@@ -26,6 +26,9 @@ object AndroidKeys {
     const val ALIAS_DEVICE_ATTESTATION = "vettid.device_attestation.v1"
     const val ALIAS_SEED_WRAP = "vettid.seed_wrap.v1"
     const val ALIAS_APP_DATA = "vettid.app_data.v1"
+
+    /** The second slot of the app-lock key: a method change makes its new key here and swaps it in only after the proof. */
+    const val ALIAS_APP_DATA_NEXT = "vettid.app_data.v1.next"
     const val ALIAS_APP_API = "vettid.app_api.v1"
 
     /**

@@ -3,8 +3,10 @@ package com.vettid.feature.devices
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.devices.AgentGrant
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.DeviceWire
+import com.vettid.core.data.devices.GrantApproval
 import com.vettid.core.ui.format.Times
 import java.time.Duration
 import java.time.Instant
@@ -93,5 +95,65 @@ internal object DeviceText {
             age.toDays() < DAYS_AS_AGO -> stringResource(R.string.devices_ago_days, age.toDays().toInt())
             else -> Times.short(at, now, zone)
         }
+    }
+}
+
+/** How an agent's other permissions are said (ANDROID-PLAN 0.1.116 §4 AA3). */
+internal object PermissionText {
+    /** The label of one of the nine delegable scopes; null for a scope this app has no label for. */
+    fun labelRes(scope: String): Int? = when (scope) {
+        "connection.list" -> R.string.devices_scope_connection_list
+        "connection.get" -> R.string.devices_scope_connection_get
+        "message.send" -> R.string.devices_scope_message_send
+        "message.list" -> R.string.devices_scope_message_list
+        "message.get" -> R.string.devices_scope_message_get
+        "message.read" -> R.string.devices_scope_message_read
+        "profile.get" -> R.string.devices_scope_profile_get
+        "action.list" -> R.string.devices_scope_action_list
+        "action.invoke" -> R.string.devices_scope_action_invoke
+        else -> null
+    }
+
+    /** What the snackbar says after a change to the permissions. */
+    fun noticeRes(n: PermissionNotice): Int = when (n) {
+        PermissionNotice.REMOVED -> R.string.devices_perm_removed
+        PermissionNotice.ALREADY_REMOVED -> R.string.devices_perm_already_removed
+        PermissionNotice.RESUMED -> R.string.devices_resumed
+        PermissionNotice.NOT_PAUSED -> R.string.devices_not_paused
+    }
+
+    /** The scope's label, or "Another permission" for one without. */
+    @Composable
+    fun label(scope: String): String = stringResource(labelRes(scope) ?: R.string.devices_scope_unknown)
+
+    /**
+     * The row's second line: "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking"
+     * (nothing for an approval this app does not know), then ", until <date>" and ", only with <names>". [names] are the
+     * connections' names by id and [namesKnown] says the connections list was read: an id not in it is then "Removed
+     * connection", a blank name "Name not shared yet"; before it was read no names are said. Empty when nothing is to be said.
+     */
+    @Composable
+    fun detail(g: AgentGrant, names: Map<String, String>, namesKnown: Boolean): String {
+        val parts = buildList {
+            when (g.approval) {
+                GrantApproval.AUTO -> add(stringResource(R.string.devices_perm_auto, g.perHour, g.perDay))
+                GrantApproval.ASK -> add(stringResource(R.string.devices_perm_ask))
+                GrantApproval.UNKNOWN -> Unit
+            }
+            g.expiresAt?.let { add(stringResource(R.string.devices_perm_until, Times.dayLabel(Times.day(it)))) }
+            if (g.connections.isNotEmpty() && namesKnown) {
+                val removed = stringResource(R.string.devices_perm_removed_connection)
+                val unnamed = stringResource(R.string.devices_perm_unnamed_connection)
+                val shown = g.connections.joinToString(", ") { id ->
+                    when (val n = names[id]) {
+                        null -> removed
+                        else -> if (n.isBlank()) unnamed else AccountNames.isolate(n)
+                    }
+                }
+                add(stringResource(R.string.devices_perm_only_with, shown))
+            }
+        }
+        // The pieces after the first start with ", ": the first stands without it.
+        return parts.joinToString("").removePrefix(", ")
     }
 }

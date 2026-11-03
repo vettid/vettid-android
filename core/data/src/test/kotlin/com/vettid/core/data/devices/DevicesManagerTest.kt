@@ -78,6 +78,16 @@ class DevicesManagerTest {
             synchronized(this) { calls += "unlink:$deviceId" }
             refuse["unlink"]?.let { throw VaultOpException("device.unlink", it) }
         }
+
+        override suspend fun revokeGrant(grantId: String) {
+            synchronized(this) { calls += "revoke:$grantId" }
+            refuse["revoke"]?.let { throw VaultOpException("leash.grant.revoke", it) }
+        }
+
+        override suspend fun resumeAgent(agentId: String) {
+            synchronized(this) { calls += "resume:$agentId" }
+            refuse["resume"]?.let { throw VaultOpException("leash.agent.resume", it) }
+        }
     }
 
     private fun TestScope.manager(ops: Ops, self: String? = "me", gone: MutableList<String> = mutableListOf()) =

@@ -876,6 +876,46 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * ANDROID-PLAN 0.1.116 §4 AA3 (VAULT-MESSAGING §10.11): revoking a grant and resuming an agent carry exactly their one
+     * member; `leash.grant.issue` carries the members it was given and no others (no `grant_id` for a new grant, no
+     * `version`, no limits for an `ask` grant).
+     */
+    @Test
+    fun permissionRequestsCarryExactlyTheirMembers() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            suspend fun body(type: String, answer: String = "{}", send: suspend () -> Unit): kotlinx.serialization.json.JsonObject {
+                val job = async(Dispatchers.IO) { send() }
+                val r = v.open(nextDeposit().second)
+                assertEquals(type, r.type)
+                d.handle(v.seal(type, answer, re = r.id, status = Inner.STATUS_OK))
+                job.await()
+                return kotlinx.serialization.json.Json.parseToJsonElement(String(r.body)) as kotlinx.serialization.json.JsonObject
+            }
+            fun obj(s: String) = kotlinx.serialization.json.Json.parseToJsonElement(s) as kotlinx.serialization.json.JsonObject
+            assertEquals(obj("""{"grant_id":"g1"}"""), body("leash.grant.revoke") { api.leashGrantRevoke("g1") })
+            assertEquals(obj("""{"agent_id":"a1"}"""), body("leash.agent.resume") { api.leashAgentResume("a1") })
+            assertEquals(
+                obj("""{"agent_id":"a1","scope":"message.list"}"""),
+                body("leash.grant.issue") { api.leashGrantIssue(LeashGrantRequest("a1", "message.list")) },
+            )
+            val full = LeashGrantRequest(
+                "a1", "message.send", grantId = "g1", version = 3, approval = "auto", connections = listOf("c1", "c2"),
+                perHour = 60, perDay = 1_000, expiresAt = "2026-12-03T10:00:00Z", statusTtl = 900,
+            )
+            assertEquals(
+                obj(
+                    """{"agent_id":"a1","grant_id":"g1","version":3,"scope":"message.send","approval":"auto","connections":["c1","c2"],""" +
+                        """"per_hour":60,"per_day":1000,"expires_at":"2026-12-03T10:00:00Z","status_ttl":900}""",
+                ),
+                body("leash.grant.issue", """{"grant_id":"g1"}""") { api.leashGrantIssue(full) },
+            )
+            assertEquals("LeashGrantRequest", full.toString())
+        }
+    }
+
     /** Release R: a recovery is finished only on a paired phone (after its credential.get), never before. */
     @Test
     fun aRecoveryIsFinishedOnlyOnAPairedPhone() = runBlocking<Unit> {

@@ -4,7 +4,9 @@
 package com.vettid.app.debug
 
 import androidx.compose.runtime.Composable
+import com.vettid.core.data.devices.AgentGrant
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.devices.GrantApproval
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
@@ -60,6 +62,14 @@ internal object DevicesCatalog {
     )
     private val autoRule = ShareRule("r2", 1, null, "a1", listOf("keys", "ops"), TagMatch.ANY, ShareMode.AUTO, perHour = 5, perDay = 50, included = listOf("i4"))
 
+    // AA3: the agent's other permissions (ANDROID-PLAN 0.1.116 §4 "An agent's permissions").
+    private val askGrant = AgentGrant("g1", "connection.list", 1, GrantApproval.ASK, 60, 1_000, null, emptyList(), 900)
+    private val autoGrant = AgentGrant(
+        "g2", "message.send", 2, GrantApproval.AUTO, 60, 1_000, now.plus(28, ChronoUnit.DAYS), listOf("c1", "c2", "gone"), 3_600,
+    )
+    private val unknownGrant = AgentGrant("g3", "wallet.send", 1, GrantApproval.ASK, 60, 1_000, null, emptyList(), 900)
+    private val names = mapOf("c1" to "Sam Lee", "c2" to "Ana Ruiz")
+
     private val code = PairingCode("p1", "eyJ2IjoyLCJ0IjoiYSIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC5vcmcifQ", now.plus(581, ChronoUnit.SECONDS))
     private val pending = PendingPairing("p1", "Claude on work laptop", "123456", now.plus(10, ChronoUnit.MINUTES))
 
@@ -95,6 +105,51 @@ internal object DevicesCatalog {
             Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true, rules = (1..64).map { askRule.copy(ruleId = "r$it", tags = listOf("tag$it")) }))
         },
         "devices.page_agent_rule_saved" to { Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule), rulesLoaded = true, ruleSaved = true)) },
+        "devices.page_agent_permissions" to {
+            Page(DeviceUiState(device = agent, loaded = true, permissions = listOf(askGrant, autoGrant, unknownGrant), permissionsLoaded = true, connectionNames = names))
+        },
+        "devices.page_agent_permissions_failed" to { Page(DeviceUiState(device = agent, loaded = true, permissionsError = FailureKind.NETWORK)) },
+        "devices.page_agent_permissions_failed_rows" to {
+            Page(DeviceUiState(device = agent, loaded = true, permissions = listOf(askGrant), permissionsLoaded = true, permissionsError = FailureKind.NETWORK))
+        },
+        "devices.page_agent_permissions_unreadable_grant" to {
+            Page(
+                DeviceUiState(
+                    device = agent, loaded = true, permissionsLoaded = true,
+                    permissions = listOf(AgentGrant(null, "", 0, GrantApproval.UNKNOWN, 60, 1_000, null, emptyList(), 3_600), askGrant),
+                ),
+            )
+        },
+        "devices.page_agent_paused" to {
+            Page(DeviceUiState(device = agent.copy(paused = true), loaded = true, permissions = listOf(askGrant), permissionsLoaded = true))
+        },
+        "devices.page_agent_paused_failed" to {
+            Page(DeviceUiState(device = agent.copy(paused = true), loaded = true, failure = DeviceFailure.RESUME, error = FailureKind.NETWORK))
+        },
+        "devices.page_agent_permission_remove" to {
+            Page(
+                DeviceUiState(
+                    device = agent, loaded = true, permissions = listOf(autoGrant), permissionsLoaded = true, connectionNames = names,
+                    confirm = DeviceConfirm.REMOVE_PERMISSION, confirmGrant = autoGrant,
+                ),
+            )
+        },
+        "devices.page_agent_permission_remove_unknown" to {
+            Page(
+                DeviceUiState(
+                    device = agent, loaded = true, permissions = listOf(unknownGrant), permissionsLoaded = true,
+                    confirm = DeviceConfirm.REMOVE_PERMISSION, confirmGrant = unknownGrant,
+                ),
+            )
+        },
+        "devices.page_agent_permission_remove_failed" to {
+            Page(
+                DeviceUiState(
+                    device = agent, loaded = true, permissions = listOf(askGrant), permissionsLoaded = true,
+                    failure = DeviceFailure.REMOVE_PERMISSION, error = FailureKind.NETWORK,
+                ),
+            )
+        },
         "devices.pair_paired_unknown" to { Pair(PairingStage.Paired("Claude on work laptop", null)) },
         "devices.pair_code" to { Pair(PairingStage.Code(code)) },
         "devices.pair_expired" to { Pair(PairingStage.CodeExpired("p1", now)) },

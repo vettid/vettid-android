@@ -123,7 +123,31 @@ The A2 exit test:
 - Notifications and the app lock (owner decisions 2026-11-02): no names whenever opening VettID would show the app lock.
   `AppLock.wouldShowLock()` is true when the state is `LOCKED` or `PENDING`, or the lock is on, the app is in the background
   and the background is due (one shared decision with `onForeground()`, which still alone engages the lock; see the clock rule below); `DISABLED` is never
-  covered; a prompt in progress (`authenticating`) is not. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  covered; a prompt in progress (`authenticating`) does not change that: a prompt left up cannot keep names showing past the timeout.
+  The prompt rule (2026-11-03): `onBackground` always records the mark (not on a configuration change) and `onForeground` never
+  clears it while a prompt is up; `promptEnded(outcome, inForeground)` decides. Success in the foreground clears it. Success in the
+  background sets it to now with a 3 s grace for the late `onStart` (so "Immediately" does not lock right after an unlock); if
+  that `onStart` comes later than the grace and the return locks, it locks without the automatic prompt
+  (`UnlockPromptGate.holdAutomatic`, as iOS #203): the member taps Unlock once, never a lock-and-prompt loop. A late success for
+  an enable already dropped does nothing (`completeEnable` returns when nothing is pending).
+  Cancelled or dismissed in the foreground runs the return decision (lock if due, then clear; with "Immediately" this locks after a
+  presence check whose screen stopped the activity); in the background it keeps the mark, or records one. The prompt of an enable or
+  a method change (`promptStarted(enable = true)`) that does not succeed also drops its pending key (`enableCancelled()`) and then
+  follows the same decision as any prompt. The app lock key of a method change is made under a second alias
+  (`vettid.app_data.v1.next`, same Keystore parameters) and `completeEnable` swaps it in only after the proof worked
+  (`AppLockKeys.promote`); a cancel, a failure or a rotation deletes it and keeps the old key, the old method and the lock on, and a
+  first enable that is cancelled stays off with no key left over. A process that died mid-change leaves both keys: `start` calls `recover(appLockKeySlot)`, which keeps the key of the
+  persisted slot marker and deletes the other (the lock stays on with the old method).
+  `completeEnable` writes enabled, method and the new slot in one DataStore edit (`setAppLock`) and only then deletes the old key,
+  so a crash after the edit also leaves both keys and `recover` keeps the marked new one; a marker never written is slot 0 (the
+  alias `vettid.app_data.v1`). Turning the lock off in Settings first asks for the phone's biometric or screen lock (`SettingsHost.confirmAppLockOff`, the lock prompt's texts); a refused check leaves it on. `abandonPrompt()` (rotation) clears `authenticating`, drops a pending key and keeps the mark. A callback that arrives after `onDestroy` is ignored (`UnlockPromptGate.finished(owner, outcome)` is false for a
+  destroyed owner, and `MainActivity` checks `isDestroyed`), so a rotation records no mark. Accepted fail-closed false locks:
+  cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
+  stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; "Immediately" + a
+  method change + cancelling the PIN screen locks (the old key unlocks); a marked slot whose key was lost from outside the app
+  makes `recover` keep the other slot's key, which may be of the other method (a fingerprint may then fail and the phone's PIN
+  unlocks); and `authenticating` has no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the
+  cover down until the next `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
   a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive
   the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
   reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
@@ -206,7 +230,7 @@ The A2 exit test:
   by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
   from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
-  Permissions (AA3) is a later PR; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
+  Permissions (AA3) is below; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
@@ -237,7 +261,7 @@ The A2 exit test:
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
   may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
-  item (AA7), permissions (AA3). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  item (AA7). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
   full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
   `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
   `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
@@ -246,6 +270,50 @@ The A2 exit test:
   `items.agent_rule_owner_check`, `items.agent_rule_delete_confirm`, `devices.page_agent_rules`, `devices.page_agent_rules_ways`,
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
+
+- An agent's permissions (ANDROID-PLAN 0.1.117 §4 AA3, decisions 3a, 7, 8; VAULT-MESSAGING 0.83.3 §10.11): on the agent's page,
+  **Other permissions** = the agent's grants of `leash.grant.list{agent_id}` that are not `items.read` (`PermissionWire.permissions`;
+  `DevicesRepository.permissions`, `refreshPermissions`, memory only, cleared with the list at lock and hold; an older answer never
+  replaces a newer one: a read number per agent). **One source per card:** **What it may use** stays `share.rule.list` (AA4, richer
+  rows); the `items.read` grants (`grant_id` = `rule_id`) are dropped from the permissions, never listed twice. The "Other permissions"
+  heading is shown **only when the agent has such grants, or the latest read failed, or `suspended` was never read for the agent
+  (`DeviceInfo.pausedKnown`)**, and it **never has an add action** and there is no editor (decision 3a; a row's tap opens nothing); with no such grants the card is not shown at all. When the **latest** read failed
+  (even after an earlier success: the earlier rows stay below) or the agent's pause is unknown, the card says "Other permissions
+  could not be loaded." with Try again (`DeviceUiState.permissionsUnreadable`), so a grant issued elsewhere never goes unseen.
+  Grants that do not read are **not dropped**: each is a row "Another permission" (a grant without `grant_id` has no ⋯ menu, it
+  cannot be revoked). A row: the scope's label (nine labels, "Another permission" for a scope
+  the app has no label for), "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking" (an `auto`
+  grant without limits shows the vault's defaults 60 and 1,000; an absent `approval` is ask, the vault's default; one the app does
+  not know is `GrantApproval.UNKNOWN`: no approval line is shown, never "Asks you each time"), then ", until
+  <date>" and ", only with <names>" (`DeviceUiState.connectionNames` from `ConnectionsRepository`; "Removed connection" for an id not
+  listed **only once the list was read** (`connectionsLoaded` = the page's own `connections.refresh()` at opening answered; a cached list never counts, so a
+  new connection is not called removed; before that, or when it fails, no names are said); "Name not shared yet" for a blank name). Trailing ⋯ → **Remove** (`ConfirmDialog`, destructive: "<name> can no longer <label,
+  lower case> from now on. Services it showed this permission to may accept it for up to <that grant's status_ttl + 1 min>.";
+  a scope without a label has its own sentence): `leash.grant.revoke{grant_id}` with **no unlock window and no password** (the
+  plan, not the task title); `{}` "Permission removed", `not_found` "It was already removed.", and the view model reads the grants again after both
+  (`DevicesManager.removePermission` itself reads nothing; a re-read that fails is shown on the card and does not turn the done
+  removal into a failure); any other failure shows its error, keeps the row and reads nothing. **Paused:** a banner at the top of the page (`NoticeKind.URGENT`, "Paused by your
+  vault") whenever `DeviceInfo.paused`. `paused` has **one ordering**: the list read and the permissions read share one read numbering
+  (`DevicesManager.permissionReads`, `pausedApplied` per agent) and a read never overwrites a `paused` set by a newer one, so a
+  list read that started before Resume's re-read cannot bring the pause back; a list read whose `grants(null)` call fails keeps the
+  `paused` values it held (fail closed), and with nothing held `paused` is **unknown** (`pausedKnown = false`), never "not
+  paused": the page then shows the failed card; **Resume** = `leash.agent.resume{agent_id}`,
+  no unlock window, no confirmation: `{}` "Resumed", `not_found` "It is no longer paused", read again after both by the view
+  model (if that re-read fails the banner stays up and the failure shows). **Re-reads:**
+  `DevicesManager.onEvent` emits `AgentChange` (`changes`): `sync.event` `leash.grant.changed|revoked`, `leash.agent.suspended` with
+  this `agent_id`, and `share.rule.changed|deleted` (only `rule_id`: the app knows no rule it can tell is another subject's, so every
+  one re-reads the permissions and the rules); also on opening and on every return to the page. **`leash.grant.issue`, core only (no
+  UI):** `LeashApi.kt` (`LeashGrantRequest`, `leashGrantIssue`, prints nothing) and `GrantIssueAnswers` / `GrantIssueResult` in
+  `:core:data` `devices/`: `Saved(grant)`, `CredentialLocked` (the caller prompts once and resends once; a second one is `LockedAgain`,
+  `refused(e, resent = true)`), `Conflict`, `Limit` (`agent_grants`), `NotPaired`, `BadRequest(field?)` (the field only when it reads
+  as a plain member name), `OwnerCheck`, `AlarmOpen` (`unlockRefused`: `credential_frozen` / `rotation_required` from the prompt's
+  unlock), `Failed(failure)`. The plan's answer texts are not in strings (unused). Texts in `feature/devices/.../strings.xml`
+  (`devices_perm*`, `devices_scope_*`, `devices_paused_*`, `devices_resume*`) are **approved by the owner 2026-11-03**, the plan's words and the ones the plan
+  does not give (`AgentPermissionTextsTest` holds them). Dev stack: `AgentPermissionsDevStackTest` (skips without the stack; the paired-agent branch needs a
+  `vaultctl` agent, and a real suspension needs an agent that sends 30 refused requests: never run). Catalog:
+  `devices.page_agent_permissions`, `devices.page_agent_permissions_failed`, `devices.page_agent_permissions_failed_rows`, `devices.page_agent_permissions_unreadable_grant`, `devices.page_agent_paused`,
+  `devices.page_agent_paused_failed`, `devices.page_agent_permission_remove`, `devices.page_agent_permission_remove_unknown`,
+  `devices.page_agent_permission_remove_failed`.
 
 - Approvals for devices and agents (ANDROID-PLAN 0.1.116 §4 AA5, decisions 6, 9, 10, 15, 16, 18; VAULT-MESSAGING 0.83.2 §6.8, §10.3,
   §10.4.2, §10.11): a device request is `Approval.DeviceRequest` (`seconds` of `device.session.pending`; `held`: `HeldRequests.of(role,

@@ -34,7 +34,12 @@ class SettingsViewModelsTest {
     private val vault = FakeVault(AppPhase.Unlocked)
     private val prefs = InMemoryPreferencesRepository()
     private val noKeys = object : AppLockKeys {
-        override fun create(method: com.vettid.core.data.prefs.AppLockMethod) = Unit
+        override fun createPending(method: com.vettid.core.data.prefs.AppLockMethod) = Unit
+        override fun pendingCipher(): Cipher = error("unused")
+        override fun promote() = Unit
+        override fun discardPending() = Unit
+        override fun recover(markedSlot: Int) = Unit
+        override fun pendingSlot() = 0
         override fun exists() = false
         override fun encryptCipher(): Cipher = error("unused")
         override fun delete() = Unit
@@ -107,6 +112,66 @@ class SettingsViewModelsTest {
         advanceUntilIdle()
         assertEquals(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK, vm.uiState.value.appLockMethod)
         assertEquals(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK, prefs.current.value.appLockMethod)
+    }
+
+    /** A software key, so that a lock can really be turned on here. */
+    private class OneKey : AppLockKeys {
+        private var key: javax.crypto.SecretKey? = null
+        private var next: javax.crypto.SecretKey? = null
+        private fun gen() = javax.crypto.KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        private fun cipher(k: javax.crypto.SecretKey?) = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, k) }
+
+        override fun createPending(method: com.vettid.core.data.prefs.AppLockMethod) {
+            next = gen()
+        }
+
+        override fun pendingCipher(): Cipher = cipher(next)
+        override fun promote() {
+            key = next
+            next = null
+        }
+
+        override fun discardPending() {
+            next = null
+        }
+
+        override fun recover(markedSlot: Int) = Unit
+        override fun pendingSlot() = 0
+        override fun exists() = key != null
+        override fun encryptCipher(): Cipher = cipher(key)
+        override fun delete() {
+            key = null
+            next = null
+        }
+    }
+
+    private suspend fun onLock(): AppLock = AppLock(prefs, OneKey(), noFile).also {
+        it.start()
+        it.completeEnable(it.cipherToEnable())
+    }
+
+    /** Turning the app lock off asks for the phone owner's presence first; a refusal or a cancel leaves it on. */
+    @Test
+    fun theAppLockIsTurnedOffOnlyAfterThePresenceCheck() = runTest {
+        val lock = onLock()
+        val vm = viewModel(screenshots(), lock)
+        advanceUntilIdle()
+        val steps = mutableListOf<String>()
+        vm.disableAppLock { steps += "asked:${lock.state.value}"; true }
+        advanceUntilIdle()
+        assertEquals(listOf("asked:UNLOCKED"), steps) // asked while still on
+        assertEquals(com.vettid.core.data.lock.AppLockState.DISABLED, lock.state.value)
+    }
+
+    @Test
+    fun aRefusedPresenceCheckLeavesTheAppLockOn() = runTest {
+        val lock = onLock()
+        val vm = viewModel(screenshots(), lock)
+        advanceUntilIdle()
+        vm.disableAppLock { false }
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.lock.AppLockState.UNLOCKED, lock.state.value)
+        assertTrue(prefs.current.value.appLockEnabled)
     }
 
     @Test

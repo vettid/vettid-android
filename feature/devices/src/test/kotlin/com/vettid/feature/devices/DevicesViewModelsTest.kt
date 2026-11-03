@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.feature.devices
 
 import androidx.lifecycle.SavedStateHandle
@@ -32,7 +35,7 @@ class DevicesViewModelsTest {
     private val sharing = com.vettid.core.testing.FakeSharing()
     private val devices = FakeDevices().apply { this.devices.value = listOf(phone, agent, desktop) }
 
-    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing)
+    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, com.vettid.core.testing.FakeSocial())
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -221,9 +224,9 @@ class DevicesViewModelsTest {
     @Test
     fun neverAsksForTheCredentialPasswordOrTheUnlockWindow() = runTest {
         // The page's ViewModel holds the devices repository and, since AA4, the sharing repository to read the agent's rules:
-        // ending access, removing and reading the rules sign nothing (no password, no unlock window, no rule saved).
+        // ending access, removing and reading the rules (and, since AA3, removing a permission or resuming, with the connections' names) sign nothing (no password, no unlock window, no rule saved).
         val ctor = DeviceViewModel::class.java.constructors.single()
-        assertEquals(listOf("SavedStateHandle", "DevicesRepository", "SharingRepository"), ctor.parameterTypes.map { it.simpleName })
+        assertEquals(listOf("SavedStateHandle", "DevicesRepository", "SharingRepository", "ConnectionsRepository"), ctor.parameterTypes.map { it.simpleName })
         val vm = page("a1")
         advanceUntilIdle()
         vm.refreshRules()

@@ -21,6 +21,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.vettid.app.debug.debugTools
@@ -231,7 +232,13 @@ class MainActivity : ComponentActivity() {
         // A prompt this activity showed ends with it; its callback will not come (a recreated activity may ask again).
         promptCancel?.cancel()
         promptCancel = null
-        if (appLock.prompts.ownerGone(this)) appLock.authenticating = false
+        if (appLock.prompts.ownerGone(this)) {
+            if (isChangingConfigurations) {
+                appLock.abandonPrompt()
+            } else {
+                appLock.promptEnded(PromptOutcome.SYSTEM_CANCELED, inForeground = false)
+            }
+        }
         super.onDestroy()
     }
 
@@ -283,8 +290,15 @@ class MainActivity : ComponentActivity() {
             enableFailed() // no biometric and no screen lock on this phone
             return
         }
-        authenticate(cipher, method, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
-            lifecycleScope.launch { appLock.completeEnable(c) }
+        authenticate(cipher, method, enable = true, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
+            lifecycleScope.launch {
+                try {
+                    appLock.completeEnable(c)
+                } catch (_: KeystoreException) {
+                    // The proof failed: completeEnable dropped the new key and kept the lock as it was. The prompt is over.
+                    Toast.makeText(this@MainActivity, R.string.app_lock_enable_failed, Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -299,16 +313,20 @@ class MainActivity : ComponentActivity() {
         if (bm == null || bm.canAuthenticate(allowed) != android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS) return true
         if (!appLock.prompts.tryStart(auto = false, owner = this)) return false
         return suspendCancellableCoroutine { cont ->
-            appLock.authenticating = true
+            appLock.promptStarted()
             val cancel = CancellationSignal()
             val prompt = BiometricPrompt.Builder(this)
                 .setTitle(title)
                 .apply { subtitle?.let { setSubtitle(it) } }
                 .setAllowedAuthenticators(allowed)
                 .build()
-            fun done(ok: Boolean) {
-                appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
-                appLock.authenticating = false
+            fun done(outcome: PromptOutcome) {
+                // A callback after onDestroy (a rotation cancelling the old prompt) is late: onDestroy already ended the prompt.
+                // finished(this, ...): a presence check never holds back the lock's prompt; false for a destroyed owner.
+                if (!isDestroyed && appLock.prompts.finished(this, PromptOutcome.SUCCEEDED)) {
+                    appLock.promptEnded(outcome, inForeground())
+                }
+                val ok = outcome == PromptOutcome.SUCCEEDED
                 if (cont.isActive) cont.resume(ok)
             }
             cont.invokeOnCancellation { cancel.cancel() }
@@ -316,13 +334,15 @@ class MainActivity : ComponentActivity() {
                 cancel,
                 mainExecutor,
                 object : BiometricPrompt.AuthenticationCallback() {
-                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(true)
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(PromptOutcome.SUCCEEDED)
 
-                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(false)
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(PromptOutcome.ofError(errorCode))
                 },
             )
         }
     }
+
+    private fun inForeground() = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
 
     private fun enableFailed() {
         appLock.prompts.finished(PromptOutcome.DISMISSED)
@@ -330,8 +350,14 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The app lock's prompt; the caller passed [AppLock.prompts]' tryStart. */
-    private fun authenticate(cipher: Cipher, method: AppLockMethod, onCancel: () -> Unit = {}, onSuccess: (Cipher) -> Unit) {
-        appLock.authenticating = true
+    private fun authenticate(
+        cipher: Cipher,
+        method: AppLockMethod,
+        enable: Boolean = false,
+        onCancel: () -> Unit = {},
+        onSuccess: (Cipher) -> Unit,
+    ) {
+        appLock.promptStarted(enable)
         val cancel = CancellationSignal()
         promptCancel = cancel
         val subtitle = when (method) {
@@ -350,19 +376,22 @@ class MainActivity : ComponentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 // A biometric or the device-credential fallback (the phone's PIN): either unlocks, once.
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    if (isDestroyed) return // late: onDestroy ended the prompt (and dropped a pending key)
                     done(PromptOutcome.SUCCEEDED)
                     result.cryptoObject?.cipher?.let(onSuccess)
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    if (isDestroyed) return
                     done(PromptOutcome.ofError(errorCode))
                     onCancel()
                 }
 
                 private fun done(outcome: PromptOutcome) {
                     if (promptCancel === cancel) promptCancel = null
-                    appLock.prompts.finished(outcome)
-                    appLock.authenticating = false
+                    if (appLock.prompts.finished(this@MainActivity, outcome)) {
+                        appLock.promptEnded(outcome, inForeground())
+                    }
                 }
             },
         )

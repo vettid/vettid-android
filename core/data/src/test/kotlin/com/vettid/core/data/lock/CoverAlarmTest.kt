@@ -90,7 +90,7 @@ class CoverAlarmTest {
     }
 
     @Test
-    fun notArmedForImmediatelyOrWhenTheLockIsOffOrAPromptIsShowing() = runTest {
+    fun notArmedForImmediatelyOrWhenTheLockIsOffOrOnARotation() = runTest {
         val immediate = unlocked(AppLockTimeout.IMMEDIATELY)
         immediate.onBackground()
         assertTrue(alarm.sets.isEmpty())
@@ -98,11 +98,34 @@ class CoverAlarmTest {
         off.start()
         off.onBackground()
         assertTrue(alarm.sets.isEmpty())
-        val prompt = unlocked()
-        prompt.authenticating = true
-        prompt.onBackground()
-        prompt.onBackground(changingConfigurations = true)
+        val rotating = unlocked()
+        rotating.onBackground(changingConfigurations = true)
         assertTrue(alarm.sets.isEmpty())
+    }
+
+    @Test
+    fun armedAlsoWhileAPromptIsShowing() = runTest {
+        val prompt = unlocked()
+        prompt.promptStarted()
+        prompt.onBackground()
+        assertEquals(clock + minute, alarm.at)
+    }
+
+    @Test
+    fun completeUnlockAndCompleteEnableSyncTheAlarm() = runTest {
+        val l = unlocked()
+        l.onBackground()
+        l.lockNow()
+        l.onForeground()
+        l.promptStarted()
+        l.onBackground() // the mark is set while locked: no alarm
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        assertEquals(null, alarm.at)
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        assertEquals(clock + minute, alarm.at)
+        alarm.cancel()
+        l.completeEnable(l.cipherToEnable())
+        assertEquals(clock + minute, alarm.at)
     }
 
     @Test
