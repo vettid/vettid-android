@@ -291,7 +291,14 @@ class MainActivity : ComponentActivity() {
             return
         }
         authenticate(cipher, method, enable = true, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
-            lifecycleScope.launch { appLock.completeEnable(c) }
+            lifecycleScope.launch {
+                try {
+                    appLock.completeEnable(c)
+                } catch (_: KeystoreException) {
+                    // The proof failed: completeEnable dropped the new key and kept the lock as it was. The prompt is over.
+                    Toast.makeText(this@MainActivity, R.string.app_lock_enable_failed, Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 

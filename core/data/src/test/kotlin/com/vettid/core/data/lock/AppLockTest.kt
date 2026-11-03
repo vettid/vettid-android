@@ -338,6 +338,41 @@ class AppLockTest {
     }
 
     @Test
+    fun aPresenceCheckThatSucceedsWhileAwayStillLocksOnTheRealReturn() = runTest {
+        val l = unlockedWith(AppLockTimeout.ONE_MINUTE)
+        l.promptStarted()
+        l.onBackground() // the member swipes home as the check succeeds
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        assertEquals("nothing decided while away", AppLockState.UNLOCKED, l.state.value)
+        clock += 3_600_000
+        assertTrue("covered while away", l.wouldShowLock())
+        l.onForeground() // the real return, an hour later
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
+    fun theHeldPromptIsReleasedByTheNextUnlock() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.lockNow()
+        l.promptStarted()
+        l.onBackground()
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        clock += 3_001
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertFalse("held", l.prompts.tryStart(auto = true, owner = this))
+        // The member's Unlock (the held prompt was not started automatically: this one is theirs).
+        assertTrue(l.prompts.tryStart(auto = false, owner = this))
+        assertTrue(l.prompts.finished(this, PromptOutcome.SUCCEEDED))
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        l.onBackground()
+        l.onForeground() // a later, unrelated timeout lock
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertTrue("prompts automatically again", l.prompts.tryStart(auto = true, owner = this))
+    }
+
+    @Test
     fun aTimeoutLockStillPromptsAutomatically() = runTest {
         val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
         l.onBackground()
