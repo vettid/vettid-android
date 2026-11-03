@@ -206,8 +206,7 @@ The A2 exit test:
   by a lock shows "This pairing has ended" (`PairUiState.interrupted`); an approval with no answer is "Pairing not
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
   from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
-  Permissions (AA3) and Approvals for devices, including the pending pairing's entry (AA5), are later PRs; screens are in the
-  catalog (`devices*`).
+  Permissions (AA3) is a later PR; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
@@ -238,7 +237,7 @@ The A2 exit test:
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
   may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
-  item (AA7), permissions (AA3), Approvals entries for agents (AA5). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  item (AA7), permissions (AA3). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
   full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
   `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
   `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
@@ -247,6 +246,42 @@ The A2 exit test:
   `items.agent_rule_owner_check`, `items.agent_rule_delete_confirm`, `devices.page_agent_rules`, `devices.page_agent_rules_ways`,
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
+
+- Approvals for devices and agents (ANDROID-PLAN 0.1.116 §4 AA5, decisions 6, 9, 10, 15, 16, 18; VAULT-MESSAGING 0.83.2 §6.8, §10.3,
+  §10.4.2, §10.11): a device request is `Approval.DeviceRequest` (`seconds` of `device.session.pending`; `held`: `HeldRequests.of(role,
+  type, body)` of `approval.pending`, a `HeldRequest` that prints nothing; `fromFeed`). **Access request:** the screen offers 15 minutes,
+  1 hour, 4, 8, 24 hours with the requested length added and preselected (1 hour when unknown; `DeviceAsks`), **Allow** =
+  `device.session.approve{request_id, seconds}` (answer `expires_at` -> "Access allowed until …"), **Deny** = `device.session.deny`; a renewal
+  keeps #226/#227 (notice, Deny and end access now, `Renewal`, the end failure) and adds Allow. **Held approval:** Approve =
+  `approval.decide{approve: true}`, Deny = `{approve: false}`; the answer's `result` is said (`ok` Approved, `forbidden`, `session_required`
+  or `denied`, `way_not_allowed`, any other with the code cleaned and isolated); an error answer to either call (`NOT_FOUND`, `OTHER`; no code is
+  named, decision 14c) is "This request is no longer waiting." and the entry goes (`SocialManager.deviceDecide`); the owner check and
+  transport failures are not. `item.use` shows its item and field (names from the item cache, `ItemSummary.fieldLabels`) and `data` decoded
+  (`DataView`: strict UTF-8 without control, format (bidi), separator, private-use or unassigned code points = text, else lower-case hex),
+  `item.get` its fields or "All fields and notes" and always the history line, the catalog its line; `item.run` / `item.proxy` (decision 15),
+  a desktop's step-up (decision 9), any other type or op, a body that does not read in full, and an item or field the cache cannot name ("an
+  item you no longer have"; cache not loaded) are **Deny only**, enforced in `SocialManager.approveDeviceRequest` too (`NOT_SUPPORTED`, nothing
+  sent). The delegable owner-type row is not built (needs AA3's labels; it is "any other type": deny-only). **Known only from the feed item**
+  (`FeedOnlyAsks`, `SocialManager.setFeedItems` from `VaultManager`): after a restart the feed item's `ref` / `device_id` / `at` make an entry
+  only while no `pending.list` was merged since the unlock (`listReadFlow`; the list is authoritative once read, and VAULT-MESSAGING 0.70.0 is why
+  decision 14a is now the fallback for an unsupported or failed list), not once archived or deleted (read stays), not after a close event or a
+  decision here, and only 10 minutes (session, pairing) or 5 minutes (held) from `at`. A feed-only approval is Deny-only with "… asked for
+  something this phone can no longer show. Deny it, or let it expire."; a feed-only session request names the device from `device.list`
+  (`DeviceAsks.named`) and is Allow/Deny with 1 hour preselected, Deny-only when the device is not listed (or the list not read). A
+  `device.pair.pending` feed item is an entry without buttons ("This pairing can't be checked on this phone any more …"), or, while
+  `PairingRepository` holds the comparison, **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`); VAULT-MESSAGING
+  0.83.0 says `device.pair.reject` accepts the item's `ref`: not used (the plan says no buttons; owner's call). **Feed and notifications:**
+  titles with the device's name from `FeedNames.devices` (`device.list`, cleaned and isolated; fallbacks without a name) and
+  `FeedNames.pairingName`; `leash.agent.suspended` and `leash.referrals_limited` are on **Security alarms** (decision 16,
+  `NotificationMapping`; the lock screen says "VettID needs your attention") and, with `leash.rate_limited`, open the agent's page
+  (`FeedTarget.Device`; no longer "not available"); under the app lock's cover (`coveredNow()`) names are never read, as for every item.
+  Catalog: `approvals.device`, `approvals.device_agent`, `approvals.device_renewal`, `approvals.device_feed`, `approvals.device_feed_unlisted`,
+  `approvals.device_allowed`, `approvals.device_gone`, `approvals.held_use`, `approvals.held_use_hex`, `approvals.held_get`,
+  `approvals.held_get_all`, `approvals.held_catalog`, `approvals.held_later`, `approvals.held_desktop`, `approvals.held_other`,
+  `approvals.held_no_item`, `approvals.held_gone`, `approvals.held_approved`, `approvals.held_denied`, `approvals.held_forbidden`,
+  `approvals.held_session_ended`, `approvals.held_way_not_allowed`, `approvals.held_other_result`, `approvals.pair_gone`,
+  `approvals.pair_held`, `approvals.device_list`, `notifications.devices`, `notifications.devices_unnamed`. Texts are marked `draft` (the
+  plan's, word for word) or `new` in `feature/approvals/.../strings.xml` and `core/data/.../strings.xml` (`data_feed_*_named`); none is approved.
 
 - Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /
   `VotesRepository` in `:core:data` `votes/`, `VoteApi.kt` in `:core:vault`, `VaultManager.votes`): the drawer entry after Approvals
