@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import com.vettid.core.data.lock.CoverAlarm
 import com.vettid.core.notify.FeedNotifier
 import dagger.hilt.EntryPoint
@@ -13,13 +14,13 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 
 /**
- * The cover's alarm (owner decision 2026-11-02, [CoverAlarm]): an inexact `AlarmManager.set(RTC, ...)` at the lock's
- * background deadline, no exact-alarm permission. Its PendingIntent is immutable and explicit to [CoverAlarmReceiver],
+ * The cover's alarm (owner decision 2026-11-02, [CoverAlarm]): an inexact `AlarmManager.set(ELAPSED_REALTIME, ...)` (monotonic, not waking; a date set back
+ * moves no deadline: the lead's decision of 2026-11-03) at the lock's background deadline, no exact-alarm permission. Its PendingIntent is immutable and explicit to [CoverAlarmReceiver],
  * which is not exported, and carries nothing.
  */
 class AndroidCoverAlarm(
     private val context: Context,
-    private val now: () -> Long = System::currentTimeMillis,
+    private val elapsed: () -> Long = { SystemClock.elapsedRealtime() },
 ) : CoverAlarm {
     private val alarms: AlarmManager? get() = context.getSystemService(AlarmManager::class.java)
 
@@ -32,11 +33,11 @@ class AndroidCoverAlarm(
      * An inexact `set` may fire up to about 75% of the wait late (45 minutes for an hour). From [WINDOW_FROM_MS] of wait,
      * `setWindow` bounds it to [WINDOW_MS] after the deadline: the shortest window allowed without the exact-alarm permission.
      */
-    override fun set(atEpochMs: Long) {
-        if (atEpochMs - now() >= WINDOW_FROM_MS) {
-            alarms?.setWindow(AlarmManager.RTC, atEpochMs, WINDOW_MS, intent())
+    override fun set(atElapsedMs: Long) {
+        if (atElapsedMs - elapsed() >= WINDOW_FROM_MS) {
+            alarms?.setWindow(AlarmManager.ELAPSED_REALTIME, atElapsedMs, WINDOW_MS, intent())
         } else {
-            alarms?.set(AlarmManager.RTC, atEpochMs, intent())
+            alarms?.set(AlarmManager.ELAPSED_REALTIME, atElapsedMs, intent())
         }
     }
 
@@ -74,5 +75,16 @@ class CoverAlarmReceiver : BroadcastReceiver() {
         internal fun handle(intent: Intent, recheck: () -> Unit) {
             if (intent.action == ACTION) recheck()
         }
+    }
+}
+
+/**
+ * The wall clock was changed (`Intent.ACTION_TIME_CHANGED`, a protected system broadcast, registered in
+ * `VettIdApplication`): the app lock decides again at once and the notifier looks at the cover, so a date set back
+ * while the app is in the background puts names away without waiting for a timer or the next screen-on.
+ */
+class ClockChangedReceiver(private val onChanged: () -> Unit) : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_TIME_CHANGED) onChanged()
     }
 }

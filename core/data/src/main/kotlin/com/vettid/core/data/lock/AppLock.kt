@@ -2,6 +2,7 @@ package com.vettid.core.data.lock
 
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.hardware.biometrics.BiometricManager.Authenticators
+import android.os.SystemClock
 import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.PreferencesRepository
@@ -57,14 +58,17 @@ fun AppLockMethod.authenticators(): Int = when (this) {
  * clock again when it is woken. [AppLock] drives it; the Android one is in the app module.
  */
 interface CoverAlarm {
-    /** Wake the app at about [atEpochMs] (wall clock); replaces an earlier one. */
-    fun set(atEpochMs: Long)
+    /**
+     * Wake the app at about [atElapsedMs] on the monotonic clock (`SystemClock.elapsedRealtime()`, as `AlarmManager.ELAPSED_REALTIME`,
+     * not waking the phone); replaces an earlier one. A date set back moves no monotonic deadline (the lead's decision of 2026-11-03).
+     */
+    fun set(atElapsedMs: Long)
 
     fun cancel()
 
     companion object {
         val NONE: CoverAlarm = object : CoverAlarm {
-            override fun set(atEpochMs: Long) = Unit
+            override fun set(atElapsedMs: Long) = Unit
 
             override fun cancel() = Unit
         }
@@ -136,7 +140,10 @@ class AppLock(
     private val keys: AppLockKeys,
     private val obsoleteWrappedKey: WrappedKeyFile,
     private val coverAlarm: CoverAlarm = CoverAlarm.NONE,
+    /** The wall clock: only compared with the wall time at [onBackground], to see that it went backwards. */
     private val now: () -> Long = System::currentTimeMillis,
+    /** The monotonic clock (`SystemClock.elapsedRealtime()`): it measures the time in the background. */
+    private val elapsed: () -> Long = { SystemClock.elapsedRealtime() },
 ) {
     private val stateFlow = MutableStateFlow(AppLockState.PENDING)
     val state: StateFlow<AppLockState> = stateFlow.asStateFlow()
@@ -154,12 +161,18 @@ class AppLock(
     /** The method of the key [cipherToEnable] made, saved by [completeEnable]. */
     private var enabling: AppLockMethod? = null
 
-    private val backgroundAtFlow = MutableStateFlow<Long?>(null)
-    private var backgroundAt: Long?
+    /** When the app went to the background: on the monotonic clock (the duration) and on the wall clock (a date set back). */
+    private data class Background(val elapsedMs: Long, val wallMs: Long)
+
+    private val backgroundAtFlow = MutableStateFlow<Background?>(null)
+    private var backgroundAt: Background?
         get() = backgroundAtFlow.value
         set(v) {
             backgroundAtFlow.value = v
         }
+
+    /** Bumped when the system says the wall clock changed, so [coverFlow] looks again at once. */
+    private val clockChanges = MutableStateFlow(0)
     private val timeoutFlow = MutableStateFlow(AppLockTimeout.DEFAULT)
 
     /** One prompt at a time, and no automatic prompt after one the member dismissed ([UnlockPromptGate]). */
@@ -198,7 +211,7 @@ class AppLock(
 
     /**
      * The alarm is set while the lock is on and unlocked, the app is in the background and the timeout is above zero (with
-     * "Immediately" the cover applies at once), for [backgroundAt] + the timeout; otherwise it is cancelled. Called after
+     * "Immediately" the cover applies at once), for the monotonic [backgroundAt] + the timeout; otherwise it is cancelled. Called after
      * every change of those inputs. The alarm is a help: a failure to set it breaks nothing.
      */
     private fun syncCoverAlarm() {
@@ -206,7 +219,7 @@ class AppLock(
         val seconds = timeoutFlow.value.seconds
         runCatching {
             if (stateFlow.value == AppLockState.UNLOCKED && at != null && seconds > 0) {
-                coverAlarm.set(at + seconds * MS)
+                coverAlarm.set(at.elapsedMs + seconds * MS)
             } else {
                 coverAlarm.cancel()
             }
@@ -236,12 +249,28 @@ class AppLock(
     /**
      * Whether opening the app now would show the lock (owner decision 2026-11-02, for notifications): the lock is
      * [AppLockState.LOCKED] or not yet known, or it is on, the app is in the background and has been for the timeout or
-     * longer. The same inputs [onForeground] uses (the lock itself engages only there); [AppLockState.DISABLED] is never covered.
+     * longer, or the wall clock went backwards since then ([backgroundDue], the lead's decision of 2026-11-03). The same
+     * decision [onForeground] uses (the lock itself engages only there); [AppLockState.DISABLED] is never covered.
      */
     fun wouldShowLock(): Boolean = when (stateFlow.value) {
         AppLockState.LOCKED, AppLockState.PENDING -> true
         AppLockState.DISABLED -> false
-        AppLockState.UNLOCKED -> !authenticating && backgroundAt?.let { now() - it >= timeoutFlow.value.seconds * MS } == true
+        AppLockState.UNLOCKED -> !authenticating && backgroundAt?.let { backgroundDue(it, timeoutFlow.value.seconds * MS) } == true
+    }
+
+    /**
+     * The one decision of [onForeground] and [wouldShowLock]: the lock is due when the monotonic time since [at] has reached
+     * the timeout, or the wall clock is earlier than it was at [at] (a date set back to stretch the timeout; more than
+     * [WALL_BACK_TOLERANCE_MS], so that a clock correction of a few seconds by the network does not lock a phone that was
+     * away a moment). A date set forward does not lock by itself: the duration is monotonic. The monotonic clock restarts at
+     * a reboot, but a reboot ends the process and the next one starts [AppLockState.LOCKED].
+     */
+    private fun backgroundDue(at: Background, timeoutMs: Long): Boolean =
+        elapsed() - at.elapsedMs >= timeoutMs || now() < at.wallMs - WALL_BACK_TOLERANCE_MS
+
+    /** The wall clock was changed (`ACTION_TIME_CHANGED`): [coverFlow] decides again now, not at its timer. */
+    fun onClockChanged() {
+        clockChanges.value++
     }
 
     /**
@@ -251,14 +280,14 @@ class AppLock(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun coverFlow(scope: CoroutineScope): StateFlow<Boolean> =
-        combine(stateFlow, backgroundAtFlow, timeoutFlow) { s, at, t -> Triple(s, at, t) }
+        combine(stateFlow, backgroundAtFlow, timeoutFlow, clockChanges) { s, at, t, _ -> Triple(s, at, t) }
             .transformLatest { (s, at, t) ->
                 when {
                     s.coversApp() -> emit(true)
                     s != AppLockState.UNLOCKED || at == null -> emit(false)
                     else -> {
-                        val left = at + t.seconds * MS - now()
-                        if (left <= 0) {
+                        val left = at.elapsedMs + t.seconds * MS - elapsed()
+                        if (backgroundDue(at, t.seconds * MS)) {
                             emit(true)
                         } else {
                             emit(false)
@@ -267,7 +296,7 @@ class AppLock(
                             // Backing off: 1 s, doubling to 60 s (a prompt that stays open, a clock far back).
                             var wait = COVER_RETRY_MS
                             while (!wouldShowLock()) {
-                                val more = at + t.seconds * MS - now()
+                                val more = at.elapsedMs + t.seconds * MS - elapsed()
                                 delay(if (more > 0) minOf(more + COVER_MARGIN_MS, wait) else wait)
                                 wait = minOf(wait * 2, COVER_RETRY_MAX_MS)
                             }
@@ -378,7 +407,7 @@ class AppLock(
      */
     fun onBackground(changingConfigurations: Boolean = false) {
         if (authenticating || changingConfigurations) return
-        backgroundAt = now()
+        backgroundAt = Background(elapsed(), now())
         syncCoverAlarm()
     }
 
@@ -386,7 +415,7 @@ class AppLock(
         if (authenticating) return
         val at = backgroundAt ?: return
         // Locked before the background time is cleared: the cover (wouldShowLock) has no gap between the two.
-        if (stateFlow.value == AppLockState.UNLOCKED && now() - at >= timeoutFlow.value.seconds * MS) lockNow()
+        if (stateFlow.value == AppLockState.UNLOCKED && backgroundDue(at, timeoutFlow.value.seconds * MS)) lockNow()
         backgroundAt = null
         syncCoverAlarm()
     }
@@ -400,5 +429,8 @@ class AppLock(
         const val COVER_MARGIN_MS = 100L
         const val COVER_RETRY_MS = 1000L
         const val COVER_RETRY_MAX_MS = 60_000L
+
+        /** A wall clock this much (or less) behind the one at the background is a correction, not a date set back. */
+        const val WALL_BACK_TOLERANCE_MS = 5_000L
     }
 }

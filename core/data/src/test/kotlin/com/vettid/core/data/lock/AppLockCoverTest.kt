@@ -19,12 +19,13 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppLockCoverTest {
-    private var clock = 0L
+    private var clock = 0L // the monotonic clock
+    private var wallSkew = 0L // the date set by hand
     private val prefs = InMemoryPreferencesRepository()
     private val keys = SoftKeys()
     private val timeoutMs = AppLockTimeout.DEFAULT.seconds * 1000L
 
-    private fun lock() = AppLock(prefs, keys, MemFile()) { clock }
+    private fun lock() = AppLock(prefs, keys, MemFile(), now = { clock + wallSkew }, elapsed = { clock })
 
     private suspend fun unlocked(): AppLock = lock().also {
         it.start()
@@ -85,6 +86,20 @@ class AppLockCoverTest {
     }
 
     @Test
+    fun aDateSetBackCoversAtOnceAndOneSetForwardDoesNot() = runTest {
+        val l = unlocked()
+        l.onBackground()
+        clock = 1_000
+        wallSkew = 10 * timeoutMs // forward: the monotonic time decides
+        assertFalse(l.wouldShowLock())
+        wallSkew = -3_600_000
+        assertTrue("set back", l.wouldShowLock())
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+    }
+
+    @Test
     fun aPromptInProgressDoesNotCover() = runTest {
         val l = unlocked()
         l.onBackground()
@@ -127,6 +142,42 @@ class AppLockCoverTest {
         advanceTimeBy(2_000)
         runCurrent()
         assertTrue("it looked again", covered.value)
+    }
+
+    @Test
+    fun theFlowTurnsTrueAtOnceWhenTheClockIsSetBackAndTheSystemSaysSo() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        assertFalse(covered.value)
+        clock = 1_000
+        wallSkew = -3_600_000
+        l.onClockChanged() // ACTION_TIME_CHANGED
+        runCurrent() // no virtual time passes: not the timer
+        assertTrue(covered.value)
+    }
+
+    @Test
+    fun theTimerRunsOnTheMonotonicClockNotTheWallClock() = runTest {
+        val l = unlocked()
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        wallSkew = 100 * timeoutMs // a date set forward does not bring the timer forward
+        advanceTimeBy(timeoutMs - 1)
+        runCurrent()
+        assertFalse(covered.value)
+        clock = timeoutMs - 1
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertFalse("1 ms short on the monotonic clock: it looked again and found no cover", covered.value)
+        clock = timeoutMs
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(covered.value)
     }
 
     @Test
