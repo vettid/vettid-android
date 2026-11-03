@@ -63,6 +63,8 @@ data class ApprovalsUiState(
     val busy: Boolean = false,
     /** The member's items (names and field labels), to name what a held request is about (AA5). */
     val items: List<ItemSummary> = emptyList(),
+    /** The item cache has been read (or failed): until then a held request's item is "Loading…". */
+    val itemsLoaded: Boolean = true,
 ) {
     /** The rows: one per approval, a connection's asks within 10 minutes as one batch (§10.4.1). */
     val entries: List<ApprovalEntry> get() = AskBatches.group(approvals)
@@ -108,12 +110,14 @@ class ApprovalsViewModel @Inject constructor(
                     ListIn(s, list, declines, cs, now)
                 },
                 devices.devices,
-                items.items,
-            ) { q, ds, its ->
+                combine(items.items, items.load) { its, ld -> its to (ld == ListLoad.LOADED || ld == ListLoad.FAILED) },
+            ) { q, ds, itl ->
+                val (its, loaded) = itl
                 val s = q.s
                 // An expired request is not offered (the list drops it itself only at the next vault event).
                 s.copy(
                     items = its,
+                    itemsLoaded = loaded,
                     approvals = q.list.filterNot { it.expiredAt(q.now) }.map { DeviceAsks.named(it, ds) },
                     peerDeclines = q.declines,
                     paused = q.cs.filter { it.asks?.paused == true },
@@ -261,6 +265,8 @@ data class ApprovalDetailUiState(
     val pairingHeld: Boolean = false,
     /** (AA5) The held pairing's name for the entry, sanitised by the pairing; null when none. */
     val pairingName: String? = null,
+    /** The item cache has been read (or failed): until then a held request's item is "Loading…", and nothing is approvable. */
+    val itemsLoaded: Boolean = true,
 ) {
     /** (AA5) The length that Allow sends: the member's choice, else the requested one, else 1 hour. */
     val allowSeconds: Int
@@ -268,7 +274,7 @@ data class ApprovalDetailUiState(
 
     /** (AA5) What a held request shows, or null for another kind of approval. */
     internal val heldShow: HeldShow?
-        get() = (approval as? Approval.DeviceRequest)?.takeIf { it.isHeld }?.let { DeviceAsks.show(it, items) }
+        get() = (approval as? Approval.DeviceRequest)?.takeIf { it.isHeld }?.let { DeviceAsks.show(it, items, itemsLoaded) }
 
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -294,7 +300,7 @@ data class ApprovalDetailUiState(
         // `device.list` names); a held approval only when the app shows it in full; a pairing offers nothing here.
         is Approval.DeviceRequest -> when {
             a.isSession -> !a.fromFeed || deviceListed
-            a.isHeld -> heldShow?.approvable == true
+            a.isHeld -> itemsLoaded && heldShow?.approvable == true
             else -> false
         }
         is Approval.GrantRequest -> grantIndexes.isNotEmpty()
@@ -406,9 +412,28 @@ class ApprovalDetailViewModel @Inject constructor(
         val withdrawn: Set<String>,
         val connections: List<ConnectionInfo>,
         val pairing: com.vettid.core.data.devices.PairingState,
+        val itemsLoaded: Boolean,
     )
 
-    private val aux = combine(devices.devices, ownerCheck.ownerCheck, repo.withdrawn, connections.connections, pairing.state, ::Aux)
+    private val aux = combine(
+        combine(devices.devices, ownerCheck.ownerCheck, repo.withdrawn, connections.connections, pairing.state) { d, o, w, c, p ->
+            arrayOf<Any?>(d, o, w, c, p)
+        },
+        combine(items.load, items.items) { ld, _ -> ld == ListLoad.LOADED || ld == ListLoad.FAILED },
+    ) { a, loaded ->
+        @Suppress("UNCHECKED_CAST")
+        Aux(
+            a[0] as List<com.vettid.core.data.devices.DeviceInfo>, a[1] as OwnerCheckView?, a[2] as Set<String>,
+            a[3] as List<ConnectionInfo>, a[4] as com.vettid.core.data.devices.PairingState, loaded,
+        )
+    }
+
+    /** Whether [a] is the pairing entry of the pairing this phone holds in its comparison: same `pending_id` as its `ref`. */
+    private fun ourPairing(a: Approval?, p: com.vettid.core.data.devices.PairingState): Boolean {
+        val d = a as? Approval.DeviceRequest ?: return false
+        val held = (p.stage as? PairingStage.Compare)?.pending?.pendingId
+        return d.isPairing && held != null && held == d.id
+    }
 
     val uiState: StateFlow<ApprovalDetailUiState> =
         combine(local, repo.approvals, clock, aux) { s, list, now, x ->
@@ -426,8 +451,10 @@ class ApprovalDetailViewModel @Inject constructor(
                 // While access is being ended the gone screen stays (it does not flicker back to the request).
                 gone = (over || held) && !s.done && (!s.busy || s.ending) && s.criticalResult == null && s.outcome == null,
                 deviceListed = (shown as? Approval.DeviceRequest)?.let { s.deviceListRead && DeviceAsks.listed(it, x.devices) } == true,
-                pairingHeld = x.pairing.stage is PairingStage.Compare,
-                pairingName = com.vettid.core.data.feed.FeedNames.pairingName(x.pairing),
+                // Only the feed item of the pairing this phone holds (its `ref` is the event's `pending_id`) is named and compared.
+                pairingHeld = ourPairing(shown, x.pairing),
+                pairingName = com.vettid.core.data.feed.FeedNames.pairingName(x.pairing).takeIf { ourPairing(shown, x.pairing) },
+                itemsLoaded = x.itemsLoaded,
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.
                 renewalUntil = Renewal.expiresAt(shown, x.devices, s.deviceListRead, now),
@@ -543,7 +570,7 @@ class ApprovalDetailViewModel @Inject constructor(
     private suspend fun approveDevice(a: Approval.DeviceRequest, seconds: Int) {
         val d = repo.approveDeviceRequest(a.key, if (a.isSession) seconds else null)
         val outcome = if (a.isSession) {
-            DeviceOutcome.Allowed(d.expiresAt ?: Instant.now().plusSeconds(seconds.toLong()))
+            DeviceOutcome.Allowed(d.expiresAt)
         } else {
             DeviceOutcome.Approved(d.result)
         }
@@ -626,11 +653,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 // A critical use stays on screen with its result; everything else closes.
                 local.update { it.copy(busy = false, done = it.criticalResult == null && it.outcome == null, password = "") }
             } catch (e: VaultFailure) {
-                // AA5: any error answer to a device request (replaced, decided elsewhere, dropped: no code is named,
-                // decision 14 item c) is "no longer waiting"; the owner check and transport failures are not.
-                if (uiState.value.approval is Approval.DeviceRequest &&
-                    (e.kind == FailureKind.NOT_FOUND || e.kind == FailureKind.OTHER)
-                ) {
+                // AA5: `not_found` (VAULT-MESSAGING 0.83.0 §10.3: replaced, decided elsewhere, dropped) is "no longer
+                // waiting"; any other failure shows its error and keeps the request.
+                if (uiState.value.approval is Approval.DeviceRequest && e.kind == FailureKind.NOT_FOUND) {
                     local.update { it.copy(busy = false, error = null, outcome = DeviceOutcome.NoLongerWaiting) }
                     return@launch
                 }

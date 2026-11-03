@@ -232,6 +232,13 @@
     <string name="approvals_held_session_ended">Approved, but %1$s\'s access ended first, so nothing was done.</string> <!-- draft -->
     <string name="approvals_held_way_not_allowed">Approved, but this item no longer allows that, so nothing was done.</string> <!-- draft -->
     <string name="approvals_held_other_result">Approved, but your vault answered: %1$s.</string> <!-- draft -->
+    <string name="approvals_loading">Loading…</string> <!-- new -->
+    <string name="approvals_session_allowed_plain">Access allowed</string> <!-- new: the answer gave no time -->
+    <string name="approvals_held_no_result">Your vault didn\'t say whether it was done.</string> <!-- new: no result, so not "Approved" -->
+    <plurals name="approvals_held_use_bytes">
+        <item quantity="one">%1$d byte</item> <!-- new -->
+        <item quantity="other">%1$d bytes</item> <!-- new -->
+    </plurals>
     <string name="approvals_pair_title">A device asks to pair</string> <!-- draft -->
     <string name="approvals_pair_title_named">%1$s asks to pair</string> <!-- draft -->
     <string name="approvals_pair_body">This pairing can\'t be checked on this phone any more. Let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.</string> <!-- draft -->

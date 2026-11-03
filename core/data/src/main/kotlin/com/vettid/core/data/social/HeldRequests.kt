@@ -45,9 +45,20 @@ sealed interface HeldRequest {
 }
 
 /** Reads a held request from the event's `role`, `type` and `body` (§6.8: `body` is the held request's body). */
+/** Default_Ignorable_Code_Point: soft hyphen, CGJ, the Hangul fillers, variation selectors, zero width and bidi controls, tags. */
+@Suppress("MagicNumber")
+private val IGNORABLE: List<IntRange> = listOf(
+    0x00AD..0x00AD, 0x034F..0x034F, 0x061C..0x061C, 0x115F..0x1160, 0x17B4..0x17B5, 0x180B..0x180F, 0x200B..0x200F,
+    0x202A..0x202E, 0x2060..0x206F, 0x3164..0x3164, 0xFE00..0xFE0F, 0xFEFF..0xFEFF, 0xFFA0..0xFFA0, 0xFFF0..0xFFF8,
+    0x1BCA0..0x1BCA3, 0x1D173..0x1D17A, 0xE0000..0xE0FFF,
+)
+
 object HeldRequests {
     /** `item.use`'s data bound (§10.11). */
     const val MAX_DATA = 16_384
+
+    /** The most field ids an `item.get` is shown with. */
+    const val MAX_FIELDS = 64
 
     @Suppress("ReturnCount")
     fun of(role: String?, type: String?, body: JsonObject?): HeldRequest {
@@ -59,6 +70,20 @@ object HeldRequests {
             "catalog" -> HeldRequest.Catalog
             "item.run", "item.proxy" -> HeldRequest.Later(VaultJson.str(body, "item_id")?.takeIf { it.isNotEmpty() })
             else -> HeldRequest.Unshown
+        }
+    }
+
+    /**
+     * Whether the item cache can name everything [h] is about: the item for an `item.use` or `item.get`, the field of an
+     * `item.use`, every field of an `item.get`. Anything else is not approved (nothing is shown unseen).
+     */
+    fun nameable(h: HeldRequest?, items: List<com.vettid.core.data.items.ItemSummary>): Boolean {
+        fun fields(id: String) = items.firstOrNull { it.itemId == id }?.fieldLabels?.map { it.fieldId }?.toSet()
+        return when (h) {
+            is HeldRequest.ItemUse -> fields(h.itemId)?.contains(h.fieldId) == true
+            is HeldRequest.ItemGet -> fields(h.itemId)?.let { have -> h.fieldIds?.all { it in have } ?: true } == true
+            HeldRequest.Catalog -> true
+            else -> false
         }
     }
 
@@ -75,6 +100,8 @@ object HeldRequests {
         }
     }
 
+    private fun fieldsShown(f: List<String>): Boolean = f.isNotEmpty() && f.size <= MAX_FIELDS && f.toSet().size == f.size
+
     @Suppress("ReturnCount")
     private fun itemGet(b: JsonObject): HeldRequest {
         val item = VaultJson.str(b, "item_id")?.takeIf { it.isNotEmpty() } ?: return HeldRequest.Unshown
@@ -84,6 +111,8 @@ object HeldRequests {
             is JsonArray -> raw.map { e -> (e as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return HeldRequest.Unshown }
             else -> return HeldRequest.Unshown
         }
+        // An empty list (a vault may read it as "all fields"), a repeated id or more than 64 are not shown unseen.
+        if (fields != null && !fieldsShown(fields)) return HeldRequest.Unshown
         return HeldRequest.ItemGet(item, fields)
     }
 
@@ -107,14 +136,24 @@ sealed interface DataView {
 
     companion object {
         /**
-         * Printable: strictly valid UTF-8, and no code point that could hide or reorder what the member reads: no control
-         * character other than a line feed or tab, no format character (the bidirectional overrides and isolates, zero
-         * width characters), no unassigned, private-use or surrogate code point, no line or paragraph separator.
+         * Printable: strictly valid UTF-8, and nothing that could hide, reorder or fake what the member reads. Hex when it has:
+         * a control character other than a line feed or tab; a format character (the bidirectional overrides and isolates,
+         * zero width characters); a Default_Ignorable code point (soft hyphen, the Hangul fillers U+115F, U+1160, U+3164,
+         * U+FFA0, variation selectors, the combining grapheme joiner U+034F, tag characters); an unassigned, private-use or
+         * surrogate code point; a line or paragraph separator; a run of more than [MAX_MARKS] combining marks on one base;
+         * more than [MAX_LINES] lines (a text with many line feeds could fill the screen with the agent's own lines).
+         * Up to [MAX_LINES] lines of text are kept.
          */
         fun of(data: ByteArray): DataView {
             val text = strict(data)
             return if (text != null && printable(text)) Text(text) else Hex(hex(data))
         }
+
+        /** The most combining marks in a row. */
+        const val MAX_MARKS = 2
+
+        /** The most lines shown as text. */
+        const val MAX_LINES = 8
 
         private fun strict(data: ByteArray): String? = try {
             Charsets.UTF_8.newDecoder()
@@ -126,22 +165,40 @@ sealed interface DataView {
             null
         }
 
+        @Suppress("ReturnCount")
         private fun printable(s: String): Boolean {
             var i = 0
+            var lines = 1
+            var marks = 0
             while (i < s.length) {
                 val cp = s.codePointAt(i)
                 i += Character.charCount(cp)
-                if (cp == '\n'.code || cp == '\t'.code) continue
-                val ok = when (Character.getType(cp).toByte()) {
-                    Character.CONTROL, Character.FORMAT, Character.UNASSIGNED, Character.PRIVATE_USE, Character.SURROGATE,
-                    Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR,
-                    -> false
-                    else -> true
-                }
-                if (!ok) return false
+                if (cp == '\n'.code && ++lines > MAX_LINES) return false
+                marks = if (isMark(cp)) marks + 1 else 0
+                if (marks > MAX_MARKS || !shown(cp)) return false
             }
             return true
         }
+
+        private fun isMark(cp: Int): Boolean = when (Character.getType(cp).toByte()) {
+            Character.NON_SPACING_MARK, Character.ENCLOSING_MARK, Character.COMBINING_SPACING_MARK -> true
+            else -> false
+        }
+
+        @Suppress("ReturnCount")
+        private fun shown(cp: Int): Boolean {
+            if (cp == '\n'.code || cp == '\t'.code) return true
+            if (ignorable(cp)) return false
+            return when (Character.getType(cp).toByte()) {
+                Character.CONTROL, Character.FORMAT, Character.UNASSIGNED, Character.PRIVATE_USE, Character.SURROGATE,
+                Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR,
+                -> false
+                else -> true
+            }
+        }
+
+        /** The Unicode Default_Ignorable_Code_Point property (and nothing less): invisible in most renderings. */
+        private fun ignorable(cp: Int): Boolean = IGNORABLE.any { cp in it }
 
         /** Lower-case hex, two digits a byte, a space between bytes. */
         fun hex(data: ByteArray): String = data.joinToString(" ") { "%02x".format(it) }

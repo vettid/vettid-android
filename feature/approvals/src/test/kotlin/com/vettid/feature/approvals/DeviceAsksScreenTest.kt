@@ -218,7 +218,7 @@ class DeviceAsksScreenTest {
     fun eachResultOfApproveHasItsText() {
         val cases = mapOf(
             "ok" to "Approved",
-            null to "Approved",
+            null to "Your vault didn't say whether it was done.",
             "forbidden" to "Approved, but $bot no longer has a permission that covers it, or is paused, so nothing was done.",
             "session_required" to "Approved, but $bot's access ended first, so nothing was done.",
             "denied" to "Approved, but $bot's access ended first, so nothing was done.",
@@ -238,6 +238,36 @@ class DeviceAsksScreenTest {
     fun deniedSaysDenied() {
         show(state(held(HeldRequest.Catalog), outcome = DeviceOutcome.Denied))
         rule.onNodeWithText("Denied").assertExists()
+    }
+
+    @Test
+    fun anAnswerWithoutATimeSaysAccessAllowedAndNothingMadeUp() {
+        show(state(session(), outcome = DeviceOutcome.Allowed(null)))
+        rule.onNodeWithText("Access allowed").assertExists()
+        assertEquals(false, has("until", substring = true))
+    }
+
+    @Test
+    fun theDataIsInABoxWithItsByteLength() {
+        show(state(held(HeldRequest.ItemUse("i1", "f1", "ping 12:00".toByteArray()))))
+        rule.onNodeWithTag("use_data_box").assertExists()
+        rule.onNodeWithText("10 bytes").assertExists()
+    }
+
+    @Test
+    fun oneByteIsOneByte() {
+        show(state(held(HeldRequest.ItemUse("i1", "f1", byteArrayOf(65)))))
+        rule.onNodeWithText("1 byte").assertExists()
+    }
+
+    @Test
+    fun whileTheItemCacheLoadsTheTitleSaysLoading() {
+        val s = state(held(HeldRequest.ItemUse("i1", "f1", byteArrayOf(1)))).copy(items = emptyList(), itemsLoaded = false)
+        show(s)
+        rule.onNodeWithText("$bot wants to use Loading… without seeing it").assertExists()
+        assertEquals(false, has("an item you no longer have", substring = true))
+        assertEquals(false, has("Approve"))
+        rule.onNodeWithText("Deny").assertExists()
     }
 
     // --- a pairing known from its feed item ---

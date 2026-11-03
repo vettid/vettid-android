@@ -162,7 +162,11 @@ class NotificationsViewModel @Inject constructor(
                 devices.devices,
                 pairing.state,
             ) { names, d, p ->
-                names.copy(devices = FeedNames.deviceNames(d), pairingName = FeedNames.pairingName(p))
+                names.copy(
+                    devices = FeedNames.deviceNames(d),
+                    pairingName = FeedNames.pairingName(p),
+                    pairingPendingId = FeedNames.pairingPendingId(p),
+                )
             }.collect { n -> state.update { it.copy(names = n) } }
         }
         if (feed.load.value == ListLoad.NOT_LOADED) refresh()

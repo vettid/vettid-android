@@ -153,16 +153,14 @@ class DeviceApprovalsViewModelTest {
     }
 
     @Test
-    fun anErrorAnswerIsNoLongerWaiting() = runTest {
-        for (kind in listOf(FailureKind.NOT_FOUND, FailureKind.OTHER)) {
-            social.fail["approveDeviceRequest"] = VaultFailure(kind, "whatever")
-            val m = vm(session())
-            runCurrent()
-            m.approve()
-            runCurrent()
-            assertEquals(kind.name, DeviceOutcome.NoLongerWaiting, m.uiState.value.outcome)
-            assertNull(m.uiState.value.error)
-        }
+    fun notFoundIsNoLongerWaiting() = runTest {
+        social.fail["approveDeviceRequest"] = VaultFailure(FailureKind.NOT_FOUND, "not_found")
+        val m = vm(session())
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.NoLongerWaiting, m.uiState.value.outcome)
+        assertNull(m.uiState.value.error)
         // The same for a deny.
         social.fail["declineDeviceRequest"] = VaultFailure(FailureKind.NOT_FOUND)
         val d = vm(session())
@@ -170,6 +168,44 @@ class DeviceApprovalsViewModelTest {
         d.deny()
         runCurrent()
         assertEquals(DeviceOutcome.NoLongerWaiting, d.uiState.value.outcome)
+    }
+
+    @Test
+    fun anyOtherFailureShowsTheErrorAndKeepsTheRequest() = runTest {
+        for (kind in listOf(FailureKind.OTHER, FailureKind.NETWORK, FailureKind.RATE_LIMITED)) {
+            social.fail["approveDeviceRequest"] = VaultFailure(kind, "internal")
+            val m = vm(session())
+            runCurrent()
+            m.approve()
+            runCurrent()
+            assertNull(kind.name, m.uiState.value.outcome)
+            assertEquals(kind, m.uiState.value.error)
+            assertFalse(m.uiState.value.gone)
+            assertFalse(m.uiState.value.done)
+        }
+        social.fail["declineDeviceRequest"] = VaultFailure(FailureKind.OTHER, "internal")
+        val d = vm(heldAsk(use))
+        runCurrent()
+        d.deny()
+        runCurrent()
+        assertNull(d.uiState.value.outcome)
+        assertEquals(FailureKind.OTHER, d.uiState.value.error)
+    }
+
+    @Test
+    fun anAnswerWithoutAnEndOrAResultIsNotMadeUp() = runTest {
+        social.deviceDecision = DeviceDecision(expiresAt = null)
+        val s = vm(session())
+        runCurrent()
+        s.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Allowed(null), s.uiState.value.outcome)
+        social.deviceDecision = DeviceDecision(result = null)
+        val h = vm(heldAsk(use))
+        runCurrent()
+        h.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved(null), h.uiState.value.outcome)
     }
 
     @Test
@@ -247,17 +283,35 @@ class DeviceApprovalsViewModelTest {
     }
 
     @Test
-    fun theItemCacheNotLoadedYetIsDenyOnlyUntilItIs() = runTest {
-        val empty = FakeItems()
+    fun theItemCacheStillLoadingIsLoadingNotAnItemYouNoLongerHave() = runTest {
+        val loading = FakeItems()
+        loading.load.value = com.vettid.core.data.items.ListLoad.LOADING
         social.approvals.value = listOf(heldAsk(use))
         val m = ApprovalDetailViewModel(
-            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to heldAsk(use).key)), social, empty, devices, FakeVault(), social, pairing,
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to heldAsk(use).key)), social, loading, devices, FakeVault(), social, pairing,
         )
         runCurrent()
+        assertFalse(m.uiState.value.itemsLoaded)
+        assertEquals(HeldShow.NoItem(use = true, loading = true), m.uiState.value.heldShow)
         assertFalse(m.uiState.value.canApprove)
-        empty.add(FakeItems.item("i1", "Bank PIN", Sensitivity.SECRET, fields = listOf("PIN" to "1234")))
+        loading.add(FakeItems.item("i1", "Bank PIN", Sensitivity.SECRET, fields = listOf("PIN" to "1234")))
+        loading.load.value = com.vettid.core.data.items.ListLoad.LOADED
         runCurrent()
+        assertTrue(m.uiState.value.itemsLoaded)
         assertTrue(m.uiState.value.canApprove)
+    }
+
+    @Test
+    fun aCacheThatFailedToLoadReadsAsAnItemYouNoLongerHave() = runTest {
+        val failed = FakeItems()
+        failed.load.value = com.vettid.core.data.items.ListLoad.FAILED
+        social.approvals.value = listOf(heldAsk(use))
+        val m = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to heldAsk(use).key)), social, failed, devices, FakeVault(), social, pairing,
+        )
+        runCurrent()
+        assertEquals(HeldShow.NoItem(use = true, loading = false), m.uiState.value.heldShow)
+        assertFalse(m.uiState.value.canApprove)
     }
 
     @Test
@@ -271,8 +325,11 @@ class DeviceApprovalsViewModelTest {
 
     @Test
     fun aPairingOffersNothingButTheComparisonWhenThePhoneHoldsIt() = runTest {
-        val p = Approval.DeviceRequest("device.pair.pending", "p1", null, null, null, now, now.plusSeconds(600), fromFeed = true)
-        val m = vm(p)
+        val p = Approval.DeviceRequest("device.pair.pending", "pend-1", null, null, null, now, now.plusSeconds(600), fromFeed = true)
+        val other = p.copy(id = "pend-2")
+        social.approvals.value = listOf(p, other)
+        val m = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to p.key)), social, items, devices, FakeVault(), social, pairing)
+        val o = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to other.key)), social, items, devices, FakeVault(), social, pairing)
         runCurrent()
         assertFalse(m.uiState.value.canApprove)
         assertFalse(m.uiState.value.pairingHeld)
@@ -280,10 +337,13 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertFalse("approveDeviceRequest" in social.calls)
 
-        pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("pp", "New bot", "123456", now.plusSeconds(600))))
+        pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("pp", "New bot", "123456", now.plusSeconds(600), "pend-1")))
         runCurrent()
+        // Only the entry whose ref is the held pairing's pending_id is named and compared.
         assertTrue(m.uiState.value.pairingHeld)
         assertEquals("New bot", m.uiState.value.pairingName)
+        assertFalse(o.uiState.value.pairingHeld)
+        assertNull(o.uiState.value.pairingName)
         // Still nothing is approved from here: the comparison is its own screen.
         assertFalse(m.uiState.value.canApprove)
     }

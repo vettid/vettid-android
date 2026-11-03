@@ -220,7 +220,7 @@ fun ApprovalsScreen(
                 }
                 items(state.entries, key = { it.key }) { e ->
                     when (e) {
-                        is ApprovalEntry.One -> ApprovalRow(e.approval, onOpen, items = state.items)
+                        is ApprovalEntry.One -> ApprovalRow(e.approval, onOpen, items = state.items, itemsLoaded = state.itemsLoaded)
                         is ApprovalEntry.Batch -> BatchRow(e, e.key in expanded, onOpen) {
                             expanded = if (e.key in expanded) expanded - e.key else expanded + e.key
                         }
@@ -263,10 +263,11 @@ private fun ApprovalRow(
     onOpen: (String) -> Unit,
     modifier: Modifier = Modifier,
     items: List<com.vettid.core.data.items.ItemSummary> = emptyList(),
+    itemsLoaded: Boolean = true,
 ) {
     val who = whoOf(a)
     VettIdListRow(
-        title = titleOf(a, items),
+        title = titleOf(a, items, itemsLoaded),
         supporting = if (a is Approval.DeviceRequest) {
             deviceSupporting(a, rememberNow())
         } else {
@@ -337,8 +338,8 @@ private fun PausedNotice(
 
 /** The kind of request, as a row title. */
 @Composable
-fun titleOf(a: Approval, items: List<com.vettid.core.data.items.ItemSummary> = emptyList()): String {
-    if (a is Approval.DeviceRequest) return deviceTitle(a, items)
+fun titleOf(a: Approval, items: List<com.vettid.core.data.items.ItemSummary> = emptyList(), itemsLoaded: Boolean = true): String {
+    if (a is Approval.DeviceRequest) return deviceTitle(a, items, itemsLoaded)
     val name = (a as? Approval.Authentication)?.connectionName?.let { AuthContext.isolatedName(it) }
     val inline = stringResource(R.string.approvals_a_connection_inline)
     return when ((a as? Approval.Authentication)?.purpose) {

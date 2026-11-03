@@ -57,6 +57,17 @@ class HeldRequestsTest {
     }
 
     @Test
+    fun anItemGetWithAnEmptyRepeatedOrTooLongFieldListIsDenyOnly() {
+        fun get(fields: String) = HeldRequests.of("agent", "agent.request", body("""{"op":"item.get","item_id":"i1","fields":$fields}"""))
+        assertEquals(HeldRequest.Unshown, get("[]"))
+        assertEquals(HeldRequest.Unshown, get("""["f1","f2","f1"]"""))
+        val many = (1..65).joinToString(",", "[", "]") { "\"f$it\"" }
+        assertEquals(HeldRequest.Unshown, get(many))
+        val ok = (1..64).joinToString(",", "[", "]") { "\"f$it\"" }
+        assertTrue(get(ok) is HeldRequest.ItemGet)
+    }
+
+    @Test
     fun theCatalogIsApprovableAndRunAndProxyAreDenyOnly() {
         assertEquals(HeldRequest.Catalog, HeldRequests.of("agent", "agent.request", body("""{"op":"catalog"}""")))
         for (op in listOf("item.run", "item.proxy")) {
@@ -105,6 +116,63 @@ class HeldRequestsTest {
         assertTrue(DataView.of("a b".toByteArray()) is DataView.Hex)
         assertTrue(DataView.of("ab".toByteArray()) is DataView.Hex)
         assertTrue(DataView.of("a͸b".toByteArray()) is DataView.Hex)
+    }
+
+    @Test
+    fun hostileInvisibleTextIsShownAsHex() {
+        val hostile = listOf(
+            "ab\u115Fcd", "ab\u1160cd", "ab\u3164cd", "ab\uFFA0cd", // Hangul fillers
+            "ab\u00ADcd", "ab\uFE0Fcd", "ab\uFE00cd", "ab\uDB40\uDD00cd", // variation selectors (the last is VS17)
+            "ab\u034Fcd", // combining grapheme joiner
+            "ab\uD83D\uDE00\uDB40\uDC41cd", // a tag character
+        )
+        hostile.forEach { assertTrue(it, DataView.of(it.toByteArray()) is DataView.Hex) }
+    }
+
+    @Test
+    fun zalgoIsShownAsHexButOrdinaryAccentsAreText() {
+        // More than 2 combining marks on one base.
+        assertTrue(DataView.of("a\u0300\u0301\u0302".toByteArray()) is DataView.Hex)
+        val zalgo = "z" + "\u0300\u0301\u0302\u0303\u0304\u0305"
+        assertTrue(DataView.of(zalgo.toByteArray()) is DataView.Hex)
+        // Two marks are fine, and the count restarts after a base.
+        assertTrue(DataView.of("a\u0300\u0301 b\u0300\u0301".toByteArray()) is DataView.Text)
+        assertTrue(DataView.of("e\u0301".toByteArray()) is DataView.Text)
+    }
+
+    @Test
+    fun moreThanEightLinesIsShownAsHex() {
+        val eight = (1..8).joinToString("\n") { "line $it" }
+        assertTrue(DataView.of(eight.toByteArray()) is DataView.Text)
+        val nine = (1..9).joinToString("\n") { "line $it" }
+        assertTrue(DataView.of(nine.toByteArray()) is DataView.Hex)
+        assertTrue(DataView.of("\n".repeat(200).toByteArray()) is DataView.Hex)
+    }
+
+    @Test
+    fun aLongTextOnOneLineIsStillText() {
+        val long = "a".repeat(HeldRequests.MAX_DATA)
+        assertTrue(DataView.of(long.toByteArray()) is DataView.Text)
+    }
+
+    @Test
+    fun nameableNeedsTheItemAndEveryFieldInTheCache() {
+        val items = listOf(
+            com.vettid.core.data.items.ItemSummary(
+                "i1", 1, "Bank", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+                fieldLabels = listOf(com.vettid.core.data.items.FieldLabel("f1", "PIN", "password")),
+            ),
+        )
+        assertTrue(HeldRequests.nameable(HeldRequest.ItemUse("i1", "f1", byteArrayOf(1)), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemUse("i1", "f9", byteArrayOf(1)), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemUse("x", "f1", byteArrayOf(1)), items))
+        assertTrue(HeldRequests.nameable(HeldRequest.ItemGet("i1", null), items))
+        assertTrue(HeldRequests.nameable(HeldRequest.ItemGet("i1", listOf("f1")), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemGet("i1", listOf("f1", "f9")), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemGet("x", null), items))
+        assertFalse(HeldRequests.nameable(HeldRequest.ItemGet("i1", null), emptyList()))
+        assertTrue(HeldRequests.nameable(HeldRequest.Catalog, emptyList()))
+        assertFalse(HeldRequests.nameable(HeldRequest.Unshown, items))
     }
 
     @Test

@@ -15,7 +15,7 @@ class FeedDeviceItemsTest {
     private fun item(kind: String, device: String? = "d1", ref: String? = "r1") =
         FeedItem("i", 1, kind, "2026-11-02T12:00:00Z", "active", "normal", deviceId = device, ref = ref)
 
-    private val names = FeedNames(devices = mapOf("d1" to "Build bot", "d2" to "‮evil\u0007"), pairingName = "New bot")
+    private val names = FeedNames(devices = mapOf("d1" to "Build bot", "d2" to "‮evil\u0007"), pairingName = "New bot", pairingPendingId = "p1")
 
     private fun iso(s: String) = FeedText(literal = "⁨$s⁩")
 
@@ -32,8 +32,20 @@ class FeedDeviceItemsTest {
         )
         named.forEach { (kind, res) -> assertEquals(kind, FeedText(res, listOf(iso("Build bot"))), FeedKinds.title(item(kind), names)) }
         // The pairing's item carries no name: the held pairing's name while the app has it.
-        assertEquals(FeedText(R.string.data_feed_device_pair_pending_named, listOf(iso("New bot"))), FeedKinds.title(item("device.pair.pending", null), names))
+        assertEquals(FeedText(R.string.data_feed_device_pair_pending_named, listOf(iso("New bot"))), FeedKinds.title(item("device.pair.pending", null, "p1"), names))
         assertEquals(FeedText(R.string.data_feed_device_pair_pending), FeedKinds.title(item("device.pair.pending", null), FeedNames()))
+    }
+
+    @Test
+    fun theHeldPairingsNameIsOnlyForTheItemWhoseRefIsItsPendingId() {
+        // Another pairing's item (another ref), or one without a ref, gets the unnamed title.
+        assertEquals(FeedText(R.string.data_feed_device_pair_pending), FeedKinds.title(item("device.pair.pending", null, "other"), names))
+        assertEquals(FeedText(R.string.data_feed_device_pair_pending), FeedKinds.title(item("device.pair.pending", null, null), names))
+        // A held pairing whose event carried no pending_id names nobody.
+        assertEquals(
+            FeedText(R.string.data_feed_device_pair_pending),
+            FeedKinds.title(item("device.pair.pending", null, "p1"), names.copy(pairingPendingId = null)),
+        )
     }
 
     @Test
@@ -92,6 +104,9 @@ class FeedDeviceItemsTest {
         val pending = com.vettid.core.data.devices.PendingPairing("p", "Held bot", "123456", java.time.Instant.EPOCH)
         val st = com.vettid.core.data.devices.PairingState(com.vettid.core.data.devices.PairingStage.Compare(pending))
         assertEquals("Held bot", FeedNames.pairingName(st))
+        assertEquals(null, FeedNames.pairingPendingId(st))
+        val withId = com.vettid.core.data.devices.PendingPairing("p", "Held bot", "123456", java.time.Instant.EPOCH, "pend-1")
+        assertEquals("pend-1", FeedNames.pairingPendingId(com.vettid.core.data.devices.PairingState(com.vettid.core.data.devices.PairingStage.Compare(withId))))
         assertEquals(null, FeedNames.pairingName(com.vettid.core.data.devices.PairingState()))
     }
 }

@@ -46,14 +46,22 @@ class PairingCode(val pairingId: String, val link: String, val exp: Instant) {
  * was not for an agent, so that it cannot be compared and only rejected. [ends] is when this phone stops offering the
  * approval (10 minutes after the event, never later than the vault's own end).
  */
-class PendingPairing(val pairingId: String, val name: String, val sas: String?, val ends: Instant) {
+class PendingPairing(
+    val pairingId: String,
+    val name: String,
+    val sas: String?,
+    val ends: Instant,
+    /** The event's `pending_id` = the `ref` of the pairing's feed item (VAULT-MESSAGING 0.83.0 §10.3); null if absent. */
+    val pendingId: String? = null,
+) {
     /** An approval is offered only for a code that can be compared. */
     val comparable: Boolean get() = sas != null
 
     override fun toString(): String = "PendingPairing(ends=$ends)"
 
     override fun equals(other: Any?): Boolean =
-        other is PendingPairing && other.pairingId == pairingId && other.name == name && other.sas == sas && other.ends == ends
+        other is PendingPairing && other.pairingId == pairingId && other.name == name && other.sas == sas &&
+            other.ends == ends && other.pendingId == pendingId
 
     override fun hashCode(): Int = pairingId.hashCode()
 }
@@ -217,7 +225,10 @@ class PairingManager(
             val role = VaultJson.str(body, "role")
             val sas = if (role == ROLE_AGENT) readSas(VaultJson.str(body, "sas")) else null
             val ends = at.plus(WINDOW)
-            val p = PendingPairing(id, DeviceWire.cleanName(VaultJson.str(body, "name")), sas, ends)
+            val p = PendingPairing(
+                id, DeviceWire.cleanName(VaultJson.str(body, "name")), sas, ends,
+                VaultJson.str(body, "pending_id")?.takeIf { it.isNotEmpty() },
+            )
             timer?.cancel()
             val gen = generation
             timer = scope.launch { endAt(ends, gen) { it is PairingStage.Compare && it.pending.pairingId == id } }

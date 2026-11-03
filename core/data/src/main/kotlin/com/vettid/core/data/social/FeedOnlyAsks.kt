@@ -8,7 +8,8 @@ import java.time.Instant
  * Asks known only from their feed item (ANDROID-PLAN 0.1.116 §4 AA5, decisions 10 and 14a): `device.session.pending`,
  * `approval.pending` and `device.pair.pending` arrive once as events, so after a restart the feed item (its `ref`, its
  * `device_id`, its `at`) is all the app has until `pending.list` (§10.4.2) is read. Once a list has been merged it is
- * authoritative and these entries are not made (an ask not in it is gone). They carry no body: an approval can only be
+ * authoritative for sessions and approvals (an ask not in it is gone) and theirs are not made; the vault does not list
+ * pairings yet (0.83.0), so a pairing's entry stays. They carry no body: an approval can only be
  * denied, a pairing offers nothing, a session request offers Allow with a default length when the device is listed.
  */
 internal object FeedOnlyAsks {

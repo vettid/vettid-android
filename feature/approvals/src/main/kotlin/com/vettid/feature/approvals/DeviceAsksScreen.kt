@@ -1,5 +1,6 @@
 package com.vettid.feature.approvals
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +26,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.DataView
@@ -80,25 +82,30 @@ internal fun kindWord(a: Approval.DeviceRequest): String = when (AccountNames.cl
 /** A device request's title (the row's and the screen's). */
 @Composable
 @Suppress("CyclomaticComplexMethod")
-internal fun deviceTitle(a: Approval.DeviceRequest, items: List<com.vettid.core.data.items.ItemSummary>): String {
+internal fun deviceTitle(
+    a: Approval.DeviceRequest,
+    items: List<com.vettid.core.data.items.ItemSummary>,
+    itemsLoaded: Boolean = true,
+): String {
     val who = deviceSentenceStart(a)
     return when {
         a.isPairing -> a.deviceName?.let { AccountNames.isolateOrNull(it) }
             ?.let { stringResource(R.string.approvals_pair_title_named, it) } ?: stringResource(R.string.approvals_pair_title)
         a.isSession -> stringResource(if (a.fromFeed) R.string.approvals_session_title_feed else R.string.approvals_session_title, who)
-        else -> when (val h = DeviceAsks.show(a, items)) {
+        else -> when (val h = DeviceAsks.show(a, items, itemsLoaded)) {
             is HeldShow.Use -> stringResource(R.string.approvals_held_use_title, who, AccountNames.isolate(h.item))
             is HeldShow.Get -> stringResource(R.string.approvals_held_get_title, who, AccountNames.isolate(h.item))
             HeldShow.Catalog -> stringResource(R.string.approvals_held_catalog_title, who)
             is HeldShow.NoItem -> stringResource(
                 if (h.use) R.string.approvals_held_use_title else R.string.approvals_held_get_title,
                 who,
-                stringResource(R.string.approvals_held_no_item),
+                stringResource(if (h.loading) R.string.approvals_loading else R.string.approvals_held_no_item),
             )
             is HeldShow.Later -> stringResource(
                 R.string.approvals_held_later_title,
                 who,
-                h.item?.let { AccountNames.isolate(it) } ?: stringResource(R.string.approvals_held_no_item),
+                h.item?.let { AccountNames.isolate(it) }
+                    ?: stringResource(if (h.loading) R.string.approvals_loading else R.string.approvals_held_no_item),
             )
             HeldShow.Desktop, HeldShow.Other, HeldShow.Gone -> stringResource(R.string.approvals_held_other_title, who)
         }
@@ -140,7 +147,7 @@ internal fun DeviceRequestScreen(
             is HeldShow.Use -> stringResource(R.string.approvals_held_use_body, AccountNames.isolate(held.field))
             is HeldShow.Get -> null
             HeldShow.Catalog -> stringResource(R.string.approvals_held_catalog_body)
-            is HeldShow.NoItem -> stringResource(R.string.approvals_held_no_item_body)
+            is HeldShow.NoItem -> stringResource(if (held.loading) R.string.approvals_loading else R.string.approvals_held_no_item_body)
             is HeldShow.Later -> stringResource(R.string.approvals_held_later_body)
             HeldShow.Desktop -> stringResource(R.string.approvals_held_desktop_body)
             HeldShow.Gone -> stringResource(R.string.approvals_held_gone_body, who)
@@ -149,7 +156,7 @@ internal fun DeviceRequestScreen(
     }
     val pairing = a.isPairing
     FormScaffold(
-        title = deviceTitle(if (pairing) a.copy(deviceName = state.pairingName ?: a.deviceName) else a, state.items),
+        title = deviceTitle(if (pairing) a.copy(deviceName = state.pairingName ?: a.deviceName) else a, state.items, state.itemsLoaded),
         body = body,
         primaryLabel = when {
             pairing -> if (state.pairingHeld) stringResource(R.string.approvals_pair_compare) else null
@@ -230,16 +237,34 @@ private fun HeldFacts(held: HeldShow?) {
         is HeldShow.Use -> {
             Spacer(Modifier.height(Spacing.m))
             Label(stringResource(R.string.approvals_held_use_data))
-            when (val d = held.data) {
-                is DataView.Text -> Value(d.text, Modifier.testTag("use_data_text"))
-                is DataView.Hex -> {
-                    Text(stringResource(R.string.approvals_held_use_data_hex), style = MaterialTheme.typography.bodySmall)
-                    Text(
-                        d.hex,
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.testTag("use_data_hex"),
+            // In a box with its length, so that the agent's text cannot pass for one of the app's own lines.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+                    .padding(Spacing.m)
+                    .testTag("use_data_box"),
+            ) {
+                Text(
+                    pluralStringResource(R.plurals.approvals_held_use_bytes, held.bytes, held.bytes),
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.testTag("use_data_bytes"),
+                )
+                when (val d = held.data) {
+                    is DataView.Text -> Text(
+                        d.text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.testTag("use_data_text"),
                     )
+                    is DataView.Hex -> {
+                        Text(stringResource(R.string.approvals_held_use_data_hex), style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            d.hex,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.testTag("use_data_hex"),
+                        )
+                    }
                 }
             }
         }
@@ -267,11 +292,15 @@ private fun HeldFacts(held: HeldShow?) {
 private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, actions: DecisionActions, modifier: Modifier) {
     val who = deviceSentenceInline(a)
     val text = when (o) {
-        is DeviceOutcome.Allowed -> stringResource(R.string.approvals_session_allowed, untilText(o.until))
+        is DeviceOutcome.Allowed ->
+            o.until?.let { stringResource(R.string.approvals_session_allowed, untilText(it)) }
+                ?: stringResource(R.string.approvals_session_allowed_plain)
         DeviceOutcome.Denied -> stringResource(R.string.approvals_held_denied)
         DeviceOutcome.NoLongerWaiting -> stringResource(R.string.approvals_no_longer_waiting)
         is DeviceOutcome.Approved -> when (val r = o.result) {
-            null, "ok" -> stringResource(R.string.approvals_held_approved)
+            // The vault did not say whether it was done: not "Approved".
+            null -> stringResource(R.string.approvals_held_no_result)
+            "ok" -> stringResource(R.string.approvals_held_approved)
             "forbidden" -> stringResource(R.string.approvals_held_forbidden, who)
             "session_required", "denied" -> stringResource(R.string.approvals_held_session_ended, who)
             "way_not_allowed" -> stringResource(R.string.approvals_held_way_not_allowed)

@@ -63,7 +63,7 @@ internal object NotificationsCatalog {
     )
 
     // AA5 (ANDROID-PLAN 0.1.116 "Notifications and the feed"): the device and agent rows, named from the device list.
-    private val agentNames = names.copy(devices = mapOf("dev-a" to "Build bot"), pairingName = "New bot")
+    private val agentNames = names.copy(devices = mapOf("dev-a" to "Build bot"), pairingName = "New bot", pairingPendingId = "p1")
     private val agentItems = listOf(
         FeedItem("g01", 43, "leash.agent.suspended", at(1), "active", "high", deviceId = "dev-a"),
         FeedItem("g02", 42, "leash.referrals_limited", at(2), "active", "high", deviceId = "dev-a"),

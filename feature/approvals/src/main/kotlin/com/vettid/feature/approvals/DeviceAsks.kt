@@ -16,7 +16,7 @@ internal sealed interface HeldShow {
     val approvable: Boolean
 
     /** `item.use`: the item and field names (cleaned), and the data as the member reads it (decision 18). */
-    data class Use(val item: String, val field: String, val data: DataView) : HeldShow {
+    data class Use(val item: String, val field: String, val data: DataView, val bytes: Int) : HeldShow {
         override val approvable get() = true
 
         override fun toString(): String = "Use"
@@ -36,12 +36,12 @@ internal sealed interface HeldShow {
     }
 
     /** The item (or a field) is not in the app's cache: "an item you no longer have", deny-only. */
-    data class NoItem(val use: Boolean) : HeldShow {
+    data class NoItem(val use: Boolean, val loading: Boolean = false) : HeldShow {
         override val approvable get() = false
     }
 
     /** `item.run` and `item.proxy` (decision 15), an item named when known. */
-    data class Later(val item: String?) : HeldShow {
+    data class Later(val item: String?, val loading: Boolean = false) : HeldShow {
         override val approvable get() = false
 
         override fun toString(): String = "Later"
@@ -80,8 +80,22 @@ internal object DeviceAsks {
     fun preselected(requested: Int?): Int = choices(requested).let { c -> requested?.takeIf { it in c } ?: DEFAULT_SECONDS }
 
     /** What [a] shows, given the app's item cache. */
+    fun show(a: Approval.DeviceRequest, items: List<ItemSummary>, loaded: Boolean = true): HeldShow {
+        val shown = showLoaded(a, items)
+        if (loaded) return shown
+        // The item cache is still being read: what it cannot name yet is "Loading…", not "an item you no longer have".
+        return when (shown) {
+            is HeldShow.NoItem -> shown.copy(loading = true)
+            is HeldShow.Later -> {
+                val named = (a.held as? HeldRequest.Later)?.itemId != null
+                if (named && shown.item == null) shown.copy(loading = true) else shown
+            }
+            else -> shown
+        }
+    }
+
     @Suppress("CyclomaticComplexMethod", "ReturnCount")
-    fun show(a: Approval.DeviceRequest, items: List<ItemSummary>): HeldShow {
+    private fun showLoaded(a: Approval.DeviceRequest, items: List<ItemSummary>): HeldShow {
         if (!a.isHeld) return HeldShow.Other
         if (a.fromFeed) return HeldShow.Gone
         fun item(id: String) = items.firstOrNull { it.itemId == id }
@@ -91,7 +105,11 @@ internal object DeviceAsks {
                 val f = i?.fieldLabels?.firstOrNull { it.fieldId == h.fieldId }
                 val name = AccountNames.cleaned(i?.name)
                 val label = AccountNames.cleaned(f?.label)
-                if (name == null || label == null) HeldShow.NoItem(use = true) else HeldShow.Use(name, label, DataView.of(h.data))
+                if (name == null || label == null) {
+                    HeldShow.NoItem(use = true)
+                } else {
+                    HeldShow.Use(name, label, DataView.of(h.data), h.data.size)
+                }
             }
             is HeldRequest.ItemGet -> {
                 val i = item(h.itemId)
@@ -131,8 +149,8 @@ internal object DeviceAsks {
 
 /** How a decision on a device request ended (shown before the screen closes). */
 sealed interface DeviceOutcome {
-    /** `device.session.approve` answered: access until [until]. */
-    data class Allowed(val until: java.time.Instant) : DeviceOutcome
+    /** `device.session.approve` answered: access until [until], or null when the answer gave no `expires_at`. */
+    data class Allowed(val until: java.time.Instant?) : DeviceOutcome
 
     /** `approval.decide{approve: true}` answered [result] (`ok`, or the code the held request was answered with). */
     data class Approved(val result: String?) : DeviceOutcome

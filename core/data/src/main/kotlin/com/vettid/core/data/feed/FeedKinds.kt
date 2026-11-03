@@ -62,6 +62,8 @@ data class FeedNames(
     val devices: Map<String, String> = emptyMap(),
     /** The name the pairing this phone holds gave itself (`device.pair.pending`, AA2); null when none is held. */
     val pairingName: String? = null,
+    /** The `pending_id` of that pairing: only the feed item whose `ref` is this one is named by [pairingName]. */
+    val pairingPendingId: String? = null,
 ) {
     companion object {
         /** Names for [devices]: the list's own names; this phone's entry too; an empty name is left out. */
@@ -71,6 +73,10 @@ data class FeedNames(
         /** The name of the pairing being compared on this phone, if one is. */
         fun pairingName(state: com.vettid.core.data.devices.PairingState): String? =
             (state.stage as? com.vettid.core.data.devices.PairingStage.Compare)?.pending?.name?.takeIf { it.isNotEmpty() }
+
+        /** The `pending_id` of the pairing being compared; null when none is, or when its event did not say. */
+        fun pairingPendingId(state: com.vettid.core.data.devices.PairingState): String? =
+            (state.stage as? com.vettid.core.data.devices.PairingStage.Compare)?.pending?.pendingId
     }
 }
 
@@ -320,7 +326,8 @@ object FeedKinds {
             "item.revealed" -> revealed(thing, details)
             "device.pair.pending" -> named(
                 R.string.data_feed_device_pair_pending_named, R.string.data_feed_device_pair_pending,
-                names.pairingName?.let { AccountNames.isolateOrNull(it) }?.let { FeedText(literal = it) },
+                names.pairingName?.takeIf { item.ref != null && item.ref == names.pairingPendingId }
+                    ?.let { AccountNames.isolateOrNull(it) }?.let { FeedText(literal = it) },
             )
             "device.paired" -> named(R.string.data_feed_device_paired_named, R.string.data_feed_device_paired, deviceName(item, names))
             "device.unlinked" ->

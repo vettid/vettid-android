@@ -87,6 +87,10 @@ class SocialManager(
     private val feedWithdrawn: (com.vettid.core.data.feed.WithdrawnBatch) -> Unit = {},
     /** The three vault calls that decide a device request (a seam for tests; the vault client in the app). */
     private val deviceOps: suspend () -> DeviceDecisionOps = { VaultDeviceDecisions(api()) },
+    /** The member's items with their field labels (the item cache): what a held `item.use` or `item.get` is shown against. */
+    private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
+    /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
+    private val deviceListed: (String) -> Boolean = { false },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -152,7 +156,7 @@ class SocialManager(
     /** The feed items (memory only), for the asks known only from them (AA5); set by the vault manager. */
     private val feedFlow = MutableStateFlow<List<com.vettid.core.vault.FeedItem>>(emptyList())
 
-    /** A `pending.list` was merged since the unlock: it is authoritative, so no ask is made from a feed item. */
+    /** A `pending.list` was merged since the unlock: it is authoritative for sessions and approvals, so none is made from a feed item. */
     private val listReadFlow = MutableStateFlow(false)
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
@@ -168,12 +172,11 @@ class SocialManager(
 
     override val approvals: StateFlow<List<Approval>> =
         combine(listedApprovals, feedFlow, listReadFlow, feedClosedFlow) { base, feed, listRead, closed ->
-            if (listRead) {
-                base
-            } else {
-                val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
-                if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt }
-            }
+            // A merged pending.list is authoritative for the asks it lists; the vault does not list pairings yet
+            // (0.83.0), so a pairing's entry is kept either way.
+            val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
+                .filter { !listRead || it.isPairing }
+            if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt }
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private fun closeFeedKey(key: String) = feedClosedFlow.update { it.copy(keys = it.keys + key) }
@@ -1545,27 +1548,20 @@ class SocialManager(
     }
 
     /**
-     * A decision on a device request: any error answer means the request is no longer waiting (§10.3 names no code,
-     * ANDROID-PLAN 0.1.116 decision 14 item c), so it leaves the list (a `not_found` already does, in [decideRun]).
+     * A decision on a device request: only `not_found` (VAULT-MESSAGING 0.83.0 §10.3: an ended request) means it is no longer
+     * waiting, and [decideRun] takes it out of the list; any other failure keeps the entry and is thrown.
      */
     private suspend fun deviceDecide(key: String, block: suspend (DeviceDecisionOps) -> Unit) {
-        try {
-            decideRun(key) { vaultGuard { block(deviceOps()) } }
-        } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.OTHER) {
-                closeFeedKey(key)
-                dropApproval(key)
-                listedFlow.update { l -> l.filterNot { it.key == key } }
-            }
-            throw e
-        }
+        decideRun(key) { vaultGuard { block(deviceOps()) } }
     }
 
     override suspend fun approveDeviceRequest(key: String, seconds: Int?): DeviceDecision {
         val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
         // Never approve what the app cannot show in full: a held request without its body, or one it cannot read.
-        val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true)
-        if (req.isPairing || unshown) {
+        val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true || !HeldRequests.nameable(req.held, itemCache()))
+        // A session request known only from its feed item is allowed only for a device the list names.
+        val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
+        if (req.isPairing || unshown || unknownDevice) {
             throw VaultFailure(FailureKind.NOT_SUPPORTED)
         }
         var decision = DeviceDecision()

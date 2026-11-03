@@ -588,7 +588,7 @@ class FeedNotifierTest {
     private fun deviceItem(id: String, kind: String, device: String? = "d1", ref: String? = "r1") =
         FeedItem(id, 1, kind, "2026-10-09T12:00:00Z", "active", "high", deviceId = device, ref = ref)
 
-    private val agentNames get() = FeedNames(devices = mapOf("d1" to "Build bot"), pairingName = "New bot")
+    private val agentNames get() = FeedNames(devices = mapOf("d1" to "Build bot"), pairingName = "New bot", pairingPendingId = "r1")
 
     @Test
     fun deviceAndAgentItemsNameTheDeviceOnTheirChannels() = runTest {

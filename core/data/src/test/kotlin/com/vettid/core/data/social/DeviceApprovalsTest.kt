@@ -75,7 +75,18 @@ class DeviceApprovalsTest {
         clock = Clock.fixed(now, ZoneOffset.UTC),
         feedRead = { kinds, ref, _ -> read += kinds to ref },
         deviceOps = { ops },
+        itemCache = { cache },
+        deviceListed = { it in listedDevices },
     )
+
+    /** The item cache and the devices `device.list` names, as the manager reads them. */
+    private var cache = listOf(
+        com.vettid.core.data.items.ItemSummary(
+            "i1", 1, "Bank PIN", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+            fieldLabels = listOf(com.vettid.core.data.items.FieldLabel("f1", "PIN", "password")),
+        ),
+    )
+    private var listedDevices = setOf("A")
 
     private fun event(type: String, body: String, ts: Instant = now) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = ts, body = body.toByteArray()))
 
@@ -193,21 +204,113 @@ class DeviceApprovalsTest {
     }
 
     @Test
-    fun anErrorAnswerTakesTheEntryAwayAndIsThrown() = runTest {
-        for (kind in listOf(FailureKind.NOT_FOUND, FailureKind.OTHER)) {
-            val m = manager()
-            m.onEvent(event("device.session.pending", session()))
-            runCurrent()
-            ops.fail = VaultFailure(kind, "gone")
+    fun onlyNotFoundTakesTheEntryAway() = runTest {
+        val m = manager()
+        m.onEvent(event("device.session.pending", session()))
+        runCurrent()
+        ops.fail = VaultFailure(FailureKind.NOT_FOUND, "not_found")
+        try {
+            m.approveDeviceRequest("device:device.session.pending:s1", 3600)
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NOT_FOUND, e.kind)
+        }
+        runCurrent()
+        assertTrue("the entry is gone", m.keys().isEmpty())
+    }
+
+    @Test
+    fun aTransientErrorAnswerKeepsTheEntry() = runTest {
+        val m = manager()
+        m.onEvent(event("device.session.pending", session()))
+        m.onEvent(event("approval.pending", held("h1", use)))
+        runCurrent()
+        for (code in listOf("internal", "bad_request", "forbidden", "rate_limited")) {
+            ops.fail = VaultFailure(FailureKind.OTHER, code)
             try {
                 m.approveDeviceRequest("device:device.session.pending:s1", 3600)
                 fail()
             } catch (e: VaultFailure) {
-                assertEquals(kind, e.kind)
+                assertEquals(code, e.code)
+            }
+            ops.fail = VaultFailure(FailureKind.OTHER, code)
+            try {
+                m.declineDeviceRequest("device:approval.pending:h1")
+                fail()
+            } catch (e: VaultFailure) {
+                assertEquals(FailureKind.OTHER, e.kind)
             }
             runCurrent()
-            assertTrue("$kind: the entry is gone", m.keys().isEmpty())
+            assertEquals("$code: both stay", 2, m.keys().size)
         }
+    }
+
+    @Test
+    fun anItemTheCacheCannotNameIsNotApprovedByTheCoreEither() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", held("h1", use)))
+        m.onEvent(event("approval.pending", held("h2", """{"op":"item.use","item_id":"i1","field_id":"f9","action":"hmac-sha256","data":"AAEC"}""")))
+        m.onEvent(event("approval.pending", held("h3", """{"op":"item.get","item_id":"gone"}""")))
+        m.onEvent(event("approval.pending", held("h4", """{"op":"item.get","item_id":"i1","fields":["f1","f9"]}""")))
+        runCurrent()
+        for (id in listOf("h2", "h3", "h4")) {
+            try {
+                m.approveDeviceRequest("device:approval.pending:$id", null)
+                fail("$id")
+            } catch (e: VaultFailure) {
+                assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
+            }
+        }
+        // An empty cache (not loaded) names nothing.
+        cache = emptyList()
+        try {
+            m.approveDeviceRequest("device:approval.pending:h1", null)
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
+        }
+        assertTrue(ops.calls.isEmpty())
+        cache = listOf(
+            com.vettid.core.data.items.ItemSummary(
+                "i1", 1, "Bank PIN", "other", com.vettid.core.data.items.Sensitivity.SECRET,
+                fieldLabels = listOf(com.vettid.core.data.items.FieldLabel("f1", "PIN", "password")),
+            ),
+        )
+        m.approveDeviceRequest("device:approval.pending:h1", null)
+        assertEquals(listOf("approval.decide:h1:true"), ops.calls)
+    }
+
+    @Test
+    fun aFeedOnlySessionRequestOfADeviceNotInTheListIsNotAllowed() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.session.pending", "s1", device = "Z"), feed("device.session.pending", "s2", device = null)))
+        runCurrent()
+        for (id in listOf("s1", "s2")) {
+            try {
+                m.approveDeviceRequest("device:device.session.pending:$id", 3600)
+                fail(id)
+            } catch (e: VaultFailure) {
+                assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
+            }
+        }
+        assertTrue(ops.calls.isEmpty())
+        // The device list names it: allowed. It can always be denied.
+        listedDevices = setOf("Z")
+        m.approveDeviceRequest("device:device.session.pending:s1", 3600)
+        m.declineDeviceRequest("device:device.session.pending:s2")
+        assertEquals(listOf("session.approve:s1:3600", "session.deny:s2"), ops.calls)
+    }
+
+    @Test
+    fun aPairingEntryStaysAfterAMergedListAndOthersGo() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.pair.pending", "p1", device = null), feed("approval.pending", "h1")))
+        runCurrent()
+        assertEquals(2, m.keys().size)
+        m.refreshPendingFrom { PendingPage(emptyList(), null, now) }
+        runCurrent()
+        // The vault does not list pairings: its entry stays; the approval, absent from the list, is gone.
+        assertEquals(listOf("device:device.pair.pending:p1"), m.keys())
     }
 
     @Test

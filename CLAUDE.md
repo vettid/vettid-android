@@ -254,25 +254,31 @@ The A2 exit test:
   `device.session.approve{request_id, seconds}` (answer `expires_at` -> "Access allowed until …"), **Deny** = `device.session.deny`; a renewal
   keeps #226/#227 (notice, Deny and end access now, `Renewal`, the end failure) and adds Allow. **Held approval:** Approve =
   `approval.decide{approve: true}`, Deny = `{approve: false}`; the answer's `result` is said (`ok` Approved, `forbidden`, `session_required`
-  or `denied`, `way_not_allowed`, any other with the code cleaned and isolated); an error answer to either call (`NOT_FOUND`, `OTHER`; no code is
-  named, decision 14c) is "This request is no longer waiting." and the entry goes (`SocialManager.deviceDecide`); the owner check and
-  transport failures are not. `item.use` shows its item and field (names from the item cache, `ItemSummary.fieldLabels`) and `data` decoded
-  (`DataView`: strict UTF-8 without control, format (bidi), separator, private-use or unassigned code points = text, else lower-case hex),
-  `item.get` its fields or "All fields and notes" and always the history line, the catalog its line; `item.run` / `item.proxy` (decision 15),
+  or `denied`, `way_not_allowed`, any other with the code cleaned and isolated); only `not_found` (VAULT-MESSAGING 0.83.0 §10.3) to either call is
+  "This request is no longer waiting." and the entry goes (`decideRun`); any other failure (`internal`, `bad_request`, `forbidden`,
+  `rate_limited`, the owner check, transport) shows its error and keeps the entry. A missing `result` is "Your vault didn't say whether it was
+  done." (not Approved) and a session answer without `expires_at` is "Access allowed". `item.use` shows its item and field (names from the item cache, `ItemSummary.fieldLabels`) and `data` decoded
+  (`DataView`: strict UTF-8 is text unless it has a control (other than LF and tab), format (bidi), Default_Ignorable (Hangul fillers, variation
+  selectors, CGJ, tags), separator, private-use or unassigned code point, more than 2 combining marks in a row, or more than 8 lines; else
+  lower-case hex), shown in a bordered box with "N bytes",
+  `item.get` its fields (an empty list, a repeated id or more than 64 are Unshown) or "All fields and notes" and always the history line, the catalog its line; `item.run` / `item.proxy` (decision 15),
   a desktop's step-up (decision 9), any other type or op, a body that does not read in full, and an item or field the cache cannot name ("an
-  item you no longer have"; cache not loaded) are **Deny only**, enforced in `SocialManager.approveDeviceRequest` too (`NOT_SUPPORTED`, nothing
-  sent). The delegable owner-type row is not built (needs AA3's labels; it is "any other type": deny-only). **Known only from the feed item**
+  item you no longer have"; "Loading…" while the cache is still being read) are **Deny only**, enforced in
+  `SocialManager.approveDeviceRequest` too (`NOT_SUPPORTED`, nothing sent): it reads the item cache (`itemCache`, `HeldRequests.nameable`) and, for a
+  feed-only session request, `device.list` (`deviceListed`: read, and the device in it). The delegable owner-type row is not built (needs AA3's labels; it is "any other type": deny-only). **Known only from the feed item**
   (`FeedOnlyAsks`, `SocialManager.setFeedItems` from `VaultManager`): after a restart the feed item's `ref` / `device_id` / `at` make an entry
-  only while no `pending.list` was merged since the unlock (`listReadFlow`; the list is authoritative once read, and VAULT-MESSAGING 0.70.0 is why
+  only while no `pending.list` was merged since the unlock (`listReadFlow`; the list is authoritative once read for sessions and approvals, not for
+  pairings, which the vault does not list yet (0.83.0): their entries stay until their 10 minutes, and VAULT-MESSAGING 0.70.0 is why
   decision 14a is now the fallback for an unsupported or failed list), not once archived or deleted (read stays), not after a close event or a
   decision here, and only 10 minutes (session, pairing) or 5 minutes (held) from `at`. A feed-only approval is Deny-only with "… asked for
   something this phone can no longer show. Deny it, or let it expire."; a feed-only session request names the device from `device.list`
   (`DeviceAsks.named`) and is Allow/Deny with 1 hour preselected, Deny-only when the device is not listed (or the list not read). A
   `device.pair.pending` feed item is an entry without buttons ("This pairing can't be checked on this phone any more …"), or, while
-  `PairingRepository` holds the comparison, **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`); VAULT-MESSAGING
+  `PairingRepository` holds the comparison and the item's `ref` is the held pairing's `pending_id` (`PendingPairing.pendingId`; any other
+  pairing item gets the unnamed title and no Compare), **Compare the code** (`DecisionActions.onOpenPairing`, `PairRoute(held = true)`); VAULT-MESSAGING
   0.83.0 says `device.pair.reject` accepts the item's `ref`: not used (the plan says no buttons; owner's call). **Feed and notifications:**
   titles with the device's name from `FeedNames.devices` (`device.list`, cleaned and isolated; fallbacks without a name) and
-  `FeedNames.pairingName`; `leash.agent.suspended` and `leash.referrals_limited` are on **Security alarms** (decision 16,
+  `FeedNames.pairingName` / `pairingPendingId`; `leash.agent.suspended` and `leash.referrals_limited` are on **Security alarms** (decision 16,
   `NotificationMapping`; the lock screen says "VettID needs your attention") and, with `leash.rate_limited`, open the agent's page
   (`FeedTarget.Device`; no longer "not available"); under the app lock's cover (`coveredNow()`) names are never read, as for every item.
   Catalog: `approvals.device`, `approvals.device_agent`, `approvals.device_renewal`, `approvals.device_feed`, `approvals.device_feed_unlisted`,
