@@ -136,7 +136,9 @@ The A2 exit test:
   cancelling a credential presence check after the PIN screen was up at least the timeout locks (the time counts from the first
   stop); "Immediately" + a credential presence check + a rotation on the PIN screen locks after the PIN; and `authenticating` has
   no time limit, so a callback lost in the background (no cancel, no `onDestroy`) keeps the cover down until the next
-  `promptEnded`. `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
+  `promptEnded`. Known, older than this rule: `cipherToEnable` replaces the key before the prompt, so a rotation during a method
+  change leaves the new key under the old method until the method is set again (the app stays locked or opens only after a real
+  authentication; follow-up: a temporary alias swapped in by `completeEnable`). `AppLock.coverFlow(scope)` is the same as a flow (true until read) with
   a timer that turns it true when the monotonic timeout elapses in the background (cancelled on return or lock off; it does not survive
   the process, whose next start is `LOCKED`, and it stops while the process is frozen (a cached process on Android 14+) as well as in deep sleep); `NotifySource.covered` is that flow, `coveredNow()` the direct read. `FeedNotifier`
   reads `coveredNow()` at post time inside its lock: item notifications are then in public form only
