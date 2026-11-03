@@ -14,6 +14,7 @@ import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -96,10 +97,16 @@ class AgentPermissionsTest {
     }
 
     @Test
-    fun anApprovalThisAppDoesNotKnowIsReadAsAsk() {
+    fun anApprovalThisAppDoesNotKnowIsUnknownNotAsk() {
         val p = PermissionWire.permissions(obj("""{"grants":[{"grant_id":"g","scope":"profile.get","approval":"maybe","per_hour":"x","per_day":-4}],"suspended":[]}"""), "a1")
-        assertEquals(GrantApproval.ASK, p.others.single().approval)
+        assertEquals(GrantApproval.UNKNOWN, p.others.single().approval)
         assertEquals(60L to 1_000L, p.others.single().perHour to p.others.single().perDay)
+    }
+
+    @Test
+    fun noApprovalIsTheVaultsDefaultAsk() {
+        val p = PermissionWire.permissions(obj("""{"grants":[{"grant_id":"g","scope":"profile.get"},{"grant_id":"h","scope":"profile.get","approval":"ask"}],"suspended":[]}"""), "a1")
+        assertEquals(listOf(GrantApproval.ASK, GrantApproval.ASK), p.others.map { it.approval })
     }
 
     @Test
@@ -173,13 +180,31 @@ class AgentPermissionsTest {
         val refuse = mutableMapOf<String, String>()
         var gate: CompletableDeferred<Unit>? = null
 
+        /** Gates for the next per-agent `grants` calls, in order; each call answers what the vault held when it was asked. */
+        val agentGates = ArrayDeque<CompletableDeferred<Unit>>()
+
+        /** What `grants(null)` answers as suspended; [allGate] holds that call after it has taken its answer. */
+        @Volatile var suspendedAll: List<String> = emptyList()
+        @Volatile var allGate: CompletableDeferred<Unit>? = null
+        @Volatile var arrived = 0
+
         override suspend fun list() = devices
 
         override suspend fun grants(agentId: String?): JsonObject {
             synchronized(this) { calls += "grants:${agentId ?: "*"}" }
+            if (agentId == null) {
+                refuse["grantsAll"]?.let { throw VaultOpException("leash.grant.list", it) }
+                val answer = obj("""{"grants":[],"suspended":[${suspendedAll.joinToString(",") { "\"$it\"" }}]}""")
+                synchronized(this) { arrived++ }
+                allGate?.await()
+                return answer
+            }
             gate?.await()
             refuse["grants"]?.let { throw VaultOpException("leash.grant.list", it) }
-            return if (agentId == null) obj("""{"grants":[],"suspended":[]}""") else grants[agentId] ?: obj("""{"grants":[],"suspended":[]}""")
+            val answer = grants[agentId] ?: obj("""{"grants":[],"suspended":[]}""")
+            val g = synchronized(this) { arrived++; agentGates.removeFirstOrNull() }
+            g?.await()
+            return answer
         }
 
         override suspend fun endAccess(deviceId: String) = Unit
@@ -347,6 +372,115 @@ class AgentPermissionsTest {
             listOf(AgentChange.Grants("a1"), AgentChange.Grants("a1"), AgentChange.Grants("a1"), AgentChange.Rule("r1"), AgentChange.Rule("r1")),
             got,
         )
+    }
+
+    private fun TestScope.waitUntil(what: String, done: () -> Boolean) {
+        repeat(500) {
+            advanceUntilIdle()
+            if (done()) return
+            Thread.sleep(10)
+        }
+        fail("never reached: $what")
+    }
+
+    private fun held(vararg ids: String) = obj("""{"grants":[${ids.joinToString(",") { """{"grant_id":"$it","scope":"profile.get"}""" }}],"suspended":[]}""")
+
+    @Test
+    fun twoReadsThatFinishInReverseOrderKeepTheNewerAnswer() = runTest {
+        val first = CompletableDeferred<Unit>()
+        val second = CompletableDeferred<Unit>()
+        val ops = Ops().apply {
+            agentGates += listOf(first, second)
+            grants["a1"] = held("old")
+        }
+        val m = manager(ops)
+        val one = launch(UnconfinedTestDispatcher(testScheduler)) { m.refreshPermissions("a1") }
+        waitUntil("the first read asked") { ops.arrived == 1 }
+        ops.grants["a1"] = held("new")
+        val two = launch(UnconfinedTestDispatcher(testScheduler)) { m.refreshPermissions("a1") }
+        waitUntil("the second read asked") { ops.arrived == 2 }
+        // The newer read answers first, then the older one: the older answer is dropped.
+        second.complete(Unit)
+        waitUntil("the newer answer applied") { m.permissions.value["a1"] != null }
+        assertEquals(listOf("new"), m.permissions.value.getValue("a1").others.map { it.grantId })
+        first.complete(Unit)
+        one.join()
+        two.join()
+        assertEquals(listOf("new"), m.permissions.value.getValue("a1").others.map { it.grantId })
+    }
+
+    @Test
+    fun theOlderReadAlonePutsItsAnswerInWhenNothingNewerCameAfterIt() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val ops = Ops().apply {
+            agentGates += gate
+            grants["a1"] = held("only")
+        }
+        val m = manager(ops)
+        val one = launch(UnconfinedTestDispatcher(testScheduler)) { m.refreshPermissions("a1") }
+        waitUntil("asked") { ops.arrived == 1 }
+        gate.complete(Unit)
+        one.join()
+        assertEquals(listOf("only"), m.permissions.value.getValue("a1").others.map { it.grantId })
+    }
+
+    // --- `paused` has one ordering ---
+
+    @Test
+    fun aListReadStartedBeforeResumesReReadCannotBringTheOldPausedBack() = runTest {
+        val ops = Ops().apply {
+            suspendedAll = listOf("a1")
+            grants["a1"] = obj("""{"grants":[],"suspended":["a1"]}""")
+        }
+        val m = manager(ops)
+        m.refresh()
+        assertTrue(m.devices.value.first { it.id == "a1" }.paused)
+        // A second list read takes its answer ("a1 is paused") and waits before applying it.
+        val gate = CompletableDeferred<Unit>()
+        ops.allGate = gate
+        val arrivedBefore = ops.arrived
+        val read = launch(UnconfinedTestDispatcher(testScheduler)) { m.refresh() }
+        waitUntil("the list read asked for the paused agents") { ops.arrived == arrivedBefore + 1 }
+        // Resume goes through meanwhile and its re-read says the agent is no longer paused.
+        ops.grants["a1"] = obj("""{"grants":[],"suspended":[]}""")
+        assertEquals(AgentResumption.RESUMED, m.resume("a1"))
+        assertFalse(m.devices.value.first { it.id == "a1" }.paused)
+        gate.complete(Unit)
+        read.join()
+        assertFalse("the older list answer must not bring the pause back", m.devices.value.first { it.id == "a1" }.paused)
+    }
+
+    @Test
+    fun aListReadStartedAfterAPermissionsReadStillDecidesPaused() = runTest {
+        val ops = Ops().apply { grants["a1"] = obj("""{"grants":[],"suspended":[]}""") }
+        val m = manager(ops)
+        m.refresh()
+        m.refreshPermissions("a1")
+        assertFalse(m.devices.value.first { it.id == "a1" }.paused)
+        ops.suspendedAll = listOf("a1")
+        m.refresh()
+        assertTrue("a newer list read pauses it", m.devices.value.first { it.id == "a1" }.paused)
+    }
+
+    @Test
+    fun aListReadWhoseSuspendedCallFailsKeepsTheBannerItHad() = runTest {
+        val ops = Ops().apply { suspendedAll = listOf("a1") }
+        val m = manager(ops)
+        m.refresh()
+        assertTrue(m.devices.value.first { it.id == "a1" }.paused)
+        ops.refuse["grantsAll"] = "internal"
+        m.refresh()
+        assertTrue("fail closed: a pause is not cleared by a read that failed", m.devices.value.first { it.id == "a1" }.paused)
+        assertEquals(ListLoad.LOADED, m.load.value)
+    }
+
+    @Test
+    fun aFirstListReadWhoseSuspendedCallFailsShowsNoPauseAndStillTheList() = runTest {
+        val ops = Ops().apply { refuse["grantsAll"] = "internal" }
+        val m = manager(ops)
+        m.refresh()
+        assertFalse(m.devices.value.first { it.id == "a1" }.paused)
+        assertEquals(2, m.devices.value.size)
     }
 
     // --- the answers to leash.grant.issue ---

@@ -48,7 +48,7 @@ class AgentPermissionsPageTest {
         rule.setContent { DevicePageScreen(state, actions, now = now) }
 
     private fun state(vararg g: AgentGrant, agent: DeviceInfo = this.agent) =
-        DeviceUiState(device = agent, loaded = true, permissions = g.toList(), permissionsLoaded = true, connectionNames = names)
+        DeviceUiState(device = agent, loaded = true, permissions = g.toList(), permissionsLoaded = true, connectionNames = names, connectionsLoaded = true)
 
     private fun ComposeContentTestRule.count(tag: String) = onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().size
 
@@ -80,6 +80,41 @@ class AgentPermissionsPageTest {
         row.assertTextContains(", until ", substring = true)
         row.assertTextContains("2026", substring = true)
         row.assertTextContains(", only with ${iso("Sam Lee")}, ${iso("Ana Ruiz")}, Removed connection", substring = true)
+    }
+
+    @Test
+    fun anApprovalThisAppDoesNotKnowSaysNothingAboutHowItIsAllowed() {
+        show(state(ask.copy(approval = GrantApproval.UNKNOWN, expiresAt = Instant.parse("2026-12-03T12:00:00Z"))))
+        val row = rule.onNodeWithTag("perm_g1")
+        row.performScrollTo()
+        row.assertTextContains("See your list of connections", substring = true)
+        row.assertTextContains("until ", substring = true)
+        assertEquals(0, rule.onAllNodes(androidx.compose.ui.test.hasText("Asks you each time", substring = true)).fetchSemanticsNodes().size)
+        assertEquals("the line starts without a comma", 0, rule.onAllNodes(androidx.compose.ui.test.hasText(", until", substring = true)).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun anUnknownApprovalWithNothingElseHasNoSecondLine() {
+        show(state(ask.copy(approval = GrantApproval.UNKNOWN)))
+        rule.onNodeWithTag("perm_g1").performScrollTo()
+        assertEquals(0, rule.onAllNodes(androidx.compose.ui.test.hasText("Asks you each time", substring = true)).fetchSemanticsNodes().size)
+        rule.onNodeWithText("See your list of connections").assertExists()
+    }
+
+    @Test
+    fun beforeTheConnectionsAreReadNoConnectionIsCalledRemoved() {
+        show(state(auto).copy(connectionNames = emptyMap(), connectionsLoaded = false))
+        val row = rule.onNodeWithTag("perm_g2")
+        row.performScrollTo()
+        row.assertTextContains("Allowed automatically", substring = true)
+        assertEquals(0, rule.onAllNodes(androidx.compose.ui.test.hasText("Removed connection", substring = true)).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodes(androidx.compose.ui.test.hasText("only with ", substring = true)).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun onceTheConnectionsAreReadAnUnlistedIdIsARemovedConnection() {
+        show(state(auto).copy(connectionNames = emptyMap(), connectionsLoaded = true))
+        rule.onNodeWithTag("perm_g2").performScrollTo().assertTextContains("only with Removed connection, Removed connection, Removed connection", substring = true)
     }
 
     @Test

@@ -127,30 +127,33 @@ internal object PermissionText {
     fun label(scope: String): String = stringResource(labelRes(scope) ?: R.string.devices_scope_unknown)
 
     /**
-     * The row's second line: "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking",
-     * then ", until <date>" and ", only with <names>". [names] are the connections' names by id: an id not in it is
-     * "Removed connection", a blank name "Name not shared yet".
+     * The row's second line: "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking"
+     * (nothing for an approval this app does not know), then ", until <date>" and ", only with <names>". [names] are the
+     * connections' names by id and [namesKnown] says the connections list was read: an id not in it is then "Removed
+     * connection", a blank name "Name not shared yet"; before it was read no names are said. Empty when nothing is to be said.
      */
     @Composable
-    fun detail(g: AgentGrant, names: Map<String, String>): String = buildString {
-        append(
-            if (g.approval == GrantApproval.AUTO) {
-                stringResource(R.string.devices_perm_auto, g.perHour, g.perDay)
-            } else {
-                stringResource(R.string.devices_perm_ask)
-            },
-        )
-        g.expiresAt?.let { append(stringResource(R.string.devices_perm_until, Times.dayLabel(Times.day(it)))) }
-        if (g.connections.isNotEmpty()) {
-            val removed = stringResource(R.string.devices_perm_removed_connection)
-            val unnamed = stringResource(R.string.devices_perm_unnamed_connection)
-            val shown = g.connections.joinToString(", ") { id ->
-                when (val n = names[id]) {
-                    null -> removed
-                    else -> if (n.isBlank()) unnamed else AccountNames.isolate(n)
-                }
+    fun detail(g: AgentGrant, names: Map<String, String>, namesKnown: Boolean): String {
+        val parts = buildList {
+            when (g.approval) {
+                GrantApproval.AUTO -> add(stringResource(R.string.devices_perm_auto, g.perHour, g.perDay))
+                GrantApproval.ASK -> add(stringResource(R.string.devices_perm_ask))
+                GrantApproval.UNKNOWN -> Unit
             }
-            append(stringResource(R.string.devices_perm_only_with, shown))
+            g.expiresAt?.let { add(stringResource(R.string.devices_perm_until, Times.dayLabel(Times.day(it)))) }
+            if (g.connections.isNotEmpty() && namesKnown) {
+                val removed = stringResource(R.string.devices_perm_removed_connection)
+                val unnamed = stringResource(R.string.devices_perm_unnamed_connection)
+                val shown = g.connections.joinToString(", ") { id ->
+                    when (val n = names[id]) {
+                        null -> removed
+                        else -> if (n.isBlank()) unnamed else AccountNames.isolate(n)
+                    }
+                }
+                add(stringResource(R.string.devices_perm_only_with, shown))
+            }
         }
+        // The pieces after the first start with ", ": the first stands without it.
+        return parts.joinToString("").removePrefix(", ")
     }
 }

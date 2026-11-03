@@ -150,7 +150,7 @@ class AgentRulesDevStackTest {
         val list: JsonObject = c.vault.deviceList()
         val devices = list["devices"] as? JsonArray ?: return null
         return devices.map { it.jsonObject }.firstOrNull { it["kind"]?.jsonPrimitive?.content == "agent" }
-            ?.get("device_id")?.jsonPrimitive?.content
+            ?.let { (it["id"] ?: it["device_id"])?.jsonPrimitive?.content }
     }
 
     private companion object {

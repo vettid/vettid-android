@@ -130,6 +130,8 @@ data class DeviceUiState(
     val permissionsError: FailureKind? = null,
     /** The names of the member's connections by id (blank: no name yet); an id not in it is a removed connection. */
     val connectionNames: Map<String, String> = emptyMap(),
+    /** The connections list was read: only then is an id missing from [connectionNames] a "Removed connection". */
+    val connectionsLoaded: Boolean = false,
     /** With [DeviceConfirm.REMOVE_PERMISSION]: the permission the confirmation is about. */
     val confirmGrant: AgentGrant? = null,
     /** "Permission removed", "Resumed" and the like, once. */
@@ -173,13 +175,18 @@ class DeviceViewModel @Inject constructor(
         )
     }
 
-    val uiState: StateFlow<DeviceUiState> = combine(base, repo.permissions, connections.connections) { s, perms, conns ->
-        val mine = perms[id]
-        s.copy(
-            permissions = mine?.others.orEmpty(), permissionsLoaded = mine != null,
-            connectionNames = conns.associate { it.id to it.displayName },
-        )
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
+    /** Set once `connections.refresh()` answered: the list may be empty for want of a read, or because there are none. */
+    private val connectionsRead = MutableStateFlow(false)
+
+    val uiState: StateFlow<DeviceUiState> =
+        combine(base, repo.permissions, connections.connections, connectionsRead) { s, perms, conns, read ->
+            val mine = perms[id]
+            s.copy(
+                permissions = mine?.others.orEmpty(), permissionsLoaded = mine != null,
+                connectionNames = conns.associate { it.id to it.displayName },
+                connectionsLoaded = read || conns.isNotEmpty(),
+            )
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
@@ -190,6 +197,7 @@ class DeviceViewModel @Inject constructor(
                 .collect {
                     readRules()
                     readPermissions()
+                    readConnections()
                 }
         }
         // `sync.event`s of other devices: this agent's grants, its pause, and share rules (AA3, §10.1).
@@ -233,6 +241,18 @@ class DeviceViewModel @Inject constructor(
                 if (mine == permissionsRead) local.update { it.copy(permissionsError = null) }
             } catch (e: VaultFailure) {
                 if (mine == permissionsRead) local.update { it.copy(permissionsError = e.kind) }
+            }
+        }
+    }
+
+    /** The names of the connections a permission is limited to: a failed read leaves the names unsaid, never "removed". */
+    private fun readConnections() {
+        viewModelScope.launch {
+            try {
+                connections.refresh()
+                connectionsRead.value = true
+            } catch (_: VaultFailure) {
+                // Unread: the row says nothing about its connections until a list is there.
             }
         }
     }

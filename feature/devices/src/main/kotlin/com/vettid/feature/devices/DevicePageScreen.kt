@@ -363,13 +363,15 @@ private fun PermissionsCard(state: DeviceUiState, actions: DevicePageActions) {
             Text(stringResource(R.string.devices_perms_failed), modifier = Modifier.testTag("permissions_failed"))
             TextButton(onClick = actions.onRetryPermissions) { Text(stringResource(R.string.devices_retry)) }
         }
-        state.permissions.forEach { PermissionRow(it, state.connectionNames, state.busy, actions.onRemovePermission) }
+        state.permissions.forEach {
+            PermissionRow(it, state.connectionNames, state.connectionsLoaded, state.busy, actions.onRemovePermission)
+        }
     }
 }
 
 /** One permission: its scope's label, how it is allowed, and ⋯ → **Remove**. A tap opens nothing (no editor yet). */
 @Composable
-private fun PermissionRow(g: AgentGrant, names: Map<String, String>, busy: Boolean, onRemove: (String) -> Unit) {
+private fun PermissionRow(g: AgentGrant, names: Map<String, String>, namesKnown: Boolean, busy: Boolean, onRemove: (String) -> Unit) {
     val label = PermissionText.label(g.scope)
     var open by remember { mutableStateOf(false) }
     Row(
@@ -378,11 +380,10 @@ private fun PermissionRow(g: AgentGrant, names: Map<String, String>, busy: Boole
     ) {
         Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}.testTag("perm_${g.grantId}")) {
             Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-            Text(
-                PermissionText.detail(g, names),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            val detail = PermissionText.detail(g, names, namesKnown)
+            if (detail.isNotEmpty()) {
+                Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Box {
             IconButton(onClick = { open = true }, enabled = !busy, modifier = Modifier.testTag("perm_more_${g.grantId}")) {

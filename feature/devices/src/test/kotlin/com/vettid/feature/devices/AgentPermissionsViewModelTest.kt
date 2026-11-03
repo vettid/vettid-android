@@ -58,6 +58,20 @@ class AgentPermissionsViewModelTest {
         assertTrue(vm.uiState.value.permissionsLoaded)
         assertEquals("Sam Lee", vm.uiState.value.connectionNames["c1"])
         assertFalse("gone" in vm.uiState.value.connectionNames)
+        assertTrue(vm.uiState.value.connectionsLoaded)
+    }
+
+    @Test
+    fun anEmptyConnectionsListIsLoadedOnlyOnceItWasRead() = runTest {
+        social.seed(emptyList())
+        social.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
+        val vm = page()
+        advanceUntilIdle()
+        assertFalse("a failed read says nothing about removed connections", vm.uiState.value.connectionsLoaded)
+        social.seed(emptyList())
+        val vm2 = page()
+        advanceUntilIdle()
+        assertTrue("read, and there are none", vm2.uiState.value.connectionsLoaded)
     }
 
     @Test

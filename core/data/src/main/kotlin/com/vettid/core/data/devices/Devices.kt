@@ -284,6 +284,12 @@ class DevicesManager(
     private var permissionReads = 0L
     private val permissionApplied = mutableMapOf<String, Long>()
 
+    /**
+     * The number of the read that last set [DeviceInfo.paused] of an agent: the list read and the permissions read share
+     * one numbering ([permissionReads], taken when a read starts), and a read never overwrites `paused` set by a newer one.
+     */
+    private val pausedApplied = mutableMapOf<String, Long>()
+
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
 
@@ -308,6 +314,7 @@ class DevicesManager(
             removedFlow.value = null
             permissionFlow.value = emptyMap()
             permissionApplied.clear()
+            pausedApplied.clear()
         }
         onClear()
     }
@@ -331,21 +338,23 @@ class DevicesManager(
     private suspend fun read(fromQueue: Boolean) {
         reads.withLock {
             if (fromQueue) queued = false
-            val gen = synchronized(lock) { generation }
+            val (gen, mine) = synchronized(lock) { generation to ++permissionReads }
             if (list.value.isEmpty()) loadState.value = ListLoad.LOADING
             try {
                 val body = vaultGuard(resend = true) { ops().list() }
                 val me = self()
                 val parsed = DeviceWire.devices(body, me)
-                // The paused agents: only asked when there is an agent; a failure leaves the chips off, never the list.
-                val paused = if (parsed.any { it.isAgent }) {
-                    runCatching { DeviceWire.suspended(vaultGuard(resend = true) { ops().grants(null) }) }.getOrDefault(emptySet())
+                // The paused agents: only asked when there is an agent. A failure never fails the list and never clears a
+                // pause: null keeps the paused flags already held (fail closed).
+                val paused: Set<String>? = if (parsed.any { it.isAgent }) {
+                    runCatching { DeviceWire.suspended(vaultGuard(resend = true) { ops().grants(null) }) }.getOrNull()
                 } else {
                     emptySet()
                 }
-                val shown = DeviceWire.ordered(parsed.map { it.copy(paused = it.isAgent && it.id in paused) })
                 synchronized(lock) {
                     if (gen != generation) return@withLock
+                    val held = list.value.associate { it.id to it.paused }
+                    val shown = DeviceWire.ordered(parsed.map { it.copy(paused = it.isAgent && pausedOf(it.id, paused, held, mine)) })
                     list.value = shown
                     loadState.value = ListLoad.LOADED
                 }
@@ -354,6 +363,13 @@ class DevicesManager(
                 throw e
             }
         }
+    }
+
+    /** One agent's `paused` for a list read numbered [mine]: [read] (null: it failed) unless a newer read set it (under [lock]). */
+    private fun pausedOf(id: String, read: Set<String>?, held: Map<String, Boolean>, mine: Long): Boolean {
+        if (read == null || mine < (pausedApplied[id] ?: 0L)) return held[id] == true
+        pausedApplied[id] = mine
+        return id in read
     }
 
     override suspend fun endAccess(deviceId: String) {
@@ -406,7 +422,11 @@ class DevicesManager(
             if (gen != generation || mine < (permissionApplied[agentId] ?: 0L)) return
             permissionApplied[agentId] = mine
             permissionFlow.value = permissionFlow.value + (agentId to read)
-            list.value = list.value.map { if (it.id == agentId && it.isAgent) it.copy(paused = read.suspended) else it }
+            // `paused` follows only the newest read of either kind (the list's, or another permissions read).
+            if (mine >= (pausedApplied[agentId] ?: 0L)) {
+                pausedApplied[agentId] = mine
+                list.value = list.value.map { if (it.id == agentId && it.isAgent) it.copy(paused = read.suspended) else it }
+            }
         }
     }
 

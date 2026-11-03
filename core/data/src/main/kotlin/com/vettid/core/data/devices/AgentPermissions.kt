@@ -13,7 +13,13 @@ import java.time.Instant
 import java.time.format.DateTimeParseException
 
 /** Whether a grant asks the member each time or is allowed within its limits (VAULT-MESSAGING §10.11 `approval`). */
-enum class GrantApproval { ASK, AUTO }
+enum class GrantApproval {
+    ASK,
+    AUTO,
+
+    /** A word this app does not know (a newer vault): nothing is said about how it is allowed, and nothing is written back. */
+    UNKNOWN,
+}
 
 /**
  * One of an agent's grants as `leash.grant.list` shows it (VAULT-MESSAGING §10.11; ANDROID-PLAN 0.1.116 §4 AA3), without
@@ -99,16 +105,19 @@ object PermissionWire {
     fun issued(o: JsonObject): AgentGrant? = grant(o)?.first
 
     private fun grantOf(o: JsonObject, id: String, scope: String): AgentGrant {
-        // Only an explicit `auto` is automatic; anything else (absent, `ask`, a word this app does not know) is read as
-        // the stricter: it asks.
-        val auto = o.s("approval") == "auto"
+        // Absent is `ask` (§10.11 default); a word this app does not know is [GrantApproval.UNKNOWN], never claimed as ask.
+        val approval = when (o.s("approval")) {
+            null, "ask" -> GrantApproval.ASK
+            "auto" -> GrantApproval.AUTO
+            else -> GrantApproval.UNKNOWN
+        }
         val ids = (o["connections"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
             .filter { it.isNotEmpty() }.take(MAX_CONNECTIONS)
         return AgentGrant(
             grantId = id,
             scope = scope,
             version = (o["version"] as? JsonPrimitive)?.longOrNull ?: 0,
-            approval = if (auto) GrantApproval.AUTO else GrantApproval.ASK,
+            approval = approval,
             perHour = o.positive("per_hour") ?: DEFAULT_PER_HOUR,
             perDay = o.positive("per_day") ?: DEFAULT_PER_DAY,
             expiresAt = instant(o.s("expires_at")),
