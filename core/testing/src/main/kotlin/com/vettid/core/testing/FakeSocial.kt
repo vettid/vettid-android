@@ -325,6 +325,15 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop(key)
     }
 
+    /** The key of the last pairing entry rejected (AA5). */
+    var lastPairingReject: String? = null
+
+    override suspend fun rejectPairingRequest(key: String) {
+        call("rejectPairingRequest")
+        lastPairingReject = key
+        drop(key)
+    }
+
     /** The last approved device request: its key and the length sent (AA5). */
     var lastDeviceApproval: Pair<String, Int?>? = null
 

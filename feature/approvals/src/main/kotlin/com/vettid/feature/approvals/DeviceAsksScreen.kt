@@ -167,7 +167,11 @@ internal fun DeviceRequestScreen(
         onPrimary = if (pairing) actions.onOpenPairing else actions.onApprove,
         primaryEnabled = pairing || state.canApprove,
         busy = state.busy,
-        secondaryLabel = if (pairing) null else stringResource(R.string.approvals_deny),
+        secondaryLabel = when {
+            // The pairing this phone can't check is rejected (owner decision 2026-11-03); the held one is compared.
+            pairing -> if (state.pairingHeld) null else stringResource(R.string.approvals_pair_reject)
+            else -> stringResource(R.string.approvals_deny)
+        },
         onSecondary = actions.onDeny,
         tertiaryLabel = if (state.renewalUntil != null) stringResource(R.string.approvals_deny_end_access) else null,
         onTertiary = actions.onAskEndAccess,
