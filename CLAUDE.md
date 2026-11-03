@@ -553,7 +553,12 @@ vettid.org repo's `local/android-ui/`).
   keyboard, with a layer that eats keys (as `AppLockGate`), and its own subtree gets a null `LocalInputGuard`. Dialogs and
   sheets are windows above it, so screens import `AlertDialog`, `ModalBottomSheet` and `DatePickerDialog` from
   `com.vettid.core.ui.components` (`ShellOverlays.kt`), which are not composed while `LocalCheckCovered`; their state lives in
-  the view models and comes back after the check. Dropdown menus are not wrapped. Rule: `ownerCheckMode()` /
+  the view models and comes back after the check. Dropdown menus are wrapped too (`DropdownMenu` in `ShellOverlays.kt`), and detekt's `ForbiddenImport` refuses Material's
+  `AlertDialog`, `ModalBottomSheet`, `DatePickerDialog` and `DropdownMenu` outside `core/ui`. The check also waits through a
+  recreation (rotation, an app-lock unlock, a restored process): until one frame has passed after a new composition it is not
+  shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
+  (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets `Key.Back` through (the app lock's
+  `AppLockGate` layer still eats every key, Back included). Rule: `ownerCheckMode()` /
   `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
   kept: the check opens when you leave this screen" is unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation

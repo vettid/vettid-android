@@ -8,6 +8,8 @@ import androidx.compose.foundation.focusable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -465,11 +467,13 @@ fun AppShell(
         }
 
         // Over the shell, never in place of it. Its own password fields are not input in progress, and its dialogs are its own.
-        // A layer takes the focus and the keys it does not use, so nothing under it is typed into (as the app lock's layer).
+        // A layer takes the focus and the keys it does not use, so nothing under it is typed into (as the app lock's layer);
+        // Back passes, so that a check the member asked for can still be closed with it on Android 12 (API 31-32).
         checkMode?.let { mode ->
             val layer = remember { FocusRequester() }
             CompositionLocalProvider(LocalInputGuard provides null, LocalCheckCovered provides false) {
-                Box(Modifier.fillMaxSize().testTag("owner_check_layer").focusRequester(layer).focusable().onKeyEvent { true }) {
+                val keys = Modifier.focusRequester(layer).focusable().onKeyEvent { it.key != Key.Back }
+                Box(Modifier.fillMaxSize().testTag("owner_check_layer").then(keys)) {
                     OwnerCheckRoute(
                         mode = mode,
                         onDone = { asked = null },

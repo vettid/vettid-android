@@ -12,10 +12,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 
 /*
- * Drop-in versions of Material's dialogs and sheet that are not composed while the daily owner check covers the shell
+ * Drop-in versions of Material's dialogs, sheet and dropdown menu that are not composed while the daily owner check covers the shell
  * ([LocalCheckCovered]): a dialog is its own window, above the check. Every screen under the shell imports these, not
  * Material's; a dialog's state must therefore live in the view model (or `rememberSaveable` above the call), which is
  * where it already is.
@@ -85,6 +87,24 @@ fun DatePickerDialog(
         modifier = modifier,
         dismissButton = dismissButton,
         colors = colors,
+        content = content,
+    )
+}
+
+@Composable
+fun DropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset(0.dp, 0.dp),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    if (LocalCheckCovered.current) return
+    androidx.compose.material3.DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        modifier = modifier,
+        offset = offset,
         content = content,
     )
 }

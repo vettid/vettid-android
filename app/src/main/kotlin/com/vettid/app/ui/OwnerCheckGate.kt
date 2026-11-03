@@ -1,11 +1,14 @@
 package com.vettid.app.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -30,13 +33,16 @@ import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.feature.onboarding.OwnerCheckMode
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 
@@ -102,12 +108,16 @@ class OwnerCheckGateViewModel @Inject constructor(
     private val timeScale: TimeScaleSource = TimeScaleSource.RealTime,
     private val calls: CallAccess = NoCallAccess,
 ) : ViewModel() {
-    private val clock = flow {
-        while (true) {
-            emit(Instant.now())
-            delay(TICK_MS)
+    /** Now, again at the next moment that changes the state (a warning, the deadline, the end of the deferral), else every tick. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val clock: Flow<Instant> = combine(repo.ownerCheck, timeScale.timeScale) { v, t -> v to t.scale }
+        .transformLatest { (v, scale) ->
+            while (true) {
+                val now = Instant.now()
+                emit(now)
+                delay(nextWakeMillis(v, now, scale, TICK_MS))
+            }
         }
-    }
 
     val gate: StateFlow<OwnerCheckGateState> =
         combine(
@@ -282,11 +292,37 @@ internal fun rememberOwnerCheckMode(
     asked: OwnerCheckMode?,
 ): OwnerCheckMode? {
     var latched by rememberSaveable { mutableStateOf(false) }
-    val mode = if (gate.gated && latched) {
-        OwnerCheckMode.GATED
-    } else {
-        ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, gate.inCall, asked)
+    // A new composition (rotation, an unlock of the app lock, a restored process) starts with the guard at 0: the screens
+    // report their input in effects that run after the first frame. Until one frame has passed, a check that may still wait
+    // is not shown (and so not latched); one that is overdue or already latched does not wait.
+    var settled by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        settled = true
+    }
+    val mode = when {
+        gate.gated && latched -> OwnerCheckMode.GATED
+        !settled && !gate.overdue -> asked
+        else -> ownerCheckMode(gate.gated, onList, guard.active, gate.overdue, gate.inCall, asked)
     }
     SideEffect { latched = gate.gated && mode == OwnerCheckMode.GATED }
     return mode
+}
+
+/**
+ * How long the gate's clock sleeps from [now]: until the next moment that changes what it shows (the early warning, the
+ * deadline, the end of the deferral, each divided by the time scale as on the vault), at most [tickMs]. The state is then
+ * re-read on time, not up to a tick late.
+ */
+internal fun nextWakeMillis(v: OwnerCheckView?, now: Instant, timeScale: Long, tickMs: Long): Long {
+    val d = v?.deadline
+    val next = d?.let {
+        listOf(
+            it.minus(OwnerCheckView.warningFor(timeScale)),
+            it,
+            it.plusSeconds(TimeScales.divide(OWNER_CHECK_DEFERRAL_S, timeScale)),
+        ).filter { m -> m.isAfter(now) }.minOrNull()
+    }
+    // One millisecond past the mark, so that the state read then is on its far side.
+    return next?.let { Duration.between(now, it).toMillis() + 1 }?.coerceIn(1, tickMs) ?: tickMs
 }

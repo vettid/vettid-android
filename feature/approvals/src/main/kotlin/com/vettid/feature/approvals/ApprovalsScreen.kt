@@ -813,7 +813,7 @@ private fun AnswerPicker(index: Int, category: String, chosen: String?, state: A
                     ?: stringResource(R.string.approvals_grant_answer),
             )
         }
-        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        com.vettid.core.ui.components.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             if (options.isEmpty()) {
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text(stringResource(R.string.approvals_grant_answer_none)) },

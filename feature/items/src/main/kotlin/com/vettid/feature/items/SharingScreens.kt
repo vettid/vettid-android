@@ -514,7 +514,7 @@ private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActio
                     TextButton(onClick = { open = true }, modifier = Modifier.testTag("ask_category")) {
                         Text(stringResource(R.string.items_ask_category, ItemsText.category(f.category)))
                     }
-                    androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                    com.vettid.core.ui.components.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                         ItemTemplates.categories.forEach { c ->
                             androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(c.label)) }, onClick = {
                                 open = false

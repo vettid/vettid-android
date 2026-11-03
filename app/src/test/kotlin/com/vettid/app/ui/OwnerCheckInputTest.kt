@@ -212,6 +212,45 @@ class OwnerCheckInputTest {
         checkShown()
     }
 
+    @Test
+    fun `a new composition with a draft does not cover it before the screen reports its input`() {
+        screen = Screen.EDITOR
+        val restore = androidx.compose.ui.test.junit4.StateRestorationTester(rule)
+        restore.setContent { Shell() }
+        rule.onNodeWithTag("editor").performTextInput("draft")
+        rule.waitForIdle()
+        due()
+        rule.waitForIdle()
+        checkNotShown()
+        restore.emulateSavedInstanceStateRestore()
+        rule.waitForIdle()
+        checkNotShown()
+        assertEquals("draft", rule.onNodeWithTag("editor").fetchSemanticsNode().config.editableText())
+    }
+
+    @Test
+    fun `the gate's clock wakes at the next boundary, so overdue turns true at deadline plus 300 seconds`() {
+        val deadline = Instant.parse("2026-11-03T08:00:00Z")
+        val v = view(deadline)
+        fun wake(now: String, scale: Long = 1) = nextWakeMillis(v, Instant.parse(now), scale, 15_000)
+        // Far from any mark: the tick.
+        assertEquals(15_000L, wake("2026-11-03T03:00:00Z"))
+        // Just before the deadline, the deadline; just after it, the end of the deferral, capped at the tick.
+        assertEquals(1_001L, wake("2026-11-03T07:59:59Z"))
+        assertEquals(15_000L, wake("2026-11-03T08:00:01Z"))
+        // Five seconds before the end of the deferral the clock sleeps exactly until it.
+        val before = Instant.parse("2026-11-03T08:04:55Z")
+        val sleep = nextWakeMillis(v, before, 1, 15_000)
+        assertEquals(5_001L, sleep)
+        assertEquals(false, OwnerCheckGateState.of(v, emptyList(), before).overdue)
+        assertEquals(true, OwnerCheckGateState.of(v, emptyList(), before.plusMillis(sleep)).overdue)
+        // After the end of the deferral, and with no deadline, the tick.
+        assertEquals(15_000L, wake("2026-11-03T08:06:00Z"))
+        assertEquals(15_000L, nextWakeMillis(null, before, 1, 15_000))
+        // On a staging vault of scale 60 the deferral ends after 5 seconds.
+        assertEquals(4_001L, wake("2026-11-03T08:00:01Z", 60))
+    }
+
     private fun view(deadline: Instant?, state: OwnerCheckState = OwnerCheckState.OK) =
         OwnerCheckView(state, deadline, 86_400, 0, true, null)
 
