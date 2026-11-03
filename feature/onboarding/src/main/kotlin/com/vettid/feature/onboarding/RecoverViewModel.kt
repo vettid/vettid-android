@@ -6,6 +6,7 @@ import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.altchan.TypedRecoveryCode
 import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.AccountSite
 import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -264,7 +265,10 @@ class RecoverViewModel @Inject constructor(
     private val releaseNotes: ReleaseNotesRepository,
 ) : ViewModel(), RecoverActions {
     private val state = MutableStateFlow(
-        RecoverUiState(startOverUrl = account.apiOrigin.trimEnd('/') + START_OVER_PATH, accountHost = hostOf(account.apiOrigin)),
+        RecoverUiState(
+            startOverUrl = AccountSite.url(account.apiOrigin, AccountSite.START_OVER_PATH),
+            accountHost = hostOf(account.apiOrigin),
+        ),
     )
     val uiState: StateFlow<RecoverUiState> = state.asStateFlow()
     private var ticker: Job? = null
@@ -696,8 +700,6 @@ class RecoverViewModel @Inject constructor(
         /** The steps a registered recovery can be left from. */
         private val LEAVABLE = setOf(RecoverStep.PIN, RecoverStep.PASSWORD, RecoverStep.ENDED)
 
-        /** MEMBER-API 2.1.0: the account site's "Delete my vault and start over". */
-        const val START_OVER_PATH = "/account/vault/deletion/"
         private const val MIN_PIN = 6
         private const val MAX_PIN = 32
         private const val TICK_MS = 1000L

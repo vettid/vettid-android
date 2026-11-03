@@ -99,6 +99,8 @@
     <string name="settings_account_canceled">Account cancelled</string>
     <string name="settings_delete_vault">Delete vault</string>
     <string name="settings_delete_vault_body">Erase your vault and everything in it</string>
+    <!-- PENDING owner approval (iOS's wording, 2026-11-03) -->
+    <string name="settings_delete_account">Delete your VettID account</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_done">Done</string>
     <string name="settings_retry">Try again</string>

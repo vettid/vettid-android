@@ -7,6 +7,7 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.vettid.core.data.prefs.AppLockMethod
@@ -440,6 +441,7 @@ fun SettingsContent(
     /** The "Allow screenshots?" confirmation shows from the start (the debug screen catalog). */
     askScreenshots: Boolean = false,
 ) {
+    val uri = LocalUriHandler.current
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
@@ -612,6 +614,15 @@ fun SettingsContent(
                     stringResource(R.string.settings_delete_vault), actions.deleteVault, icon = Icons.Outlined.DeleteForever,
                     iconTint = MaterialTheme.colorScheme.error, supporting = stringResource(R.string.settings_delete_vault_body),
                     modifier = Modifier.testTag("delete_vault"),
+                )
+                SettingsDivider()
+                // Opens the account site's delete-account page (Google Play); the page does the work, so no confirmation here.
+                SettingsRow(
+                    label = stringResource(R.string.settings_delete_account),
+                    onClick = { if (state.accountDeleteUrl.isNotEmpty()) uri.openUri(state.accountDeleteUrl) },
+                    icon = Icons.AutoMirrored.Outlined.OpenInNew,
+                    showChevron = false,
+                    modifier = Modifier.testTag("delete_account"),
                 )
             }
             Spacer(Modifier.height(Spacing.xxl))

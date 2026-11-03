@@ -18,6 +18,7 @@ import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.AccountSite
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CanaryManifestView
@@ -45,6 +46,8 @@ import javax.inject.Inject
 
 /** Immutable UI state of the Settings screen. */
 data class SettingsUiState(
+    /** The account site's delete-account page on this build's origin; empty until known. */
+    val accountDeleteUrl: String = "",
     val account: AccountInfo? = null,
     val preferences: AppPreferences = AppPreferences(),
     val appLockOn: Boolean = false,
@@ -87,6 +90,7 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(
         SettingsUiState(
+            accountDeleteUrl = AccountSite.url(account.apiOrigin, AccountSite.DELETE_ACCOUNT_PATH),
             screenshotsAllowed = screenshots.allowed.value, screenshotsStayOn = screenshots.staysOn, phoneSecret = vault.usesPhoneSecret,
         ),
     )
