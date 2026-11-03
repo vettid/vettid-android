@@ -6,6 +6,10 @@ import com.vettid.core.data.feed.FeedBadge
 import com.vettid.core.data.feed.FeedRepository
 import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresenceRepository
+import com.vettid.core.data.presence.PresenceState
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.NotifyVisibility
 import com.vettid.core.notify.Visible
@@ -54,6 +58,7 @@ class ShellViewModel @Inject constructor(
     private val visibility: NotifyVisibility,
     votes: VotesRepository,
     wallet: WalletAccess,
+    private val presence: PresenceRepository,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -102,6 +107,22 @@ class ShellViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
+    }
+
+    /** The member's own status for the avatar sheet's row (ANDROID-PLAN §4 "Presence"); null where the vault has no presence. */
+    val presenceState: StateFlow<PresenceState?> = combine(presence.availability, presence.policy) { a, p ->
+        p?.state?.takeIf { a == PresenceAvailability.AVAILABLE }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** The sheet's picker: the same `presence.set` as Settings → Privacy → Presence. A refused change leaves the row as it was. */
+    fun setPresenceState(state: PresenceState) {
+        viewModelScope.launch {
+            try {
+                presence.update { it.copy(state = state) }
+            } catch (_: VaultFailure) {
+                // The row keeps showing the state the vault still has; Settings → Privacy → Presence says what went wrong.
+            }
+        }
     }
 
     /** An opened invitation link waiting for the connect flow. */

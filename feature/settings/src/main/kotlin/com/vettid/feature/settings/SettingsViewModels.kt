@@ -12,6 +12,10 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.prefs.ThemePreference
+import com.vettid.core.data.presence.NoPresence
+import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresenceRepository
+import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AttestationInfo
@@ -63,6 +67,10 @@ data class SettingsUiState(
     val screenshotsStayOn: Boolean = false,
     /** (Release R) The vault has a phone secret: Settings → Security → New phone secret is offered. */
     val phoneSecret: Boolean = false,
+    /** The vault has presence (ANDROID-PLAN §4 "Presence"): Settings → Privacy → Presence is offered, with the status as its line. */
+    val presenceShown: Boolean = false,
+    /** The status the Presence row shows (the name of the state, a `@StringRes` of `:core:data`); null until the policy is read. */
+    val presenceStateRes: Int? = null,
 )
 
 /** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
@@ -75,6 +83,7 @@ class SettingsViewModel @Inject constructor(
     private val profiles: ProfileRepository,
     updates: ReleaseUpdateRepository,
     private val screenshots: ScreenshotAllowance,
+    presence: PresenceRepository = NoPresence,
 ) : ViewModel() {
     private val local = MutableStateFlow(
         SettingsUiState(
@@ -88,6 +97,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { appLock.method.collect { m -> local.update { it.copy(appLockMethod = m) } } }
         viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
+        viewModelScope.launch {
+            combine(presence.availability, presence.policy) { a, p -> (a == PresenceAvailability.AVAILABLE) to p }.collect { (on, p) ->
+                local.update { it.copy(presenceShown = on, presenceStateRes = p?.let { x -> PresenceText.stateName(x.state) }) }
+            }
+        }
     }
     val uiState: StateFlow<SettingsUiState> = combine(local, account.account, prefs.preferences, appLock.state, appLock.invalidated) {
         s, a, p, l, inv ->

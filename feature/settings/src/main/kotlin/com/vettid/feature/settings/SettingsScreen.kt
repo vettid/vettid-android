@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VerifiedUser
 import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -188,6 +189,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 sharedProfile = { host.navigate(SharedProfileRoute) },
                 releaseUpdate = host.onReleaseUpdate,
                 notifications = { host.navigate(NotificationSettingsRoute) },
+                presence = { host.navigate(PresenceSettingsRoute) },
             ),
             ownerCheck = ownerCheck,
             ownerCheckActions = OwnerCheckSettingsActions(
@@ -331,6 +333,9 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<NotificationSettingsRoute> {
         NotificationSettingsRouteContent(hiltViewModel(), host.onBack)
     }
+    composable<PresenceSettingsRoute> {
+        PresenceSettingsRouteContent(hiltViewModel(), host.onBack)
+    }
 }
 
 /** The theme choice after [mode], cycling System → Light → Dark. */
@@ -387,6 +392,8 @@ data class SettingsActions(
     val sharedProfile: () -> Unit = {},
     val releaseUpdate: () -> Unit = {},
     val notifications: () -> Unit = {},
+    /** Settings → Privacy → Presence (ANDROID-PLAN §4 "Presence"): only where the vault has it. */
+    val presence: () -> Unit = {},
 )
 
 /**
@@ -557,6 +564,16 @@ fun SettingsContent(
                     modifier = Modifier.testTag("shared_profile_row"),
                 )
                 SettingsDivider()
+                if (state.presenceShown) {
+                    SettingsRow(
+                        stringResource(R.string.settings_presence_title),
+                        actions.presence,
+                        icon = Icons.Outlined.Visibility,
+                        supporting = state.presenceStateRes?.let { stringResource(it) },
+                        modifier = Modifier.testTag("presence_row"),
+                    )
+                    SettingsDivider()
+                }
                 SettingsInfoRow(
                     stringResource(R.string.settings_privacy_sharing),
                     stringResource(R.string.settings_privacy_sharing_body),

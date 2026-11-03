@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Settings → Privacy → Presence (ANDROID-PLAN §4 "Presence", VAULT-MESSAGING §10.17, P1). The state names are in :core:data (data_presence_*). -->
+    <string name="settings_presence_title">Presence</string> <!-- NEW: not in the plan's table -->
+    <string name="settings_presence_status">Status</string> <!-- NEW: not in the plan's table -->
+    <string name="settings_presence_invisible_option">You appear offline to everyone</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="settings_presence_invisible_note">Invisible: you appear offline to everyone.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="settings_presence_who">Who can see it</string> <!-- NEW: not in the plan's table -->
+    <string name="settings_presence_all">All my connections</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="settings_presence_none">No one</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="settings_presence_exceptions">Exceptions</string> <!-- NEW: not in the plan's table -->
+    <string name="settings_presence_except">Except…</string> <!-- NEW: not in the plan's table -->
+    <string name="settings_presence_only">Only…</string> <!-- NEW: not in the plan's table -->
+    <!-- The same words as connections_name_not_shared (approved). -->
+    <string name="settings_presence_name_not_shared">Name not shared yet</string>
+</resources>

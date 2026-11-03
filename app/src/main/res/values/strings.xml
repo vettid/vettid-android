@@ -132,4 +132,7 @@
     <!-- ANDROID-PLAN 0.1.54 "A vault being deleted" (approved by the owner, 2026-10-20). -->
     <string name="vault_deleted_notice">Your vault was deleted. To start again, get a setup code on the account site.</string>
     <string name="root_moved_away">Your vault has moved to your new phone. VettID has removed its keys from this phone.</string>
+    <!-- Presence (ANDROID-PLAN §4 "Presence", P1): the avatar sheet's status row. -->
+    <string name="account_presence_status">Status: %1$s</string> <!-- NEW: not in the plan's table -->
+    <string name="account_presence_picker">Status</string> <!-- NEW: not in the plan's table -->
 </resources>

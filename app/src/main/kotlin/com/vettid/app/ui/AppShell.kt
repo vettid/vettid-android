@@ -541,10 +541,12 @@ fun AppShell(
     }
 
     if (showAccount && !covered) {
+        val presenceState by shell.presenceState.collectAsStateWithLifecycle()
         AccountSheet(
             account = account,
             portalUrl = portal,
             photo = photo,
+            presence = presenceState?.let { SheetPresence(it, shell::setPresenceState) },
             onDismiss = { showAccount = false },
             onLockVault = {
                 showAccount = false

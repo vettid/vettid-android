@@ -267,4 +267,14 @@
     <string name="connections_leave_request_body">It stays in Approvals, where you can finish it.</string>
     <string name="connections_leave_request_leave">Leave</string>
     <string name="connections_leave_request_stay">Stay</string>
+    <!-- Presence (ANDROID-PLAN §4 "Presence", P1): DRAFT = the plan's text word for word, NEW = not in the plan's table. State names: :core:data. -->
+    <string name="connections_presence_share">Share my status with %1$s</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_share_off">%1$s sees \'Status unknown\' for you, as if your vault were offline.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_unknown_detail">%1$s\'s vault didn\'t answer. They may be offline or locked, or not sharing their status with you.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_refresh">Check again</string> <!-- NEW: not in the plan's table -->
+    <string name="connections_presence_card_title">Let your connections see when you\'re around?</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_card_body">They see Available, Busy or Away and roughly when you last used VettID.</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_card_share">Share with everyone</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_card_not_now">Not now</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
+    <string name="connections_presence_card_settings">Change this in Settings → Privacy → Presence</string> <!-- DRAFT: ANDROID-PLAN §4 Presence -->
 </resources>

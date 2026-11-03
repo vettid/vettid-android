@@ -67,6 +67,8 @@ import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.BottomFloatingControls
+import com.vettid.core.data.presence.PresenceReading
+import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DayDivider
@@ -386,6 +388,8 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     ) {
         Column(Modifier.fillMaxSize()) {
             CenteredTitle(name)
+            // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
+            state.presence?.let { ConversationPresenceLine(it) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
@@ -645,3 +649,15 @@ private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
 
 private val LIST_BOTTOM = 96.dp
 private const val COMPOSER_LINES = 5
+
+/** "Available · active 10 min ago", "Checking…" or "Status unknown", under the conversation's title. */
+@Composable
+internal fun ConversationPresenceLine(reading: PresenceReading) {
+    Text(
+        PresenceText.line(androidx.compose.ui.platform.LocalResources.current, reading, java.time.Instant.now()),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.s).testTag("conversation_presence"),
+    )
+}

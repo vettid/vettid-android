@@ -13,6 +13,14 @@ import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.prefs.InMemoryPreferencesRepository
+import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.presence.NoPresence
+import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresenceReading
+import com.vettid.core.data.presence.PresenceRepository
+import com.vettid.core.data.presence.PresenceShare
+import com.vettid.core.data.presence.queryWhenKnown
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
@@ -41,7 +49,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -67,6 +77,11 @@ data class ConnectionsUiState(
     val query: String = "",
     /** Whether there is any connection to search. */
     val searchable: Boolean = false,
+    /**
+     * The one-time card "Let your connections see when you're around?" (ANDROID-PLAN §4 "Presence", question 23): the vault has
+     * presence, shares with everyone (its default) and the member has not answered on this phone.
+     */
+    val presenceCard: Boolean = false,
 ) {
     val searching: Boolean get() = query.isNotBlank()
 
@@ -91,10 +106,16 @@ class ConnectionsViewModel @Inject constructor(
     private val repo: ConnectionsRepository,
     private val approvals: ApprovalsRepository,
     private val ownerCheck: OwnerCheckRepository,
+    private val presence: PresenceRepository = NoPresence,
+    private val prefs: PreferencesRepository = InMemoryPreferencesRepository(),
 ) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
-    val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines) { s, cs, declines ->
+    private val cardOn = combine(presence.availability, presence.policy, prefs.preferences) { a, p, pref ->
+        a == PresenceAvailability.AVAILABLE && p?.share == PresenceShare.ALL && !pref.presenceCardAnswered
+    }
+
+    val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines, cardOn) { s, cs, declines, card ->
         val order = compareByDescending<ConnectionInfo> { it.favorite }
             .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() }
         val shown = cs.filter { it.matches(s.query) }.sortedWith(order)
@@ -103,6 +124,7 @@ class ConnectionsViewModel @Inject constructor(
             services = shown.filter { it.service },
             peerDeclines = declines,
             searchable = cs.isNotEmpty(),
+            presenceCard = card,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionsUiState())
 
@@ -147,6 +169,17 @@ class ConnectionsViewModel @Inject constructor(
     }
 
     fun dismissError() = local.update { it.copy(error = null) }
+
+    /** "Share with everyone": the vault's default is already `share: all`, so nothing is sent; the card is answered. */
+    fun shareWithEveryone() {
+        viewModelScope.launch { prefs.setPresenceCardAnswered() }
+    }
+
+    /** "Not now": `share: none`, then the card is answered. A refused change keeps the card and says why. */
+    fun notNow() = act {
+        presence.update { it.withShare(PresenceShare.NONE) }
+        prefs.setPresenceCardAnswered()
+    }
 
     /** The member saw that the other member declined [requestId] (0.10.5): not shown again. */
     fun dismissPeerDecline(requestId: String) = act { approvals.dismissPeerDecline(requestId) }
@@ -567,7 +600,18 @@ data class ConnectionDetailUiState(
      * did not know): the text was shown once (as [error]) and the action is gone, whatever the connection list says.
      */
     val authRefused: Boolean = false,
+    /**
+     * Presence (ANDROID-PLAN §4 "Presence"): null for a service, for a connection that is not active, and wherever the vault
+     * has no presence (nothing of it is shown then).
+     */
+    val presence: DetailPresence? = null,
 )
+
+/**
+ * What the connection's page shows of presence: the [reading] under the name, and whether the member's own status is
+ * [shared] with this connection (the switch; null while the policy is not read, then no switch).
+ */
+data class DetailPresence(val reading: PresenceReading, val shared: Boolean?)
 
 /**
  * What the Votes feature knows of one connection: [count] votes from it (a service connection gets the row "Votes from
@@ -630,19 +674,33 @@ class ConnectionDetailViewModel @Inject constructor(
     private val sharing: SharingRepository,
     private val calls: CallAccess = NoCallAccess,
     private val votes: VotesRepository = NoVotes,
+    private val presence: PresenceRepository = NoPresence,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
     val uiState: StateFlow<ConnectionDetailUiState> =
-        combine(local, repo.connections, repo.authentication, calls.availability, ownVotes()) { s, cs, auth, call, v ->
+        combine(local, repo.connections, repo.authentication, combine(calls.availability, ownVotes()) { c, v -> c to v }, ownPresence()) {
+            s, cs, auth, (call, v), p ->
+            val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
-                connection = cs.firstOrNull { it.id == id } ?: s.connection,
+                connection = c,
                 auth = auth[id],
                 canCall = call == CallAvailability.READY,
                 votes = v,
+                presence = p?.takeIf { c?.askable == true }?.let { DetailPresence(it.reading ?: PresenceReading.Checking, it.shared) },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
+
+    /** What presence knows of this connection, while the vault has presence; null otherwise. */
+    private class PresenceView(val reading: PresenceReading?, val shared: Boolean?)
+
+    private fun ownPresence() = combine(presence.availability, presence.policy, presence.readings) { a, policy, readings ->
+        if (a == PresenceAvailability.AVAILABLE) PresenceView(readings[id], policy?.sharesWith(id)) else null
+    }
+
+    /** Presence is asked of a person who is connected, never of a service (a service is not a person). */
+    private val ConnectionInfo.askable: Boolean get() = state == ConnectionState.ACTIVE && !service
 
     private fun ownVotes() = combine(votes.votes, votes.reconnect, votes.availability) { v, r, a ->
         val mine = v.filter { it.connectionId == id }
@@ -669,7 +727,20 @@ class ConnectionDetailViewModel @Inject constructor(
             }
         }
         loadSharing()
+        // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
+        viewModelScope.launch {
+            val c = uiState.map { it.connection }.filterNotNull().first()
+            if (c.askable) presence.queryWhenKnown(id)
+        }
     }
+
+    /** The refresh icon: asks again (the vault answers a second question within the minute with the first answer). */
+    fun refreshPresence() {
+        if (uiState.value.presence != null) viewModelScope.launch { presence.query(id) }
+    }
+
+    /** The switch "Share my status with <First>": adds the connection to or takes it out of the policy's `except`. */
+    fun setPresenceShared(shared: Boolean) = act { presence.update { it.withSharedWith(id, shared) } }
 
     /**
      * Reads both directions again (`share.rule.list` for this connection, `grant.list`), e.g. when the screen comes
