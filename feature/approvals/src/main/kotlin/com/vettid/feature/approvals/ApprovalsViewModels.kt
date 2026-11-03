@@ -608,7 +608,8 @@ class ApprovalDetailViewModel @Inject constructor(
     /** [shown]: as for [approve]; only the share items the screen showed are declined. */
     fun deny(shown: List<String>? = null) {
         val a = uiState.value.approval ?: return
-        if (expiredNow(a)) return
+        // The pairing this phone holds is compared, never rejected from here (Reject is for the one it can't check).
+        if (expiredNow(a) || heldPairing(a)) return
         decide {
             when (a) {
                 is Approval.ConnectionRequest -> repo.declineConnection(a.pendingId)
@@ -617,13 +618,22 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = false)
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)
                 is Approval.ShareDecision -> repo.decideShare(a.ruleId, include = emptyList(), decline = shown ?: a.items.map { it.itemId })
-                is Approval.DeviceRequest -> {
-                    repo.declineDeviceRequest(a.key)
-                    // A held request says "Denied"; a session request just closes, as it always did.
-                    if (a.isHeld) local.update { it.copy(outcome = DeviceOutcome.Denied) }
-                }
+                is Approval.DeviceRequest -> denyDevice(a)
             }
         }
+    }
+
+    private fun heldPairing(a: Approval): Boolean = a is Approval.DeviceRequest && a.isPairing && uiState.value.pairingHeld
+
+    private suspend fun denyDevice(a: Approval.DeviceRequest) {
+        if (a.isPairing) {
+            // AA5, owner decision 2026-11-03: Reject (`device.pair.reject` with the entry's ref); the entry just closes.
+            repo.rejectPairingRequest(a.key)
+            return
+        }
+        repo.declineDeviceRequest(a.key)
+        // A held request says "Denied"; a session request just closes, as it always did.
+        if (a.isHeld) local.update { it.copy(outcome = DeviceOutcome.Denied) }
     }
 
     /** "Deny and end access now" on a renewal request: asks "End access for <device>?" first; nothing is sent yet. */
