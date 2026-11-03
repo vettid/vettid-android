@@ -195,10 +195,37 @@ class AgentPermissionsPageTest {
     }
 
     @Test
-    fun aFailedReadAfterAGoodOneKeepsTheRowsAndSaysNothing() {
-        show(state(ask).copy(permissionsError = FailureKind.NETWORK))
-        assertEquals(0, rule.count("permissions_failed"))
+    fun aFailedReadAfterAGoodOneSaysSoAndKeepsTheEarlierRows() {
+        val calls = mutableListOf<String>()
+        show(state(ask).copy(permissionsError = FailureKind.NETWORK), DevicePageActions(onRetryPermissions = { calls += "retry" }))
+        rule.onNodeWithTag("permissions_failed").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Other permissions could not be loaded.").assertExists()
         rule.onNodeWithTag("perm_g1").assertExists()
+        rule.onNodeWithText("Try again").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("retry"), calls)
+    }
+
+    @Test
+    fun anAgentWhoseSuspendedWasNeverReadSaysSoInsteadOfNotPaused() {
+        show(DeviceUiState(device = agent.copy(pausedKnown = false), loaded = true))
+        assertEquals(0, rule.count("paused_banner"))
+        rule.onNodeWithTag("permissions_failed").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun onceItsPermissionsWereReadAnUnknownPausedIsNotSaidAnyMore() {
+        show(DeviceUiState(device = agent.copy(pausedKnown = false), loaded = true, permissionsLoaded = true))
+        assertEquals(0, rule.count("permissions_card"))
+    }
+
+    @Test
+    fun aGrantThatDoesNotReadIsAnotherPermissionAndWithoutAnIdHasNoMenu() {
+        val noId = AgentGrant(null, "", 0, GrantApproval.UNKNOWN, 60, 1_000, null, emptyList(), 3_600)
+        show(state(noId, unknown.copy(scope = "", approval = GrantApproval.UNKNOWN)))
+        rule.onNodeWithTag("perm_unreadable_0").performScrollTo().assertTextContains("Another permission", substring = true)
+        assertEquals("no id, no way to remove it", 0, rule.count("perm_more_unreadable_0"))
+        rule.onNodeWithTag("perm_g3").assertTextContains("Another permission", substring = true)
+        assertEquals("with an id it can be removed", 1, rule.count("perm_more_g3"))
     }
 
     @Test

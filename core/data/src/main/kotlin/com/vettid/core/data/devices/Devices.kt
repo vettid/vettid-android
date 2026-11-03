@@ -52,6 +52,8 @@ data class DeviceInfo(
     val thisPhone: Boolean = false,
     /** The vault paused this agent (`leash.grant.list`'s `suspended`, §10.11). */
     val paused: Boolean = false,
+    /** False when no read of `suspended` has answered for this agent: [paused] is then unknown, not "not paused". */
+    val pausedKnown: Boolean = true,
 ) {
     val isAgent: Boolean get() = !thisPhone && kind == KIND_AGENT
 
@@ -241,14 +243,15 @@ interface DevicesRepository {
     suspend fun refreshPermissions(agentId: String)
 
     /**
-     * `leash.grant.revoke{grant_id}`: no unlock window, nothing signed. `not_found` is [PermissionRemoval.ALREADY_GONE].
-     * The agent's grants are read again after either; any other failure is thrown and nothing is read.
+     * `leash.grant.revoke{grant_id}`: no unlock window, nothing signed. `not_found` is [PermissionRemoval.ALREADY_GONE];
+     * any other failure is thrown. Reads nothing: the caller reads the grants again after either answer ([refreshPermissions]),
+     * so that a read that fails is shown.
      */
-    suspend fun removePermission(agentId: String, grantId: String): PermissionRemoval
+    suspend fun removePermission(grantId: String): PermissionRemoval
 
     /**
-     * `leash.agent.resume{agent_id}`: no unlock window. `not_found` is [AgentResumption.NOT_PAUSED]. The grants are read
-     * again after either; any other failure is thrown and nothing is read.
+     * `leash.agent.resume{agent_id}`: no unlock window. `not_found` is [AgentResumption.NOT_PAUSED]; any other failure is
+     * thrown. Reads nothing: the caller reads the grants again after either answer ([refreshPermissions]).
      */
     suspend fun resume(agentId: String): AgentResumption
 }
@@ -353,8 +356,8 @@ class DevicesManager(
                 }
                 synchronized(lock) {
                     if (gen != generation) return@withLock
-                    val held = list.value.associate { it.id to it.paused }
-                    val shown = DeviceWire.ordered(parsed.map { it.copy(paused = it.isAgent && pausedOf(it.id, paused, held, mine)) })
+                    val held = list.value.associateBy { it.id }
+                    val shown = DeviceWire.ordered(parsed.map { pausedOf(it, paused, held[it.id], mine) })
                     list.value = shown
                     loadState.value = ListLoad.LOADED
                 }
@@ -365,11 +368,18 @@ class DevicesManager(
         }
     }
 
-    /** One agent's `paused` for a list read numbered [mine]: [read] (null: it failed) unless a newer read set it (under [lock]). */
-    private fun pausedOf(id: String, read: Set<String>?, held: Map<String, Boolean>, mine: Long): Boolean {
-        if (read == null || mine < (pausedApplied[id] ?: 0L)) return held[id] == true
-        pausedApplied[id] = mine
-        return id in read
+    /**
+     * [d] with `paused` for a list read numbered [mine] (under [lock]): from [read] (null: that call failed), unless a newer
+     * read set it. A failed read keeps what [held] (the entry already listed) knew; with nothing known, `paused` is unknown.
+     */
+    private fun pausedOf(d: DeviceInfo, read: Set<String>?, held: DeviceInfo?, mine: Long): DeviceInfo {
+        val keep = read == null || mine < (pausedApplied[d.id] ?: 0L)
+        if (d.isAgent && !keep) pausedApplied[d.id] = mine
+        return when {
+            !d.isAgent -> d.copy(paused = false, pausedKnown = true)
+            keep -> d.copy(paused = held?.paused == true, pausedKnown = held?.pausedKnown == true)
+            else -> d.copy(paused = read != null && d.id in read, pausedKnown = true)
+        }
     }
 
     override suspend fun endAccess(deviceId: String) {
@@ -425,42 +435,27 @@ class DevicesManager(
             // `paused` follows only the newest read of either kind (the list's, or another permissions read).
             if (mine >= (pausedApplied[agentId] ?: 0L)) {
                 pausedApplied[agentId] = mine
-                list.value = list.value.map { if (it.id == agentId && it.isAgent) it.copy(paused = read.suspended) else it }
+                list.value = list.value.map {
+                    if (it.id == agentId && it.isAgent) it.copy(paused = read.suspended, pausedKnown = true) else it
+                }
             }
         }
     }
 
-    override suspend fun removePermission(agentId: String, grantId: String): PermissionRemoval {
-        val outcome = try {
-            vaultGuard { ops().revokeGrant(grantId) }
-            PermissionRemoval.REMOVED
-        } catch (e: VaultFailure) {
-            if (e.kind != FailureKind.NOT_FOUND) throw e
-            PermissionRemoval.ALREADY_GONE
-        }
-        readAfter(agentId)
-        return outcome
+    override suspend fun removePermission(grantId: String): PermissionRemoval = try {
+        vaultGuard { ops().revokeGrant(grantId) }
+        PermissionRemoval.REMOVED
+    } catch (e: VaultFailure) {
+        if (e.kind != FailureKind.NOT_FOUND) throw e
+        PermissionRemoval.ALREADY_GONE
     }
 
-    override suspend fun resume(agentId: String): AgentResumption {
-        val outcome = try {
-            vaultGuard { ops().resumeAgent(agentId) }
-            AgentResumption.RESUMED
-        } catch (e: VaultFailure) {
-            if (e.kind != FailureKind.NOT_FOUND) throw e
-            AgentResumption.NOT_PAUSED
-        }
-        readAfter(agentId)
-        return outcome
-    }
-
-    /** The read after a change here: the change is done, so a read that fails must not turn it into a failed request. */
-    private suspend fun readAfter(agentId: String) {
-        try {
-            refreshPermissions(agentId)
-        } catch (_: VaultFailure) {
-            // The next event or the next return to the page reads again.
-        }
+    override suspend fun resume(agentId: String): AgentResumption = try {
+        vaultGuard { ops().resumeAgent(agentId) }
+        AgentResumption.RESUMED
+    } catch (e: VaultFailure) {
+        if (e.kind != FailureKind.NOT_FOUND) throw e
+        AgentResumption.NOT_PAUSED
     }
 
     /** The app's own entry, and any other `app`, has no actions (`forbidden` from the vault): nothing is sent for it. */

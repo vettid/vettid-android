@@ -25,10 +25,11 @@ enum class GrantApproval {
  * One of an agent's grants as `leash.grant.list` shows it (VAULT-MESSAGING §10.11; ANDROID-PLAN 0.1.116 §4 AA3), without
  * its `delegation` and `sig`, which the app never reads. [scope] is the vault's own text: a scope this app has no label
  * for is still listed, and can be removed ([PermissionScopes.known]). [connections] is empty for "all connections" (and
- * for every scope that takes none).
+ * for every scope that takes none). A grant that does not read is still listed: an empty [scope] is shown as "Another
+ * permission", and a null [grantId] (the vault sent none) cannot be removed ([removable]).
  */
 data class AgentGrant(
-    val grantId: String,
+    val grantId: String?,
     val scope: String,
     val version: Long,
     val approval: GrantApproval,
@@ -39,6 +40,9 @@ data class AgentGrant(
     /** Seconds a service shown this grant may still accept it after it is revoked, before the 60 s skew (§10.11). */
     val statusTtl: Long,
 ) {
+    /** Only a grant with an id can be revoked. */
+    val removable: Boolean get() = grantId != null
+
     /** A grant names connections, which are the member's business: nothing is printed but the type. */
     override fun toString(): String = "AgentGrant"
 }
@@ -82,29 +86,39 @@ object PermissionWire {
 
     /**
      * The grants of [body] for [agentId] that are not share rules, in the vault's order, and whether [agentId] is in
-     * `suspended`. A grant of another agent (when it names one) is dropped. A body without a `grants` array is a failure:
-     * an unreadable answer is never "no permissions".
+     * `suspended`. A grant of another agent (when it names one) is dropped. **A grant that does not read is not dropped**
+     * (it could be a permission nobody sees): it is listed with an empty scope, and without an id when it has none. A body
+     * without a `grants` array is a failure: an unreadable answer is never "no permissions".
      */
     fun permissions(body: JsonObject, agentId: String): AgentPermissions {
         val list = body["grants"] as? JsonArray ?: throw VaultFailure(FailureKind.OTHER, "unreadable_grants")
-        val others = list.mapNotNull { (it as? JsonObject)?.let(::grant) }
-            .filter { it.second == null || it.second == agentId }
-            .map { it.first }
-            .filter { it.scope != PermissionScopes.ITEMS_READ }
+        val others = list.mapNotNull { e ->
+            val o = e as? JsonObject
+            val agent = o?.s("agent_id")
+            val scope = o?.s("scope")?.takeIf { it.isNotEmpty() }
+            when {
+                agent != null && agent != agentId -> null
+                scope == PermissionScopes.ITEMS_READ -> null
+                o == null -> unreadable()
+                else -> grantOf(o, o.s("grant_id")?.takeIf { it.isNotEmpty() }, scope.orEmpty())
+            }
+        }
         return AgentPermissions(others, agentId in DeviceWire.suspended(body))
     }
 
-    /** One grant, with the agent it names (null when it names none); null when it has no `grant_id` or no `scope`. */
-    private fun grant(o: JsonObject): Pair<AgentGrant, String?>? {
-        val id = o.s("grant_id")?.takeIf { it.isNotEmpty() }
-        val scope = o.s("scope")?.takeIf { it.isNotEmpty() }
-        return if (id == null || scope == null) null else grantOf(o, id, scope) to o.s("agent_id")
-    }
+    /** An entry that is not even an object: shown as an unknown permission that cannot be removed. */
+    private fun unreadable() = AgentGrant(
+        null, "", 0, GrantApproval.UNKNOWN, DEFAULT_PER_HOUR, DEFAULT_PER_DAY, null, emptyList(), DeviceWire.MAX_STATUS_TTL,
+    )
 
     /** A `<grant>` as `leash.grant.issue` answers it; null when it has no `grant_id` or no `scope`. */
-    fun issued(o: JsonObject): AgentGrant? = grant(o)?.first
+    fun issued(o: JsonObject): AgentGrant? {
+        val id = o.s("grant_id")?.takeIf { it.isNotEmpty() }
+        val scope = o.s("scope")?.takeIf { it.isNotEmpty() }
+        return if (id == null || scope == null) null else grantOf(o, id, scope)
+    }
 
-    private fun grantOf(o: JsonObject, id: String, scope: String): AgentGrant {
+    private fun grantOf(o: JsonObject, id: String?, scope: String): AgentGrant {
         // Absent is `ask` (§10.11 default); a word this app does not know is [GrantApproval.UNKNOWN], never claimed as ask.
         val approval = when (o.s("approval")) {
             null, "ask" -> GrantApproval.ASK

@@ -62,7 +62,7 @@ class AgentPermissionsDevStackTest {
             check(e.kind == FailureKind.NOT_FOUND) { "list: ${e.kind}" }
         }
         check(devices.resume(AGENT_NOT_PAIRED) == AgentResumption.NOT_PAUSED) { "resume of an unpaired agent" }
-        check(devices.removePermission(AGENT_NOT_PAIRED, GRANT_NOBODY_HAS) == PermissionRemoval.ALREADY_GONE) { "revoke of a grant nobody has" }
+        check(devices.removePermission(GRANT_NOBODY_HAS) == PermissionRemoval.ALREADY_GONE) { "revoke of a grant nobody has" }
         log("an unpaired agent and a grant nobody has: not_found, read as 'no longer paused' and 'already removed'")
 
         // The grant itself, outside the unlock window and then inside it, for an agent that is not paired.
@@ -94,9 +94,10 @@ class AgentPermissionsDevStackTest {
         devices.refreshPermissions(agent)
         val listed = devices.permissions.value.getValue(agent)
         check(listed.others.any { it.grantId == saved.grant.grantId }) { "the issued grant is not listed under Other permissions" }
-        check(devices.removePermission(agent, saved.grant.grantId) == PermissionRemoval.REMOVED)
+        check(devices.removePermission(saved.grant.grantId!!) == PermissionRemoval.REMOVED)
+        devices.refreshPermissions(agent)
         check(devices.permissions.value.getValue(agent).others.none { it.grantId == saved.grant.grantId })
-        check(devices.removePermission(agent, saved.grant.grantId) == PermissionRemoval.ALREADY_GONE)
+        check(devices.removePermission(saved.grant.grantId!!) == PermissionRemoval.ALREADY_GONE)
         check(devices.resume(agent) == AgentResumption.NOT_PAUSED) { "an agent that is not paused" }
         log("grant ${saved.grant.grantId} issued, listed, removed twice (removed, already gone) and resume answered 'no longer paused' for agent $agent")
     }

@@ -11,13 +11,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** The plan's drafts for an agent's permissions, word for word (ANDROID-PLAN 0.1.116 §4 AA3); not approved yet: the owner approves them. */
+/** The texts of an agent's permissions (ANDROID-PLAN 0.1.117 §4 AA3), approved by the owner 2026-11-03: the plan's words, and the ones proposed here. */
 @RunWith(RobolectricTestRunner::class)
 class AgentPermissionTextsTest {
     private val r = ApplicationProvider.getApplicationContext<Context>().resources
 
     @Test
-    fun theDraftsAreThePlansWords() {
+    fun thePlansWordsAreUnchanged() {
         val drafts = listOf(
             R.string.devices_perms_title to "Other permissions",
             R.string.devices_scope_connection_list to "See your list of connections",
@@ -54,7 +54,7 @@ class AgentPermissionTextsTest {
     }
 
     @Test
-    fun theTextsThePlanDoesNotGiveAreProposedHere() {
+    fun theTextsThePlanDoesNotGiveAreUnchanged() {
         assertEquals("Another permission", r.getString(R.string.devices_scope_unknown))
         assertEquals("Other permissions could not be loaded.", r.getString(R.string.devices_perms_failed))
         assertEquals("That permission could not be removed. Try again.", r.getString(R.string.devices_perm_remove_failed))

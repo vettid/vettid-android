@@ -109,6 +109,17 @@ internal object DevicesCatalog {
             Page(DeviceUiState(device = agent, loaded = true, permissions = listOf(askGrant, autoGrant, unknownGrant), permissionsLoaded = true, connectionNames = names))
         },
         "devices.page_agent_permissions_failed" to { Page(DeviceUiState(device = agent, loaded = true, permissionsError = FailureKind.NETWORK)) },
+        "devices.page_agent_permissions_failed_rows" to {
+            Page(DeviceUiState(device = agent, loaded = true, permissions = listOf(askGrant), permissionsLoaded = true, permissionsError = FailureKind.NETWORK))
+        },
+        "devices.page_agent_permissions_unreadable_grant" to {
+            Page(
+                DeviceUiState(
+                    device = agent, loaded = true, permissionsLoaded = true,
+                    permissions = listOf(AgentGrant(null, "", 0, GrantApproval.UNKNOWN, 60, 1_000, null, emptyList(), 3_600), askGrant),
+                ),
+            )
+        },
         "devices.page_agent_paused" to {
             Page(DeviceUiState(device = agent.copy(paused = true), loaded = true, permissions = listOf(askGrant), permissionsLoaded = true))
         },

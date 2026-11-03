@@ -252,25 +252,30 @@ The A2 exit test:
   `DevicesRepository.permissions`, `refreshPermissions`, memory only, cleared with the list at lock and hold; an older answer never
   replaces a newer one: a read number per agent). **One source per card:** **What it may use** stays `share.rule.list` (AA4, richer
   rows); the `items.read` grants (`grant_id` = `rule_id`) are dropped from the permissions, never listed twice. The "Other permissions"
-  heading is shown **only when the agent has such grants (or their read failed and never succeeded)**, and it **never has an add
-  action** and there is no editor (decision 3a; a row's tap opens nothing); with no such grants the card is not shown at all. A
-  list that never read says "Other permissions could not be loaded." with Try again. A row: the scope's label (nine labels, "Another permission" for a scope
+  heading is shown **only when the agent has such grants, or the latest read failed, or `suspended` was never read for the agent
+  (`DeviceInfo.pausedKnown`)**, and it **never has an add action** and there is no editor (decision 3a; a row's tap opens nothing); with no such grants the card is not shown at all. When the **latest** read failed
+  (even after an earlier success: the earlier rows stay below) or the agent's pause is unknown, the card says "Other permissions
+  could not be loaded." with Try again (`DeviceUiState.permissionsUnreadable`), so a grant issued elsewhere never goes unseen.
+  Grants that do not read are **not dropped**: each is a row "Another permission" (a grant without `grant_id` has no ⋯ menu, it
+  cannot be revoked). A row: the scope's label (nine labels, "Another permission" for a scope
   the app has no label for), "Asks you each time" or "Allowed automatically, up to N an hour and M a day without asking" (an `auto`
   grant without limits shows the vault's defaults 60 and 1,000; an absent `approval` is ask, the vault's default; one the app does
   not know is `GrantApproval.UNKNOWN`: no approval line is shown, never "Asks you each time"), then ", until
   <date>" and ", only with <names>" (`DeviceUiState.connectionNames` from `ConnectionsRepository`; "Removed connection" for an id not
-  listed **only once the list was read** (`connectionsLoaded`: the page calls `connections.refresh()`; before that, or when it fails,
-  no names are said); "Name not shared yet" for a blank name). Trailing ⋯ → **Remove** (`ConfirmDialog`, destructive: "<name> can no longer <label,
+  listed **only once the list was read** (`connectionsLoaded` = the page's own `connections.refresh()` at opening answered; a cached list never counts, so a
+  new connection is not called removed; before that, or when it fails, no names are said); "Name not shared yet" for a blank name). Trailing ⋯ → **Remove** (`ConfirmDialog`, destructive: "<name> can no longer <label,
   lower case> from now on. Services it showed this permission to may accept it for up to <that grant's status_ttl + 1 min>.";
   a scope without a label has its own sentence): `leash.grant.revoke{grant_id}` with **no unlock window and no password** (the
-  plan, not the task title); `{}` "Permission removed", `not_found` "It was already removed.", the grants are read again after both
-  (`DevicesManager.removePermission`: a read that fails after a done removal does not turn it into a failure); any other failure shows
-  its error, keeps the row and reads nothing. **Paused:** a banner at the top of the page (`NoticeKind.URGENT`, "Paused by your
+  plan, not the task title); `{}` "Permission removed", `not_found` "It was already removed.", and the view model reads the grants again after both
+  (`DevicesManager.removePermission` itself reads nothing; a re-read that fails is shown on the card and does not turn the done
+  removal into a failure); any other failure shows its error, keeps the row and reads nothing. **Paused:** a banner at the top of the page (`NoticeKind.URGENT`, "Paused by your
   vault") whenever `DeviceInfo.paused`. `paused` has **one ordering**: the list read and the permissions read share one read numbering
   (`DevicesManager.permissionReads`, `pausedApplied` per agent) and a read never overwrites a `paused` set by a newer one, so a
   list read that started before Resume's re-read cannot bring the pause back; a list read whose `grants(null)` call fails keeps the
-  `paused` values it held (fail closed); **Resume** = `leash.agent.resume{agent_id}`,
-  no unlock window, no confirmation: `{}` "Resumed", `not_found` "It is no longer paused", read again after both. **Re-reads:**
+  `paused` values it held (fail closed), and with nothing held `paused` is **unknown** (`pausedKnown = false`), never "not
+  paused": the page then shows the failed card; **Resume** = `leash.agent.resume{agent_id}`,
+  no unlock window, no confirmation: `{}` "Resumed", `not_found` "It is no longer paused", read again after both by the view
+  model (if that re-read fails the banner stays up and the failure shows). **Re-reads:**
   `DevicesManager.onEvent` emits `AgentChange` (`changes`): `sync.event` `leash.grant.changed|revoked`, `leash.agent.suspended` with
   this `agent_id`, and `share.rule.changed|deleted` (only `rule_id`: the app knows no rule it can tell is another subject's, so every
   one re-reads the permissions and the rules); also on opening and on every return to the page. **`leash.grant.issue`, core only (no
@@ -279,10 +284,10 @@ The A2 exit test:
   `refused(e, resent = true)`), `Conflict`, `Limit` (`agent_grants`), `NotPaired`, `BadRequest(field?)` (the field only when it reads
   as a plain member name), `OwnerCheck`, `AlarmOpen` (`unlockRefused`: `credential_frozen` / `rotation_required` from the prompt's
   unlock), `Failed(failure)`. The plan's answer texts are not in strings (unused). Texts in `feature/devices/.../strings.xml`
-  (`devices_perm*`, `devices_scope_*`, `devices_paused_*`, `devices_resume*`) are marked `draft` or `new`; none is approved
-  (`AgentPermissionTextsTest`). Dev stack: `AgentPermissionsDevStackTest` (skips without the stack; the paired-agent branch needs a
+  (`devices_perm*`, `devices_scope_*`, `devices_paused_*`, `devices_resume*`) are **approved by the owner 2026-11-03**, the plan's words and the ones the plan
+  does not give (`AgentPermissionTextsTest` holds them). Dev stack: `AgentPermissionsDevStackTest` (skips without the stack; the paired-agent branch needs a
   `vaultctl` agent, and a real suspension needs an agent that sends 30 refused requests: never run). Catalog:
-  `devices.page_agent_permissions`, `devices.page_agent_permissions_failed`, `devices.page_agent_paused`,
+  `devices.page_agent_permissions`, `devices.page_agent_permissions_failed`, `devices.page_agent_permissions_failed_rows`, `devices.page_agent_permissions_unreadable_grant`, `devices.page_agent_paused`,
   `devices.page_agent_paused_failed`, `devices.page_agent_permission_remove`, `devices.page_agent_permission_remove_unknown`,
   `devices.page_agent_permission_remove_failed`.
 

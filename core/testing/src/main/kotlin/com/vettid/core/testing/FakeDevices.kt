@@ -90,18 +90,18 @@ class FakeDevices : DevicesRepository {
         devices.value = devices.value.map { if (it.id == agentId && it.isAgent) it.copy(paused = snapshot.suspended) else it }
     }
 
-    override suspend fun removePermission(agentId: String, grantId: String): PermissionRemoval {
+    override suspend fun removePermission(grantId: String): PermissionRemoval {
         call("removePermission:$grantId")
-        val held = grantsHeld[agentId]
-        if (held != null) grantsHeld[agentId] = held.copy(others = held.others.filterNot { it.grantId == grantId })
-        refreshPermissions(agentId)
+        grantsHeld.keys.toList().forEach { agent ->
+            val held = grantsHeld.getValue(agent)
+            grantsHeld[agent] = held.copy(others = held.others.filterNot { it.grantId == grantId })
+        }
         return removal
     }
 
     override suspend fun resume(agentId: String): AgentResumption {
         call("resume:$agentId")
         grantsHeld[agentId]?.let { grantsHeld[agentId] = it.copy(suspended = false) }
-        refreshPermissions(agentId)
         return resumption
     }
 }

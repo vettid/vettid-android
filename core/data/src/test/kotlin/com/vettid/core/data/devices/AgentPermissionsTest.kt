@@ -56,15 +56,33 @@ class AgentPermissionsTest {
     @Test
     fun itemsReadIsASplitOutShareRuleAndTheOthersAreListedInOrder() {
         val p = PermissionWire.permissions(body, "a1")
-        assertEquals(listOf("g1", "g2", "g3"), p.others.map { it.grantId })
+        assertEquals(listOf("g1", "g2", "g3", null, "g4", null), p.others.map { it.grantId })
         assertTrue("an items.read grant is a share rule: listed under What it may use", p.others.none { it.scope == PermissionScopes.ITEMS_READ })
     }
 
     @Test
-    fun aGrantOfAnotherAgentOrWithoutAnIdOrAScopeIsNotListed() {
+    fun aGrantOfAnotherAgentIsNotListed() {
         val ids = PermissionWire.permissions(body, "a1").others.map { it.grantId }
         assertFalse("x1" in ids)
-        assertEquals(listOf("x1"), PermissionWire.permissions(body, "a2").others.map { it.grantId })
+        // For a2: its own x1, and the entry that is not even an object (it names no agent, so it may be anyone's).
+        assertEquals(listOf("x1", null), PermissionWire.permissions(body, "a2").others.map { it.grantId })
+    }
+
+    @Test
+    fun aGrantThatDoesNotReadIsListedAsAnUnknownPermissionNeverDropped() {
+        val others = PermissionWire.permissions(body, "a1").others
+        // No `grant_id`: shown, cannot be removed. No scope: shown as an unknown permission, removable. Not an object: shown too.
+        val noId = others[3]
+        assertEquals("profile.get", noId.scope)
+        assertFalse(noId.removable)
+        val noScope = others[4]
+        assertEquals("g4", noScope.grantId)
+        assertEquals("", noScope.scope)
+        assertTrue(noScope.removable)
+        val junk = others[5]
+        assertFalse(junk.removable)
+        assertEquals(GrantApproval.UNKNOWN, junk.approval)
+        assertEquals(DeviceWire.MAX_STATUS_TTL, junk.statusTtl)
     }
 
     @Test
@@ -231,7 +249,7 @@ class AgentPermissionsTest {
         m.refresh()
         assertFalse(m.devices.value.first { it.id == "a1" }.paused)
         m.refreshPermissions("a1")
-        assertEquals(listOf("g1", "g2", "g3"), m.permissions.value.getValue("a1").others.map { it.grantId })
+        assertEquals(listOf("g1", "g2", "g3", null, "g4", null), m.permissions.value.getValue("a1").others.map { it.grantId })
         assertTrue(m.devices.value.first { it.id == "a1" }.paused)
         // It is read with `agent_id`, never for every agent.
         assertTrue("grants:a1" in ops.calls)
@@ -261,7 +279,7 @@ class AgentPermissionsTest {
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.OTHER, e.kind)
         }
-        assertEquals(3, m.permissions.value.getValue("a1").others.size)
+        assertEquals(6, m.permissions.value.getValue("a1").others.size)
     }
 
     @Test
@@ -280,24 +298,23 @@ class AgentPermissionsTest {
     }
 
     @Test
-    fun removeSendsOnlyTheGrantIdAndReadsTheGrantsAgain() = runTest {
+    fun removeSendsOnlyTheGrantId() = runTest {
         val ops = Ops().apply { grants["a1"] = body }
         val m = manager(ops)
         m.refresh()
-        assertEquals(PermissionRemoval.REMOVED, m.removePermission("a1", "g2"))
-        assertEquals(listOf("revoke:g2", "grants:a1"), ops.calls.filter { it.startsWith("revoke") || it.startsWith("grants:a1") })
+        assertEquals(PermissionRemoval.REMOVED, m.removePermission("g2"))
+        assertEquals(listOf("revoke:g2"), ops.calls.filter { it.startsWith("revoke") })
     }
 
     @Test
-    fun removeNotFoundIsAlreadyGoneAndReadsAgain() = runTest {
+    fun removeNotFoundIsAlreadyGone() = runTest {
         val ops = Ops().apply {
             grants["a1"] = body
             refuse["revoke"] = "not_found"
         }
         val m = manager(ops)
         m.refresh()
-        assertEquals(PermissionRemoval.ALREADY_GONE, m.removePermission("a1", "g2"))
-        assertTrue("grants:a1" in ops.calls)
+        assertEquals(PermissionRemoval.ALREADY_GONE, m.removePermission("g2"))
     }
 
     @Test
@@ -306,7 +323,7 @@ class AgentPermissionsTest {
             val ops = Ops().apply { refuse["revoke"] = code }
             val m = manager(ops)
             try {
-                m.removePermission("a1", "g2")
+                m.removePermission("g2")
                 fail("$code passed")
             } catch (e: VaultFailure) {
                 assertTrue(e.kind != FailureKind.NOT_FOUND)
@@ -316,14 +333,7 @@ class AgentPermissionsTest {
     }
 
     @Test
-    fun aRemovalThatWentThroughIsNotAFailureBecauseTheReadAfterItFailed() = runTest {
-        val ops = Ops().apply { refuse["grants"] = "internal" }
-        val m = manager(ops)
-        assertEquals(PermissionRemoval.REMOVED, m.removePermission("a1", "g2"))
-    }
-
-    @Test
-    fun resumeSendsOnlyTheAgentIdAndReadsAgainWhichClearsThePause() = runTest {
+    fun resumeSendsOnlyTheAgentIdAndTheReadAfterItClearsThePause() = runTest {
         val ops = Ops().apply { grants["a1"] = body }
         val m = manager(ops)
         m.refresh()
@@ -332,16 +342,16 @@ class AgentPermissionsTest {
         ops.grants["a1"] = obj("""{"grants":[],"suspended":[]}""")
         assertEquals(AgentResumption.RESUMED, m.resume("a1"))
         assertEquals(1, ops.calls.count { it == "resume:a1" })
+        m.refreshPermissions("a1")
         assertFalse(m.devices.value.first { it.id == "a1" }.paused)
     }
 
     @Test
-    fun resumeNotFoundIsNoLongerPausedAndReadsAgain() = runTest {
+    fun resumeNotFoundIsNoLongerPaused() = runTest {
         val ops = Ops().apply { refuse["resume"] = "not_found" }
         val m = manager(ops)
         m.refresh()
         assertEquals(AgentResumption.NOT_PAUSED, m.resume("a1"))
-        assertTrue("grants:a1" in ops.calls)
     }
 
     @Test
@@ -444,6 +454,7 @@ class AgentPermissionsTest {
         // Resume goes through meanwhile and its re-read says the agent is no longer paused.
         ops.grants["a1"] = obj("""{"grants":[],"suspended":[]}""")
         assertEquals(AgentResumption.RESUMED, m.resume("a1"))
+        m.refreshPermissions("a1")
         assertFalse(m.devices.value.first { it.id == "a1" }.paused)
         gate.complete(Unit)
         read.join()
@@ -471,16 +482,31 @@ class AgentPermissionsTest {
         ops.refuse["grantsAll"] = "internal"
         m.refresh()
         assertTrue("fail closed: a pause is not cleared by a read that failed", m.devices.value.first { it.id == "a1" }.paused)
+        assertTrue(m.devices.value.first { it.id == "a1" }.pausedKnown)
         assertEquals(ListLoad.LOADED, m.load.value)
     }
 
     @Test
-    fun aFirstListReadWhoseSuspendedCallFailsShowsNoPauseAndStillTheList() = runTest {
+    fun aFirstListReadWhoseSuspendedCallFailsLeavesPausedUnknownNotFalseAndStillTheList() = runTest {
         val ops = Ops().apply { refuse["grantsAll"] = "internal" }
         val m = manager(ops)
         m.refresh()
-        assertFalse(m.devices.value.first { it.id == "a1" }.paused)
+        assertFalse("unknown is not 'paused'", m.devices.value.first { it.id == "a1" }.paused)
+        assertFalse("and not 'known not paused' either", m.devices.value.first { it.id == "a1" }.pausedKnown)
         assertEquals(2, m.devices.value.size)
+        // Still unknown after a second failed read, and known once a read of the agent's grants answers.
+        m.refresh()
+        assertFalse(m.devices.value.first { it.id == "a1" }.pausedKnown)
+        m.refreshPermissions("a1")
+        assertTrue(m.devices.value.first { it.id == "a1" }.pausedKnown)
+    }
+
+    @Test
+    fun aDesktopOrThisPhoneIsNeverUnknownlyPaused() = runTest {
+        val ops = Ops().apply { refuse["grantsAll"] = "internal" }
+        val m = manager(ops)
+        m.refresh()
+        assertTrue(m.devices.value.first { it.id == "me" }.pausedKnown)
     }
 
     // --- the answers to leash.grant.issue ---

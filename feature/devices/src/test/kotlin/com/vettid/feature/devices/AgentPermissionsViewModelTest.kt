@@ -62,6 +62,21 @@ class AgentPermissionsViewModelTest {
     }
 
     @Test
+    fun aCachedConnectionsListIsNotLoadedUntilThePageOpeningsReadAnswered() = runTest {
+        // The cache holds a list (Sam Lee only), but this page's read failed: a connection added since reads as unknown,
+        // never as removed.
+        social.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
+        val vm = page()
+        advanceUntilIdle()
+        assertEquals("Sam Lee", vm.uiState.value.connectionNames["c1"])
+        assertFalse(vm.uiState.value.connectionsLoaded)
+        vm.refreshPermissions()
+        val ok = page()
+        advanceUntilIdle()
+        assertTrue(ok.uiState.value.connectionsLoaded)
+    }
+
+    @Test
     fun anEmptyConnectionsListIsLoadedOnlyOnceItWasRead() = runTest {
         social.seed(emptyList())
         social.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
@@ -208,6 +223,24 @@ class AgentPermissionsViewModelTest {
     }
 
     @Test
+    fun aReadThatFailsAfterARemovalIsShownAndTheEarlierRowsStay() = runTest {
+        val vm = page()
+        advanceUntilIdle()
+        devices.fail["refreshPermissions:a1"] = VaultFailure(FailureKind.NETWORK)
+        vm.askRemovePermission("g1")
+        vm.confirm()
+        advanceUntilIdle()
+        assertEquals(PermissionNotice.REMOVED, vm.uiState.value.notice)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.permissionsError)
+        assertTrue(vm.uiState.value.permissionsUnreadable)
+        assertEquals(listOf("g1", "g2"), vm.uiState.value.permissions.map { it.grantId })
+        vm.refreshPermissions()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.permissionsUnreadable)
+        assertEquals(listOf("g2"), vm.uiState.value.permissions.map { it.grantId })
+    }
+
+    @Test
     fun aGrantThatIsNotListedCannotBeAskedAbout() = runTest {
         val vm = page()
         advanceUntilIdle()
@@ -235,6 +268,26 @@ class AgentPermissionsViewModelTest {
         assertEquals(listOf("resume:a1"), devices.calls.filter { it.startsWith("resume") })
         assertEquals(PermissionNotice.RESUMED, vm.uiState.value.notice)
         assertFalse("the banner goes with the pause", vm.uiState.value.device?.paused == true)
+    }
+
+    @Test
+    fun afterResumedAReReadThatFailsKeepsTheBannerAndShowsTheFailure() = runTest {
+        devices.grantsHeld["a1"] = AgentPermissions(listOf(g1), suspended = true)
+        val vm = page()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.device?.paused == true)
+        devices.fail["refreshPermissions:a1"] = VaultFailure(FailureKind.NETWORK)
+        vm.resume()
+        advanceUntilIdle()
+        assertEquals(PermissionNotice.RESUMED, vm.uiState.value.notice)
+        assertTrue("the pause is not cleared on the strength of a read that failed", vm.uiState.value.device?.paused == true)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.permissionsError)
+        assertTrue(vm.uiState.value.permissionsUnreadable)
+        // A read that goes through settles it.
+        vm.refreshPermissions()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.device?.paused == true)
+        assertFalse(vm.uiState.value.permissionsUnreadable)
     }
 
     @Test

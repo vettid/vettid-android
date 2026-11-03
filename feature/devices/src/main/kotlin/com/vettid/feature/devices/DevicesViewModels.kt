@@ -140,6 +140,13 @@ data class DeviceUiState(
     /** The agent has the most rules it can have (64, §10.12 `share_rules_subject`): no new one. */
     val atRuleLimit: Boolean get() = rules.size >= RULE_LIMIT
 
+    /**
+     * The latest read of the permissions failed, or `suspended` was never read for this agent (its `paused` is then unknown,
+     * not "not paused"): the card says so, with Try again.
+     */
+    val permissionsUnreadable: Boolean
+        get() = permissionsError != null || (device?.isAgent == true && !device.pausedKnown && !permissionsLoaded)
+
     /** This phone's own entry has no page (it has no actions). */
     val gone: Boolean get() = loaded && (device == null || device.thisPhone)
 
@@ -175,7 +182,10 @@ class DeviceViewModel @Inject constructor(
         )
     }
 
-    /** Set once `connections.refresh()` answered: the list may be empty for want of a read, or because there are none. */
+    /**
+     * Set once `connections.refresh()` answered at this page's opening: a cached list may be stale (a new connection would
+     * read as removed) or empty for want of a read.
+     */
     private val connectionsRead = MutableStateFlow(false)
 
     val uiState: StateFlow<DeviceUiState> =
@@ -184,7 +194,7 @@ class DeviceViewModel @Inject constructor(
             s.copy(
                 permissions = mine?.others.orEmpty(), permissionsLoaded = mine != null,
                 connectionNames = conns.associate { it.id to it.displayName },
-                connectionsLoaded = read || conns.isNotEmpty(),
+                connectionsLoaded = read,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
@@ -312,6 +322,8 @@ class DeviceViewModel @Inject constructor(
                 val done = repo.resume(d.id)
                 val notice = if (done == AgentResumption.RESUMED) PermissionNotice.RESUMED else PermissionNotice.NOT_PAUSED
                 local.update { it.copy(busy = false, notice = notice) }
+                // Read again after either answer; if that fails the banner stays and the failure is shown.
+                readPermissions()
             } catch (e: VaultFailure) {
                 local.update { it.copy(busy = false, failure = DeviceFailure.RESUME, error = e.kind, errorCode = e.shownCode) }
             }
@@ -335,9 +347,11 @@ class DeviceViewModel @Inject constructor(
             try {
                 when (what) {
                     DeviceConfirm.REMOVE_PERMISSION -> {
-                        val gone = repo.removePermission(d.id, checkNotNull(grant).grantId)
+                        val gone = repo.removePermission(checkNotNull(grant?.grantId))
                         val notice = if (gone == PermissionRemoval.REMOVED) PermissionNotice.REMOVED else PermissionNotice.ALREADY_REMOVED
                         local.update { it.copy(busy = false, notice = notice) }
+                        // Read again after either answer; a read that fails is shown on the card, not swallowed.
+                        readPermissions()
                     }
                     DeviceConfirm.END_ACCESS -> {
                         repo.endAccess(d.id)

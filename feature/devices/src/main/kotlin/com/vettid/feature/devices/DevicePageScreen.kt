@@ -355,7 +355,9 @@ private fun PausedBanner(name: String, busy: Boolean, onResume: () -> Unit) {
  */
 @Composable
 private fun PermissionsCard(state: DeviceUiState, actions: DevicePageActions) {
-    val failed = state.permissionsError != null && !state.permissionsLoaded
+    // The latest read failing is said even when an earlier one succeeded (a grant issued elsewhere must not go unseen); the
+    // earlier rows stay below it.
+    val failed = state.permissionsUnreadable
     if (state.permissions.isEmpty() && !failed) return
     DetailCard(Modifier.testTag("permissions_card")) {
         CardTitle(stringResource(R.string.devices_perms_title))
@@ -363,30 +365,40 @@ private fun PermissionsCard(state: DeviceUiState, actions: DevicePageActions) {
             Text(stringResource(R.string.devices_perms_failed), modifier = Modifier.testTag("permissions_failed"))
             TextButton(onClick = actions.onRetryPermissions) { Text(stringResource(R.string.devices_retry)) }
         }
-        state.permissions.forEach {
-            PermissionRow(it, state.connectionNames, state.connectionsLoaded, state.busy, actions.onRemovePermission)
+        state.permissions.forEachIndexed { i, g ->
+            PermissionRow(g, i, state.connectionNames, state.connectionsLoaded, state.busy, actions.onRemovePermission)
         }
     }
 }
 
 /** One permission: its scope's label, how it is allowed, and ⋯ → **Remove**. A tap opens nothing (no editor yet). */
 @Composable
-private fun PermissionRow(g: AgentGrant, names: Map<String, String>, namesKnown: Boolean, busy: Boolean, onRemove: (String) -> Unit) {
+private fun PermissionRow(
+    g: AgentGrant,
+    index: Int,
+    names: Map<String, String>,
+    namesKnown: Boolean,
+    busy: Boolean,
+    onRemove: (String) -> Unit,
+) {
     val label = PermissionText.label(g.scope)
+    val id = g.grantId
+    val key = id ?: "unreadable_$index"
     var open by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).padding(vertical = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}.testTag("perm_${g.grantId}")) {
+        Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}.testTag("perm_$key")) {
             Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             val detail = PermissionText.detail(g, names, namesKnown)
             if (detail.isNotEmpty()) {
                 Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Box {
-            IconButton(onClick = { open = true }, enabled = !busy, modifier = Modifier.testTag("perm_more_${g.grantId}")) {
+        // A grant the vault sent without an id cannot be revoked: shown, with no menu.
+        if (id != null) Box {
+            IconButton(onClick = { open = true }, enabled = !busy, modifier = Modifier.testTag("perm_more_$key")) {
                 Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.devices_perm_more_cd, label))
             }
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -394,9 +406,9 @@ private fun PermissionRow(g: AgentGrant, names: Map<String, String>, namesKnown:
                     text = { Text(stringResource(R.string.devices_remove)) },
                     onClick = {
                         open = false
-                        onRemove(g.grantId)
+                        onRemove(id)
                     },
-                    modifier = Modifier.testTag("perm_remove_${g.grantId}"),
+                    modifier = Modifier.testTag("perm_remove_$key"),
                 )
             }
         }
