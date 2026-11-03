@@ -195,7 +195,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                     modifier = Modifier.testTag("detail_display_name"),
                 )
             }
-            state.presence?.let { PresenceLine(it.reading, sharingName(c), actions.onRefreshPresence) }
+            state.presence?.let { PresenceLine(it.reading, sharingName(c), it.canRefresh, actions.onRefreshPresence) }
             Text(
                 stateLabel(c.state) ?: stringResource(R.string.connections_state_active),
                 style = MaterialTheme.typography.labelLarge,
@@ -240,7 +240,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         state.presence?.let { p ->
             val first = sharingName(c)?.let { AccountNames.isolate(it) }
             // Without the first name the switch and its note would have to say "this connection": not offered until it arrives.
-            if (first != null && p.shared != null) PresenceShareCard(p.shared, first, state.busy, actions.onSetPresenceShared)
+            if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
         }
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.

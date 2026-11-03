@@ -79,6 +79,13 @@ class AccountSheetPresenceTest {
     }
 
     @Test
+    fun whileAPickIsInFlightTheRowDoesNotOpenThePicker() {
+        show(SheetPresence(PresenceState.AVAILABLE, null, true) {})
+        rule.onNodeWithTag("account_status_row").performScrollTo().performClick()
+        assertEquals(0, rule.onAllNodesWithText("Away").fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun noErrorNoticeWithoutAFailure() {
         show(SheetPresence(PresenceState.AVAILABLE) {})
         assertEquals(0, rule.onAllNodesWithTag("account_status_error").fetchSemanticsNodes().size)

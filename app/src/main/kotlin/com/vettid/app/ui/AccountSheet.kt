@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -51,7 +52,13 @@ import java.time.Instant
  * The avatar sheet's status row (ANDROID-PLAN §4 "Presence"): the member's own [state], and what picking another one does.
  * Passed only where the vault has presence.
  */
-data class SheetPresence(val state: PresenceState, val error: PresenceFailure? = null, val onPick: (PresenceState) -> Unit)
+data class SheetPresence(
+    val state: PresenceState,
+    val error: PresenceFailure? = null,
+    /** A pick is on its way to the vault: the row waits (dimmed, not tappable). */
+    val busy: Boolean = false,
+    val onPick: (PresenceState) -> Unit,
+)
 
 /**
  * Avatar sheet (ANDROID-PLAN §4, 0.1.10): "Lock vault" first, right under the name (owner feedback 2026-10-08: at the
@@ -145,10 +152,10 @@ fun StatusGroup(presence: SheetPresence) {
     SettingsGroup(Modifier.testTag("account_status")) {
         SettingsRow(
             stringResource(R.string.account_presence_status, stringResource(PresenceText.stateName(presence.state))),
-            { picking = true },
+            { if (!presence.busy) picking = true },
             icon = Icons.Outlined.Visibility,
             showChevron = false,
-            modifier = Modifier.testTag("account_status_row"),
+            modifier = Modifier.alpha(if (presence.busy) BUSY_ALPHA else 1f).testTag("account_status_row"),
         )
     }
     presence.error?.let { e ->
@@ -306,3 +313,4 @@ private fun subscriptionText(s: SubscriptionInfo?, now: Instant): String {
 }
 
 private const val STATE_MEMBER = "member"
+private const val BUSY_ALPHA = 0.38f

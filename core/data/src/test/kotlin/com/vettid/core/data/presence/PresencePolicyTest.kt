@@ -85,6 +85,14 @@ class PresencePolicyTest {
         assertNull(PresenceWire.policy(obj("""{"version":3,"state":"x","share":"all"}""")))
         assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"y"}""")))
         assertNull(PresenceWire.policy(obj("""{"version":3}""")))
+        // An `except` entry that does not read, or more than 1,024, makes the whole policy unreadable: never dropped.
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"all","except":["a",7]}""")))
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"all","except":["a",null]}""")))
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"all","except":"a"}""")))
+        val many = (1..1025).joinToString(",") { "\"c$it\"" }
+        assertNull(PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"all","except":[$many]}""")))
+        val max = (1..1024).joinToString(",") { "\"c$it\"" }
+        assertEquals(1024, PresenceWire.policy(obj("""{"version":3,"state":"busy","share":"all","except":[$max]}"""))?.except?.size)
         assertNull(PresenceWire.policy(obj("""{"state":"busy"}""")))
         val at = Instant.parse("2026-11-03T12:00:00Z")
         // A last_active a little ahead (skew) is now, far ahead is dropped; invisible is never an answer.
@@ -93,5 +101,10 @@ class PresencePolicyTest {
         val far = PresenceWire.result(obj("""{"connection_id":"c","ping_id":"p","state":"busy","last_active":"2026-11-03T13:00:00Z"}"""), at)
         assertNull(far?.lastActive)
         assertNull(PresenceWire.result(obj("""{"connection_id":"c","ping_id":"p","state":"invisible"}"""), at))
+        // A last_active that is there and does not parse drops the result; an exp that does not parse is no answer.
+        assertNull(PresenceWire.result(obj("""{"connection_id":"c","ping_id":"p","state":"busy","last_active":"yesterday"}"""), at))
+        assertNull(PresenceWire.asked(obj("""{"ping_id":"p","exp":"soon"}""")))
+        assertNull(PresenceWire.asked(obj("""{"exp":"2026-11-03T12:00:30Z"}""")))
+        assertEquals(PresenceWire.Asked("p", null), PresenceWire.asked(obj("""{"ping_id":"p"}""")))
     }
 }

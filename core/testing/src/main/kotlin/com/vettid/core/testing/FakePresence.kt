@@ -21,7 +21,14 @@ class FakePresence(available: Boolean = true, initial: PresencePolicy? = Presenc
     override val policy = MutableStateFlow(initial)
     override val readings = MutableStateFlow<Map<String, PresenceReading>>(emptyMap())
 
+    /** The connections asked in the last minute; a test sets it (a query here does not). */
+    override val recent = MutableStateFlow<Set<String>>(emptySet())
+
+    /** How many times the policy was read (`presence.get`). */
+    var refreshes = 0
+
     override suspend fun refreshPolicy() {
+        refreshes++
         fail?.let { throw it }
     }
 

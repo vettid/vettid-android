@@ -1,5 +1,6 @@
 package com.vettid.feature.settings
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +14,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -112,11 +114,7 @@ class PresenceSettingsViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, PresenceSettingsUiState())
 
-    init {
-        refresh()
-    }
-
-    /** Reads the policy again (`presence.get`): on opening and on every return to the screen. */
+    /** Reads the policy again (`presence.get`): once when the screen opens (its first resume) and on every return to it. */
     fun refresh() {
         viewModelScope.launch {
             try {
@@ -193,14 +191,28 @@ fun PresenceSettingsContent(
                     actions = { TextButton(onClick = onDismissError) { Text(stringResource(R.string.settings_done)) } },
                 )
             }
-            val policy = state.policy ?: return@Column
+            val policy = state.policy
+            if (policy == null) {
+                // Until the policy is known (an error, if any, is above).
+                if (state.error == null) {
+                    Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                return@Column
+            }
             SettingsSectionHeader(stringResource(R.string.settings_presence_status))
             SettingsGroup {
                 Column(Modifier.selectableGroup()) {
                     PresenceState.entries.forEach { s ->
                         ChoiceLine(
                             stringResource(PresenceText.stateName(s)),
-                            if (s == PresenceState.INVISIBLE) stringResource(R.string.settings_presence_invisible_option) else null,
+                            // The option's line is for choosing it; once chosen, the note below says it (not both).
+                            if (s == PresenceState.INVISIBLE && policy.state != s) {
+                                stringResource(R.string.settings_presence_invisible_option)
+                            } else {
+                                null
+                            },
                             selected = policy.state == s,
                             enabled = !state.busy,
                             tag = "presence_state_${s.wire}",

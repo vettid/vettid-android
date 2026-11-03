@@ -4,6 +4,8 @@
 package com.vettid.feature.connections
 
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -63,7 +65,7 @@ class PresenceConnectionsTest {
 
     private fun service() = ConnectionInfo("s1", "Acme", ConnectionState.ACTIVE, firstName = "Acme", lastName = "Co-op", service = true)
 
-    private fun detailVm(id: String = "c1", p: FakePresence = presence) =
+    private fun detailVm(id: String = "c1", p: com.vettid.core.data.presence.PresenceRepository = presence) =
         ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to id)), social, FakeSharing(), presence = p)
 
     // --- the view model ---
@@ -93,7 +95,7 @@ class PresenceConnectionsTest {
     }
 
     @Test
-    fun afterAHoldThatClearedTheReadingsThePageSaysUnknownAndAsksAgainWhenPresenceIsBack() = runTest {
+    fun afterAHoldThatClearedTheReadingsThePageShowsNothingThenCheckingAndAsksAgainWhenPresenceIsBack() = runTest {
         social.seed(listOf(ada()))
         val vm = detailVm()
         advanceUntilIdle()
@@ -103,14 +105,70 @@ class PresenceConnectionsTest {
         presence.readings.value = emptyMap()
         advanceUntilIdle()
         assertNull(vm.uiState.value.presence)
-        // After the check: presence again; the reading was lost, so "Status unknown" until the question is asked, then Checking.
+        // After the check: presence again; the reading was lost, so the question is asked and the page says Checking.
         presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
         advanceUntilIdle()
         assertEquals(2, presence.queries.size)
         assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
+    }
+
+    @Test
+    fun aReadingThatGoesStaleOnAnOpenPageIsAskedAgainWithCheckingMeanwhile() = runTest {
+        social.seed(listOf(ada()))
+        val vm = detailVm()
+        advanceUntilIdle()
+        presence.readings.value = mapOf("c1" to PresenceReading.Known(PresenceState.BUSY, null))
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        // The manager drops a reading after a minute; the open page asks again instead of falling to "Status unknown".
         presence.readings.value = emptyMap()
         advanceUntilIdle()
+        assertEquals(2, presence.queries.size)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
+    }
+
+    @Test
+    fun notAskedYetIsCheckingAndAClosedVaultShowsNoLine() = runTest {
+        social.seed(listOf(ada()))
+        val quiet = object : com.vettid.core.data.presence.PresenceRepository by presence {
+            override suspend fun query(connectionId: String) = Unit
+        }
+        val vm = detailVm(p = quiet)
+        advanceUntilIdle()
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
+        presence.readings.value = mapOf("c1" to PresenceReading.Closed)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.presence)
+    }
+
+    @Test
+    fun aFailureOnOurSideAndATimeoutAreDifferentReadings() = runTest {
+        social.seed(listOf(ada()))
+        val vm = detailVm()
+        advanceUntilIdle()
+        presence.readings.value = mapOf("c1" to PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null))
+        advanceUntilIdle()
+        assertEquals(PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null), vm.uiState.value.presence?.reading)
+        presence.readings.value = mapOf("c1" to PresenceReading.Unknown)
+        advanceUntilIdle()
         assertEquals(PresenceReading.Unknown, vm.uiState.value.presence?.reading)
+    }
+
+    @Test
+    fun refreshIsOffInTheMinuteAfterAnAskAndInvisibleTurnsTheSwitchOff() = runTest {
+        social.seed(listOf(ada()))
+        val vm = detailVm()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.presence!!.canRefresh)
+        presence.recent.value = setOf("c1")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.presence!!.canRefresh)
+        vm.refreshPresence()
+        advanceUntilIdle()
+        assertEquals(1, presence.queries.size)
+        presence.policy.value = PresencePolicy(5, PresenceState.INVISIBLE)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.presence!!.invisible)
     }
 
     @Test
@@ -184,11 +242,19 @@ class PresenceConnectionsTest {
 
     // --- the screen ---
 
-    private fun detail(reading: PresenceReading, shared: Boolean? = true, onRefresh: () -> Unit = {}, onShared: (Boolean) -> Unit = {}, service: Boolean = false) {
+    private fun detail(
+        reading: PresenceReading,
+        shared: Boolean? = true,
+        onRefresh: () -> Unit = {},
+        onShared: (Boolean) -> Unit = {},
+        service: Boolean = false,
+        invisible: Boolean = false,
+        canRefresh: Boolean = true,
+    ) {
         val c = if (service) service() else ada()
         rule.setContent {
             ConnectionDetailScreen(
-                ConnectionDetailUiState(c.id, c, null, loading = false, presence = if (service) null else DetailPresence(reading, shared)),
+                ConnectionDetailUiState(c.id, c, null, loading = false, presence = if (service) null else DetailPresence(reading, shared, invisible, canRefresh)),
                 DetailActions(onRefreshPresence = onRefresh, onSetPresenceShared = onShared),
             )
         }
@@ -223,6 +289,34 @@ class PresenceConnectionsTest {
         detail(PresenceReading.Checking)
         rule.onNodeWithText("Checking…").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithTag("detail_presence_unknown").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aFailureOnOurSideShowsTheFailureTextAndNotTheStatusUnknownSentence() {
+        detail(PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null))
+        assertEquals(0, rule.onAllNodesWithText("Status unknown").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("detail_presence_unknown").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("detail_presence").assertIsDisplayed()
+    }
+
+    @Test
+    fun theRefreshIconIsDisabledInTheMinuteAfterAnAsk() {
+        var refreshed = 0
+        detail(PresenceReading.Unknown, onRefresh = { refreshed++ }, canRefresh = false)
+        rule.onNodeWithContentDescription("Check again").assertIsNotEnabled().performClick()
+        assertEquals(0, refreshed)
+    }
+
+    @Test
+    fun whenInvisibleTheSwitchIsOffDisabledAndSaysWhy() {
+        val seen = mutableListOf<Boolean>()
+        detail(PresenceReading.Unknown, shared = true, invisible = true, onShared = { seen += it })
+        rule.onNodeWithTag("detail_presence_share").assertIsDisplayed()
+        rule.onNodeWithText("Invisible: you appear offline to everyone.").assertIsDisplayed()
+        rule.onNodeWithText("Share my status with $ada").assertIsNotEnabled().assertIsOff()
+        assertEquals(0, rule.onAllNodesWithText("$ada sees 'Status unknown' for you, as if your vault were offline.").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("detail_presence_share").performClick()
+        assertTrue(seen.isEmpty())
     }
 
     @Test

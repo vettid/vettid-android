@@ -653,8 +653,14 @@ private const val COMPOSER_LINES = 5
 /** "Available · active 10 min ago", "Checking…" or "Status unknown", under the conversation's title. */
 @Composable
 internal fun ConversationPresenceLine(reading: PresenceReading) {
+    // Our own failure is said with the failure's text; "Status unknown" is only a timeout.
+    val text = if (reading is PresenceReading.Failed) {
+        failureText(reading.kind.messageRes(), reading.kind.vaultCode(reading.code))
+    } else {
+        PresenceText.line(androidx.compose.ui.platform.LocalResources.current, reading, java.time.Instant.now())
+    }
     Text(
-        PresenceText.line(androidx.compose.ui.platform.LocalResources.current, reading, java.time.Instant.now()),
+        text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,

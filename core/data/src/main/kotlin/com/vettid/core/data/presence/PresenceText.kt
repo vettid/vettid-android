@@ -31,6 +31,8 @@ object PresenceText {
     fun line(res: Resources, reading: PresenceReading, now: Instant, zone: ZoneId = ZoneId.systemDefault()): String = when (reading) {
         PresenceReading.Checking -> res.getString(R.string.data_presence_checking)
         PresenceReading.Unknown -> res.getString(R.string.data_presence_unknown)
+        // A failure is said with its own text by the screen (`failureText`), and a closed vault shows no line.
+        is PresenceReading.Failed, PresenceReading.Closed -> ""
         is PresenceReading.Known -> {
             val name = res.getString(stateName(reading.state))
             val ago = age(res, PresenceAge.of(reading.lastActive, now, zone))

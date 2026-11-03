@@ -55,6 +55,9 @@ class PresenceManager(
     private class Ask(val pingId: String, val askedAt: Instant, val expiry: Job) {
         /** Drops a result after a minute (a reading is not shown as current longer). */
         var stale: Job? = null
+
+        /** Ends the minute in which asking again would send nothing. */
+        var lapse: Job? = null
     }
 
     private val lock = Any()
@@ -75,10 +78,13 @@ class PresenceManager(
     @Volatile
     private var policyQueued = false
     private var starter: Job? = null
+    private var watcher: Job? = null
+    private val recentFlow = MutableStateFlow<Set<String>>(emptySet())
 
     override val availability: StateFlow<PresenceAvailability> = availabilityFlow.asStateFlow()
     override val policy: StateFlow<PresencePolicy?> = policyFlow.asStateFlow()
     override val readings: StateFlow<Map<String, PresenceReading>> = readingFlow.asStateFlow()
+    override val recent: StateFlow<Set<String>> = recentFlow.asStateFlow()
 
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
@@ -87,9 +93,13 @@ class PresenceManager(
             policyQueued = false
             starter?.cancel()
             starter = null
+            watcher?.cancel()
+            watcher = null
+            recentFlow.value = emptySet()
             asks.values.forEach {
                 it.expiry.cancel()
                 it.stale?.cancel()
+                it.lapse?.cancel()
             }
             asks.clear()
             sending.clear()
@@ -160,7 +170,25 @@ class PresenceManager(
 
     /** Nothing is sent while the vault is not open or the owner check is due or held (§3.6.3): `owner_check_required`, unsent. */
     private fun ensureOpen() {
-        if (closed()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
+        if (closed()) {
+            watchClosed()
+            throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
+        }
+    }
+
+    /**
+     * Something was held back because the vault is closed (not open, or the owner check due or held): when [closed] ends, by
+     * whatever means (the check passing, or its deadline moving), the probe starts again. [closed] is looked at every few
+     * seconds meanwhile; a lock or hold ([clear]) ends the watch.
+     */
+    private fun watchClosed() {
+        synchronized(lock) {
+            if (watcher?.isActive == true) return
+            watcher = scope.launch {
+                while (closed()) delay(WATCH.toMillis())
+                start()
+            }
+        }
     }
 
     /** A vault whose release has no presence is asked no more until the next unlock. */
@@ -187,6 +215,8 @@ class PresenceManager(
             if (gen == generation) {
                 policyFlow.value = read
                 availabilityFlow.value = PresenceAvailability.AVAILABLE
+                // Readings that waited for the check are asked again.
+                readingFlow.value = readingFlow.value.filterValues { it != PresenceReading.Closed }
             }
         }
         return read
@@ -244,22 +274,35 @@ class PresenceManager(
     }
 
     /** Sends `presence.query` ("Checking…" meanwhile); null when it cannot be sent or is refused. */
-    private suspend fun ask(connectionId: String, gen: Int): PresenceWire.Asked? {
-        if (closed()) return null
+    private suspend fun ask(connectionId: String, gen: Int): Asking {
+        if (closed()) {
+            watchClosed()
+            return Asking.Not(PresenceReading.Closed)
+        }
         synchronized(lock) { sending += connectionId }
         setReading(connectionId, gen, PresenceReading.Checking)
         return try {
-            PresenceWire.asked(vaultGuard(resend = true) { ops().query(connectionId) })
-        } catch (_: VaultFailure) {
-            null
+            val body = vaultGuard(resend = true) { ops().query(connectionId) }
+            PresenceWire.asked(body)?.let { Asking.Sent(it) } ?: Asking.Not(PresenceReading.Failed(FailureKind.OTHER, "unreadable_result"))
+        } catch (e: VaultFailure) {
+            // The vault itself says the check is due: closed, not a failure of ours.
+            val checkDue = e.kind == FailureKind.OWNER_CHECK_REQUIRED
+            Asking.Not(if (checkDue) PresenceReading.Closed else PresenceReading.Failed(e.kind, e.shownCode))
         }
+    }
+
+    /** What came of sending the question: the vault's answer, or the reading that stands instead. */
+    private sealed interface Asking {
+        class Sent(val asked: PresenceWire.Asked) : Asking
+
+        class Not(val reading: PresenceReading) : Asking
     }
 
     /**
      * The answer to the query, in one step under [lock]: the ask is registered before its timer can run, a result that came
      * first is taken, and the connection is no longer "being sent". Without an answer the reading is unknown.
      */
-    private fun register(connectionId: String, gen: Int, asked: PresenceWire.Asked?) {
+    private fun register(connectionId: String, gen: Int, asked: Asking) {
         synchronized(lock) {
             sending -= connectionId
             if (gen == generation) track(connectionId, asked)
@@ -267,9 +310,10 @@ class PresenceManager(
     }
 
     /** Under [lock]. */
-    private fun track(connectionId: String, asked: PresenceWire.Asked?) {
+    private fun track(connectionId: String, answer: Asking) {
+        val asked = (answer as? Asking.Sent)?.asked
         if (asked == null) {
-            readingFlow.value = readingFlow.value + (connectionId to PresenceReading.Unknown)
+            readingFlow.value = readingFlow.value + (connectionId to (answer as Asking.Not).reading)
             return
         }
         val at = now()
@@ -278,9 +322,16 @@ class PresenceManager(
             delay(wait.toMillis())
             expire(connectionId, asked.pingId)
         }
-        asks.put(connectionId, Ask(asked.pingId, at, expiry))?.let {
+        val ask = Ask(asked.pingId, at, expiry)
+        asks.put(connectionId, ask)?.let {
             it.expiry.cancel()
             it.stale?.cancel()
+            it.lapse?.cancel()
+        }
+        recentFlow.value = recentFlow.value + connectionId
+        ask.lapse = scope.launch {
+            delay(MINUTE.toMillis())
+            synchronized(lock) { if (asks[connectionId] === ask) recentFlow.value = recentFlow.value - connectionId }
         }
         // The result may have arrived before this answer did.
         strays.remove(connectionId)?.takeIf { it.pingId == asked.pingId }?.let { applyResult(it) }
@@ -334,7 +385,7 @@ class PresenceManager(
         if (held == PresenceReading.Unknown) return // `exp` passed: the vault would not have sent it
         val known = PresenceReading.Known(r.state, r.lastActive)
         readingFlow.value = readingFlow.value + (r.connectionId to known)
-        // A reading older than a minute is not shown as current: it goes (the page asks again or says unknown).
+        // A reading older than a minute is not shown as current: it goes, and an open page asks again (Checking meanwhile).
         val ask = asks[r.connectionId] ?: return
         ask.stale?.cancel()
         ask.stale = scope.launch {
@@ -351,6 +402,7 @@ class PresenceManager(
         val MINUTE: Duration = Duration.ofMinutes(1)
         val EXP: Duration = Duration.ofSeconds(30)
         const val CHANGED = "presence.changed"
+        val WATCH: Duration = Duration.ofSeconds(5)
         val RETRY: List<Duration> = listOf(5L, 15L, 60L).map { Duration.ofSeconds(it) }
     }
 }

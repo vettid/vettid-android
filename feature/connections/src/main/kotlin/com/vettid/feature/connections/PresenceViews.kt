@@ -28,6 +28,9 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceText
+import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
@@ -38,9 +41,20 @@ import java.time.Instant
  * and, once unknown, why. [first] is the connection's first name for the explanation (it is left out without one).
  */
 @Composable
-internal fun PresenceLine(reading: PresenceReading, first: String?, onRefresh: () -> Unit, modifier: Modifier = Modifier) {
+internal fun PresenceLine(
+    reading: PresenceReading,
+    first: String?,
+    canRefresh: Boolean,
+    onRefresh: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val res = LocalContext.current.resources
-    val text = PresenceText.line(res, reading, Instant.now())
+    // Our own failure is said with the failure's text (and no sentence about the other vault); "Status unknown" is only a timeout.
+    val text = if (reading is PresenceReading.Failed) {
+        failureText(reading.kind.messageRes(), reading.kind.vaultCode(reading.code))
+    } else {
+        PresenceText.line(res, reading, Instant.now())
+    }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
             Text(
@@ -49,7 +63,7 @@ internal fun PresenceLine(reading: PresenceReading, first: String?, onRefresh: (
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("detail_presence"),
             )
-            IconButton(onClick = onRefresh, modifier = Modifier.size(48.dp).testTag("detail_presence_refresh")) {
+            IconButton(onClick = onRefresh, enabled = canRefresh, modifier = Modifier.size(48.dp).testTag("detail_presence_refresh")) {
                 Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.connections_presence_refresh))
             }
         }
@@ -68,13 +82,16 @@ internal fun PresenceLine(reading: PresenceReading, first: String?, onRefresh: (
 
 /** The switch "Share my status with <First>" and, when off, what <First> sees instead. [first] is already isolated. */
 @Composable
-internal fun PresenceShareCard(shared: Boolean, first: String, busy: Boolean, onChange: (Boolean) -> Unit) {
+internal fun PresenceShareCard(shared: Boolean, invisible: Boolean, first: String, busy: Boolean, onChange: (Boolean) -> Unit) {
+    // Invisible: nothing is shared with anyone, so the switch is off and cannot be turned on, and the note says why.
+    val on = shared && !invisible
+    val enabled = !busy && !invisible
     DetailCard(Modifier.testTag("detail_presence_share")) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 48.dp)
-                .toggleable(value = shared, enabled = !busy, role = Role.Switch, onValueChange = onChange),
+                .toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = onChange),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -82,11 +99,15 @@ internal fun PresenceShareCard(shared: Boolean, first: String, busy: Boolean, on
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.weight(1f),
             )
-            Switch(checked = shared, onCheckedChange = null, enabled = !busy)
+            Switch(checked = on, onCheckedChange = null, enabled = enabled)
         }
-        if (!shared) {
+        if (invisible || !shared) {
             Text(
-                stringResource(R.string.connections_presence_share_off, first),
+                if (invisible) {
+                    stringResource(R.string.connections_presence_invisible_note)
+                } else {
+                    stringResource(R.string.connections_presence_share_off, first)
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = Spacing.xs).testTag("detail_presence_share_off"),

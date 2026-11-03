@@ -214,7 +214,9 @@ class ConversationViewModel @Inject constructor(
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
             .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
             .combine(presence.readings) { (s, on), r ->
-                s.copy(presence = if (on && s.connection?.askable == true) r[connectionId] ?: PresenceReading.Unknown else null)
+                // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
+                val reading = r[connectionId] ?: PresenceReading.Checking
+                s.copy(presence = reading.takeIf { on && s.connection?.askable == true && it != PresenceReading.Closed })
             }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 

@@ -21,6 +21,7 @@ import com.vettid.core.data.presence.PresencePolicy
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceShare
+import com.vettid.core.data.presence.PresenceState
 import com.vettid.core.data.presence.queryWhileAvailable
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
@@ -612,7 +613,14 @@ data class ConnectionDetailUiState(
  * What the connection's page shows of presence: the [reading] under the name, and whether the member's own status is
  * [shared] with this connection (the switch; null while the policy is not read, then no switch).
  */
-data class DetailPresence(val reading: PresenceReading, val shared: Boolean?)
+data class DetailPresence(
+    val reading: PresenceReading,
+    val shared: Boolean?,
+    /** The member's own status is Invisible: nothing is shared, whatever the switch would say. */
+    val invisible: Boolean = false,
+    /** The refresh icon works: the connection was not asked in the last minute (asking again would send nothing). */
+    val canRefresh: Boolean = true,
+)
 
 /**
  * What the Votes feature knows of one connection: [count] votes from it (a service connection gets the row "Votes from
@@ -689,15 +697,23 @@ class ConnectionDetailViewModel @Inject constructor(
                 auth = auth[id],
                 canCall = call == CallAvailability.READY,
                 votes = v,
-                presence = p?.takeIf { c?.askable == true }?.let { DetailPresence(it.reading ?: PresenceReading.Unknown, it.shared) },
+                presence = p?.takeIf { c?.askable == true && it.reading != PresenceReading.Closed }?.let {
+                    // Not asked yet is "Checking…" (it is being asked); closed shows no line at all.
+                    DetailPresence(it.reading ?: PresenceReading.Checking, it.shared, it.invisible, it.canRefresh)
+                },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
     /** What presence knows of this connection, while the vault has presence; null otherwise. */
-    private class PresenceView(val reading: PresenceReading?, val shared: Boolean?)
+    private class PresenceView(val reading: PresenceReading?, val shared: Boolean?, val invisible: Boolean, val canRefresh: Boolean)
 
-    private fun ownPresence() = combine(presence.availability, presence.policy, presence.readings) { a, policy, readings ->
-        if (a == PresenceAvailability.AVAILABLE) PresenceView(readings[id], policy?.sharesWith(id)) else null
+    private fun ownPresence() = combine(presence.availability, presence.policy, presence.readings, presence.recent) {
+        a, policy, r, recent ->
+        if (a == PresenceAvailability.AVAILABLE) {
+            PresenceView(r[id], policy?.sharesWith(id), policy?.state == PresenceState.INVISIBLE, id !in recent)
+        } else {
+            null
+        }
     }
 
     /** Presence is asked of a person who is connected, never of a service (a service is not a person). */
@@ -737,7 +753,7 @@ class ConnectionDetailViewModel @Inject constructor(
 
     /** The refresh icon: asks again (the vault answers a second question within the minute with the first answer). */
     fun refreshPresence() {
-        if (uiState.value.presence != null) viewModelScope.launch { presence.query(id) }
+        if (uiState.value.presence?.canRefresh == true) viewModelScope.launch { presence.query(id) }
     }
 
     /** The switch "Share my status with <First>": adds the connection to or takes it out of the policy's `except`. */

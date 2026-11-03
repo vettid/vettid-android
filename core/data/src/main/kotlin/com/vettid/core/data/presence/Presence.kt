@@ -5,6 +5,9 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -71,8 +74,14 @@ sealed interface PresenceReading {
     /** Asked; no `presence.result` yet and `exp` not reached: "Checking…". */
     data object Checking : PresenceReading
 
-    /** No answer by `exp` (30 s), or the question could not be sent: "Status unknown". Not told apart, as the vault does not. */
+    /** The question was sent and no result came by `exp` (30 s): "Status unknown", which the vault cannot tell from a refusal. */
     data object Unknown : PresenceReading
+
+    /** The question could not be sent or was refused on our side (transport, no response, an unreadable answer): the failure's text. */
+    data class Failed(val kind: FailureKind, val code: String?) : PresenceReading
+
+    /** The owner check is due or held (or the vault locked): nothing is sent and no line is shown. */
+    data object Closed : PresenceReading
 
     /** The connection answered: [state] is available, busy or away; [lastActive] is rounded down to 5 minutes by the vault. */
     data class Known(val state: PresenceState, val lastActive: Instant?) : PresenceReading
@@ -119,14 +128,23 @@ object PresenceWire {
     /** `presence.get`'s answer. No `version`, or a `state` or `share` the app does not know, is no policy (never a guessed default). */
     fun policy(body: JsonObject): PresencePolicy? {
         val version = version(body)
-        val except = (body["except"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        // An `except` entry that does not read makes the whole policy unreadable: dropping it would let the next `presence.set`
+        // write the list without it, and that person would see the member under `share: all`.
+        val except = exceptIds(body)
         val state = PresenceState.of(VaultJson.str(body, "state"))
         val share = PresenceShare.entries.firstOrNull { it.wire == VaultJson.str(body, "share") }
-        return if (version == null || state == null || share == null) {
-            null
-        } else {
-            PresencePolicy(version = version, state = state, share = share, except = PresencePolicy.cleaned(except))
-        }
+        val head = if (version != null && state != null) version to state else null
+        val tail = if (share != null && except != null) share to except else null
+        if (head == null || tail == null) return null
+        return PresencePolicy(head.first, head.second, tail.first, PresencePolicy.cleaned(tail.second))
+    }
+
+    /** The `except` ids, or null when the member does not read as a list of at most 1,024 strings. */
+    private fun exceptIds(body: JsonObject): List<String>? {
+        val raw = body["except"] ?: return emptyList()
+        val list = (raw as? JsonArray)?.takeIf { it.size <= PresencePolicy.MAX_EXCEPT }
+        val ids = list?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        return ids?.takeIf { it.size == list.size }
     }
 
     /** `presence.set`'s answer: the new version. */
@@ -135,9 +153,12 @@ object PresenceWire {
     /** `presence.query`'s answer. */
     data class Asked(val pingId: String, val exp: Instant?)
 
+    /** The answer, or null when it does not read: no `ping_id`, or an `exp` that is there and does not parse (a failure). */
     fun asked(body: JsonObject): Asked? {
-        val ping = VaultJson.str(body, "ping_id")?.takeIf { it.isNotEmpty() } ?: return null
-        return Asked(ping, instant(VaultJson.str(body, "exp")))
+        val ping = VaultJson.str(body, "ping_id")?.takeIf { it.isNotEmpty() }
+        val rawExp = VaultJson.str(body, "exp")
+        val exp = instant(rawExp)
+        return if (ping == null || (rawExp != null && exp == null)) null else Asked(ping, exp)
     }
 
     /** `presence.result`'s body. */
@@ -151,9 +172,13 @@ object PresenceWire {
         val connection = VaultJson.str(body, "connection_id")?.takeIf { it.isNotEmpty() }
         val ping = VaultJson.str(body, "ping_id")?.takeIf { it.isNotEmpty() }
         val state = PresenceState.of(VaultJson.str(body, "state"))?.takeIf { it != PresenceState.INVISIBLE }
-        if (connection == null || ping == null || state == null) return null
-        val active = instant(VaultJson.str(body, "last_active"))?.takeUnless { it.isAfter(now.plus(SKEW)) }
-        return Result(connection, ping, state, active?.let { if (it.isAfter(now)) now else it })
+        val rawActive = VaultJson.str(body, "last_active")
+        val parsed = instant(rawActive)
+        // A `last_active` that is there and does not parse drops the result: it is not guessed at.
+        val unreadableActive = rawActive != null && parsed == null
+        val active = parsed?.takeUnless { it.isAfter(now.plus(SKEW)) }?.let { if (it.isAfter(now)) now else it }
+        val ids = if (connection != null && ping != null) connection to ping else null
+        return if (unreadableActive || ids == null || state == null) null else Result(ids.first, ids.second, state, active)
     }
 
     private val SKEW: Duration = Duration.ofMinutes(5)
@@ -203,7 +228,15 @@ interface PresenceRepository {
      * earlier answer stands. Never throws: whatever goes wrong reads as [PresenceReading.Unknown].
      */
     suspend fun query(connectionId: String)
+
+    /**
+     * The connections asked less than a minute ago: asking again would send nothing (the vault answers a second question with
+     * the first), so the refresh icon waits until the minute has passed.
+     */
+    val recent: StateFlow<Set<String>> get() = NO_RECENT
 }
+
+private val NO_RECENT: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 /**
  * [PresenceRepository.query] each time the vault has presence: when the screen opens before the first `presence.get` is
@@ -211,7 +244,12 @@ interface PresenceRepository {
  * until the screen's scope ends.
  */
 suspend fun PresenceRepository.queryWhileAvailable(connectionId: String) {
-    availability.collect { if (it == PresenceAvailability.AVAILABLE) query(connectionId) }
+    // Asks when presence is there and the connection has no reading: on opening, after a hold took the readings, and when a
+    // reading went stale (a minute) while the page is open.
+    val held = readings.map { connectionId in it }.distinctUntilChanged()
+    combine(availability, held) { a, has -> a == PresenceAvailability.AVAILABLE && !has }
+        .distinctUntilChanged()
+        .collect { if (it) query(connectionId) }
 }
 
 /** Presence where there is none (a screen's default): never available, nothing sent. */

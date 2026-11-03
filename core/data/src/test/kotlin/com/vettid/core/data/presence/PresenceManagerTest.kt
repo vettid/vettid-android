@@ -388,11 +388,81 @@ class PresenceManagerTest {
     }
 
     @Test
-    fun aRefusedQueryIsUnknown() = runTest {
+    fun aQueryThatFailsOnOurSideIsFailedNotUnknown() = runTest {
         val ops = Ops().apply { refuse["query"] = "connection_unavailable" }
         val m = open(ops)
         m.query("c1")
-        assertEquals(PresenceReading.Unknown, m.readings.value["c1"])
+        assertEquals(PresenceReading.Failed(FailureKind.CONNECTION_UNAVAILABLE, null), m.readings.value["c1"])
+        // And no timer turns it into "Status unknown".
+        advanceTimeBy(60_000)
+        assertTrue(m.readings.value["c1"] is PresenceReading.Failed)
+    }
+
+    @Test
+    fun aTransportFailureIsFailed() = runTest {
+        val ops = Ops()
+        val m = open(ops)
+        val broken = object : PresenceOps by ops {
+            override suspend fun query(connectionId: String): JsonObject = throw java.io.IOException("offline")
+        }
+        val n = PresenceManager(this, ops = { broken }, closed = { closed }, now = { clock })
+        n.refreshPolicy()
+        n.query("c1")
+        assertTrue(n.readings.value["c1"] is PresenceReading.Failed)
+        assertTrue(m.readings.value.isEmpty())
+    }
+
+    @Test
+    fun anOwnerCheckRefusalFromTheVaultIsClosedNotAFailure() = runTest {
+        val ops = Ops().apply { refuse["query"] = "owner_check_required" }
+        val m = open(ops)
+        m.query("c1")
+        assertEquals(PresenceReading.Closed, m.readings.value["c1"])
+    }
+
+    @Test
+    fun anExpThatDoesNotParseIsAFailure() = runTest {
+        val ops = Ops().apply { exp = "tomorrow" }
+        val m = open(ops)
+        m.query("c1")
+        assertEquals(PresenceReading.Failed(FailureKind.OTHER, "unreadable_result"), m.readings.value["c1"])
+    }
+
+    @Test
+    fun closedReadingsAreAskedAgainAfterThePolicyIsRead() = runTest {
+        val m = open(Ops())
+        closed = true
+        m.query("c1")
+        closed = false
+        m.refreshPolicy()
+        // The reading is gone, so an open page (which asks when none is held) asks again.
+        assertNull(m.readings.value["c1"])
+    }
+
+    @Test
+    fun whenTheClosedStateEndsByTheClockTheProbeStartsAgain() = runTest {
+        val ops = Ops()
+        val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
+        closed = true
+        m.start()
+        advanceTimeBy(12_000)
+        assertTrue(ops.gets.isEmpty())
+        // Nobody told the manager: the deadline simply moved, or passed the other way.
+        closed = false
+        advanceTimeBy(6_000)
+        settle { m.availability.value == PresenceAvailability.AVAILABLE }
+        assertEquals(1, ops.gets.size)
+    }
+
+    @Test
+    fun askingAgainSendsNothingInTheMinuteAndTheManagerSaysSo() = runTest {
+        val m = open(Ops())
+        m.query("c1")
+        assertEquals(setOf("c1"), m.recent.value)
+        advanceTimeBy(59_000)
+        assertEquals(setOf("c1"), m.recent.value)
+        advanceTimeBy(2_000)
+        assertTrue(m.recent.value.isEmpty())
     }
 
     @Test
@@ -422,7 +492,8 @@ class PresenceManagerTest {
         val m = open(ops)
         closed = true
         m.query("c1")
-        assertEquals(PresenceReading.Unknown, m.readings.value["c1"])
+        // Nothing is sent, and it is neither "Checking…" nor "Status unknown": the page shows no line.
+        assertEquals(PresenceReading.Closed, m.readings.value["c1"])
         assertTrue(ops.queries.isEmpty())
         for (act in listOf<suspend () -> Unit>({ m.update { it.copy(state = PresenceState.BUSY) } }, { m.refreshPolicy() })) {
             try {

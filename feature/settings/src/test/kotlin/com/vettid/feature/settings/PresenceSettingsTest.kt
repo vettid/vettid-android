@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -69,6 +70,17 @@ class PresenceSettingsTest {
         advanceUntilIdle()
         assertEquals(listOf("c1", "c2"), vm.uiState.value.people.map { it.id })
         assertTrue(vm.uiState.value.available)
+    }
+
+    @Test
+    fun openingTheScreenReadsThePolicyOnlyWhenTheScreenAsks() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        // The screen's first resume is the one read (not a second one from the view model's start).
+        assertEquals(0, presence.refreshes)
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(1, presence.refreshes)
     }
 
     @Test
@@ -189,8 +201,23 @@ class PresenceSettingsTest {
         show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1, PresenceState.INVISIBLE, PresenceShare.NONE), people = people, loading = false))
         rule.onNodeWithText("Only…").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Invisible: you appear offline to everyone.").performScrollTo().assertIsDisplayed()
-        rule.onNodeWithText("You appear offline to everyone").performScrollTo().assertIsDisplayed()
+        // The option's line is for choosing it: with Invisible chosen, only the note says it.
+        assertEquals(0, rule.onAllNodesWithText("You appear offline to everyone").fetchSemanticsNodes().size)
         rule.onNodeWithTag("presence_share_none").assertIsSelected()
+    }
+
+    @Test
+    fun theOptionLineIsShownWhileInvisibleIsNotChosenAndTheNoteIsNot() {
+        show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1), people = people, loading = false))
+        rule.onNodeWithText("You appear offline to everyone").performScrollTo().assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("presence_invisible_note").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun untilThePolicyIsKnownAProgressIndicatorShowsAndNothingElse() {
+        show(PresenceSettingsUiState(loading = true))
+        assertEquals(0, rule.onAllNodesWithTag("presence_state_available").fetchSemanticsNodes().size)
+        rule.onNodeWithText("Presence").assertIsDisplayed()
     }
 
     @Test

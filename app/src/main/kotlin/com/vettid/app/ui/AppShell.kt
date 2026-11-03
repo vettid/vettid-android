@@ -543,11 +543,13 @@ fun AppShell(
     if (showAccount && !covered) {
         val presenceState by shell.presenceState.collectAsStateWithLifecycle()
         val presenceError by shell.presenceError.collectAsStateWithLifecycle()
+        val presenceBusy by shell.presenceBusy.collectAsStateWithLifecycle()
+        LaunchedEffect(Unit) { shell.presenceErrorSeen() }
         AccountSheet(
             account = account,
             portalUrl = portal,
             photo = photo,
-            presence = presenceState?.let { SheetPresence(it, presenceError, shell::setPresenceState) },
+            presence = presenceState?.let { SheetPresence(it, presenceError, presenceBusy, shell::setPresenceState) },
             onDismiss = { showAccount = false },
             onLockVault = {
                 showAccount = false

@@ -121,15 +121,29 @@ class ShellViewModel @Inject constructor(
 
     /** The sheet's picker: the same `presence.set` as Settings → Privacy → Presence. A refused change leaves the row as it was. */
     fun setPresenceState(state: PresenceState) {
+        if (presenceBusyFlow.value) return
         presenceFailure.value = null
+        presenceBusyFlow.value = true
         viewModelScope.launch {
             try {
                 presence.update { it.copy(state = state) }
             } catch (e: VaultFailure) {
                 // The row keeps the state the vault still has, and the sheet says why: a failed "Invisible" must not look done.
                 presenceFailure.value = PresenceFailure(e.kind, e.shownCode)
+            } finally {
+                presenceBusyFlow.value = false
             }
         }
+    }
+
+    private val presenceBusyFlow = MutableStateFlow(false)
+
+    /** A status pick is on its way to the vault: the sheet's row waits. */
+    val presenceBusy: StateFlow<Boolean> = presenceBusyFlow.asStateFlow()
+
+    /** The sheet opened: an earlier refusal is not shown again. */
+    fun presenceErrorSeen() {
+        presenceFailure.value = null
     }
 
     private val presenceFailure = MutableStateFlow<PresenceFailure?>(null)

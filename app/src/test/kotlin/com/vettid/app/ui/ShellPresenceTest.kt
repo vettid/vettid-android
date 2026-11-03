@@ -56,5 +56,16 @@ class ShellPresenceTest {
         vm.setPresenceState(PresenceState.INVISIBLE)
         assertNull(vm.presenceError.value)
         assertEquals(PresenceState.INVISIBLE, vm.presenceState.value)
+        assertEquals(false, vm.presenceBusy.value)
+    }
+
+    @Test
+    fun openingTheSheetForgetsAnEarlierRefusal() = runTest {
+        val vm = vm()
+        presence.fail = VaultFailure(FailureKind.NETWORK)
+        vm.setPresenceState(PresenceState.INVISIBLE)
+        assertEquals(FailureKind.NETWORK, vm.presenceError.value?.kind)
+        vm.presenceErrorSeen()
+        assertNull(vm.presenceError.value)
     }
 }

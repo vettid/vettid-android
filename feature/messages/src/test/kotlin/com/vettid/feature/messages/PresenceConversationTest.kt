@@ -78,10 +78,19 @@ class PresenceConversationTest {
         advanceUntilIdle()
         assertEquals(listOf("c1", "c1"), presence.queries)
         assertEquals(PresenceReading.Checking, vm.uiState.value.presence)
-        // A lost reading is "Status unknown", never "Checking…" for good.
+        // A reading that goes missing (stale, or lost in a hold) is asked again, never "Status unknown" and never stuck.
         presence.readings.value = emptyMap()
         advanceUntilIdle()
-        assertEquals(PresenceReading.Unknown, vm.uiState.value.presence)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence)
+        assertEquals(3, presence.queries.size)
+        // A closed vault shows no line.
+        presence.readings.value = mapOf("c1" to PresenceReading.Closed)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.presence)
+        // A failure is its own reading.
+        presence.readings.value = mapOf("c1" to PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null))
+        advanceUntilIdle()
+        assertEquals(PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null), vm.uiState.value.presence)
     }
 
     @Test
