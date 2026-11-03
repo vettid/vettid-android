@@ -24,6 +24,8 @@ object NotificationMapping {
         "credential.alarm", "owner_check.locked", "owner_check.failed", "owner_check.hold_changed",
         "credential.password_failed", "credential.reset", "device.replaced", "device.transferred",
         "device.signer_changed",
+        // ANDROID-PLAN 0.1.116 decision 16: an agent paused, or asking too often, is something to look at at once.
+        "leash.agent.suspended", "leash.referrals_limited",
     )
 
     /** The channel [item] notifies on; null when it does not notify. */

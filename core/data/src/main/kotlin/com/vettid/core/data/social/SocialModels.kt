@@ -459,8 +459,23 @@ sealed interface Approval {
         override val connectionName: String? = null,
         /** The requesting device (`device_id` of both events, §6.8); null when an event did not say. */
         val deviceId: String? = null,
+        /** The length the device asked for (`device.session.pending.seconds`); null for another request or one not known. */
+        val seconds: Int? = null,
+        /** What a held approval asks (AA5); null for a session request and for one known only from its feed item. */
+        val held: HeldRequest? = null,
+        /** Known only from its feed item (the process ended, `pending.list` not read): deny-only, or Allow for a session. */
+        val fromFeed: Boolean = false,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
+
+        /** Prints no name, id or body. */
+        override fun toString(): String = "DeviceRequest(type=$type, fromFeed=$fromFeed)"
+
+        /** `device.pair.pending` known from its feed item (AA2 step 2): nothing to decide here. */
+        val isPairing: Boolean get() = type == PAIR_PENDING
+
+        /** `approval.pending`. */
+        val isHeld: Boolean get() = type == APPROVAL_PENDING
 
         /** An access-session request (`device.session.pending`); a renewal when the device has a live session. */
         val isSession: Boolean get() = type == SESSION_PENDING
@@ -470,6 +485,8 @@ sealed interface Approval {
 
         companion object {
             const val SESSION_PENDING = "device.session.pending"
+            const val APPROVAL_PENDING = "approval.pending"
+            const val PAIR_PENDING = "device.pair.pending"
         }
     }
 }

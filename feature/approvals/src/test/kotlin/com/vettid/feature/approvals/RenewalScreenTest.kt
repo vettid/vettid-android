@@ -42,7 +42,8 @@ class RenewalScreenTest {
         rule.onNodeWithTag("renewal_notice").assertExists()
         rule.onNodeWithText("Denying refuses only the extra time. $iso keeps its current access until ${Times.full(until)}.")
             .assertExists()
-        assertEquals(0, rule.onAllNodesWithText("Approve").fetchSemanticsNodes().size)
+        // AA5: Allow with a length, Deny, and Deny and end access now.
+        rule.onNodeWithText("Allow").assertExists()
         assertEquals(0, rule.onAllNodesWithText("This version of the app", substring = true).fetchSemanticsNodes().size)
         rule.onNodeWithText("Deny").assertExists()
         rule.onNodeWithText("Deny and end access now").assertExists()
@@ -56,11 +57,10 @@ class RenewalScreenTest {
     }
 
     @Test
-    fun aFirstRequestHasNoNoticeAndOnlyDeny() {
+    fun aFirstRequestHasNoNoticeAndAllowAndDeny() {
         show(state(request(), until = null))
         assertEquals(0, rule.onAllNodesWithTag("renewal_notice").size)
-        assertEquals(0, rule.onAllNodesWithText("Approve").fetchSemanticsNodes().size)
-        rule.onNodeWithText("This version of the app does not pair desktops or agents, so it can only decline.").assertExists()
+        rule.onNodeWithText("Allow").assertExists()
         rule.onNodeWithText("Deny").assertExists()
         assertEquals(0, rule.onAllNodesWithText("Deny and end access now").fetchSemanticsNodes().size)
     }

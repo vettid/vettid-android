@@ -39,6 +39,10 @@ object ApprovalParser {
 
     private fun JsonObject.a(k: String): List<JsonObject> = (this[k] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
 
+    /** A device's own name, cleaned and capped as `device.list`'s are (`DeviceWire.cleanName`); null if nothing shows. */
+    private fun name(body: JsonObject): String? =
+        com.vettid.core.data.devices.DeviceWire.cleanName(body.s("name")).takeIf { it.isNotEmpty() }
+
     fun instant(s: String?): Instant? = s?.let {
         try {
             Instant.parse(it)
@@ -85,12 +89,14 @@ object ApprovalParser {
         }
         "approval.pending" -> body.s("approval_id")?.let {
             Approval.DeviceRequest(
-                type, it, body.s("name"), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                type, it, name(body), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                held = HeldRequests.of(body.s("role"), body.s("type"), body.o("body")),
             )
         }
         "device.session.pending" -> body.s("request_id")?.let {
             Approval.DeviceRequest(
-                type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                type, it, name(body), body.s("role"), null, at, instant(body.s("exp")), deviceId = body.s("device_id"),
+                seconds = body.l("seconds")?.takeIf { s -> s in 1..Int.MAX_VALUE }?.toInt(),
             )
         }
         else -> null

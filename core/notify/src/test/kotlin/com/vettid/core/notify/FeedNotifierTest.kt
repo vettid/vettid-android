@@ -582,4 +582,71 @@ class FeedNotifierTest {
             assertTrue(n.text.orEmpty(), !n.text.orEmpty().contains("4271"))
         }
     }
+
+    // --- ANDROID-PLAN 0.1.116 §4 AA5: device and agent items ---
+
+    private fun deviceItem(id: String, kind: String, device: String? = "d1", ref: String? = "r1") =
+        FeedItem(id, 1, kind, "2026-10-09T12:00:00Z", "active", "high", deviceId = device, ref = ref)
+
+    private val agentNames get() = FeedNames(devices = mapOf("d1" to "Build bot"), pairingName = "New bot", pairingPendingId = "r1")
+
+    @Test
+    fun deviceAndAgentItemsNameTheDeviceOnTheirChannels() = runTest {
+        notifier()
+        source.names = agentNames
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES)
+        arrive(deviceItem("a1", "device.session.pending"))
+        arrive(deviceItem("a2", "approval.pending"))
+        arrive(deviceItem("a3", "leash.agent.suspended"))
+        arrive(deviceItem("a4", "leash.referrals_limited"))
+        arrive(deviceItem("a5", "device.pair.pending", device = null))
+        assertEquals("\u2068Build bot\u2069 asks for access", poster.shown.getValue("a1").title)
+        assertEquals("\u2068Build bot\u2069 asks you to approve a request", poster.shown.getValue("a2").title)
+        assertEquals("\u2068Build bot\u2069 was paused", poster.shown.getValue("a3").title)
+        assertEquals("\u2068Build bot\u2069 asked too often", poster.shown.getValue("a4").title)
+        assertEquals("\u2068New bot\u2069 asks to pair", poster.shown.getValue("a5").title)
+        assertEquals(Channels.REQUESTS, poster.shown.getValue("a1").channel)
+        assertEquals(Channels.REQUESTS, poster.shown.getValue("a2").channel)
+        assertEquals(Channels.REQUESTS, poster.shown.getValue("a5").channel)
+        // Decision 16: a paused agent, or one asking too often, is a Security alarm.
+        assertEquals(Channels.SECURITY, poster.shown.getValue("a3").channel)
+        assertEquals(Channels.SECURITY, poster.shown.getValue("a4").channel)
+        assertEquals("VettID needs your attention", poster.shown.getValue("a3").publicTitle)
+        assertEquals("VettID needs your attention", poster.shown.getValue("a4").publicTitle)
+    }
+
+    @Test
+    fun underTheCoverADeviceOrAgentItemNamesNothing() = runTest {
+        notifier()
+        source.names = agentNames
+        source.covered.value = true
+        for (previews in listOf(NotificationPreviews.NAMES, NotificationPreviews.NAMES_AND_TEXT)) {
+            settings.value = NotifySettings(previews = previews)
+            arrive(deviceItem("c1", "device.session.pending"))
+            arrive(deviceItem("c2", "approval.pending"))
+            arrive(deviceItem("c3", "leash.agent.suspended"))
+            arrive(deviceItem("c4", "device.pair.pending", device = null))
+            for (tag in listOf("c1", "c2", "c3", "c4")) {
+                val n = poster.shown.getValue(tag)
+                assertEquals(n.publicTitle, n.title)
+                assertNull(n.text)
+                assertFalse(n.names)
+                assertFalse("${n.title}", "Build bot" in n.title || "New bot" in n.title)
+            }
+            assertEquals(Channels.SECURITY, poster.shown.getValue("c3").channel)
+            assertEquals("VettID needs your attention", poster.shown.getValue("c3").title)
+            assertEquals("New activity in VettID", poster.shown.getValue("c1").title)
+        }
+        assertEquals("no names read under the cover", 0, source.namesCalls)
+    }
+
+    @Test
+    fun anItemNamingNoKnownDeviceSaysAnAgentOrADevice() = runTest {
+        notifier()
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES)
+        arrive(deviceItem("n1", "device.session.pending", device = "gone"))
+        arrive(deviceItem("n2", "leash.agent.suspended", device = null))
+        assertEquals("A device asks for access", poster.shown.getValue("n1").title)
+        assertEquals("An agent was paused", poster.shown.getValue("n2").title)
+    }
 }

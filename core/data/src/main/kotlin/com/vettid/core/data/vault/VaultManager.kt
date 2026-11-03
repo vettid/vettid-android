@@ -934,6 +934,8 @@ class VaultManager(
         },
         feedRead = { kinds, ref, connectionId -> feed.markReadWhere(kinds, ref, connectionId) },
         feedWithdrawn = { feed.askWithdrawn(it) },
+        itemCache = { items.items.value },
+        deviceListed = { id -> devices.load.value == ListLoad.LOADED && devices.devices.value.any { it.id == id && !it.thisPhone } },
     )
 
     /**
@@ -955,6 +957,11 @@ class VaultManager(
         gated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
+    /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
+    init {
+        scope.launch { feed.items.collect { social.setFeedItems(it) } }
+    }
+
     /**
      * The member's shared profile and the account's names (VAULT-MESSAGING 0.18.0 §10.8): the display name, and the
      * name change, which counts as an owner check for its PIN and password (§3.6.4).
@@ -975,7 +982,7 @@ class VaultManager(
      * The member's devices and agents (VAULT-MESSAGING §10.3, ANDROID-PLAN 0.1.53 AA1): "Devices & agents". Memory only,
      * while the vault is open and not held. Ending a device's access or removing it takes its requests out of Approvals.
      */
-    val devices = DevicesManager(
+    val devices: DevicesManager = DevicesManager(
         scope,
         ops = { VaultDevicesOps(openApi()) },
         self = { session?.device?.deviceId },
@@ -994,6 +1001,7 @@ class VaultManager(
             devices.devices.value
         },
         onPaired = { devices.refreshQuietly() },
+        onCompareLeft = { social.closePairing(it) },
     )
 
     /**

@@ -54,7 +54,7 @@ class ApprovalsViewModelsTest {
     private val vault = FakeVault()
 
     private fun detail(a: Approval) =
-        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social)
+        ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, com.vettid.core.testing.FakePairing())
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -63,7 +63,7 @@ class ApprovalsViewModelsTest {
     fun aListRefusedForTheDailyCheckReloadsWhenTheCheckPasses() = runTest {
         val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
         social.fail["refreshApprovals"] = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
-        val vm = ApprovalsViewModel(social, social, vault)
+        val vm = ApprovalsViewModel(social, social, vault, com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
         vault.ownerCheck.value = check(OwnerCheckState.OK)
@@ -75,7 +75,7 @@ class ApprovalsViewModelsTest {
     /** §10.4.2: the notice follows the repository's note of the last failed read of the open asks, and its own code. */
     @Test
     fun theOpenAsksNoticeFollowsTheRepositoryNote() = runTest {
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertNull(vm.uiState.value.openAsksError)
         social.pendingReadFailure.value = VaultFailure(FailureKind.NETWORK)
@@ -91,7 +91,7 @@ class ApprovalsViewModelsTest {
     @Test
     fun aHeldOpenAsksReadReadsAgainWhenTheCheckPasses() = runTest {
         val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
-        val vm = ApprovalsViewModel(social, social, vault)
+        val vm = ApprovalsViewModel(social, social, vault, com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         social.pendingReadFailure.value = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
         advanceUntilIdle()
@@ -104,7 +104,7 @@ class ApprovalsViewModelsTest {
 
     @Test
     fun listsWhatTheRepositoryHolds() = runTest {
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertEquals(5, vm.uiState.value.approvals.size)
         assertTrue("refreshApprovals" in social.calls)
@@ -114,7 +114,7 @@ class ApprovalsViewModelsTest {
     @Test
     fun showsAPeerDeclineOnceUntilDismissed() = runTest {
         social.approvals.value = listOf(request, outgoing)
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         social.peerDeclined("p1", "Morgan", outgoing = false)
         social.peerDeclined("c9", "Jordan", outgoing = true)
@@ -252,7 +252,7 @@ class ApprovalsViewModelsTest {
     fun anExpiredRequestReadsAsGoneAndIsNotListed() = runTest {
         val expired = Approval.Authentication("a2", "c1", null, now, Instant.now().minusSeconds(5), "Sam")
         social.approvals.value = listOf(expired, request)
-        val list = ApprovalsViewModel(social, social, FakeVault())
+        val list = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         val vm = detail(expired)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.gone)
@@ -290,7 +290,7 @@ class ApprovalsViewModelsTest {
     fun aResumedListDropsWhatExpiredInTheMeantime() = runTest {
         val soon = Approval.Authentication("a8", "c1", null, now, Instant.now().plusMillis(300), "Sam")
         social.approvals.value = listOf(soon)
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         runCurrent()
         assertEquals(1, vm.uiState.value.approvals.size)
         Thread.sleep(400)
@@ -321,7 +321,7 @@ class ApprovalsViewModelsTest {
         val a = Approval.Authentication("a6", "c1", null, now, Instant.now().plusSeconds(60), "Sam")
         val b = Approval.Authentication("a7", "c1", null, now, Instant.now().plusSeconds(120), "Sam")
         social.approvals.value = listOf(a, b)
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.approvals.isEmpty())
     }
@@ -500,7 +500,7 @@ class ApprovalsViewModelsTest {
         // One ask alone is a single entry.
         assertEquals(listOf(ApprovalEntry.One(a)), AskBatches.group(listOf(a)))
         social.approvals.value = listOf(c, g, a)
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertEquals(1, vm.uiState.value.entries.size)
     }
@@ -514,7 +514,7 @@ class ApprovalsViewModelsTest {
         )
         val jo = sam.copy(id = "c2", asks = com.vettid.core.data.social.AskState())
         social.connections.value = listOf(sam, jo)
-        val vm = ApprovalsViewModel(social, social, FakeVault())
+        val vm = ApprovalsViewModel(social, social, FakeVault(), com.vettid.core.testing.FakeDevices(), items)
         advanceUntilIdle()
         assertEquals(listOf("c1"), vm.uiState.value.paused.map { it.id })
         vm.resumeAsks("c1")

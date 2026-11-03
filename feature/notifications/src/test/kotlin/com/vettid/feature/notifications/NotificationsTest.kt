@@ -137,7 +137,7 @@ class NotificationsTest {
     private val items = FakeItems().apply { add(FakeItems.item("i1", "Passport")) }
 
     private fun vm(archived: Boolean = false) =
-        NotificationsViewModel(SavedStateHandle(mapOf(NotificationsViewModel.ARG_ARCHIVED to archived)), feed, social, social, items)
+        NotificationsViewModel(SavedStateHandle(mapOf(NotificationsViewModel.ARG_ARCHIVED to archived)), feed, social, social, items, com.vettid.core.testing.FakeDevices(), com.vettid.core.testing.FakePairing())
 
     @Test
     fun aTapMarksReadAndOpensTheTargetOrTheSheetWhenItIsGone() = runTest {
