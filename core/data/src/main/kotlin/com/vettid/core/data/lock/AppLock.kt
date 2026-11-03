@@ -140,10 +140,10 @@ class AppLock(
     private val keys: AppLockKeys,
     private val obsoleteWrappedKey: WrappedKeyFile,
     private val coverAlarm: CoverAlarm = CoverAlarm.NONE,
-    /** The wall clock: only compared with the wall time at [onBackground], to see that it went backwards. */
-    private val now: () -> Long = System::currentTimeMillis,
-    /** The monotonic clock (`SystemClock.elapsedRealtime()`): it measures the time in the background. */
+    /** The monotonic clock (`SystemClock.elapsedRealtime()`): it measures the time in the background. Pass both clocks by name. */
     private val elapsed: () -> Long = { SystemClock.elapsedRealtime() },
+    /** The wall clock: only compared with the monotonic one since [onBackground], to see that it was set back. */
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val stateFlow = MutableStateFlow(AppLockState.PENDING)
     val state: StateFlow<AppLockState> = stateFlow.asStateFlow()
@@ -162,7 +162,11 @@ class AppLock(
     private var enabling: AppLockMethod? = null
 
     /** When the app went to the background: on the monotonic clock (the duration) and on the wall clock (a date set back). */
-    private data class Background(val elapsedMs: Long, val wallMs: Long)
+    private class Background(val elapsedMs: Long, val wallMs: Long) {
+        /** Sticky: the wall clock went back at some look since the background; only a new background or the return clears it. */
+        @Volatile
+        var wentBack: Boolean = false
+    }
 
     private val backgroundAtFlow = MutableStateFlow<Background?>(null)
     private var backgroundAt: Background?
@@ -260,16 +264,21 @@ class AppLock(
 
     /**
      * The one decision of [onForeground] and [wouldShowLock]: the lock is due when the monotonic time since [at] has reached
-     * the timeout, or the wall clock is earlier than it was at [at] (a date set back to stretch the timeout; more than
-     * [WALL_BACK_TOLERANCE_MS], so that a clock correction of a few seconds by the network does not lock a phone that was
-     * away a moment). A date set forward does not lock by itself: the duration is monotonic. The monotonic clock restarts at
+     * the timeout, or the wall clock went back (strict reading, fail secure): the wall time since [at] is shorter than the
+     * monotonic time by more than [WALL_BACK_TOLERANCE_MS] (so that a clock correction of a few seconds by the network does
+     * not lock a phone that was away a moment). That is remembered in [Background.wentBack]: a date set back and then
+     * restored still locks. A date set forward does not lock by itself: the duration is monotonic. The monotonic clock restarts at
      * a reboot, but a reboot ends the process and the next one starts [AppLockState.LOCKED].
      */
     private fun backgroundDue(at: Background, timeoutMs: Long): Boolean =
-        elapsed() - at.elapsedMs >= timeoutMs || now() < at.wallMs - WALL_BACK_TOLERANCE_MS
+        elapsed().minus(at.elapsedMs).let { mono ->
+            if (now() - at.wallMs < mono - WALL_BACK_TOLERANCE_MS) at.wentBack = true
+            at.wentBack || mono >= timeoutMs
+        }
 
     /** The wall clock was changed (`ACTION_TIME_CHANGED`): [coverFlow] decides again now, not at its timer. */
     fun onClockChanged() {
+        backgroundAt?.let { backgroundDue(it, timeoutFlow.value.seconds * MS) } // remembers a step back before it is undone
         clockChanges.value++
     }
 

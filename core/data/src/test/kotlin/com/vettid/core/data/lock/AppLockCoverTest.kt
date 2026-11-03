@@ -100,6 +100,36 @@ class AppLockCoverTest {
     }
 
     @Test
+    fun aDateSetBackAndRestoredIsRememberedAndStillLocksOnReturn() = runTest {
+        val l = unlocked()
+        l.setTimeout(AppLockTimeout.FIVE_MINUTES)
+        val min = 60_000L
+        val covered = l.coverFlow(backgroundScope)
+        clock = 12 * 60 * min
+        l.onBackground() // 12:00
+        runCurrent()
+        clock += min // 12:01
+        wallSkew = -61 * min // the date reads 11:00
+        l.onClockChanged() // TIME_CHANGED
+        runCurrent()
+        assertTrue("cover up", covered.value)
+        clock += min // 12:02
+        wallSkew = 0 // restored
+        l.onClockChanged()
+        runCurrent()
+        assertTrue("still up", covered.value)
+        assertTrue(l.wouldShowLock())
+        clock += min // 12:03, under the 5 minute timeout
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
+        assertTrue(covered.value)
+        // A new background starts clean.
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        l.onBackground()
+        assertFalse(l.wouldShowLock())
+    }
+
+    @Test
     fun aPromptInProgressDoesNotCover() = runTest {
         val l = unlocked()
         l.onBackground()

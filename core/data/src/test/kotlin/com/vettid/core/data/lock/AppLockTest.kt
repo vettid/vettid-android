@@ -168,10 +168,26 @@ class AppLockTest {
         l.setTimeout(AppLockTimeout.ONE_MINUTE)
         l.onBackground()
         clock += 10_000
-        wallSkew = -15_000 // 5 s behind the wall time at the background (the tolerance): still a correction
+        wallSkew = -5_000 // a step of exactly the tolerance: still a correction
         assertFalse(l.wouldShowLock())
-        wallSkew = -15_001
+        wallSkew = -5_001
         assertTrue(l.wouldShowLock())
+    }
+
+    @Test
+    fun aDateSetBackToAnEarlierTimeThanTheMonotonicOneLocksEvenAfterTheBackgroundTime() = runTest {
+        val l = lock()
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        l.setTimeout(AppLockTimeout.ONE_HOUR)
+        val min = 60_000L
+        clock = 12 * 60 * min // 12:00 (the wall clock is the same)
+        l.onBackground()
+        clock += 30 * min // 12:30
+        wallSkew = -20 * min // the date reads 12:10: after the background time, but 20 minutes short
+        assertTrue(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.LOCKED, l.state.value)
     }
 
     @Test
