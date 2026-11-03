@@ -1,6 +1,12 @@
 package com.vettid.app.ui
 
+import android.os.SystemClock
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -13,11 +19,13 @@ import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.components.InfoBanner
+import com.vettid.core.ui.components.InputGuard
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.core.ui.format.LocalTimeScale
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.durationText
 import com.vettid.core.ui.format.stagingNoteSuffix
+import com.vettid.feature.onboarding.OwnerCheckMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -210,3 +218,54 @@ private fun noticeText(n: OwnerCheckNotice, count: Int): String {
     val withTime = at?.let { stringResource(R.string.owner_check_notice_at, main, it) } ?: main
     return if (count > 1) stringResource(R.string.owner_check_notice_more, withTime, count - 1) else withTime
 }
+
+/** How long the daily owner check waits for input in progress once it is due (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03). */
+internal const val OWNER_CHECK_DEFERRAL_MS = 5 * 60 * 1000L
+
+/**
+ * What covers the app now. The check that is due ([gated]) comes at once, except while the screen in front holds input
+ * the member has not sent ([inputInProgress]) and it is not a drawer screen ([onList]) and the deferral has not run out
+ * ([overdue]); a check the member asked for ([asked]) shows as asked.
+ */
+internal fun ownerCheckMode(
+    gated: Boolean,
+    onList: Boolean,
+    inputInProgress: Boolean,
+    overdue: Boolean,
+    asked: OwnerCheckMode?,
+): OwnerCheckMode? {
+    val waits = !onList && inputInProgress && !overdue
+    return if (gated && !waits) OwnerCheckMode.GATED else asked
+}
+
+/**
+ * [ownerCheckMode] with its time limit: [overdue] turns true [deferralMs] after the check came due (by [clock], which counts
+ * the time the phone slept), and false again when it is passed. The check is drawn over the screen, which stays composed, so the
+ * input is still there when it passes.
+ */
+@Composable
+internal fun rememberOwnerCheckMode(
+    gated: Boolean,
+    onList: Boolean,
+    guard: InputGuard,
+    asked: OwnerCheckMode?,
+    deferralMs: Long = OWNER_CHECK_DEFERRAL_MS,
+    clock: () -> Long = SystemClock::elapsedRealtime,
+): OwnerCheckMode? {
+    var overdue by remember { mutableStateOf(false) }
+    LaunchedEffect(gated) {
+        overdue = false
+        if (!gated) return@LaunchedEffect
+        val dueAt = clock()
+        while (true) {
+            val left = deferralMs - (clock() - dueAt)
+            if (left <= 0) break
+            // In short steps, so that a phone that slept notices the time at once when it wakes.
+            delay(minOf(left, OVERDUE_STEP_MS))
+        }
+        overdue = true
+    }
+    return ownerCheckMode(gated, onList, guard.active, overdue, asked)
+}
+
+private const val OVERDUE_STEP_MS = 1_000L

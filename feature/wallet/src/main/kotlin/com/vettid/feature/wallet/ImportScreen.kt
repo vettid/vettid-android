@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
@@ -59,6 +60,11 @@ data class ImportActions(
  */
 @Composable
 fun ImportScreen(state: ImportUiState, actions: ImportActions, modifier: Modifier = Modifier, secure: Boolean = true) {
+    HoldsInput(
+        state.step != ImportStep.DONE &&
+            (state.name.isNotEmpty() || state.typed.isNotEmpty() || state.passphrase.isNotEmpty() ||
+                state.limits.perTx.isNotEmpty() || state.limits.perPeriod.isNotEmpty()),
+    )
     if (secure) {
         SecureWindow()
         HiddenFromCapture()

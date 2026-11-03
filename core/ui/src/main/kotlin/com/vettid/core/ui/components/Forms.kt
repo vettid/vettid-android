@@ -93,6 +93,7 @@ fun SecretField(
     enabled: Boolean = true,
 ) {
     var visible by rememberSaveable { mutableStateOf(false) }
+    HoldsInput(value.isNotEmpty())
     OutlinedTextField(
         value = value,
         onValueChange = { v -> onValueChange(if (isPin) v.filter { it in '0'..'9' } else v) },

@@ -80,6 +80,7 @@ import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.items.ItemChecks
 import com.vettid.core.data.items.Sensitivity
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -193,6 +194,8 @@ data class ItemEditActions(
 @Composable
 @Suppress("CyclomaticComplexMethod")
 fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: Modifier = Modifier) {
+    // Changes not yet saved (an item being typed or edited): the daily owner check waits for them, VAULT-MESSAGING §3.6.5.
+    HoldsInput(state.dirty)
     val prompt = state.prompt
     if (prompt != null) {
         return CredentialPasswordContent(

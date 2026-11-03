@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.ExcludeScreenFromAutofill
 import com.vettid.core.ui.components.FormScaffold
@@ -209,6 +210,8 @@ data class BackupActions(
 /** Make a wallet and back it up, or back up one (ANDROID-PLAN §4 "Creating and backing up"): one step at a time. */
 @Composable
 fun BackupScreen(state: BackupUiState, actions: BackupActions, modifier: Modifier = Modifier) {
+    // A wallet being made: the name typed, or the phrase and its check under way (a new wallet or a backup).
+    HoldsInput(state.step != BackupStep.DONE && (state.name.isNotEmpty() || state.step != BackupStep.FORM))
     // One hold for the phrase and the check together, at one place in the composition: moving between them toggles nothing.
     if (state.step == BackupStep.PHRASE || state.step == BackupStep.CHECK) {
         SecureWindow()

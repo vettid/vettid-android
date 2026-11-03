@@ -16,6 +16,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.data.items.RuleMatch
 import com.vettid.core.data.items.RulePreview
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.TagChip
 import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.VettIdShape
@@ -167,6 +168,7 @@ data class RuleEditActions(
  */
 @Composable
 fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: Modifier = Modifier) {
+    HoldsInput(state.dirty)
     val name = sharingNameOf(state.connectionName)
     val leave = { if (state.dirty) actions.onAskDiscard() else actions.onBack() }
     BackHandler(enabled = state.dirty && !state.confirmDiscard) { actions.onAskDiscard() }

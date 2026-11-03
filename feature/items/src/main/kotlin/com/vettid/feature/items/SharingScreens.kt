@@ -43,6 +43,7 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
 import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
@@ -502,6 +503,7 @@ private fun askState(s: String): String = when (s) {
 
 @Composable
 private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActions) {
+    HoldsInput(f.label.isNotEmpty() || f.reason.isNotEmpty())
     var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { actions.onOpenAsk(false) },

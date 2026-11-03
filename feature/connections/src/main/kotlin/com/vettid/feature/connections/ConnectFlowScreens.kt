@@ -1,5 +1,6 @@
 package com.vettid.feature.connections
 
+import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.QrScanner
 import com.vettid.core.ui.components.rememberCameraPermission
 import android.content.ClipData
@@ -508,6 +509,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
         ?: stringResource(R.string.connections_request_them)
     // While the request is open, Back and the arrow ask first; the request stays in Approvals either way.
     val back = rememberLeaveRequest(state.step in OPEN_ACCEPT_STEPS, actions.onBack)
+    HoldsInput(state.input.isNotEmpty())
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
             title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),

@@ -528,6 +528,20 @@ vettid.org repo's `local/android-ui/`).
 
 ## Conventions
 
+- The daily owner check in the shell (VAULT-MESSAGING §3.6.5, owner decision 2026-11-03; iOS does the same): when it comes due
+  (`gate.gated`) it covers the app at once on every screen, read-only pushed ones included (a detail, History entry, photo viewer,
+  Notifications, a device, a vote, a wallet), a drawer screen, and the return from the background. The one exception is input in
+  progress: a screen that holds input not yet sent reports it with `HoldsInput(active)` (`:core:ui` `InputGuard.kt`; the shell
+  provides `LocalInputGuard`; a `SecretField` with text reports by itself), and the check waits until the member leaves that
+  screen or `OWNER_CHECK_DEFERRAL_MS` (5 minutes) after it came due, then covers it anyway. The check is drawn over the shell
+  (`OwnerCheckRoute` after the `ModalNavigationDrawer`, never in place of the NavHost), so the screen stays composed and what
+  was typed is there when the check passes. Screens that report: the item editor (`dirty`), the share-rule editors, a
+  conversation with a draft or photos, Accept (invitation text), the tag form and ask dialogs, wallet Send, Import, a new
+  wallet or backup under way, Spending limits form, Chain server, shared profile (edited name or taken photo), change name,
+  delete vault (phrase), and every PIN / password `SecretField`. Search boxes are not input in progress. Rule:
+  `ownerCheckMode()` / `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). A new form screen with typed
+  input must call `HoldsInput`. The refused-request text "What you entered is kept: the check opens when you leave this screen" is
+  unchanged (owner decision a).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto
