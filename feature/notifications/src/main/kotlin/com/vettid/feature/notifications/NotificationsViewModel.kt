@@ -14,6 +14,8 @@ import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionsRepository
+import com.vettid.core.data.devices.DevicesRepository
+import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.votes.NoVotes
@@ -121,6 +123,8 @@ class NotificationsViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     private val approvals: ApprovalsRepository,
     private val items: ItemsRepository,
+    private val devices: DevicesRepository,
+    private val pairing: PairingRepository,
     private val votes: VotesRepository = NoVotes,
 ) : ViewModel() {
     private val state = MutableStateFlow(NotificationsUiState(archived = saved.get<Boolean>(ARG_ARCHIVED) ?: false))
@@ -143,16 +147,22 @@ class NotificationsViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            combine(connections.connections, approvals.approvals, items.items, votes.votes) { c, a, i, v ->
-                FeedNames(
-                    c.associateBy { x -> x.id },
-                    i.associate { x -> x.itemId to x.name },
-                    a.associateBy { x -> x.key },
-                    // The vote titles of the list in memory, for a vote item's second line (never a choice).
-                    v.mapNotNull { x ->
-                        AccountNames.isolateOrNull(x.title)?.let { t -> VoteTitles.key(x.connectionId, x.proposalId) to t }
-                    }.toMap(),
-                )
+            combine(
+                combine(connections.connections, approvals.approvals, items.items, votes.votes) { c, a, i, v ->
+                    FeedNames(
+                        c.associateBy { x -> x.id },
+                        i.associate { x -> x.itemId to x.name },
+                        a.associateBy { x -> x.key },
+                        // The vote titles of the list in memory, for a vote item's second line (never a choice).
+                        v.mapNotNull { x ->
+                            AccountNames.isolateOrNull(x.title)?.let { t -> VoteTitles.key(x.connectionId, x.proposalId) to t }
+                        }.toMap(),
+                    )
+                },
+                devices.devices,
+                pairing.state,
+            ) { names, d, p ->
+                names.copy(devices = FeedNames.deviceNames(d), pairingName = FeedNames.pairingName(p))
             }.collect { n -> state.update { it.copy(names = n) } }
         }
         if (feed.load.value == ListLoad.NOT_LOADED) refresh()

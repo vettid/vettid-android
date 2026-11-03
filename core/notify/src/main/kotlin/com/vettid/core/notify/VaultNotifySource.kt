@@ -48,6 +48,8 @@ class VaultNotifySource(
         votes = vault.votes.votes.value.mapNotNull { v ->
             AccountNames.isolateOrNull(v.title)?.let { VoteTitles.key(v.connectionId, v.proposalId) to it }
         }.toMap(),
+        devices = FeedNames.deviceNames(vault.devices.devices.value),
+        pairingName = FeedNames.pairingName(vault.pairing.state.value),
     )
 
     /** A photo's notification says "Photo" and, with previews on, its caption; never the image or the thumbnail. */
