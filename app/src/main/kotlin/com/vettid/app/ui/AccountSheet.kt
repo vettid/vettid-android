@@ -103,7 +103,6 @@ fun AccountSheetOptions(
     presence: SheetPresence? = null,
 ) {
     val uri = LocalUriHandler.current
-    presence?.let { StatusGroup(it) }
     SettingsGroup(Modifier.testTag("account_lock")) {
         SettingsRow(
             stringResource(R.string.account_lock_vault),
@@ -114,6 +113,8 @@ fun AccountSheetOptions(
             modifier = Modifier.testTag("account_lock_vault"),
         )
     }
+    // The status sits right after Lock vault, which stays first under the name (owner, 2026-10-08).
+    presence?.let { StatusGroup(it) }
     AccountNamesGroup(account, now, onChangeName, onSharedProfile)
     AccountEmailGroup(account)
     AccountDetails(account, now)

@@ -44,9 +44,9 @@ class AccountSheetPresenceTest {
         show(SheetPresence(PresenceState.AVAILABLE) {})
         rule.onNodeWithText("Status: Available").assertIsDisplayed()
         val top = { tag: String -> rule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y }
-        // One row under the name: before Lock vault and the names.
-        assertTrue(top("account_status") < top("account_lock"))
-        assertTrue(top("account_lock") < top("account_names"))
+        // Lock vault stays first under the name (owner, 2026-10-08); the status comes right after it, before the names.
+        assertTrue(top("account_lock") < top("account_status"))
+        assertTrue(top("account_status") < top("account_names"))
     }
 
     @Test
