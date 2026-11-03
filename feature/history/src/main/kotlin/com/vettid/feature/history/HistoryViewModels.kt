@@ -265,10 +265,9 @@ class HistoryViewModel @Inject constructor(
         when {
             state.value.entries.isEmpty() -> reload()
             // The daily check was due: the rows stay, and the newest page is read again (not older ones).
-            state.value.error == FailureKind.OWNER_CHECK_REQUIRED -> {
-                state.update { it.copy(error = null) }
-                refreshNewest()
-            }
+            // The error stays until the answer arrives: its clearing re-runs the list's load-more effect (an older
+            // page refused as held is then read), and a second hold keeps the notice.
+            state.value.error == FailureKind.OWNER_CHECK_REQUIRED -> refreshNewest()
             else -> {
                 state.update { it.copy(error = null) }
                 loadMore()

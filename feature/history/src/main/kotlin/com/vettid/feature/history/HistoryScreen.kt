@@ -598,7 +598,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
             last >= list.layoutInfo.totalItemsCount - LOAD_AHEAD
         }
     }
-    LaunchedEffect(nearEnd, state.entries.size, state.end) {
+    LaunchedEffect(nearEnd, state.entries.size, state.end, state.error) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
     val held = state.error == FailureKind.OWNER_CHECK_REQUIRED

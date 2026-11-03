@@ -364,6 +364,30 @@ class HistoryViewModelTest {
         assertEquals(listOf(6L, 5L, 4L), ok.entries.map { it.seq })
     }
 
+    /** The older page was refused as held: the check passes, the newest page is read, the error clears and more() can run. */
+    @Test
+    fun anOlderPageRefusedAsHeldLoadsOnceTheCheckPasses() = runTest(main.dispatcher) {
+        val owner = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val vault = Vault(
+            { page(900, 700, next = 650) },
+            { throw VaultOpException("connection.audit.list", "owner_check_required") },
+            { page(900, 700, next = 650) },
+            { page(650, 600) },
+        )
+        val model = vm(vault, owner = owner)
+        settle(model, ::idle)
+        model.loadMore()
+        val held = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, held.error)
+        owner.ownerCheck.value = check(OwnerCheckState.OK)
+        // Still held until the newest page answers; then the list's effect asks for more again.
+        settle(model) { idle(it) && it.error == null }
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.entries.size == 4 }
+        assertEquals(listOf(900L, 700L, 650L, 600L), s.entries.map { it.seq })
+        assertEquals(650L, vault.calls.last()["before_seq"])
+    }
+
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
     @Test
