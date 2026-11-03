@@ -347,6 +347,37 @@ class AppLockTest {
     }
 
     @Test
+    fun aLateCallbackAfterARotationLeavesNoMark() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.promptStarted()
+        l.abandonPrompt()
+        // MainActivity skips promptEnded once destroyed; nothing the AppLock saw recorded a mark.
+        clock += 60_000
+        assertFalse(l.wouldShowLock())
+        l.onForeground()
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+    }
+
+    @Test
+    fun cancellingAMethodChangeInTheForegroundDoesNotLock() = runTest {
+        val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        l.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        l.promptStarted()
+        l.onBackground() // the credential screen stopped the activity
+        l.promptEnded(PromptOutcome.DISMISSED, inForeground = true)
+        assertEquals(AppLockState.UNLOCKED, l.state.value)
+        assertFalse(l.wouldShowLock())
+        l.enableCancelled()
+        assertFalse(l.invalidated.value)
+        // Out of the foreground it is unchanged: the mark stays.
+        val m = unlockedWith(AppLockTimeout.IMMEDIATELY)
+        m.cipherToEnable(AppLockMethod.SCREEN_LOCK)
+        m.promptStarted()
+        m.promptEnded(PromptOutcome.DISMISSED, inForeground = false)
+        assertTrue(m.wouldShowLock())
+    }
+
+    @Test
     fun resetClearsThePromptState() = runTest {
         val l = unlockedWith(AppLockTimeout.IMMEDIATELY)
         l.promptStarted()

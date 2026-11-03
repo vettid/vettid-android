@@ -246,6 +246,29 @@ class AppLockCoverTest {
     }
 
     @Test
+    fun theRetryBacksOffAndNeverWaitsMoreThanSixtySeconds() = runTest {
+        val looks = mutableListOf<Long>() // virtual time of each look at the monotonic clock
+        val l = AppLock(prefs, keys, MemFile(), now = { clock + wallSkew }, elapsed = { looks += testScheduler.currentTime; clock })
+        l.start()
+        l.completeEnable(l.cipherToEnable())
+        val covered = l.coverFlow(backgroundScope)
+        runCurrent()
+        l.onBackground()
+        runCurrent()
+        l.promptStarted()
+        clock = timeoutMs
+        advanceTimeBy(timeoutMs) // up to the timer
+        runCurrent()
+        looks.clear()
+        advanceTimeBy(200_000)
+        runCurrent()
+        assertFalse(covered.value)
+        val times = looks.distinct()
+        assertTrue("backs off: ${times.size} looks", times.size <= 10)
+        assertTrue("no wait over 60 s: $times", times.zipWithNext().all { (a, b) -> b - a <= 61_000 })
+    }
+
+    @Test
     fun aLongPromptHoldsTheCoverBackAndItsEndBringsItAtOnce() = runTest {
         val l = unlocked()
         val covered = l.coverFlow(backgroundScope)

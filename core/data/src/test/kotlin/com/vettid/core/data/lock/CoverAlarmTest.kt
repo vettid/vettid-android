@@ -112,6 +112,23 @@ class CoverAlarmTest {
     }
 
     @Test
+    fun completeUnlockAndCompleteEnableSyncTheAlarm() = runTest {
+        val l = unlocked()
+        l.onBackground()
+        l.lockNow()
+        l.onForeground()
+        l.promptStarted()
+        l.onBackground() // the mark is set while locked: no alarm
+        l.promptEnded(PromptOutcome.SUCCEEDED, inForeground = false)
+        assertEquals(null, alarm.at)
+        assertTrue(l.completeUnlock(l.cipherToUnlock()!!))
+        assertEquals(clock + minute, alarm.at)
+        alarm.cancel()
+        l.completeEnable(l.cipherToEnable())
+        assertEquals(clock + minute, alarm.at)
+    }
+
+    @Test
     fun anAlarmThatFailsBreaksNothing() = runTest {
         val failing = object : CoverAlarm {
             override fun set(atElapsedMs: Long) = throw SecurityException("no")

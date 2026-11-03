@@ -314,8 +314,11 @@ class MainActivity : ComponentActivity() {
                 .setAllowedAuthenticators(allowed)
                 .build()
             fun done(outcome: PromptOutcome) {
-                appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
-                appLock.promptEnded(outcome, inForeground())
+                // A callback after onDestroy (a rotation cancelling the old prompt) is late: onDestroy already ended the prompt.
+                if (!isDestroyed) {
+                    appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
+                    appLock.promptEnded(outcome, inForeground())
+                }
                 val ok = outcome == PromptOutcome.SUCCEEDED
                 if (cont.isActive) cont.resume(ok)
             }
@@ -371,6 +374,7 @@ class MainActivity : ComponentActivity() {
 
                 private fun done(outcome: PromptOutcome) {
                     if (promptCancel === cancel) promptCancel = null
+                    if (isDestroyed) return // late: onDestroy already ended the prompt
                     appLock.prompts.finished(outcome)
                     appLock.promptEnded(outcome, inForeground())
                 }

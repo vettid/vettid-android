@@ -317,8 +317,8 @@ class AppLock(
                         } else {
                             emit(false)
                             delay(left + COVER_MARGIN_MS)
-                            // Early (a clock set back, a prompt in progress): look again rather than lose the cover for good.
-                            // Backing off: 1 s, doubling to 60 s (a prompt that stays open, a clock far back).
+                            // Early (only a prompt in progress now): look again rather than lose the cover for good.
+                            // Backing off: 1 s, doubling to 60 s (a prompt that stays open); a prompt's end rechecks at once.
                             var wait = COVER_RETRY_MS
                             while (!wouldShowLock()) {
                                 val more = at.elapsedMs + t.seconds * MS - elapsed()
@@ -355,6 +355,7 @@ class AppLock(
         methodFlow.value = m
         invalidatedFlow.value = false
         stateFlow.value = AppLockState.UNLOCKED
+        syncCoverAlarm()
     }
 
     /**
@@ -478,6 +479,7 @@ class AppLock(
      * - [PromptOutcome.SYSTEM_CANCELED] or [PromptOutcome.DISMISSED] in the foreground: the decision of [onForeground]: lock
      *   if the mark is due, then clear it (fail secure; with "Immediately", cancelling a presence check whose screen stopped
      *   the activity therefore locks the app).
+     * - The same while an enable or a method change is in progress (`enabling`): the mark is only cleared, no lock.
      * - Either of those not in the foreground: the mark is kept; if there is none, one is recorded now.
      */
     fun promptEnded(outcome: PromptOutcome, inForeground: Boolean) {
@@ -490,6 +492,11 @@ class AppLock(
             outcome == PromptOutcome.SUCCEEDED -> {
                 backgroundAt = Background(elapsed(), now())
                 provenAtElapsed = elapsed()
+            }
+            // A method change that was cancelled: the key is about to be deleted, so locking would only end in a false notice.
+            inForeground && enabling != null -> {
+                provenAtElapsed = null
+                backgroundAt = null
             }
             inForeground -> returned()
             else -> if (backgroundAt == null) backgroundAt = Background(elapsed(), now())
