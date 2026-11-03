@@ -90,6 +90,8 @@ fun NavGraphBuilder.approvalsDestination(
     onBack: () -> Unit,
     /** Leaves the approval screen of the back stack entry with this id (only if it is still the one in front). */
     onLeaveDetail: (entryId: String) -> Unit = { onBack() },
+    /** (AA5) Opens the comparison of the pairing this phone holds (Devices & agents). */
+    onOpenPairing: () -> Unit = {},
 ) {
     composable<ApprovalsRoute> {
         val vm: ApprovalsViewModel = hiltViewModel()
@@ -140,6 +142,8 @@ fun NavGraphBuilder.approvalsDestination(
                 onAskMute = vm::askMute,
                 onMute = vm::mute,
                 onDismissMute = vm::dismissMute,
+                onChooseSeconds = vm::chooseSeconds,
+                onOpenPairing = onOpenPairing,
             ),
         )
     }
@@ -216,7 +220,7 @@ fun ApprovalsScreen(
                 }
                 items(state.entries, key = { it.key }) { e ->
                     when (e) {
-                        is ApprovalEntry.One -> ApprovalRow(e.approval, onOpen)
+                        is ApprovalEntry.One -> ApprovalRow(e.approval, onOpen, items = state.items, itemsLoaded = state.itemsLoaded)
                         is ApprovalEntry.Batch -> BatchRow(e, e.key in expanded, onOpen) {
                             expanded = if (e.key in expanded) expanded - e.key else expanded + e.key
                         }
@@ -254,11 +258,21 @@ private fun OpenAsksNotice(error: FailureKind?, code: String?, onRetry: () -> Un
 }
 
 @Composable
-private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun ApprovalRow(
+    a: Approval,
+    onOpen: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    items: List<com.vettid.core.data.items.ItemSummary> = emptyList(),
+    itemsLoaded: Boolean = true,
+) {
     val who = whoOf(a)
     VettIdListRow(
-        title = titleOf(a),
-        supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
+        title = titleOf(a, items, itemsLoaded),
+        supporting = if (a is Approval.DeviceRequest) {
+            deviceSupporting(a, rememberNow())
+        } else {
+            listOfNotNull(who, summaryOf(a)).joinToString(" · ")
+        },
         meta = Times.short(a.receivedAt),
         tileName = AccountNames.cleaned(who) ?: "?",
         emphasized = a.needsDecision,
@@ -324,7 +338,8 @@ private fun PausedNotice(
 
 /** The kind of request, as a row title. */
 @Composable
-fun titleOf(a: Approval): String {
+fun titleOf(a: Approval, items: List<com.vettid.core.data.items.ItemSummary> = emptyList(), itemsLoaded: Boolean = true): String {
+    if (a is Approval.DeviceRequest) return deviceTitle(a, items, itemsLoaded)
     val name = (a as? Approval.Authentication)?.connectionName?.let { AuthContext.isolatedName(it) }
     val inline = stringResource(R.string.approvals_a_connection_inline)
     return when ((a as? Approval.Authentication)?.purpose) {
@@ -342,8 +357,7 @@ private fun kindTitleRes(a: Approval): Int =
         is Approval.GrantRequest -> R.string.approvals_type_grant
         is Approval.CriticalUse -> R.string.approvals_type_critical
         is Approval.ShareDecision -> R.string.approvals_type_share
-        is Approval.DeviceRequest ->
-            if (a.type == "device.session.pending") R.string.approvals_type_session else R.string.approvals_type_device
+        is Approval.DeviceRequest -> R.string.approvals_held_other_title
     }
 
 @Composable
@@ -379,7 +393,7 @@ private fun summaryOf(a: Approval): String? = when (a) {
 
 /** The kind of a desktop or agent request ("A desktop", "An agent"), or null for a kind this app does not name (§10.8). */
 @Composable
-private fun deviceKind(a: Approval.DeviceRequest): String? = when (AccountNames.cleaned(a.role)?.lowercase()) {
+internal fun deviceKind(a: Approval.DeviceRequest): String? = when (AccountNames.cleaned(a.role)?.lowercase()) {
     "agent" -> stringResource(R.string.approvals_an_agent)
     "desktop" -> stringResource(R.string.approvals_a_desktop)
     else -> null
@@ -387,7 +401,7 @@ private fun deviceKind(a: Approval.DeviceRequest): String? = when (AccountNames.
 
 /** The name a desktop or agent gave itself, isolated; its kind when it gave none (§10.8). Starts the row's second line. */
 @Composable
-private fun deviceWho(a: Approval.DeviceRequest): String? = AccountNames.isolateOrNull(a.deviceName) ?: deviceKind(a)
+internal fun deviceWho(a: Approval.DeviceRequest): String? = AccountNames.isolateOrNull(a.deviceName) ?: deviceKind(a)
 
 /** "item · field", each cleaned and isolated; null when neither shows anything. */
 private fun criticalItem(a: Approval.CriticalUse): String? =
@@ -419,6 +433,10 @@ data class DecisionActions(
     val onAskMute: () -> Unit = {},
     val onMute: () -> Unit = {},
     val onDismissMute: () -> Unit = {},
+    /** (AA5) The length of access chosen for a session request, in seconds. */
+    val onChooseSeconds: (Int) -> Unit = {},
+    /** (AA5) Opens the comparison of the pairing this phone holds. */
+    val onOpenPairing: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -439,6 +457,10 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         CriticalResult(status, a, actions.onFinish, modifier)
         return
     }
+    if (a is Approval.DeviceRequest) {
+        DeviceRequestScreen(a, state, actions, modifier)
+        return
+    }
     FormScaffold(
         title = titleOf(a),
         body = bodyOf(a),
@@ -456,7 +478,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         when (a) {
             is Approval.ShareDecision -> ShareFacts(a, state.shareExcluded, actions.onToggleShareItem)
             is Approval.GrantRequest -> GrantFacts(a, state, actions)
-            else -> Facts(a, renewal = state.renewalUntil != null)
+            else -> Facts(a)
         }
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
@@ -554,7 +576,7 @@ private fun GoneScreen(a: Approval?, state: ApprovalDetailUiState, actions: Deci
 
 /** The Devices page's confirmation, its words reused (core:ui strings). */
 @Composable
-private fun EndAccessDialog(a: Approval, actions: DecisionActions) {
+internal fun EndAccessDialog(a: Approval, actions: DecisionActions) {
     ConfirmDialog(
         title = stringResource(UiR.string.devices_end_access_title, deviceSentenceInline(a)),
         text = stringResource(UiR.string.devices_end_access_body),
@@ -567,7 +589,7 @@ private fun EndAccessDialog(a: Approval, actions: DecisionActions) {
 
 /** A renewal request's notice above the choices (0.78.0 §6.8 step 3), and why ending access failed. */
 @Composable
-private fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: DecisionActions) {
+internal fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: DecisionActions) {
     state.renewalUntil?.let { until ->
         Spacer(Modifier.height(Spacing.l))
         Text(
@@ -584,7 +606,7 @@ private fun RenewalNotices(state: ApprovalDetailUiState, a: Approval, actions: D
 
 /** The device's name inside a sentence ("a desktop", "an agent" when it gave none, §10.8). */
 @Composable
-private fun deviceSentenceInline(a: Approval): String {
+internal fun deviceSentenceInline(a: Approval): String {
     val d = a as? Approval.DeviceRequest
     val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
     return AccountNames.isolateOrNull(d?.deviceName)
@@ -593,7 +615,7 @@ private fun deviceSentenceInline(a: Approval): String {
 
 /** The device's name starting a sentence ("A desktop", "An agent" when it gave none, §10.8). */
 @Composable
-private fun deviceSentenceStart(a: Approval): String {
+internal fun deviceSentenceStart(a: Approval): String {
     val d = a as? Approval.DeviceRequest
     val agent = AccountNames.cleaned(d?.role)?.lowercase() == "agent"
     return AccountNames.isolateOrNull(d?.deviceName)
@@ -635,7 +657,7 @@ private fun denyLabelRes(a: Approval): Int = when {
 
 /** A refusal in words; a password backoff counts down to its end; a named limit (0.21.0 §10.1) says which. */
 @Composable
-private fun failureText(
+internal fun failureText(
     kind: com.vettid.core.data.vault.FailureKind,
     retryUntil: java.time.Instant?,
     limit: com.vettid.core.data.vault.VaultLimit? = null,
@@ -989,7 +1011,7 @@ private fun bodyOf(a: Approval): String? = when (a) {
             ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent_inline) }
             ?: stringResource(R.string.approvals_a_connection_inline),
     )
-    is Approval.DeviceRequest -> stringResource(R.string.approvals_device_body)
+    is Approval.DeviceRequest -> null
 }
 
 @Composable
@@ -1007,7 +1029,7 @@ private fun approveLabel(a: Approval): String? = when (a) {
 }
 
 @Composable
-private fun Label(text: String) {
+internal fun Label(text: String) {
     Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
@@ -1016,13 +1038,13 @@ private fun Label(text: String) {
 private fun themOf(name: String?): String = AccountNames.isolateOrNull(name) ?: stringResource(R.string.approvals_them)
 
 @Composable
-private fun Value(text: String, modifier: Modifier = Modifier) {
+internal fun Value(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.bodyLarge, modifier = modifier.padding(bottom = Spacing.m))
 }
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval, renewal: Boolean = false, withdrawn: Boolean = false) {
+private fun Facts(a: Approval, withdrawn: Boolean = false) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
@@ -1197,25 +1219,8 @@ private fun Facts(a: Approval, renewal: Boolean = false, withdrawn: Boolean = fa
                 Text("• $n (${AccountNames.isolate(ItemCategories.humanize(it.category))})", style = MaterialTheme.typography.bodyLarge)
             }
         }
-        is Approval.DeviceRequest -> {
-            Label(stringResource(R.string.approvals_device))
-            // With a name: "name · role". Without: the kind once ("A desktop"), never "a desktop · desktop".
-            val named = AccountNames.isolateOrNull(a.deviceName)
-            val who = if (named != null) {
-                listOfNotNull(named, AccountNames.isolateOrNull(a.role)).joinToString(" · ")
-            } else {
-                deviceKind(a) ?: AccountNames.isolateOrNull(a.role).orEmpty()
-            }
-            Value(who.ifEmpty { "?" })
-            a.requestType?.let { AuthContext.isolated(it) }?.let {
-                Label(stringResource(R.string.approvals_request))
-                Value(it)
-            }
-            // A renewal says what a deny does instead (RenewalNotices).
-            if (!renewal) {
-                Text(stringResource(R.string.approvals_device_v1), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Start)
-            }
-        }
+        // A device request has its own screen (DeviceRequestScreen, AA5).
+        is Approval.DeviceRequest -> Unit
     }
 }
 

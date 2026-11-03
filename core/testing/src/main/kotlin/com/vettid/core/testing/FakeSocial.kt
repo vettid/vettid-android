@@ -325,6 +325,19 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop(key)
     }
 
+    /** The last approved device request: its key and the length sent (AA5). */
+    var lastDeviceApproval: Pair<String, Int?>? = null
+
+    /** What [approveDeviceRequest] answers. */
+    var deviceDecision = com.vettid.core.data.social.DeviceDecision(result = "ok")
+
+    override suspend fun approveDeviceRequest(key: String, seconds: Int?): com.vettid.core.data.social.DeviceDecision {
+        call("approveDeviceRequest")
+        lastDeviceApproval = key to seconds
+        drop(key)
+        return deviceDecision
+    }
+
     companion object {
         /**
          * A connection titled "[first] [last]" (the names on the peer's account, VAULT-MESSAGING 0.18.0 §10.8), with

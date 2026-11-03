@@ -220,6 +220,55 @@ class PairingManagerTest {
         assertEquals("Claude on laptop", s.name)
     }
 
+    private fun TestScope.watched(ops: Ops, left: MutableList<String>) =
+        PairingManager(this, ops = { ops }, now = { clock }, knownDeviceIds = { setOf("me") }, readDevices = { emptyList() }, onCompareLeft = { left += it })
+
+    @Test
+    fun theComparisonLeftIsToldByItsPendingIdWhenApprovedRejectedEndedOrCleared() = runTest {
+        // Approved.
+        val a = mutableListOf<String>()
+        val m = watched(Ops(), a)
+        m.start()
+        m.onEvent(pending())
+        assertTrue("held: nothing yet", a.isEmpty())
+        m.approve(3600)
+        assertEquals(listOf("x"), a)
+        // Rejected.
+        val r = mutableListOf<String>()
+        val n = watched(Ops(), r)
+        n.start()
+        n.onEvent(pending())
+        n.reject()
+        assertEquals(listOf("x"), r)
+        // Ended by its time.
+        val e = mutableListOf<String>()
+        val o = watched(Ops(), e)
+        o.start()
+        o.onEvent(pending())
+        advanceTimeBy(601_000)
+        assertEquals(PairingStage.Ended, o.state.value.stage)
+        assertEquals(listOf("x"), e)
+        // Cleared (a lock).
+        val c = mutableListOf<String>()
+        val p = watched(Ops(), c)
+        p.start()
+        p.onEvent(pending())
+        p.clear()
+        assertEquals(listOf("x"), c)
+    }
+
+    @Test
+    fun aRefusedApprovalThatKeepsTheComparisonDoesNotCloseIt() = runTest {
+        val left = mutableListOf<String>()
+        val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
+        val m = watched(ops, left)
+        m.start()
+        m.onEvent(pending())
+        m.approve(3600)
+        assertTrue(m.state.value.stage is PairingStage.Compare)
+        assertTrue(left.isEmpty())
+    }
+
     @Test
     fun noAccessYetSendsNoSession() = runTest {
         val ops = Ops()

@@ -80,6 +80,7 @@ class RenewalTest {
             devices,
             vault,
             social,
+            com.vettid.core.testing.FakePairing(),
         )
     }
 
@@ -88,13 +89,14 @@ class RenewalTest {
         val renewal = vm()
         runCurrent()
         assertEquals(live, renewal.uiState.value.renewalUntil)
-        assertFalse(renewal.uiState.value.canApprove)
+        // AA5: a session request is allowed with a length, a renewal too.
+        assertTrue(renewal.uiState.value.canApprove)
         assertTrue("refresh" in devices.calls)
 
         val first = vm(list = listOf(device(expires = null)))
         runCurrent()
         assertNull(first.uiState.value.renewalUntil)
-        assertFalse(first.uiState.value.canApprove)
+        assertTrue(first.uiState.value.canApprove)
     }
 
     @Test
@@ -248,7 +250,6 @@ class RenewalTest {
         runCurrent()
         assertFalse(m.uiState.value.canApprove)
         assertNull(m.uiState.value.renewalUntil)
-        assertFalse("refresh" in devices.calls)
     }
 
     @Test

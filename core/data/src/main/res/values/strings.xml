@@ -173,6 +173,15 @@
     <string name="data_feed_item_revealed">%1$s was revealed</string>
     <string name="data_feed_item_revealed_any">A critical item was revealed</string>
     <string name="data_feed_device_pair_pending">A device asks to pair</string>
+    <!-- AA5, ANDROID-PLAN 0.1.116 "Notifications and the feed": the plan's labels, word for word (draft); the fallbacks without a name are new. -->
+    <string name="data_feed_device_pair_pending_named">%1$s asks to pair</string> <!-- draft -->
+    <string name="data_feed_device_paired_named">%1$s was paired</string> <!-- draft -->
+    <string name="data_feed_device_unlinked_named">%1$s was removed</string> <!-- draft -->
+    <string name="data_feed_device_session_named">%1$s asks for access</string> <!-- draft -->
+    <string name="data_feed_device_approval_named">%1$s asks you to approve a request</string> <!-- draft -->
+    <string name="data_feed_leash_rate_limited_named">%1$s reached a limit</string> <!-- draft -->
+    <string name="data_feed_leash_referrals_named">%1$s asked too often</string> <!-- draft -->
+    <string name="data_feed_leash_suspended_named">%1$s was paused</string> <!-- draft -->
     <string name="data_feed_device_paired">A device was paired</string>
     <string name="data_feed_device_unlinked">A device was removed</string>
     <string name="data_feed_device_transferred">Your vault moved to this phone</string>
@@ -199,10 +208,10 @@
     <string name="data_feed_hold_back_on">Hold back on</string>
     <string name="data_feed_guide">A tip from VettID</string>
     <string name="data_feed_leash">Agent activity</string>
-    <string name="data_feed_leash_rate_limited">An agent reached its limit</string>
+    <string name="data_feed_leash_rate_limited">An agent reached a limit</string> <!-- new: no name -->
     <string name="data_feed_leash_item_read">An agent read an item</string>
-    <string name="data_feed_leash_suspended">An agent was suspended</string>
-    <string name="data_feed_leash_referrals">An agent’s referrals were limited</string>
+    <string name="data_feed_leash_suspended">An agent was paused</string> <!-- new: no name -->
+    <string name="data_feed_leash_referrals">An agent asked too often</string> <!-- new: no name -->
     <string name="data_feed_action_request">%1$s asks you to run an action</string>
     <string name="data_feed_intro_request">%1$s wants to introduce someone</string>
     <string name="data_feed_location_shared">%1$s shared a location</string>

@@ -85,6 +85,12 @@ class SocialManager(
      * batch's item read when no ask of the batch is still open, else re-posts its notification with the asks left.
      */
     private val feedWithdrawn: (com.vettid.core.data.feed.WithdrawnBatch) -> Unit = {},
+    /** The three vault calls that decide a device request (a seam for tests; the vault client in the app). */
+    private val deviceOps: suspend () -> DeviceDecisionOps = { VaultDeviceDecisions(api()) },
+    /** The member's items with their field labels (the item cache): what a held `item.use` or `item.get` is shown against. */
+    private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
+    /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
+    private val deviceListed: (String) -> Boolean = { false },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -147,10 +153,45 @@ class SocialManager(
         combine(connectionsFlow, messagesFlow) { cs, ms -> summaries(cs, ms) }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
-    override val approvals: StateFlow<List<Approval>> =
+    /** The feed items (memory only), for the asks known only from them (AA5); set by the vault manager. */
+    private val feedFlow = MutableStateFlow<List<com.vettid.core.vault.FeedItem>>(emptyList())
+
+    /** A `pending.list` was merged since the unlock: it is authoritative for sessions and approvals, so none is made from a feed item. */
+    private val listReadFlow = MutableStateFlow(false)
+    private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
+
+    /** The feed's items, as they change (the vault manager forwards them). */
+    fun setFeedItems(items: List<com.vettid.core.vault.FeedItem>) {
+        feedFlow.value = items
+    }
+
+    private val listedApprovals: StateFlow<List<Approval>> =
         combine(storedFlow, listedFlow, requestsFlow, connectionsFlow, nowFlow) { stored, listed, requests, cs, now ->
             merge(stored, listed + requests, cs, now)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    override val approvals: StateFlow<List<Approval>> =
+        combine(listedApprovals, feedFlow, listReadFlow, feedClosedFlow) { base, feed, listRead, closed ->
+            // A merged pending.list is authoritative for the asks it lists; the vault does not list pairings yet
+            // (0.83.0), so a pairing's entry is kept either way.
+            val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
+                .filter { !listRead || it.isPairing }
+            replaceSessions(if (extra.isEmpty()) base else (base + extra).sortedByDescending { it.receivedAt })
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** The pairing with this `pending_id` was approved, rejected or ended: its entry (from the feed item) goes. */
+    fun closePairing(pendingId: String) = closeFeedKey("device:${Approval.DeviceRequest.PAIR_PENDING}:$pendingId")
+
+    /** A device has one access request (§6.8): of several shown, the newest stays. */
+    private fun replaceSessions(list: List<Approval>): List<Approval> {
+        val newest = list.mapNotNull { it as? Approval.DeviceRequest }.filter { it.sessionDeviceId != null }
+            .groupBy { it.sessionDeviceId }.mapValues { (_, v) -> v.maxBy { it.receivedAt }.key }
+        return list.filter { a -> val d = (a as? Approval.DeviceRequest)?.sessionDeviceId; d == null || newest[d] == a.key }
+    }
+
+    private fun closeFeedKey(key: String) = feedClosedFlow.update { it.copy(keys = it.keys + key) }
+
+    private fun closeFeedDevice(deviceId: String, ts: Instant) = feedClosedFlow.update { it.copy(devices = it.devices + (deviceId to ts)) }
 
     override val requestEnds: StateFlow<Map<String, RequestEnd>> = endsFlow.asStateFlow()
 
@@ -269,6 +310,8 @@ class SocialManager(
      */
     private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
         pending.reset()
+        listReadFlow.value = false
+        feedClosedFlow.value = FeedOnlyAsks.Closed()
         if (close) closed = true
         local = Local()
         storedFlow.value = emptyList()
@@ -303,7 +346,7 @@ class SocialManager(
                 val admit = p?.let { a ->
                     { pending.acceptCreate(a.key, m.ts, (a as? Approval.DeviceRequest)?.deviceId, m.type == PendingAsks.SESSION) }
                 }
-                store(m.type, b, admit)
+                store(m.type, b, admit, m.ts)
             }
             "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId) }
             "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId) }
@@ -317,15 +360,29 @@ class SocialManager(
         nowFlow.value = now()
     }
 
-    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null) {
+    /** The held `device.session.pending` events of the same device as [parsed] (a session request), with their keys. */
+    private fun sessionsOfSameDevice(events: List<StoredEvent>, parsed: Approval): List<Pair<String, StoredEvent>> {
+        val req = parsed as? Approval.DeviceRequest
+        val device = req?.sessionDeviceId ?: return emptyList()
+        return events.mapNotNull { e ->
+            val p = parsed(e) as? Approval.DeviceRequest
+            if (p != null && p.sessionDeviceId == device && p.key != parsed.key) p.key to e else null
+        }
+    }
+
+    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null, ts: Instant? = null) {
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
         // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
         if (parsed is Approval.ShareDecision) noteBatch(parsed)
         edit { l ->
+            // A newer session request of the same device replaces an older (§6.8, by the event's ts): an older one that
+            // arrives late is not shown, and the older ones already held go.
+            val older = sessionsOfSameDevice(l.events, parsed)
+            if (ts != null && older.any { (k, e) -> (pending.createdTs(k) ?: Instant.ofEpochMilli(e.at)).isAfter(ts) }) return@edit l
             if (admit != null && !admit()) return@edit l
-            val others = l.events.filterNot { e -> keyOf(e) == parsed.key }
+            val others = l.events.filterNot { e -> keyOf(e) == parsed.key || older.any { (_, o) -> o === e } }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
             l.copy(events = others + StoredEvent(type, merged, at))
         }
@@ -599,8 +656,11 @@ class SocialManager(
     }
 
     /** A closing event of an ask `pending.list` carries: decided inside the edit, with the drop (§10.4.2 ts rule). */
-    private suspend fun closeAsk(key: String, ts: Instant) = edit { l ->
-        if (!pending.acceptClose(key, ts)) l else l.copy(events = l.events.filterNot { keyOf(it) == key })
+    private suspend fun closeAsk(key: String, ts: Instant) {
+        closeFeedKey(key)
+        edit { l ->
+            if (!pending.acceptClose(key, ts)) l else l.copy(events = l.events.filterNot { keyOf(it) == key })
+        }
     }
 
     /**
@@ -609,7 +669,12 @@ class SocialManager(
      * approvals of an ended session arrive as their own `approval.decided`, 0.77.0). A late one for an earlier session
      * (not later than the last list) is ignored, and a request created after the event stays: it is not about it.
      */
-    private suspend fun onSessionClosed(deviceId: String, ts: Instant) = edit { l ->
+    private suspend fun onSessionClosed(deviceId: String, ts: Instant) {
+        closeFeedDevice(deviceId, ts)
+        closeSessionEvents(deviceId, ts)
+    }
+
+    private suspend fun closeSessionEvents(deviceId: String, ts: Instant) = edit { l ->
         if (!pending.acceptDeviceClose(deviceId, ts)) return@edit l
         l.copy(
             events = l.events.filterNot { e ->
@@ -1051,6 +1116,7 @@ class SocialManager(
             if (closed) return@edit l // a read that began after the lock merges nothing (see [closed])
             val plan = pending.merge(ticket, ts, listed) ?: return@edit l
             merged = true
+            listReadFlow.value = true
             val at = now().toEpochMilli()
             val (gone, kept) = l.events.partition { e ->
                 e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
@@ -1311,12 +1377,14 @@ class SocialManager(
                 // Only here: a decision the vault took keeps the question's batches (§10.12 rule 3).
                 if (key.startsWith("auth:")) noteNotFound(key)
                 forgetBatches(key)
+                closeFeedKey(key)
                 dropApproval(key)
                 listedFlow.update { l -> l.filterNot { it.key == key } }
             }
             throw e
         }
         if (whole) {
+            closeFeedKey(key)
             dropApproval(key)
             listedFlow.update { l -> l.filterNot { it.key == key } }
             decided(key)
@@ -1498,12 +1566,43 @@ class SocialManager(
 
     override suspend fun declineDeviceRequest(key: String) {
         val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        decide(key) {
-            if (req.type == "approval.pending") it.approvalDecide(req.id, false) else it.sessionDeny(req.id)
+        deviceDecide(key) { ops ->
+            if (req.isHeld) ops.approvalDecide(req.id, false) else ops.sessionDeny(req.id)
         }
     }
 
+    /**
+     * A decision on a device request: only `not_found` (VAULT-MESSAGING 0.83.0 §10.3: an ended request) means it is no longer
+     * waiting, and [decideRun] takes it out of the list; any other failure keeps the entry and is thrown.
+     */
+    private suspend fun deviceDecide(key: String, block: suspend (DeviceDecisionOps) -> Unit) {
+        decideRun(key) { vaultGuard { block(deviceOps()) } }
+    }
+
+    override suspend fun approveDeviceRequest(key: String, seconds: Int?): DeviceDecision {
+        val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
+        // Never approve what the app cannot show in full: a held request without its body, or one it cannot read.
+        val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true || !HeldRequests.nameable(req.held, itemCache()))
+        // A session request known only from its feed item is allowed only for a device the list names.
+        val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
+        if (req.isPairing || unshown || unknownDevice) {
+            throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        }
+        var decision = DeviceDecision()
+        deviceDecide(key) { ops ->
+            decision = if (req.isSession) {
+                DeviceDecision(expiresAt = ApprovalParser.instant(ops.sessionApprove(req.id, seconds)))
+            } else {
+                DeviceDecision(result = ops.approvalDecide(req.id, true))
+            }
+        }
+        return decision
+    }
+
     override suspend fun dropDeviceRequests(deviceId: String) {
+        closeFeedDevice(deviceId, now())
+        val keys = feedFlow.value.filter { it.deviceId == deviceId }.mapNotNull { i -> i.ref?.let { "device:${i.kind}:$it" } }
+        feedClosedFlow.update { c -> c.copy(keys = c.keys + keys) }
         edit { l -> l.copy(events = l.events.filterNot { (parsed(it) as? Approval.DeviceRequest)?.deviceId == deviceId }) }
         listedFlow.update { l -> l.filterNot { it is Approval.DeviceRequest && it.deviceId == deviceId } }
     }
@@ -1536,4 +1635,24 @@ class SocialManager(
         private val NAME_RETENTION: Duration = Duration.ofDays(17)
         private val json = Json { ignoreUnknownKeys = true }
     }
+}
+
+/** The vault calls behind a decision on a device request (VAULT-MESSAGING §10.3): `device.session.approve`, `.deny`, `approval.decide`. */
+interface DeviceDecisionOps {
+    /** `device.session.approve{request_id, seconds}`: the answer's `expires_at` (RFC 3339), or null if it has none. */
+    suspend fun sessionApprove(requestId: String, seconds: Int?): String?
+
+    suspend fun sessionDeny(requestId: String)
+
+    /** `approval.decide{approval_id, approve}`: the answer's `result`. */
+    suspend fun approvalDecide(approvalId: String, approve: Boolean): String?
+}
+
+internal class VaultDeviceDecisions(private val api: VaultApi) : DeviceDecisionOps {
+    override suspend fun sessionApprove(requestId: String, seconds: Int?): String? =
+        VaultJson.str(api.sessionApprove(requestId, seconds), "expires_at")
+
+    override suspend fun sessionDeny(requestId: String) = api.sessionDeny(requestId)
+
+    override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? = api.approvalDecide(approvalId, approve)
 }
