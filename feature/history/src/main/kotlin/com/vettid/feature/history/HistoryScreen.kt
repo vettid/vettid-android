@@ -87,6 +87,7 @@ import com.vettid.core.ui.components.FilterChipRow
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.LargeTitle
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
@@ -257,7 +258,7 @@ fun categoryIcon(c: AuditCategory): ImageVector = when (c) {
  * History (owner request 2026-10-07): newest first, more as the list scrolls (`before_seq` cursors), each entry
  * with its title, time and connection; a search, the date range, a connection and the groups filter it. Read-only.
  */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun HistoryScreen(
     state: HistoryUiState,
@@ -292,6 +293,9 @@ fun HistoryScreen(
                 when {
                     state.loading && state.entries.isEmpty() -> Centered {
                         CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    }
+                    error == FailureKind.OWNER_CHECK_REQUIRED && state.entries.isEmpty() -> Centered {
+                        HistoryHeldNotice(Modifier.padding(Spacing.xl))
                     }
                     error != null && state.entries.isEmpty() -> Centered {
                         NoticeCard(
@@ -335,6 +339,18 @@ fun HistoryScreen(
             actions = { MoreMenu(actions.onExport) },
         ) { body() }
     }
+}
+
+/** The vault holds requests while the daily owner check is due: said to be held, not failed; nothing to retry. */
+@Composable
+internal fun HistoryHeldNotice(modifier: Modifier = Modifier) {
+    NoticeCard(
+        kind = NoticeKind.INFO,
+        title = stringResource(R.string.history_held_title),
+        body = stringResource(R.string.history_held_body),
+        actions = null,
+        modifier = modifier.testTag("history_held_notice"),
+    )
 }
 
 /** History's ⋯ menu: "Export…" (ANDROID-PLAN 0.1.17). */
@@ -555,6 +571,7 @@ private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     val list = rememberLazyListState()
     // New entries on top (a refresh, e.g. `audit.exported` after an export): the rows are keyed by `seq` and a
@@ -577,7 +594,12 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     LaunchedEffect(nearEnd, state.entries.size, state.end) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
+    val held = state.error == FailureKind.OWNER_CHECK_REQUIRED
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
+        // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
+        if (held) {
+            item(key = "held-notice") { HistoryHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
+        }
         items(state.shown, key = { it.seq }) { e ->
             val names = RowNames(state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles, state.walletItems)
             EntryRow(e, names, actions.onOpen)
@@ -600,7 +622,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
                             )
                         }
                     }
-                    state.error != null -> TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) }
+                    state.error != null && !held -> TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) }
                     state.end -> Text(
                         stringResource(R.string.history_end),
                         style = MaterialTheme.typography.bodySmall,

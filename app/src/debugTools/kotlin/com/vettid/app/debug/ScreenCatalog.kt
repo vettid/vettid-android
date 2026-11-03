@@ -1079,6 +1079,12 @@ object ScreenCatalog {
             MessagesScreen(MessagesUiState(loading = false, conversations = conversations.take(1), noConnections = false, query = "sam", searchable = true), chrome)
         },
         "messages.search_none" to { MessagesScreen(MessagesUiState(loading = false, noConnections = false, query = "zz", searchable = true), chrome) },
+        "messages.held" to {
+            MessagesScreen(
+                MessagesUiState(loading = false, conversations = conversations, noConnections = false, searchable = true, error = FailureKind.OWNER_CHECK_REQUIRED),
+                chrome,
+            )
+        },
         "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
         "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false, searchable = true), chrome) },
         "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
@@ -1449,6 +1455,13 @@ object ScreenCatalog {
                     historyEntries.take(2), filter = AuditFilter(query = "unlocked"), connectionNames = historyNames, loading = false,
                     end = true, localSearch = true,
                 ),
+                chrome,
+                HistoryActions(),
+            )
+        },
+        "history.held" to {
+            HistoryScreen(
+                HistoryUiState(historyEntries, connectionNames = historyNames, loading = false, error = FailureKind.OWNER_CHECK_REQUIRED),
                 chrome,
                 HistoryActions(),
             )
