@@ -91,7 +91,14 @@ class FeedEventTitlesTest {
             assertEquals(FeedText(R.string.data_feed_leash_item_used, listOf("\u2068GitHub token\u2069")), title(item(k, "01ITEM")))
             assertEquals(FeedText(R.string.data_feed_leash_item_used_any), title(item(k, "01ITEM"), details = false))
             assertEquals(FeedText(R.string.data_feed_leash_item_used_any), title(item(k, "01GONE")))
+            assertFalse("$k has its detail sheet", FeedKinds.notAvailable(k))
+            assertEquals(FeedTarget.Sheet, FeedKinds.target(item(k, "01ITEM")))
+            assertEquals("01ITEM", FeedKinds.sheetItemId(item(k, "01ITEM"), names))
+            assertNull(FeedKinds.sheetItemId(item(k, "01GONE"), names))
         }
+        assertEquals(FeedText(R.string.data_feed_leash_item_run_detail), FeedKinds.sheetDetail(item("leash.item.run")))
+        assertEquals(FeedText(R.string.data_feed_leash_item_proxy_detail), FeedKinds.sheetDetail(item("leash.item.proxy")))
+        assertNull(FeedKinds.sheetDetail(item("leash.item.read")))
     }
 
     @Test

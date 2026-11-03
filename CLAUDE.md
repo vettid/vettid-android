@@ -353,7 +353,7 @@ The A2 exit test:
   `approvals.held_get_all`, `approvals.held_catalog`, `approvals.held_later`, `approvals.held_desktop`, `approvals.held_other`,
   `approvals.held_no_item`, `approvals.held_gone`, `approvals.held_approved`, `approvals.held_denied`, `approvals.held_forbidden`,
   `approvals.held_session_ended`, `approvals.held_way_not_allowed`, `approvals.held_other_result`, `approvals.pair_gone`,
-  `approvals.pair_held`, `approvals.device_list`, `notifications.devices`, `notifications.devices_unnamed`. Texts are marked `draft` (the
+  `approvals.pair_held`, `approvals.device_list`, `notifications.devices`, `notifications.devices_unnamed`. **AA6 part 1:** the detail sheet of `leash.item.run` / `leash.item.proxy` keeps its title and adds History's approved detail line (`data_feed_leash_item_run_detail` / `_proxy_detail` in `core/data/.../strings.xml`, copies of `history_detail_leash_item_run` / `_proxy`, word for word; `LeashItemDetailTextTest` in `:feature:history` holds both copies) and "Open the item" (`notifications_sheet_open_item`, the same text as `history_detail_open_item`; `NotificationsViewModel.openSheetItem` opens `FeedTarget.Item`), shown only while `FeedNames.items` knows the `ref` (`FeedKinds.sheetItemId`); a deleted item gets the line and no action. Catalog: `notifications.sheet_leash_run`, `notifications.sheet_leash_proxy`, `notifications.sheet_leash_deleted`. Texts are marked `draft` (the
   plan's, word for word) or `new` in `feature/approvals/.../strings.xml` and `core/data/.../strings.xml` (`data_feed_*_named`); none is approved.
 
 - Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /

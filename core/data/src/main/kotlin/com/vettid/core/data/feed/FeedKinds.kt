@@ -185,9 +185,9 @@ object FeedKinds {
 
     /** Kinds whose screens come later (§6): listed, with "Not available in this version of the app". */
     fun notAvailable(kind: String): Boolean =
-        (kind.startsWith("leash.") && kind !in AGENT_PAGE) || kind in LATER
+        (kind.startsWith("leash.") && kind !in AGENT_PAGE && kind !in AGENT_USE) || kind in LATER
 
-    /** (AA5) The `leash.*` kinds that open the agent's page. */
+    /** (AA5) The `leash.*` kinds that open the agent's page. AA6: the agent-use kinds have their detail sheet, with the item opened from it. */
     private val AGENT_PAGE = setOf("leash.rate_limited", "leash.referrals_limited", "leash.agent.suspended")
 
     /** The device's (or agent's) own name for the item's `device_id`, isolated; null when not known. */
@@ -465,6 +465,19 @@ object FeedKinds {
         SignerClass.DEVELOPMENT -> R.string.data_signer_development
         null -> R.string.data_signer_other
     }
+
+    /** The detail sheet's own line under the title (AA6): what an agent's use of a secret did, as History says it; null for other kinds. */
+    fun sheetDetail(item: FeedItem): FeedText? = when (item.kind) {
+        "leash.item.run" -> FeedText(R.string.data_feed_leash_item_run_detail)
+        "leash.item.proxy" -> FeedText(R.string.data_feed_leash_item_proxy_detail)
+        else -> null
+    }
+
+    /** The item the sheet can open (AA6): the agent-use kinds' `ref`, only while [FeedNames.items] still knows it. */
+    fun sheetItemId(item: FeedItem, names: FeedNames): String? =
+        item.ref?.takeIf { item.kind in AGENT_USE && it in names.items }
+
+    private val AGENT_USE = setOf("leash.item.run", "leash.item.proxy")
 
     /** The row's second line: the item's name or the batch's "3 things"; null for none. */
     fun supporting(item: FeedItem, names: FeedNames): FeedText? = when {

@@ -33,6 +33,8 @@
     <string name="notifications_sheet_time">When</string>
     <string name="notifications_sheet_connection">Connection</string>
     <string name="notifications_sheet_item">Item</string>
+    <!-- Same text as History's history_detail_open_item. -->
+    <string name="notifications_sheet_open_item">Open the item</string>
     <string name="notifications_sheet_kind">Kind</string>
     <string name="notifications_sheet_no_longer_waiting">This is no longer waiting.</string>
     <string name="notifications_sheet_gone">What this was about is no longer there.</string>

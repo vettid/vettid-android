@@ -74,6 +74,9 @@ internal object NotificationsCatalog {
         FeedItem("g07", 37, "leash.rate_limited", at(7), "read", deviceId = "dev-a", ref = "gr1"),
     )
 
+    private val agentSheetNames = names.copy(items = names.items + ("i-known" to "GitHub token"))
+    private fun agentUse(kind: String, ref: String) = FeedItem("g08", 36, kind, at(8), "read", deviceId = "dev-a", ref = ref)
+
     private val loaded = NotificationsUiState(items = items, names = names, load = ListLoad.LOADED)
 
     @Composable
@@ -107,6 +110,10 @@ internal object NotificationsCatalog {
         "notifications.sheet_unknown" to { DetailSheetContent(items[8], names, gone = false) },
         "notifications.sheet_not_available" to { DetailSheetContent(items[10], names, gone = false) },
         "notifications.sheet_guide" to { DetailSheetContent(items[7], names, gone = false) },
+        // AA6: an agent's use of a secret: the detail line and "Open the item" (known item), or the line alone (deleted item).
+        "notifications.sheet_leash_run" to { DetailSheetContent(agentUse("leash.item.run", "i-known"), agentSheetNames, gone = false) },
+        "notifications.sheet_leash_proxy" to { DetailSheetContent(agentUse("leash.item.proxy", "i-known"), agentSheetNames, gone = false) },
+        "notifications.sheet_leash_deleted" to { DetailSheetContent(agentUse("leash.item.run", "i-deleted"), agentSheetNames, gone = false) },
         "shell.bell" to { Bars() },
     )
 }

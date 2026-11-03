@@ -101,4 +101,33 @@ class NotificationsScreenTest {
         rule.onNodeWithTag("clear_filters").performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(false, unreadOnly)
     }
+
+    // AA6: the detail sheet of an agent's use of a secret: title, History's detail line and "Open the item" while the item exists.
+    private val itemNames = FeedNames(items = mapOf("it1" to "GitHub token"))
+
+    private fun agentUse(kind: String, ref: String) = FeedItem("u", 4, kind, now.toString(), "active", "normal", deviceId = "dev", ref = ref)
+
+    @Test
+    fun agentUseSheetsShowTheTitleTheDetailLineAndOpenTheKnownItem() {
+        val run = "The secret went to your VettID connector for one command on your computer. The agent was not given it."
+        val proxy = "The secret went to your VettID connector, which added it to the agent's requests to a site you allowed. " +
+            "The agent was not given it."
+        for ((kind, line) in listOf("leash.item.run" to run, "leash.item.proxy" to proxy)) {
+            var opened = 0
+            rule.setContent { VettIdTheme { DetailSheetContent(agentUse(kind, "it1"), itemNames, gone = false, onOpenItem = { opened++ }) } }
+            rule.onNodeWithText("An agent used \u2068GitHub token\u2069").assertExists()
+            rule.onNodeWithTag("feed_sheet_detail").assertTextEquals(line)
+            rule.onNodeWithTag("feed_sheet_open_item").assertTextEquals("Open the item").performClick()
+            assertEquals(1, opened)
+            rule.setContent { }
+        }
+    }
+
+    @Test
+    fun agentUseSheetOfADeletedItemHasTheDetailLineButNoAction() {
+        rule.setContent { VettIdTheme { DetailSheetContent(agentUse("leash.item.run", "gone"), itemNames, gone = false) } }
+        rule.onNodeWithText("An agent used an item").assertExists()
+        rule.onNodeWithTag("feed_sheet_detail").assertExists()
+        rule.onNodeWithTag("feed_sheet_open_item").assertDoesNotExist()
+    }
 }
