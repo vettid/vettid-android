@@ -92,7 +92,8 @@ class MessagesViewModel @Inject constructor(
     }
 
     fun refresh() {
-        local.update { it.copy(error = null) }
+        // Loading again with the error cleared: a list without rows must not flash "No messages" meanwhile.
+        local.update { it.copy(error = null, loading = true) }
         viewModelScope.launch {
             try {
                 repo.refreshConversations()

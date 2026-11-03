@@ -81,6 +81,7 @@ import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.categoryColor
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.FilterChipRow
@@ -295,13 +296,7 @@ fun HistoryScreen(
                         CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     }
                     error != null && state.entries.isEmpty() -> Centered {
-                        NoticeCard(
-                            kind = NoticeKind.WARNING,
-                            title = stringResource(R.string.history_error_title),
-                            body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
-                            modifier = Modifier.padding(Spacing.xl),
-                            actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) } },
-                        )
+                        HistoryErrorNotice(error, state.errorCode, actions.onRetry, Modifier.padding(Spacing.xl))
                     }
                     state.emptyHistory -> EmptyState(
                         icon = Icons.Outlined.History,
@@ -336,6 +331,34 @@ fun HistoryScreen(
             actions = { MoreMenu(actions.onExport) },
         ) { body() }
     }
+}
+
+/** The list could not be read: a held vault (daily check due) is said to be held, with nothing to retry; else the error. */
+@Composable
+private fun HistoryErrorNotice(error: FailureKind, code: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    if (error == FailureKind.OWNER_CHECK_REQUIRED) {
+        HistoryHeldNotice(modifier)
+        return
+    }
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(R.string.history_error_title),
+        body = failureText(error.messageRes(), error.vaultCode(code)),
+        modifier = modifier,
+        actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.history_retry)) } },
+    )
+}
+
+/** The vault holds requests while the daily owner check is due: said to be held, not failed; nothing to retry. */
+@Composable
+internal fun HistoryHeldNotice(modifier: Modifier = Modifier) {
+    NoticeCard(
+        kind = NoticeKind.INFO,
+        title = stringResource(R.string.history_held_title),
+        body = stringResource(R.string.history_held_body),
+        actions = null,
+        modifier = modifier.testTag("history_held_notice"),
+    )
 }
 
 /** History's ⋯ menu: "Export…" (ANDROID-PLAN 0.1.17). */
@@ -556,6 +579,7 @@ private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     val list = rememberLazyListState()
     // New entries on top (a refresh, e.g. `audit.exported` after an export): the rows are keyed by `seq` and a
@@ -575,10 +599,15 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
             last >= list.layoutInfo.totalItemsCount - LOAD_AHEAD
         }
     }
-    LaunchedEffect(nearEnd, state.entries.size, state.end) {
+    LaunchedEffect(nearEnd, state.entries.size, state.end, state.error) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
+    val held = state.error == FailureKind.OWNER_CHECK_REQUIRED
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
+        // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
+        if (held) {
+            item(key = "held-notice") { HistoryHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
+        }
         items(state.shown, key = { it.seq }) { e ->
             val names = RowNames(
                 state.connectionNames, state.itemNames, state.deviceNames, state.voteTitles, state.walletItems, state.serviceConnections,
@@ -603,7 +632,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
                             )
                         }
                     }
-                    state.error != null -> TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) }
+                    state.error != null && !held -> TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.history_retry)) }
                     state.end -> Text(
                         stringResource(R.string.history_end),
                         style = MaterialTheme.typography.bodySmall,

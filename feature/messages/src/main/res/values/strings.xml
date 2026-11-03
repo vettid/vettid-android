@@ -27,6 +27,9 @@
     </plurals>
     <string name="messages_error_title">Could not load messages</string>
     <string name="messages_retry">Try again</string>
+    <!-- Owner-approved 2026-11-03: the daily check is due and the vault holds requests; as vettid-ios #201. Same words in both modules. -->
+    <string name="messages_held_title">Messages are on hold</string>
+    <string name="messages_held_body">Your daily check is due. They\'ll show again once it\'s done.</string>
     <string name="messages_ok">OK</string>
     <string name="messages_load_older">Show older messages</string>
     <string name="messages_loading_older">Loading older messages</string>
