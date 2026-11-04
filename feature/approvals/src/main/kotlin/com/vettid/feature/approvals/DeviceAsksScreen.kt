@@ -331,10 +331,8 @@ private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, act
 
 private const val MAX_CODE = 64
 
-/** The time of day when it is today, else the date and time. */
-@Composable
-private fun untilText(until: Instant): String {
-    val zone = ZoneId.systemDefault()
-    val sameDay = until.atZone(zone).toLocalDate() == Instant.now().atZone(zone).toLocalDate()
-    return if (sameDay) Times.time(until) else Times.full(until)
+/** The time of day when [until] is on the same day as [now] in [zone], else the date and time (as `DevicesText.access`). */
+internal fun untilText(until: Instant, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
+    val sameDay = until.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
+    return if (sameDay) Times.time(until, zone) else Times.full(until, zone)
 }
