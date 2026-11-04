@@ -12,13 +12,16 @@ import androidx.compose.ui.test.performClick
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.ui.components.ShellChrome
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.Instant
 import java.time.ZoneId
+import java.util.TimeZone
 
 /** The list and a device's page (ANDROID-PLAN 0.1.53 AA1), rendered as the member sees them. */
 @RunWith(RobolectricTestRunner::class)
@@ -28,8 +31,21 @@ class DevicesScreenTest {
 
     private val chrome = ShellChrome("Sam", onMenuClick = {}, onAvatarClick = {})
 
-    // A fixed instant in the middle of a day in every zone: "today" is the 21st wherever the tests run.
+    // A fixed instant, formatted in a fixed zone (the screen uses the system's): 12:00Z is not mid-day everywhere (UTC+12 and
+    // later would put "10 min ago" on the day before).
     private val now = Instant.parse("2026-10-21T12:00:00Z")
+    private var savedZone: TimeZone? = null
+
+    @Before
+    fun pinZone() {
+        savedZone = TimeZone.getDefault()
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+    }
+
+    @After
+    fun restoreZone() {
+        savedZone?.let { TimeZone.setDefault(it) }
+    }
     private val ik = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     private val phone = DeviceInfo("me", "app", "Pixel", null, null, null, null, thisPhone = true)
     private val agent = DeviceInfo(
