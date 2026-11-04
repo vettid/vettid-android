@@ -65,6 +65,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.ERASE_FAILED -> R.string.data_failure_erase_failed
     FailureKind.DEVICE_SECRET -> R.string.data_failure_device_secret
     FailureKind.TRANSFER_INCOMPLETE -> R.string.data_failure_transfer_incomplete
+    FailureKind.MOVE_NOT_FINISHED -> R.string.data_failure_move_not_finished
     FailureKind.BUSY -> R.string.data_failure_busy
     FailureKind.RETRY -> R.string.data_failure_retry
     FailureKind.COUNTER_UNAVAILABLE -> R.string.data_failure_counter_unavailable

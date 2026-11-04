@@ -4951,8 +4951,11 @@ class VaultManager(
          * [code] of an error answer to a request of [type] (ANDROID-PLAN 0.1.57): `forbidden` to a holder-only type is
          * [FailureKind.NOT_HOLDER]; to any other type, as every code [opFailure] does not map, [FailureKind.OTHER].
          */
-        fun opFailure(code: String, type: String?): FailureKind =
-            if (code == VaultCodes.FORBIDDEN && type in VaultCodes.HOLDER_ONLY) FailureKind.NOT_HOLDER else opFailure(code)
+        fun opFailure(code: String, type: String?): FailureKind = when {
+            code == VaultCodes.FORBIDDEN && type in VaultCodes.HOLDER_ONLY -> FailureKind.NOT_HOLDER
+            code == VaultCodes.TRANSFER_INCOMPLETE && type in VaultCodes.MOVE_GATED -> FailureKind.MOVE_NOT_FINISHED
+            else -> opFailure(code)
+        }
 
         @Suppress("CyclomaticComplexMethod") // one branch per error code
         fun opFailure(code: String): FailureKind = when (code) {
