@@ -57,8 +57,12 @@ class PresenceManagerTest {
         /** `presence.get` fails (the transport) that many times first. */
         var getFailures = 0
 
+        /** Called at each `presence.get`, before it answers. */
+        var onGet: () -> Unit = {}
+
         override suspend fun get(): JsonObject {
             synchronized(this) { gets += "get" }
+            onGet()
             refuse["get"]?.let { throw VaultOpException("presence.get", it) }
             if (getFailures > 0) {
                 getFailures--
@@ -245,18 +249,25 @@ class PresenceManagerTest {
 
     @Test
     fun aFailedFirstReadIsTriedAgainWithABackoffUntilItWorks() = runTest {
+        // Each read notes the virtual time and the availability at that moment. `settle` runs every waiting timer, so the
+        // retries can follow one another within one settle: the test checks the times of the reads, not a count at a moment.
         val ops = Ops().apply { getFailures = 2 }
         val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
+        val reads = mutableListOf<Pair<Long, PresenceAvailability>>()
+        ops.onGet = { synchronized(reads) { reads += testScheduler.currentTime to m.availability.value } }
         m.start()
-        settle { ops.gets.size == 1 }
-        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
-        advanceTimeBy(5_001)
-        settle { ops.gets.size == 2 }
-        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
-        advanceTimeBy(15_001)
         settle { m.availability.value == PresenceAvailability.AVAILABLE }
         assertEquals(3, ops.gets.size)
+        val (t0, a0) = reads[0]
+        val (t1, a1) = reads[1]
+        val (t2, a2) = reads[2]
+        assertEquals(listOf(PresenceAvailability.UNKNOWN, PresenceAvailability.UNKNOWN, PresenceAvailability.UNKNOWN), listOf(a0, a1, a2))
+        // The backoff: 5 s after the first failure, then 15 s.
+        assertTrue("first retry after ${t1 - t0} ms", t1 - t0 >= 5_000)
+        assertTrue("second retry after ${t2 - t1} ms", t2 - t1 >= 15_000)
+        // Once it works, nothing more is read.
         advanceTimeBy(300_000)
+        settle { true }
         assertEquals(3, ops.gets.size)
     }
 
