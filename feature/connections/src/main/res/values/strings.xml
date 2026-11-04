@@ -355,7 +355,7 @@
         <item quantity="one">You asked %1$s a few minutes ago. You can ask again in %2$d minute.</item>
         <item quantity="other">You asked %1$s a few minutes ago. You can ask again in %2$d minutes.</item>
     </plurals>
-    <!-- NEW: not in the plan (the glance\'s icon description; %1$s is the age, empty before the first position) -->
+    <!-- NEW: not in the plan (the glance\'s icon description) -->
     <string name="connections_location_glance">Shares their location with you</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
     <string name="connections_location_sharing_with">You\'re sharing with</string>
