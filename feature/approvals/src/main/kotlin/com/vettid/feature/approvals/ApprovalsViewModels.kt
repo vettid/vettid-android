@@ -486,7 +486,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 pairingHeld = ourPairing(shown, x.pairing),
                 pairingName = com.vettid.core.data.feed.FeedNames.pairingName(x.pairing).takeIf { ourPairing(shown, x.pairing) },
                 itemsLoaded = x.itemsLoaded,
-                sharingUntil = (shown as? Approval.LocationRequest)?.let { sharingUntil(sharing.first, sharing.second, it.connectionId, now) },
+                sharingUntil = (shown as? Approval.LocationRequest)?.let {
+                    sharingUntil(sharing.first, sharing.second, it.connectionId, now)
+                },
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.
                 renewalUntil = Renewal.expiresAt(shown, x.devices, s.deviceListRead, now),
@@ -621,11 +623,7 @@ class ApprovalDetailViewModel @Inject constructor(
      * request (`request_id`). The phone's permission is the screen's to ask first. Refused for a service.
      */
     fun shareOnce() {
-        val a = uiState.value.approval as? Approval.LocationRequest ?: return
-        // One share per tap: a second tap (or the permission result of the first) while a start is out does nothing.
-        if (local.value.busy || a.connectionService || expiredNow(a)) return
-        // Already sharing with this connection (a share not ended, not being stopped, not over): another would replace it.
-        if (sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) != null) return
+        val a = (uiState.value.approval as? Approval.LocationRequest)?.takeIf { mayShareOnce(it) } ?: return
         local.update { it.copy(busy = true, error = null, errorCode = null, locationIssue = null) }
         viewModelScope.launch {
             try {
@@ -648,6 +646,14 @@ class ApprovalDetailViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * One share per tap: a second tap (or the permission result of the first) while a start is out does nothing; and none while
+     * already sharing with this connection (a share not ended, not being stopped, not over): another would replace it.
+     */
+    private fun mayShareOnce(a: Approval.LocationRequest): Boolean =
+        !local.value.busy && !a.connectionService && !expiredNow(a) &&
+            sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) == null
 
     /** The phone's permission is being asked for (the system's prompt is up): taps wait, and the result starts the share once. */
     fun permissionAsked(): Boolean {

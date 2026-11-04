@@ -45,11 +45,12 @@ import com.vettid.core.ui.theme.Spacing
 
 /** "{First} asks where you are": the first name, else the display name, else "A connection". */
 @Composable
-internal fun locationTitle(a: Approval.LocationRequest): String {
-    val who = AccountNames.isolateOrNull(a.firstName) ?: AccountNames.isolateOrNull(a.connectionName)
+internal fun locationTitle(a: Approval.LocationRequest): String = stringResource(R.string.approvals_location_title, locationWho(a))
+
+@Composable
+private fun locationWho(a: Approval.LocationRequest): String =
+    AccountNames.isolateOrNull(a.firstName) ?: AccountNames.isolateOrNull(a.connectionName)
         ?: stringResource(R.string.approvals_a_connection)
-    return stringResource(R.string.approvals_location_title, who)
-}
 
 @Composable
 internal fun LocationRequestScreen(
@@ -74,16 +75,7 @@ internal fun LocationRequestScreen(
         title = locationTitle(a),
         body = null,
         primaryLabel = if (canShare) stringResource(R.string.approvals_location_once) else null,
-        onPrimary = {
-            if (state.busy) {
-                Unit
-            } else if (permissionsGranted(context)) {
-                actions.onShareOnce()
-            } else {
-                // Busy before the system's prompt is up, so that a second tap cannot start a second request.
-                if (actions.onPermissionAsked()) ask.launch(PERMISSIONS)
-            }
-        },
+        onPrimary = { if (!state.busy) shareOnceTapped(context, actions) { ask.launch(PERMISSIONS) } },
         busy = state.busy,
         secondaryLabel = stringResource(if (canShare) R.string.approvals_location_while else R.string.approvals_location_not_now),
         onSecondary = if (canShare) actions.onShareWhile else actions.onNotNow,
@@ -92,36 +84,50 @@ internal fun LocationRequestScreen(
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
-        a.note?.let {
-            Text(
-                AccountNames.isolate(it),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.testTag("location_request_note"),
-            )
-        }
-        a.exp?.let {
-            Spacer(Modifier.height(Spacing.s))
-            Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall)
-        }
-        state.sharingUntil?.let { until ->
-            Spacer(Modifier.height(Spacing.m))
-            val who = AccountNames.isolateOrNull(a.firstName) ?: AccountNames.isolateOrNull(a.connectionName)
-                ?: stringResource(R.string.approvals_a_connection)
-            Text(
-                stringResource(R.string.approvals_location_already_sharing, who, ShareTime.format(context, until)),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.testTag("location_request_already_sharing"),
-            )
-        }
-        PermissionNotes(canShare && !hasPermission, state.locationIssue)
-        state.error?.let {
-            Spacer(Modifier.height(Spacing.m))
-            Text(
-                failureText(it.messageRes(), it.vaultCode(state.errorCode)),
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("failure"),
-            )
-        }
+        LocationRequestBody(a, state, explain = canShare && !hasPermission)
+    }
+}
+
+/** Share once's tap: the share with the permission, else (busy before the system's prompt is up, so that a second tap cannot
+ * start a second request) the permission asked first. */
+private fun shareOnceTapped(context: android.content.Context, actions: DecisionActions, askPermission: () -> Unit) {
+    if (permissionsGranted(context)) {
+        actions.onShareOnce()
+    } else if (actions.onPermissionAsked()) {
+        askPermission()
+    }
+}
+
+@Composable
+private fun LocationRequestBody(a: Approval.LocationRequest, state: ApprovalDetailUiState, explain: Boolean) {
+    val context = LocalContext.current
+    a.note?.let {
+        Text(
+            AccountNames.isolate(it),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.testTag("location_request_note"),
+        )
+    }
+    a.exp?.let {
+        Spacer(Modifier.height(Spacing.s))
+        Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall)
+    }
+    state.sharingUntil?.let { until ->
+        Spacer(Modifier.height(Spacing.m))
+        Text(
+            stringResource(R.string.approvals_location_already_sharing, locationWho(a), ShareTime.format(context, until)),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.testTag("location_request_already_sharing"),
+        )
+    }
+    PermissionNotes(explain, state.locationIssue)
+    state.error?.let {
+        Spacer(Modifier.height(Spacing.m))
+        Text(
+            failureText(it.messageRes(), it.vaultCode(state.errorCode)),
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("failure"),
+        )
     }
 }
 
