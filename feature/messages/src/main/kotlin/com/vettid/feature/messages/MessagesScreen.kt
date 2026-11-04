@@ -265,8 +265,13 @@ fun MessagesScreen(
                 if (error != null && error != FailureKind.OWNER_CHECK_REQUIRED) {
                     ErrorNotice(error, onRetry, state.errorCode, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
-                    items(state.conversations, key = { it.connection.id }) { c -> ConversationRow(c, onClick = { onOpen(c.connection.id) }) }
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth().testTag("conversations"),
+                    contentPadding = PaddingValues(bottom = LIST_BOTTOM),
+                ) {
+                    items(state.conversations, key = { it.connection.id }) { c ->
+                        ConversationRow(c, onClick = { onOpen(c.connection.id) })
+                    }
                 }
             }
         }
