@@ -100,6 +100,34 @@ class CredentialAndItemsTest {
         assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.create(k1, k1) }
     }
 
+    /** VAULT-MESSAGING 0.83.9 §10.4: the chain is followed from the first statement whose `old_key` is the pinned key. */
+    @Test
+    fun aCredentialChainIsFollowedFromThePinnedKey() {
+        val k1 = Ed25519PrivateKey.generate()
+        val k2 = Ed25519PrivateKey.generate()
+        val k3 = Ed25519PrivateKey.generate()
+        val k4 = Ed25519PrivateKey.generate()
+        val r1 = CredentialKeyRotation.create(k1, k2)
+        val r2 = CredentialKeyRotation.create(k2, k3)
+        val r3 = CredentialKeyRotation.create(k3, k4)
+        // Pinned at k2 (r1 followed earlier): the chain from k1 is followed from r2.
+        assertTrue(Bytes.constantTimeEquals(k4.publicKey, CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, r2, r3))))
+        // The statements before the pin are not checked: a bad one there does not matter.
+        val bad = CredentialKeyRotation(k1.publicKey, k2.publicKey, ByteArray(64), ByteArray(64))
+        assertTrue(Bytes.constantTimeEquals(k4.publicKey, CredentialKeyRotation.followChain(k2.publicKey, listOf(bad, r2, r3))))
+        // No statement from the pin: refused (a chain that ends before or at the pin, or another key's).
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k4.publicKey, listOf(r1, r2, r3)) }
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, listOf(r1, r2)) }
+        // A break after the pin: refused.
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, listOf(r1, r3)) }
+        // A bad signature after the pin: refused.
+        val forged = CredentialKeyRotation(k2.publicKey, k3.publicKey, ByteArray(64), ByteArray(64))
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, forged, r3)) }
+        // More than 32 statements in all: refused, even if the part from the pin is short.
+        val long = List(32) { r1 } + listOf(r2)
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
+    }
+
     @Test
     fun inviteRules() {
         val ik = Ed25519PrivateKey.generate()

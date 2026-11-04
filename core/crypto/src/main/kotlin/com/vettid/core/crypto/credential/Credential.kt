@@ -161,13 +161,21 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
             )
         }
 
-        /** Follows a non-empty chain (≤ 32 links) from the pinned key; returns the key it leads to. */
+        /**
+         * Follows a chain (≤ 32 statements in all) from the pinned key; returns the key it leads to (VAULT-MESSAGING 0.83.9
+         * §10.4). It starts at the first statement whose `old_key` is the pinned key, skipping the statements before it (links
+         * this receiver followed earlier: the sender starts a chain at the key it last signed with); from there each `old_key`
+         * must be the previous `new_key` and both signatures must verify. A chain with no statement from the pinned key, or
+         * one that breaks after it, fails. Nothing before the pin is verified or trusted.
+         */
         fun followChain(pinned: ByteArray, chain: List<CredentialKeyRotation>): ByteArray {
             if (pinned.size != Suite.ED25519_PUBLIC_SIZE || chain.isEmpty() || chain.size > MAX_CHAIN) {
                 throw CryptoException.Signature("credential chain")
             }
+            val from = chain.indexOfFirst { Ed25519.equalPublic(it.oldKey, pinned) }
+            if (from < 0) throw CryptoException.Signature("credential chain")
             var cur = pinned
-            for (r in chain) {
+            for (r in chain.subList(from, chain.size)) {
                 if (!Ed25519.equalPublic(r.oldKey, cur)) throw CryptoException.Signature("credential chain")
                 r.verify()
                 cur = r.newKey
