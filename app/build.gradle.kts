@@ -319,6 +319,49 @@ abstract class ApplicationIdCheck : DefaultTask() {
 }
 
 /**
+ * Location is shared in the foreground only (ANDROID-PLAN §4 "Location", question 24): a share starts from the member's tap while
+ * the app is visible, and a foreground service of type `location` keeps it going with the screen off, so Google Play's
+ * background-location review is never needed. Fails if a build's merged manifest asks for `ACCESS_BACKGROUND_LOCATION` (in
+ * `uses-permission`, `uses-permission-sdk-23` or `uses-permission-sdk-m`), or lacks what sharing needs: the coarse and fine
+ * permissions, `FOREGROUND_SERVICE_LOCATION`, and the service of type `location`. Every variant's build runs it, so every APK
+ * (both distributions, every build type) is held to it.
+ */
+abstract class BackgroundLocationCheck : DefaultTask() {
+    @get:InputFile
+    abstract val manifest: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val ns = "http://schemas.android.com/apk/res/android"
+        val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest.get().asFile)
+        fun names(tag: String) =
+            doc.getElementsByTagName(tag).let { l -> (0 until l.length).map { (l.item(it) as org.w3c.dom.Element).getAttributeNS(ns, "name") } }
+        val asked = listOf("uses-permission", "uses-permission-sdk-23", "uses-permission-sdk-m").flatMap(::names)
+        val found = asked.filter { it == FORBIDDEN }
+        check(found.isEmpty()) { "${manifest.get().asFile}: $found (ANDROID-PLAN §4 Location, question 24: foreground location only)" }
+        val missing = REQUIRED.filterNot { it in asked }
+        check(missing.isEmpty()) { "${manifest.get().asFile}: location sharing needs $missing" }
+        val services = doc.getElementsByTagName("service").let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
+        val location = services.firstOrNull { it.getAttributeNS(ns, "name").endsWith(".LocationService") }
+        check(location != null && location.getAttributeNS(ns, "foregroundServiceType") == "location") {
+            "${manifest.get().asFile}: the location service must be declared with foregroundServiceType=location"
+        }
+        logger.lifecycle("merged manifest: no background location; foreground location permissions and service present")
+    }
+
+    companion object {
+        const val FORBIDDEN = "android.permission.ACCESS_BACKGROUND_LOCATION"
+        val REQUIRED = listOf(
+            "android.permission.ACCESS_COARSE_LOCATION",
+            "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_LOCATION",
+        )
+    }
+}
+
+/**
  * Photo attachments need no media or storage permission (ANDROID-PLAN 0.1.39 "Choosing a photo"): photos come from
  * the Photo Picker, which hands over only what the member picks, or from the app's own camera; Save writes through
  * MediaStore without one. Fails if a build's merged manifest asks for one. Every variant's build runs it.
@@ -910,11 +953,14 @@ androidComponents {
         val media = tasks.register<MediaPermissionCheck>("check${v.name.cap()}MediaPermissions") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
         }
-        // Every build of every variant (debug, devStack, staging, release; both distributions) runs it: APKs,
+        val backgroundLocation = tasks.register<BackgroundLocationCheck>("check${v.name.cap()}BackgroundLocation") {
+            manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+        }
+        // Every build of every variant (debug, devStack, staging, release; both distributions) runs both: APKs,
         // bundles and unit tests (not pre*Build, which the merged manifest itself depends on).
         tasks.matching { t ->
             t.name in setOf("assemble${v.name.cap()}", "bundle${v.name.cap()}", "test${v.name.cap()}UnitTest")
-        }.configureEach { dependsOn(media) }
+        }.configureEach { dependsOn(media, backgroundLocation) }
         tasks.register<PushManifestCheck>("check${name}PushManifest") {
             manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
             pushConfigured.set(!foss && fcmOptions(v.buildType!!) != null)
@@ -1016,6 +1062,8 @@ dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)
+    // Sharing the member's location (ANDROID-PLAN §4 "Location", L1a): in both distributions, no Google code, no background location.
+    implementation(projects.core.location)
     // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.calls)

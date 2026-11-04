@@ -488,8 +488,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 canMute = withdrawn && peer != null && peer.asks?.muted != true && !s.muted &&
                     AccountNames.isolateOrNull(shown?.connectionName) != null,
                 connectionIsService = peer?.service == true,
-                peerFingerprint = (shown as? Approval.OutgoingRequest)?.takeIf { it.service }
-                    ?.let { o -> x.connections.firstOrNull { it.id == o.connectionId }?.keyFingerprint },
+                // An invalid `ik` clears it, as on the connect screen: no fallback to the connection list's fingerprint.
+                peerFingerprint = (shown as? Approval.OutgoingRequest)?.takeIf { it.service && !it.peerIkInvalid }
+                    ?.let { o -> o.peerFingerprint ?: x.connections.firstOrNull { it.id == o.connectionId }?.keyFingerprint },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 

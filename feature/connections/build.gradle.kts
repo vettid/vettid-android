@@ -6,6 +6,8 @@ plugins {
 dependencies {
     implementation(projects.core.data)
     implementation(libs.androidx.hilt.navigation.compose)
+    // The permission request of the share sheet (ANDROID-PLAN §4 "Location").
+    implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

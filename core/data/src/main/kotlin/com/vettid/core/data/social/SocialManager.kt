@@ -487,7 +487,7 @@ class SocialManager(
                 old is Approval.OutgoingRequest && a is Approval.OutgoingRequest ->
                     a.copy(
                         state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name,
-                        service = old.service || a.service,
+                        service = old.service || a.service, peerFingerprint = RequestKinds.fingerprint(old.peerFingerprint, a),
                     )
                 else -> a
             }
@@ -1834,7 +1834,7 @@ internal class VaultDeviceDecisions(private val api: VaultApi) : DeviceDecisionO
     override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? = api.approvalDecide(approvalId, approve)
 }
 
-/** What the request list keeps of `peer_kind` whichever answer or event arrives first (VAULT-MESSAGING 0.69.0 §6.4). */
+/** What the request list keeps of `peer_kind` and `ik` whichever answer or event arrives first (VAULT-MESSAGING 0.69.0 §6.4). */
 internal object RequestKinds {
     /** The accept's [waiting] request joins [list]; one the outgoing event already put there is kept and learns the kind. */
     fun withAccepted(list: List<Approval>, waiting: Approval.OutgoingRequest): List<Approval> =
@@ -1847,9 +1847,23 @@ internal object RequestKinds {
             list + waiting
         }
 
-    /** A request list read replaces [old] with [read]; a request known as a service stays one when its entry lacks the marker. */
+    /**
+     * A request list read replaces [old] with [read]. For an outgoing request already known: a service stays one when its entry lacks
+     * the marker, and the peer's fingerprint follows [fingerprint] (a valid `ik` replaces it, an invalid one clears it, none keeps it).
+     */
     fun keepServices(old: List<Approval>, read: List<Approval>): List<Approval> {
-        val known = old.filterIsInstance<Approval.OutgoingRequest>().filter { it.service }.map { it.connectionId }.toSet()
-        return read.map { if (it is Approval.OutgoingRequest && it.connectionId in known) it.copy(service = true) else it }
+        val known = old.filterIsInstance<Approval.OutgoingRequest>().associateBy { it.connectionId }
+        return read.map {
+            val before = (it as? Approval.OutgoingRequest)?.let { o -> known[o.connectionId] }
+            if (it is Approval.OutgoingRequest && before != null) {
+                it.copy(service = it.service || before.service, peerFingerprint = fingerprint(before.peerFingerprint, it))
+            } else {
+                it
+            }
+        }
     }
+
+    /** The fingerprint a request [now] shows: its own `ik`'s; none when that `ik` is invalid; the [earlier] one when it sent no `ik`. */
+    fun fingerprint(earlier: String?, now: Approval.OutgoingRequest): String? =
+        if (now.peerIkInvalid) null else now.peerFingerprint ?: earlier
 }

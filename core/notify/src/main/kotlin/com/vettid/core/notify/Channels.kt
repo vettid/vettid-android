@@ -30,6 +30,9 @@ object Channels {
     const val VAULT_UPDATES = "vault_updates_v2"
     const val CONNECTION = "connection"
 
+    /** The ongoing notification of sharing the member's location (ANDROID-PLAN §4 "Location"): low importance, silent. */
+    const val LOCATION = "location_sharing"
+
     /** The ids the channels had before their sounds; deleted at start, never posted to. */
     val RETIRED = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates")
 
@@ -55,6 +58,7 @@ object Channels {
         Triple(OWNER_CHECK, R.string.notify_channel_owner_check to R.string.notify_channel_owner_check_body, NotificationManager.IMPORTANCE_HIGH),
         Triple(ACTIVITY, R.string.notify_channel_activity to R.string.notify_channel_activity_body, NotificationManager.IMPORTANCE_LOW),
         Triple(CONNECTION, R.string.notify_channel_connection to R.string.notify_channel_connection_body, NotificationManager.IMPORTANCE_MIN),
+        Triple(LOCATION, R.string.notify_channel_location to R.string.notify_channel_location_body, NotificationManager.IMPORTANCE_LOW),
     )
 
     /** The channels [ensure] creates ([VAULT_UPDATES] is the release notice's own). */

@@ -195,6 +195,8 @@ data class OutgoingRequest(
     @SerialName("introduced_by") val introducedBy: String? = null,
     /** (VAULT-MESSAGING 0.69.0 §6.4) `"service"` for a service's request; absent, or any other value: a person. */
     @SerialName("peer_kind") val peerKind: String? = null,
+    /** (VAULT-MESSAGING 0.83.7 §10.4) A service's vault identity key (standard base64, 32 bytes), with [sas]; absent otherwise. */
+    val ik: String? = null,
 )
 
 /** `connection.event` (§10.4). */
