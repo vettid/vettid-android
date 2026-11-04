@@ -37,6 +37,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -174,6 +177,34 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
         // Presence is asked only while the page is shown (a question counts as activity).
         LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
         LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
+        // The share sheet (ANDROID-PLAN §4 "Location"): its own state; the permission is asked at the first share.
+        val share: ShareLocationViewModel = hiltViewModel()
+        val shareState by share.uiState.collectAsStateWithLifecycle()
+        val context = LocalContext.current
+        val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            share.permissionResult(LocationPermission.read(context))
+        }
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { share.setPermission(LocationPermission.read(context)) }
+        ShareLocationSheet(
+            state = shareState,
+            name = locationName(state.connection, stringResource(R.string.connections_name_not_shared)),
+            actions = ShareLocationActions(
+                onOnce = share::setOnce,
+                onLength = share::setLength,
+                onPrecision = share::setPrecision,
+                onInterval = share::setInterval,
+                onTrail = share::setTrail,
+                onStart = {
+                    // The phone's permission is asked for only once the vault is known to have location.
+                    when {
+                        !shareState.available -> Unit
+                        shareState.permission == LocationPermission.NONE -> askLocation.launch(LocationPermission.ASKED)
+                        else -> share.start()
+                    }
+                },
+                onDismiss = share::dismiss,
+            ),
+        )
         ConnectionDetailScreen(
             state = state,
             actions = DetailActions(
@@ -198,6 +229,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onOpenVotes = { host.onOpenVotes(state.connectionId) },
                 onRefreshPresence = vm::refreshPresence,
                 onSetPresenceShared = vm::setPresenceShared,
+                onShareLocation = share::open,
+                onStopSharingLocation = vm::stopSharingLocation,
             ),
         )
     }

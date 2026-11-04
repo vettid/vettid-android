@@ -278,4 +278,56 @@
     <string name="connections_presence_card_share">Share with everyone</string> <!-- Owner-approved 2026-11-03 -->
     <string name="connections_presence_card_not_now">Not now</string> <!-- Owner-approved 2026-11-03 -->
     <string name="connections_presence_card_settings">Change this in Settings → Privacy → Presence</string> <!-- Owner-approved 2026-11-03 -->
+
+    <!-- Sharing the member's location (ANDROID-PLAN §4 "Location", L1a). DRAFT = the plan's words, word for word; NEW = not in the
+         plan (labels from its prose, or the app's own). None is approved by the owner. -->
+    <!-- NEW: not in the plan (the plan names the sheet "Share my location"); also the label of the connection page's button. -->
+    <string name="connections_location_title">Share my location</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_once">Once</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (screen notes: Once). -->
+    <string name="connections_location_once_note">Sends one position now; ends after 15 minutes</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_while">For a while</string>
+    <!-- NEW: not in the plan (the durations and intervals are the plan's screen-note words as labels). -->
+    <string name="connections_location_len_15m">15 min</string>
+    <string name="connections_location_len_1h">1 hour</string>
+    <string name="connections_location_len_8h">8 hours</string>
+    <string name="connections_location_len_1d">1 day</string>
+    <string name="connections_location_len_7d">7 days</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_precision">Precision</string>
+    <string name="connections_location_approximate">Approximate</string>
+    <string name="connections_location_exact">Exact</string>
+    <string name="connections_location_city">City</string>
+    <string name="connections_location_approximate_note">within about 1 km</string>
+    <string name="connections_location_exact_note">within a few metres</string>
+    <string name="connections_location_city_note">within about 10 km</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Share sheet, precision note). %1$s the connection's first name. -->
+    <string name="connections_location_precision_note">Approximate and City show the centre of a fixed area. If you move across an area\'s edge, %1$s may see that you were near it.</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_interval">Update every</string>
+    <string name="connections_location_int_30s">30 s</string>
+    <string name="connections_location_int_1m">1 min</string>
+    <string name="connections_location_int_5m">5 min</string>
+    <string name="connections_location_int_15m">15 min</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Share sheet, trail). %1$s the connection's first name. -->
+    <string name="connections_location_trail">Let %1$s keep the trail</string>
+    <string name="connections_location_trail_note">Without this, %1$s sees only your latest position.</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_start">Start sharing</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Permission). -->
+    <string name="connections_location_permission">To share your location, VettID needs to know where this phone is. It asks only while you share, and sends nothing to anyone else.</string>
+    <!-- NEW: not in the plan. Shown when the member refused the permission. -->
+    <string name="connections_location_permission_denied">Location is off for VettID. Allow it in Android settings to share your location.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Exact unavailable). -->
+    <string name="connections_location_exact_unavailable">Exact needs precise location in Android settings.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Started). %1$s the first name, %2$s the time the share ends. -->
+    <string name="connections_location_started">Sharing your location with %1$s until %2$s.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Provider: the share sheet says "Finding your location…"). -->
+    <string name="connections_location_finding">Finding your location…</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (screen notes: Connection detail). %1$s the time the share ends. -->
+    <string name="connections_location_sharing_until">Sharing your location until %1$s</string>
+    <!-- NEW: not in the plan (words from its screen notes). -->
+    <string name="connections_location_stop">Stop</string>
 </resources>

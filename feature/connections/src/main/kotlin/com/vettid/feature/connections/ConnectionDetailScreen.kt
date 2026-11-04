@@ -97,6 +97,10 @@ data class DetailActions(
     val onRefreshPresence: () -> Unit = {},
     /** The switch "Share my status with <First>". */
     val onSetPresenceShared: (Boolean) -> Unit = {},
+    /** **Share my location**: opens the share sheet (ANDROID-PLAN §4 "Location"). */
+    val onShareLocation: () -> Unit = {},
+    /** **Stop** on "Sharing your location until …". */
+    val onStopSharingLocation: () -> Unit = {},
 )
 
 /**
@@ -241,6 +245,10 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             val first = sharingName(c)?.let { AccountNames.isolate(it) }
             // Without the first name the switch and its note would have to say "this connection": not offered until it arrives.
             if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
+        }
+        // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
+        if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
+            LocationCard(state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
         }
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.

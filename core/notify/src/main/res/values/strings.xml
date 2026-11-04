@@ -17,6 +17,9 @@
     <string name="notify_channel_activity_body">Other activity in your vault, without sound</string>
     <string name="notify_channel_connection">Connection</string>
     <string name="notify_channel_connection_body">VettID’s own connection to your vault</string>
+    <!-- NEW: not in the plan (the plan names the channel "Location sharing"; its description is the app's). -->
+    <string name="notify_channel_location">Location sharing</string>
+    <string name="notify_channel_location_body">Shown while VettID sends your location, without sound</string>
 
     <!-- Lock screen (private notifications show this until the phone is unlocked). -->
     <string name="notify_public_activity">New activity in VettID</string>

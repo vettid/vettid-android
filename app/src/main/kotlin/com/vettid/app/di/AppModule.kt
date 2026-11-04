@@ -30,7 +30,12 @@ import com.vettid.core.notify.PushRegState
 import com.vettid.core.notify.PushRegistrar
 import com.vettid.core.notify.ServiceStatus
 import com.vettid.core.notify.VaultNotifySource
+import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LocationRepository
+import com.vettid.core.data.prefs.NotificationPreviews
+import com.vettid.core.location.AndroidLocationPlatform
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -235,6 +240,36 @@ object AppModule {
 
     @Provides
     fun presenceRepository(m: VaultManager): PresenceRepository = m.presence
+
+    /**
+     * Sharing the member's location (ANDROID-PLAN §4 "Location", L1a): the platform's positions and the foreground service are
+     * attached to the manager's sharing here. The application injects it at the start of the process, so that the shares of
+     * an earlier run are taken up again at the first unlock. The notification says a first name only while no cover is up
+     * (the app lock's) and the member's notifications show names.
+     */
+    @Provides
+    @Singleton
+    fun locationRepository(
+        @ApplicationContext context: Context,
+        m: VaultManager,
+        prefs: PreferencesRepository,
+        appLock: AppLock,
+        @AppScope scope: CoroutineScope,
+    ): LocationRepository {
+        val names = combine(
+            m.social.connections,
+            appLock.coverFlow(scope),
+            prefs.preferences.map { it.notificationPreviews != NotificationPreviews.NOTHING },
+        ) { connections, covered, show ->
+            if (covered || !show) {
+                emptyMap()
+            } else {
+                connections.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
+            }
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+        m.location.attach(AndroidLocationPlatform(context, m.location, names))
+        return m.location
+    }
 
     @Provides
     fun itemsRepository(m: VaultManager): ItemsRepository = m.items
