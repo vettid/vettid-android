@@ -1,3 +1,6 @@
+// Event bodies and fixtures stay on one line each.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.data.social
 
 import com.vettid.core.data.vault.CredentialRepository
@@ -6,7 +9,23 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.MessagePage
+import com.vettid.core.crypto.envelope.Inner
+import com.vettid.core.crypto.envelope.Ulid
+import com.vettid.core.vault.VaultJson
+import com.vettid.core.vault.VaultMessage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import org.junit.Assert.assertNull
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
@@ -26,6 +45,31 @@ class LockRaceTest {
 
     private fun msg(id: String) = Message("c1", id, "in", "hi", "2026-10-04T12:00:00Z")
 
+    private val now = Instant.parse("2026-10-08T12:00:00Z")
+
+    private fun o(s: String): JsonObject = VaultJson.json.parseToJsonElement(s).jsonObject
+
+    private fun event(type: String, body: String) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = now, body = body.toByteArray()))
+
+    private suspend fun SocialManager.batch(rule: String, item: String) =
+        onEvent(event("share.pending", """{"rule_id":"$rule","subject":{"connection_id":"c1"},"items":[{"item_id":"$item","name":"$item","category":"other","sensitivity":"data"}]}"""))
+
+    private fun shareEntry(rule: String, item: String) =
+        """{"rule_id":"$rule","subject":{"connection_id":"c1"},"item_id":"$item","name":"$item","category":"other","sensitivity":"data"}"""
+
+    private suspend fun listRead(vararg entries: String): SocialManager.ListRead {
+        val d = SharePending.decisions(
+            pendingPage = { o("""{"pending":[${entries.joinToString(",")}]}""") },
+            rulePage = { o("""{"rules":[{"rule_id":"r1","subject":{"connection_id":"c1"},"tags":["medical"]}]}""") },
+            names = emptyMap(),
+            t = now,
+        )
+        return SocialManager.ListRead(d, grantsOk = true, criticalOk = true, sharesOk = true)
+    }
+
+    private fun SocialManager.shareItems(rule: String) =
+        approvals.value.filterIsInstance<Approval.ShareDecision>().firstOrNull { it.ruleId == rule }?.items?.map { it.itemId }
+
     private fun TestScope.manager() = SocialManager(
         backgroundScope,
         api = { throw VaultFailure(FailureKind.OTHER) },
@@ -34,6 +78,10 @@ class LockRaceTest {
             if (before == null) MessagePage(listOf(msg("m-new")), "b1") else MessagePage(listOf(msg("m-old")), null)
         },
         readConnections = { SocialManager.ConnectionRead(listOf(FakeSocial.connection("c1", "Sam")), null) },
+        readRequests = {
+            o("""{"incoming":[{"pending_id":"p1","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"}}],"outgoing":[]}""")
+        },
+        clock = Clock.fixed(now, ZoneOffset.UTC),
     )
 
     @Test
@@ -70,5 +118,76 @@ class LockRaceTest {
         m.olderHook = null
         runCurrent()
         assertEquals("the old older page is absent", listOf("m-new"), m.messages("c1").first().map { it.messageId })
+    }
+
+    @Test
+    fun aRequestListReadAcrossALockWritesNoNames() = runTest {
+        val m = manager()
+        m.requestsHook = { m.forgetOpenVault() }
+        m.refreshRequests()
+        m.requestsHook = null
+        runCurrent()
+        assertTrue("no request, no name", m.approvals.value.none { it is Approval.ConnectionRequest })
+    }
+
+    @Test
+    fun aRequestListReadAcrossAHoldWritesNothing() = runTest {
+        val m = manager()
+        m.requestsHook = { m.forgetPending() }
+        m.refreshRequests()
+        m.requestsHook = null
+        runCurrent()
+        assertTrue(m.approvals.value.none { it is Approval.ConnectionRequest })
+        m.refreshRequests() // after the hold the next read is taken in
+        runCurrent()
+        assertTrue(m.approvals.value.any { it is Approval.ConnectionRequest })
+    }
+
+    @Test
+    fun anApprovalsReadAcrossAHoldWritesNothing() = runTest {
+        val m = manager()
+        val r = listRead(shareEntry("r1", "A"))
+        m.approvalsHook = { m.forgetPending() }
+        m.refreshApprovalsFrom(now) { r }
+        m.approvalsHook = null
+        runCurrent()
+        assertNull("nothing of the stale read", m.shareItems("r1"))
+    }
+
+    @Test
+    fun aStaleApprovalsReadAfterALockAndUnlockPrunesNoNewEvents() = runTest {
+        val m = manager()
+        val stale = listRead(shareEntry("r1", "A"))
+        m.approvalsHook = {
+            m.forgetOpenVault()
+            m.reopen()
+            runBlocking { m.batch("r2", "X") } // an approval that arrived after the unlock
+        }
+        m.refreshApprovalsFrom(now) { stale }
+        m.approvalsHook = null
+        runCurrent()
+        assertNull("the stale list is not taken in", m.shareItems("r1"))
+        assertEquals("the new event stays", listOf("X"), m.shareItems("r2"))
+    }
+
+    @Test
+    fun overlappingApprovalsReadsDoNotDeadlock() = runBlocking {
+        val m = SocialManager(
+            CoroutineScope(Dispatchers.Default),
+            api = { throw VaultFailure(FailureKind.OTHER) },
+            credential = credential,
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+        )
+        m.batch("r1", "A")
+        val r = listRead(shareEntry("r1", "A"))
+        // Real threads and a real-time timeout: virtual time would fire it at once.
+        withContext(Dispatchers.Default) {
+            withTimeout(30_000) {
+                repeat(300) {
+                    listOf(async { m.refreshApprovalsFrom(now) { r } }, async { m.refreshApprovalsFrom(now) { r } }, async { m.batch("r1", "B") }).awaitAll()
+                }
+            }
+        }
+        assertEquals(setOf("A", "B"), m.shareItems("r1")?.toSet())
     }
 }
