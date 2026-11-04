@@ -4308,6 +4308,21 @@ class VaultDeviceTest {
         }
     }
 
+    /** A key-keeping keep (the same key held) says nothing; a different key is said. */
+    @Test
+    fun onlyAKeyThatDiffersFromTheHeldOneIsEmitted() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val seen = collectKeyChanges(d)
+            d.keepCredential("QkxPQjQ=", 4, "key-one") // an ordinary operation: same key
+            d.keepCredential("QkxPQjU=", 5, d.credentialKey) // what `keep(sameKey = true)` passes
+            assertTrue("nothing for the same key: ${seen.toList()}", seen.isEmpty())
+            d.keepCredential("QkxPQjY=", 1, "key-two")
+            assertEquals(listOf<String?>("key-two"), seen.toList())
+        }
+    }
+
     @Test
     fun aKeepThatCannotBeSavedEmitsNothing() = runBlocking<Unit> {
         withTimeout(30_000) {

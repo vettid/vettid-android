@@ -184,6 +184,22 @@ class CredentialKeyRowTest {
         assertEquals(CredentialKeyUi.Shown("5555 6666 7777 8888"), vm.credentialKey.value)
     }
 
+    /** A routine operation keeps the held key and emits nothing: the ask in flight is not cancelled, and its answer is shown. */
+    @Test
+    fun aRoutineKeepDuringAnAskDoesNotCancelIt() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val gate = CompletableDeferred<Unit>()
+        vault.credentialKeyGate = gate
+        val vm = VaultStatusViewModel(vault)
+        advanceUntilIdle() // the ask is out
+        // (a PIN change meanwhile keeps the held credential and key: the device emits nothing, so nothing arrives here)
+        advanceUntilIdle()
+        assertEquals(CredentialKeyUi.Loading, vm.credentialKey.value)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(CredentialKeyUi.Shown(fp), vm.credentialKey.value)
+    }
+
     @Test
     fun tryAgainOnTheOverviewAsksTheKeyToo() = runTest {
         vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)

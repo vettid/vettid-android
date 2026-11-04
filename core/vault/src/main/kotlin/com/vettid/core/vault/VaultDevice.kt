@@ -1870,7 +1870,9 @@ class VaultDevice private constructor(
             st.credential = prev
             throw e
         }
-        if (key != null) credentialKeys.tryEmit(key)
+        // Only a key that differs from the one held before: a key-keeping operation says nothing (a stale held key must not
+        // replace a fresher `credential.version` answer on screen).
+        if (key != null && key != prev?.key) credentialKeys.tryEmit(key)
     }
 
     internal suspend fun endRecovery() = lock.withLock {
