@@ -28,6 +28,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -256,7 +257,10 @@ class LockRaceTest {
                 Thread.sleep(100)
             }
             assertTrue("every thread finished", threads.none { it.isAlive })
-            assertEquals(setOf("A", "B"), m.shareItems("r1")?.toSet())
+            // `approvals` is a combined flow on Dispatchers.Default here: wait for it to catch up, in real time.
+            runBlocking {
+                withTimeout(10_000) { m.approvals.first { m.shareItems("r1")?.toSet() == setOf("A", "B") } }
+            }
         } finally {
             scope.cancel()
         }
