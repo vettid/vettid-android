@@ -129,6 +129,12 @@ class SocialManager(
     private val loadedFlow = MutableStateFlow<Set<String>>(emptySet())
     private val reloadFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
+    /** Bumped by every lock and clear: a read in flight across one writes nothing back (messages, loaded set, failure). */
+    private val lockEpoch = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Bumped at the start of every [refreshConversations]: only the latest-started reload writes the failure state. */
+    private val reloadSeq = java.util.concurrent.atomic.AtomicInteger()
+
     /** Per conversation, where its loaded history stands (§10.5.2); dropped with its messages. */
     private val pagingFlow = MutableStateFlow<Map<String, MessagePaging>>(emptyMap())
     private val pages = Mutex()
@@ -269,6 +275,7 @@ class SocialManager(
      * lock). An unlock reads the lists again.
      */
     fun forgetOpenVault() {
+        lockEpoch.incrementAndGet()
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
@@ -300,6 +307,7 @@ class SocialManager(
 
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
+        lockEpoch.incrementAndGet()
         pendingFailureFlow.value = null
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
@@ -343,10 +351,8 @@ class SocialManager(
                 refreshConversations()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: VaultFailure) {
-                reloadFailureFlow.value = e
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                reloadFailureFlow.value = VaultFailure(FailureKind.OTHER, cause = e)
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                // Not silent: refreshConversations noted it in [reloadFailure] for the Messages screen.
             }
             runCatching { refreshApprovals() }
             retryPendingOnce()
@@ -575,7 +581,13 @@ class SocialManager(
     private suspend fun onAdded(conn: String, req: String) {
         requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
         edit { l -> l.copy(requestNames = l.requestNames - req) }
-        runCatching { load(conn) }
+        try {
+            load(conn)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            noteReloadFailure(e, lockEpoch.get(), reloadSeq.incrementAndGet())
+        }
     }
 
     /**
@@ -935,10 +947,35 @@ class SocialManager(
         connectionsFlow.value = list
     }
 
+    /**
+     * Every caller's failure ends up in [reloadFailure] (set on failure, cleared on success); the latest-started reload
+     * wins, and one that ran across a lock writes nothing.
+     */
     override suspend fun refreshConversations() {
-        if (connectionsFlow.value.isEmpty()) refresh()
-        // Every thread is tried even when one fails (a vault just restarted may fail the first only); the first failure
-        // is thrown after the rest, and a thread that failed stays "not loaded".
+        val epoch = lockEpoch.get()
+        val seq = reloadSeq.incrementAndGet()
+        val first = try {
+            if (connectionsFlow.value.isEmpty()) refresh()
+            loadEveryThread()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            e
+        }
+        val failed = first
+        if (failed == null) {
+            if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = null
+        } else {
+            noteReloadFailure(failed, epoch, seq)
+            throw failed
+        }
+    }
+
+    /**
+     * Every thread is tried even when one fails (a vault just restarted may fail the first only); a thread that failed
+     * stays "not loaded". Returns the held failure if any, else the first, or null.
+     */
+    private suspend fun loadEveryThread(): Exception? {
         var first: Exception? = null
         for (c in connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }) {
             try {
@@ -946,11 +983,19 @@ class SocialManager(
             } catch (e: CancellationException) {
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                if (first == null) first = e
+                if (first == null || e.isHeld() && !first.isHeld()) first = e
             }
         }
-        first?.let { throw it }
-        reloadFailureFlow.value = null
+        return first
+    }
+
+    private fun allActiveLoaded() = connectionsFlow.value.none { it.state == ConnectionState.ACTIVE && it.id !in loadedFlow.value }
+
+    private fun Exception.isHeld() = this is VaultFailure && kind == FailureKind.OWNER_CHECK_REQUIRED
+
+    private fun noteReloadFailure(e: Exception, epoch: Int, seq: Int) {
+        val failure = e as? VaultFailure ?: VaultFailure(FailureKind.OTHER, cause = e)
+        if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = failure
     }
 
     override fun olderAvailable(connectionId: String): Flow<Boolean> =
@@ -962,7 +1007,12 @@ class SocialManager(
      */
     override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
 
-    private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard(resend = true) {
+    private suspend fun load(connectionId: String, fresh: Boolean) {
+        val epoch = lockEpoch.get() // before the read, on the caller's thread: a lock after this point voids the page
+        loadPage(connectionId, fresh, epoch)
+    }
+
+    private suspend fun loadPage(connectionId: String, fresh: Boolean, epoch: Int) = vaultGuard(resend = true) {
         val page = pageFitting { limit -> readPage(connectionId, limit) }
         val list = page.messages.map(ApprovalParser::message)
         pages.withLock {
@@ -972,6 +1022,15 @@ class SocialManager(
             messagesFlow.update { it + (connectionId to merged.messages) }
             pagingFlow.update { it + (connectionId to merged.paging) }
             loadedFlow.update { it + connectionId }
+            if (epoch != lockEpoch.get()) {
+                // A lock came while the page was read: nothing of it stays (the clear may already have run).
+                messagesFlow.update { it - connectionId }
+                pagingFlow.update { it - connectionId }
+                loadedFlow.update { it - connectionId }
+            } else if (reloadFailureFlow.value != null && allActiveLoaded()) {
+                // This page completed the list: a load error no longer describes it.
+                reloadFailureFlow.value = null
+            }
         }
     }
 

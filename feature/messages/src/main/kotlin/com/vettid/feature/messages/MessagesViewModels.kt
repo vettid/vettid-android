@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -86,9 +87,10 @@ class MessagesViewModel @Inject constructor(
             conversations = (if (s.unreadOnly) all.filter { it.unread > 0 } else all).filter { it.matches(s.query) },
             noConnections = all.none { it.connection.state == ConnectionState.ACTIVE },
             searchable = all.isNotEmpty(),
-            // A quiet reload (after an unlock) that failed is shown like this screen's own failure: no silent failure.
-            error = s.error ?: reload?.kind,
-            errorCode = if (s.error != null) s.errorCode else reload?.shownCode,
+            // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
+            // set by the repository and cleared by its next good load. Shown only while a row is still not loaded.
+            error = reload?.kind?.takeIf { all.isEmpty() || all.any { !it.loaded } },
+            errorCode = reload?.shownCode,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())
 
@@ -103,14 +105,18 @@ class MessagesViewModel @Inject constructor(
     }
 
     fun refresh() {
-        // Loading again with the error cleared: a list without rows must not flash "No messages" meanwhile.
-        local.update { it.copy(error = null, loading = true) }
+        local.update { it.copy(loading = true) }
         viewModelScope.launch {
             try {
                 repo.refreshConversations()
+            } catch (_: VaultFailure) {
+                // Noted by the repository in reloadFailure, which is what the screen shows.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                // Not a crash in viewModelScope: the repository noted it (as FailureKind.OTHER) in reloadFailure.
+            } finally {
                 local.update { it.copy(loading = false) }
-            } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -119,7 +125,6 @@ class MessagesViewModel @Inject constructor(
 
     fun setQuery(q: String) = local.update { it.copy(query = q) }
 
-    fun dismissError() = local.update { it.copy(error = null) }
 }
 
 /** Immutable UI state of a conversation. */
