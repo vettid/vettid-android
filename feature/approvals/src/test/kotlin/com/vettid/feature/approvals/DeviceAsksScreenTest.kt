@@ -107,8 +107,6 @@ class DeviceAsksScreenTest {
     fun theOutcomesOfAnAccessRequest() {
         val until = now.plusSeconds(3_600)
         show(state(session(), outcome = DeviceOutcome.Allowed(until)))
-        // The screen says the time alone on the same day, the date and time otherwise: in the last hour before midnight
-        // (CI runs in UTC) an hour from now is tomorrow.
         // The same-day rule itself is pinned in DeviceAsksUntilTextTest; here, that the screen uses it.
         rule.onNodeWithText("Access allowed until ${untilText(until)}", substring = true).assertExists()
     }
