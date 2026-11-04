@@ -788,6 +788,13 @@ class ConnectionDetailViewModel @Inject constructor(
         if (uiState.value.canCall && uiState.value.connection?.state == ConnectionState.ACTIVE) calls.call(id)
     }
 
+    /**
+     * Whether the page is shown ([setVisible]). Declared above `init`: `viewModelScope` runs on `Main.immediate`, so the
+     * presence query can start inside the constructor when the connection is already cached, before a field below `init`
+     * is set.
+     */
+    private val shown = MutableStateFlow(true)
+
     init {
         viewModelScope.launch {
             try {
@@ -804,8 +811,6 @@ class ConnectionDetailViewModel @Inject constructor(
             if (c.askable) presence.queryWhileAvailable(id, shown)
         }
     }
-
-    private val shown = MutableStateFlow(true)
 
     /** The screen is at least STARTED ([shown]) or stopped: presence is asked only while it is shown. */
     fun setVisible(visible: Boolean) {
