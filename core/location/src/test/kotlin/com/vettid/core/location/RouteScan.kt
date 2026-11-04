@@ -14,7 +14,7 @@ import java.nio.ByteOrder
  */
 object RouteScan {
     private fun forms(v: Double): List<ByteArray> {
-        val text = listOf(v.toString(), "%.6f".format(java.util.Locale.ROOT, v), "%.5f".format(java.util.Locale.ROOT, v))
+        val text = listOf(v.toString(), "%.6f".format(java.util.Locale.ROOT, v), "%.5f".format(java.util.Locale.ROOT, v), "%.4f".format(java.util.Locale.ROOT, v))
             .map { it.encodeToByteArray() }
         val doubles = listOf(ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN).map { ByteBuffer.allocate(8).order(it).putDouble(v).array() }
         val floats = listOf(ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN).map { ByteBuffer.allocate(4).order(it).putFloat(v.toFloat()).array() }

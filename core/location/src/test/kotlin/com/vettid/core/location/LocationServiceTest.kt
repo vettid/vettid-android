@@ -118,6 +118,22 @@ class LocationServiceTest {
     }
 
     @Test
+    fun whenLocationIsOffTheNotificationSaysSoAndOffersAndroidsSettings() {
+        LocationService.source = source
+        source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)), issue = com.vettid.core.data.location.SendIssue.NO_PERMISSION)
+        val service = start().get()
+        idle()
+        val n = shadowOf(service).lastForegroundNotification
+        assertEquals("Not sending: location is off for VettID.", n.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals(listOf("Open settings", "Stop all"), actions(n))
+        source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)), issue = com.vettid.core.data.location.SendIssue.STOP_PENDING)
+        idle()
+        val after = shadowOf(service).lastForegroundNotification
+        assertEquals("Not sending until your vault has stopped a share.", after.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals(listOf("Stop all"), actions(after))
+    }
+
+    @Test
     fun theNotificationFollowsTheState() {
         LocationService.source = source
         source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)))

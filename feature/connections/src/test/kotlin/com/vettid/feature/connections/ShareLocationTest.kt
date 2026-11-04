@@ -444,6 +444,78 @@ class ShareLocationTest {
         assertTrue(h >= 48.dp)
     }
 
+    private fun card(loc: DetailLocation?, missed: Boolean = false, onStop: () -> Unit = {}) {
+        val c = FakeSocial.connection("c1", "Sam")
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(c.id, c, null, loading = false, location = loc, locationMissed = missed),
+                DetailActions(onStopSharingLocation = onStop),
+            )
+        }
+    }
+
+    @Test
+    fun thePausedCardSaysSoAndKeepsStop() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), paused = true))
+        rule.onNodeWithText("Paused until your daily check.").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aCardThatIsNotSendingSaysWhyWithStopAndWhereItCanBePutRight() {
+        val until = Instant.now().plusSeconds(1_800)
+        card(DetailLocation("s1", until, issue = com.vettid.core.data.location.SendIssue.NO_PERMISSION))
+        rule.onNodeWithText("Not sending: location is off for VettID.").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_settings").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Sharing your location until", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun locationOffOnThePhoneOffersTheLocationSettings() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = com.vettid.core.data.location.SendIssue.LOCATION_OFF))
+        rule.onNodeWithText("Not sending: location is off on this phone.").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_settings").assertIsDisplayed()
+        val h = rule.onNodeWithTag("detail_location_settings").getUnclippedBoundsInRoot().let { it.bottom - it.top }
+        assertTrue(h >= 48.dp)
+    }
+
+    @Test
+    fun aStopToWaitForIsSaidWithoutASettingsButton() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = com.vettid.core.data.location.SendIssue.STOP_PENDING))
+        rule.onNodeWithText("Not sending until your vault has stopped a share.").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aOnceShareThatFoundNoPositionIsSaidAboveTheButton() {
+        card(null, missed = true)
+        rule.onNodeWithText("No position was found, so nothing was sent.").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_share").assertIsDisplayed()
+    }
+
+    @Test
+    fun theDetailViewModelCarriesThePausedStateTheIssueAndTheMissedOnce() = runTest {
+        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
+        val share = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(
+            listOf(com.vettid.core.data.location.ServiceState.Target("c1", share.expiresAt)),
+            paused = true,
+            issue = com.vettid.core.data.location.SendIssue.STOP_PENDING,
+        )
+        advanceUntilIdle()
+        val shown = read(vm.uiState).location!!
+        assertTrue(shown.paused)
+        assertEquals(com.vettid.core.data.location.SendIssue.STOP_PENDING, shown.issue)
+        location.stop(share.shareId)
+        location.missedOnce.value = setOf("c1")
+        advanceUntilIdle()
+        assertTrue(read(vm.uiState).locationMissed)
+        assertNull(read(vm.uiState).location)
+    }
+
     @Test
     fun aServiceIsOfferedNoLocationSharing() {
         val svc = com.vettid.core.data.social.ConnectionInfo("s1", "Acme", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Acme", lastName = "Co-op", service = true)

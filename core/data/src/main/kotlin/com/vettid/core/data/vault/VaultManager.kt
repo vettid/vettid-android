@@ -1563,7 +1563,7 @@ class VaultManager(
             steps.step { devices.clear() }
             steps.step { votes.clear() }
             steps.step { presence.clear() }
-            steps.step { location.clear() }
+            steps.step { location.forget() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -2919,7 +2919,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
-        steps.step { location.clear() }
+        steps.step { location.forget() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2972,7 +2972,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
-        steps.step { location.clear() }
+        steps.step { location.forget() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -4574,7 +4574,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
-        steps.step { location.clear() }
+        steps.step { location.forget() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null

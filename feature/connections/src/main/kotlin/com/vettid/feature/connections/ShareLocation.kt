@@ -52,6 +52,8 @@ import com.vettid.core.data.location.ShareLength
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareRequest
 import com.vettid.core.data.location.ShareTime
+import com.vettid.core.data.location.settingsIntent
+import com.vettid.core.data.location.textRes
 import com.vettid.core.data.location.ShareTiming
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -472,13 +474,23 @@ private fun precisionNote(p: SharePrecision): Int = when (p) {
 
 /**
  * The connection page's location card: **Share my location** (opens the sheet), or, while the member shares with this connection,
- * "Sharing your location until {time}" with **Stop**.
+ * "Sharing your location until {time}" with **Stop**; instead of that line "Paused until your daily check." while the check is due,
+ * or why nothing is being sent (a stop to wait for, location off for VettID or on the phone) with **Open settings** where Android's
+ * settings can put it right. [missed]: the last once share found no position.
  */
 @Composable
-internal fun LocationCard(location: DetailLocation?, busy: Boolean, onShare: () -> Unit, onStop: () -> Unit) {
+internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Boolean, onShare: () -> Unit, onStop: () -> Unit) {
     val context = LocalContext.current
     DetailCard(Modifier.testTag("detail_location")) {
         if (location == null) {
+            if (missed) {
+                Text(
+                    stringResource(com.vettid.core.data.R.string.data_location_missed),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = Spacing.s).testTag("detail_location_missed"),
+                )
+            }
             SecondaryButton(
                 stringResource(R.string.connections_location_title),
                 onShare,
@@ -487,9 +499,14 @@ internal fun LocationCard(location: DetailLocation?, busy: Boolean, onShare: () 
             )
         } else {
             val until = remember(location.until) { ShareTime.format(context, location.until, Instant.now()) }
+            val issueText = location.issue.textRes()
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    stringResource(R.string.connections_location_sharing_until, until),
+                    when {
+                        location.paused -> stringResource(com.vettid.core.data.R.string.data_location_paused)
+                        issueText != null -> stringResource(issueText)
+                        else -> stringResource(R.string.connections_location_sharing_until, until)
+                    },
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f).testTag("detail_location_sharing"),
                 )
@@ -498,6 +515,13 @@ internal fun LocationCard(location: DetailLocation?, busy: Boolean, onShare: () 
                     enabled = !busy,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("detail_location_stop"),
                 ) { Text(stringResource(R.string.connections_location_stop)) }
+            }
+            val settings = location.issue.settingsIntent(context)
+            if (settings != null) {
+                androidx.compose.material3.TextButton(
+                    onClick = { runCatching { context.startActivity(settings) } },
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("detail_location_settings"),
+                ) { Text(stringResource(com.vettid.core.data.R.string.data_location_open_settings)) }
             }
         }
     }

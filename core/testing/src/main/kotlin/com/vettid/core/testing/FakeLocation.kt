@@ -26,6 +26,9 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
     /** Whether the vault has location; a test sets UNKNOWN to see the sheet read it first ([refresh] then makes it AVAILABLE). */
     override val availability = MutableStateFlow(LocationAvailability.AVAILABLE)
 
+    /** Connections whose once share ended without a position; a test sets it. */
+    override val missedOnce = MutableStateFlow<Set<String>>(emptySet())
+
     /** How many times `location.share.list` was read. */
     var refreshes = 0
 

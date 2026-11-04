@@ -116,10 +116,29 @@ data class ServiceState(
     val paused: Boolean = false,
     /** The shares were taken up again after a lock or a restart ("Sharing your location with {First} again, until {time}."). */
     val resumed: Boolean = false,
+    /** Why nothing is being sent although shares are active (shown on the notification and the card), or [SendIssue.NONE]. */
+    val issue: SendIssue = SendIssue.NONE,
 ) {
     data class Target(val connectionId: String, val expiresAt: Instant)
 
     val active: Boolean get() = targets.isNotEmpty()
+}
+
+/** Why this phone is not sending positions while a share is active. */
+enum class SendIssue {
+    NONE,
+
+    /** A stop the vault has not taken yet: nothing is sent at all until it has (each position goes to every share). */
+    STOP_PENDING,
+
+    /** Location is off for VettID in Android (the permission was taken away). */
+    NO_PERMISSION,
+
+    /** Location is switched off on the phone. */
+    LOCATION_OFF,
+
+    /** The foreground service is not running and the app is not in front. */
+    SERVICE,
 }
 
 /** One position of this phone, held only until it is sent. **Prints its type name only.** */
@@ -165,6 +184,9 @@ interface LocationPlatform {
     fun startService(): Boolean
 
     fun stopService()
+
+    /** Why the platform cannot deliver positions now (the permission, the phone's location switch), or [SendIssue.NONE]. */
+    fun issue(): SendIssue = SendIssue.NONE
 
     /** Whether precise (fine) location is allowed: with approximate access only, a once share cannot wait for 100 m. */
     fun precise(): Boolean = true
@@ -213,6 +235,9 @@ interface LocationRepository {
     /** Reads `location.share.list` again. */
     suspend fun refresh()
 
+    /** Connections whose `once` share ended without a position being found (memory only; cleared at the next share). */
+    val missedOnce: StateFlow<Set<String>> get() = NO_MISSED
+
     /** Whether this vault has location: learnt from `location.share.list` (at unlock) or the first start. */
     val availability: StateFlow<LocationAvailability> get() = NO_AVAILABILITY
 
@@ -228,6 +253,8 @@ interface LocationRepository {
 
 /** Whether this vault has location: learnt by asking, since no message lists a release's features. */
 enum class LocationAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
+
+private val NO_MISSED: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 private val NO_AVAILABILITY: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 

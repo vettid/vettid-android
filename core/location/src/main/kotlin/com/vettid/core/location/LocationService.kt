@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.vettid.core.data.location.ServiceState
+import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.notify.Channels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,17 +52,17 @@ class LocationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        handle(intent)
+        handle(intent, startId)
         return START_NOT_STICKY
     }
 
-    private fun handle(intent: Intent?) {
+    private fun handle(intent: Intent?, startId: Int) {
         val current = source
         if (intent?.action == ACTION_STOP_ALL) current?.stopAll()
         // Asked to go by the sharing: shown first (it was started as a foreground service), then ended, never racing startForeground.
         if (intent?.action == ACTION_STOP) {
             foreground(ServiceState(), emptyMap())
-            stop()
+            stop(startId)
             return
         }
         val state = current?.state?.value
@@ -71,7 +72,7 @@ class LocationService : Service() {
         if (current == null || !active || !shown) {
             // Active shares and no service: it failed, and the sharing is told so that it can start it again.
             if (current != null && active) current.serviceEnded()
-            stop()
+            stop(startId)
             return
         }
         following?.cancel()
@@ -93,10 +94,11 @@ class LocationService : Service() {
 
     private var stoppedByUs = false
 
-    private fun stop() {
+    /** Ends the service; with a [startId] only if no later start came in meanwhile (`stopSelf(startId)`). */
+    private fun stop(startId: Int = -1) {
         stoppedByUs = true
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
-        stopSelf()
+        if (startId >= 0) stopSelf(startId) else stopSelf()
     }
 
     private fun notification(state: ServiceState, names: Map<String, String>): Notification {
@@ -124,6 +126,11 @@ class LocationService : Service() {
         if (state.paused) {
             // "Check now" opens the app, where the daily check covers the screen.
             builder.addAction(0, getString(R.string.core_location_check_now), open)
+        }
+        // Where the member can put it right: the app's permission page, or the phone's location settings.
+        state.issue.settingsIntent(this)?.let {
+            val settings = PendingIntent.getActivity(this, 2, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            builder.addAction(0, getString(com.vettid.core.data.R.string.data_location_open_settings), settings)
         }
         val stopAll = PendingIntent.getService(
             this,

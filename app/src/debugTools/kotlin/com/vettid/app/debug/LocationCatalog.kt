@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.OutgoingShare
+import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
@@ -34,6 +35,10 @@ internal object LocationCatalog {
         ShareLocationSheet(state, first, ShareLocationActions())
     }
 
+    @Composable
+    private fun Detail(location: DetailLocation) =
+        ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, location = location), DetailActions())
+
     private val open = ShareLocationUiState(
         "c1", open = true, permission = LocationPermission.PRECISE, availability = LocationAvailability.AVAILABLE,
     )
@@ -54,6 +59,21 @@ internal object LocationCatalog {
             Sheet(open.copy(startedId = "s1", started = share))
         },
         // The connection's page while the member shares with the connection.
+        // Sharing, but not sending: the daily check, a stop to wait for, location off for VettID, location off on the phone, and a once
+        // share that found no position.
+        "connections.detail_location_paused" to { Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), paused = true)) },
+        "connections.detail_location_stop_pending" to {
+            Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = SendIssue.STOP_PENDING))
+        },
+        "connections.detail_location_no_permission" to {
+            Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = SendIssue.NO_PERMISSION))
+        },
+        "connections.detail_location_off" to {
+            Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = SendIssue.LOCATION_OFF))
+        },
+        "connections.detail_location_missed" to {
+            ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, locationMissed = true), DetailActions())
+        },
         "connections.detail_location" to {
             ConnectionDetailScreen(
                 ConnectionDetailUiState("c1", sam, null, loading = false, location = DetailLocation("s1", Instant.now().plusSeconds(1_800))),

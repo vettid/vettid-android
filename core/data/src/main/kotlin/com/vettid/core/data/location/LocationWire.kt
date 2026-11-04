@@ -1,5 +1,6 @@
 package com.vettid.core.data.location
 
+import com.vettid.core.vault.LocationLimits
 import com.vettid.core.vault.LocationSample
 import com.vettid.core.vault.LocationWire as Words
 import com.vettid.core.vault.VaultApi
@@ -10,6 +11,7 @@ import com.vettid.core.vault.locationShareStop
 import com.vettid.core.vault.locationUpdate
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
@@ -48,13 +50,13 @@ internal object ShareWire {
      * The `outgoing` shares of `location.share.list`; [self] is this phone's device id (the source of a share when it matches),
      * [mine] the share ids this phone kept (a source whatever the device id). Null when any entry does not read.
      */
-    fun outgoing(body: JsonObject, self: String?, mine: Set<String> = emptySet()): List<OutgoingShare>? {
+    fun outgoing(body: JsonObject, self: String?, mine: Set<String> = emptySet(), now: Instant = Instant.now()): List<OutgoingShare>? {
         val entries = (body["outgoing"] as? JsonArray)?.map { it as? JsonObject }
-        val read = entries?.map { o -> o?.let { share(it, self, mine) } }
+        val read = entries?.map { o -> o?.let { share(it, self, mine, now) } }
         return read?.takeIf { r -> r.none { it == null } }?.filterNotNull()
     }
 
-    private fun share(o: JsonObject, self: String?, mine: Set<String>): OutgoingShare? {
+    private fun share(o: JsonObject, self: String?, mine: Set<String>, now: Instant): OutgoingShare? {
         val id = VaultJson.str(o, "share_id")?.takeIf { it.isNotEmpty() }
         val connection = VaultJson.str(o, "connection_id")?.takeIf { it.isNotEmpty() }
         val mode = VaultJson.str(o, "mode")
@@ -63,7 +65,7 @@ internal object ShareWire {
         val once = mode == Words.MODE_ONCE
         val known = once || mode == Words.MODE_CONTINUOUS
         val whole = id != null && connection != null && precision != null && expires != null
-        return if (!whole || !known) {
+        return if (!whole || !known || !strict(o, once, expires!!, now)) {
             null
         } else {
             OutgoingShare(
@@ -72,7 +74,7 @@ internal object ShareWire {
                 once = once,
                 precision = precision!!,
                 intervalSeconds = VaultJson.long(o, "interval_seconds"),
-                trail = (o["history"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
+                trail = (o["history"] as kotlinx.serialization.json.JsonPrimitive).content == "true",
                 expiresAt = expires!!,
                 lastSentAt = instant(VaultJson.str(o, "last_sent_at")),
                 // The vault's `device_id` decides when this phone's id is known; the stored ids are the fallback when it is not.
@@ -80,6 +82,23 @@ internal object ShareWire {
             )
         }
     }
+
+    /**
+     * The vault's bounds (§10.16), strictly: a continuous entry has `interval_seconds` from 10 to 3,600, a once entry none,
+     * `history` is a boolean, and `expires_at` is at most 7 days ahead (with a minute for the clocks). One entry that is not so
+     * makes the whole list unreadable.
+     */
+    private fun strict(o: JsonObject, once: Boolean, expires: Instant, now: Instant): Boolean {
+        val interval = o["interval_seconds"]
+        val seconds = VaultJson.long(o, "interval_seconds")
+        val intervalOk = if (once) interval == null else seconds != null &&
+            seconds in LocationLimits.MIN_INTERVAL_SECONDS..LocationLimits.MAX_INTERVAL_SECONDS
+        val history = (o["history"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+        val ahead = expires.isAfter(now.plusSeconds(LocationLimits.MAX_DURATION_SECONDS + CLOCK_SLACK_SECONDS))
+        return intervalOk && history != null && !ahead
+    }
+
+    private const val CLOCK_SLACK_SECONDS = 60L
 
     private fun instant(s: String?): Instant? = try {
         s?.let { Instant.parse(it) }

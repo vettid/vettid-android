@@ -84,10 +84,20 @@ class LocationSharingTest {
             return obj("{}")
         }
 
+        /** When set, `location.share.list` answers only after it is completed (a read in flight), with the list as it was asked. */
+        var listGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
         override suspend fun list(): JsonObject {
             synchronized(this) { lists++ }
             listRefusal?.let { throw VaultOpException("location.share.list", it) }
-            return obj("""{"outgoing":$outgoing,"incoming":[]}""")
+            // The vault no longer lists a share it has stopped.
+            val kept = (Json.parseToJsonElement(outgoing) as kotlinx.serialization.json.JsonArray).filter {
+                val id = ((it as JsonObject)["share_id"] as JsonPrimitive).content
+                synchronized(this) { id !in stops }
+            }
+            val answer = obj("""{"outgoing":${kotlinx.serialization.json.JsonArray(kept)},"incoming":[]}""")
+            listGate?.await()
+            return answer
         }
     }
 
@@ -96,8 +106,12 @@ class LocationSharingTest {
         val fixes = MutableSharedFlow<Fix>()
         var live = 0
 
+        /** The platform refuses the positions (the permission was taken away). */
+        var failWith: Throwable? = null
+
         override fun fixes(request: PositionRequest): Flow<Fix> = flow {
             synchronized(this@Provider) { requests += request }
+            failWith?.let { throw it }
             live++
             try {
                 fixes.collect { emit(it) }
@@ -112,6 +126,9 @@ class LocationSharingTest {
         var stops = 0
         var refuse = false
         var precise = true
+        var issue = SendIssue.NONE
+
+        override fun issue() = issue
 
         override fun precise() = precise
 
@@ -133,7 +150,13 @@ class LocationSharingTest {
         }
     }
 
-    private inner class Rig(val scope: TestScope, val ops: Ops = Ops(), val store: MemStore = MemStore(), attach: Boolean = true) {
+    private inner class Rig(
+        val scope: TestScope,
+        val ops: Ops = Ops(),
+        val store: MemStore = MemStore(),
+        attach: Boolean = true,
+        retry: List<Duration> = listOf(Duration.ofSeconds(5)),
+    ) {
         val provider = Provider()
         val platform = Platform(provider)
         val sharing = LocationSharing(
@@ -146,7 +169,7 @@ class LocationSharingTest {
             now = { clock },
             io = StandardTestDispatcher(scope.testScheduler),
             watchEvery = Duration.ofSeconds(5),
-            retryDelays = listOf(Duration.ofSeconds(5)),
+            retryDelays = retry,
             elapsedNanos = { elapsed },
         ).also { if (attach) it.attach(platform) }
 
@@ -192,7 +215,12 @@ class LocationSharingTest {
         }
     }
 
-    private fun TestScope.rig(ops: Ops = Ops(), store: MemStore = MemStore(), attach: Boolean = true) = Rig(this, ops, store, attach)
+    private fun TestScope.rig(
+        ops: Ops = Ops(),
+        store: MemStore = MemStore(),
+        attach: Boolean = true,
+        retry: List<Duration> = listOf(Duration.ofSeconds(5)),
+    ) = Rig(this, ops, store, attach, retry)
 
     private fun message(type: String, body: String) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = clock, body = body.toByteArray()))
 
@@ -548,7 +576,8 @@ class LocationSharingTest {
         val r = rig(store = store)
         r.sharing.resume()
         r.settle()
-        assertTrue(r.ops.stops.isEmpty())
+        // The stop is sent anyway (the vault answers {}), without waiting for the list; the mark goes with it.
+        assertEquals(listOf("gone"), r.ops.stops)
         assertTrue(store.saved.isEmpty())
     }
 
@@ -911,6 +940,216 @@ class LocationSharingTest {
         r.settle()
         assertEquals(1, r.platform.starts)
         assertEquals(1, r.provider.requests.size)
+    }
+
+    // --- review fixes: H1, M1, M2, M3 and the low ones ---
+
+    @Test
+    fun whileAStopIsPendingNoPositionIsSentAtAll() = runTest {
+        // The vault forwards each position to every share this phone sources: a pending stop for A would leave A fed by B's.
+        val r = rig()
+        val a = r.begin(id = "a")
+        r.begin(id = "b")
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(a.shareId) }
+        r.settle()
+        r.emit(r.fix())
+        assertTrue("no update at all", r.ops.updates.isEmpty())
+        assertEquals(0, r.provider.live)
+        val state = r.sharing.serviceState.value
+        assertEquals(SendIssue.STOP_PENDING, state.issue)
+        assertEquals("B is still shared with", listOf("b"), state.targets.map { it.connectionId })
+        // The stop lands: sending goes on.
+        r.ops.stopRefusal = null
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+        r.elapse(Duration.ofSeconds(60))
+        r.emit(r.fix())
+        assertEquals(1, r.ops.updates.size)
+    }
+
+    @Test
+    fun aListReadInFlightWhenAStopLandsDoesNotBringTheShareBack() = runTest {
+        val r = rig()
+        val s = r.begin()
+        r.ops.outgoing = "[${listed(s.shareId, "dev-this", expires = s.expiresAt)}]"
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.listGate = gate
+        val read = backgroundScope.async { r.sharing.refresh() }
+        r.settle()
+        r.sharing.stop(s.shareId)
+        r.settle()
+        // The read answers with the list as it was when asked, which still has the share.
+        gate.complete(Unit)
+        read.await()
+        r.settle()
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
+    }
+
+    @Test
+    fun theStopMarksAreLoadedAndSentWithoutWaitingForTheOwnerCheck() = runTest {
+        due = true
+        val store = MemStore(listOf(StoredShare("s7", "c-s7", t0.plusSeconds(3_600).toEpochMilli(), stopping = true)))
+        val r = rig(store = store)
+        r.sharing.resume()
+        r.settle()
+        assertEquals(listOf("s7"), r.ops.stops)
+        assertEquals("the list waits for the check", 0, r.ops.lists)
+        assertTrue(store.saved.isEmpty())
+    }
+
+    @Test
+    fun aStopThatKeepsFailingIsTriedWithAGrowingWait() = runTest {
+        val r = rig(retry = listOf(5L, 15L, 60L).map { Duration.ofSeconds(it) })
+        val s = r.begin()
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(s.shareId) }
+        repeat(6) { r.elapse(Duration.ofSeconds(5)) }
+        // Now, and after 5, 10 and 25 seconds; a fixed 5 s would have made seven by 30 s.
+        assertEquals(4, r.ops.stops.size)
+    }
+
+    @Test
+    fun aWipeOrSignOutForgetsTheStopMarksAndTheStoredSettings() = runTest {
+        val r = rig()
+        val s = r.begin()
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(s.shareId) }
+        r.settle()
+        assertEquals(1, r.store.saved.size)
+        r.sharing.forget()
+        r.settle()
+        assertTrue(r.store.saved.isEmpty())
+        r.ops.stopRefusal = null
+        r.ops.outgoing = "[]"
+        r.sharing.resume()
+        r.settle()
+        assertEquals("nothing is stopped for a vault this phone left", 1, r.ops.stops.size)
+    }
+
+    @Test
+    fun aSecondStartForTheSameConnectionIsRefused() = runTest {
+        val r = rig()
+        val a = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
+        val b = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
+        r.settle()
+        val results = listOf(a.await(), b.await())
+        assertEquals(1, results.count { it.isSuccess })
+        assertEquals(1, r.ops.starts.size)
+        assertEquals("busy", (results.single { it.isFailure }.exceptionOrNull() as VaultFailure).code)
+    }
+
+    @Test
+    fun aOnceShareThatEndsWithoutAPositionIsRemembered() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.Once)
+        r.elapse(Duration.ofSeconds(901))
+        assertEquals(setOf("c1"), r.sharing.missedOnce.value)
+        // A new share for the connection clears it.
+        r.begin(ShareTiming.ForAWhile(), id = "c1")
+        assertTrue(r.sharing.missedOnce.value.isEmpty())
+    }
+
+    @Test
+    fun aDeliveredOnceShareIsNotMissed() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.Once)
+        r.emit(r.fix(accuracy = 10.0))
+        r.elapse(Duration.ofSeconds(901))
+        assertTrue(r.sharing.missedOnce.value.isEmpty())
+    }
+
+    @Test
+    fun whenNothingCanBeSentTheStateSaysWhy() = runTest {
+        val r = rig()
+        r.begin()
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+        r.platform.issue = SendIssue.NO_PERMISSION
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(SendIssue.NO_PERMISSION, r.sharing.serviceState.value.issue)
+        r.platform.issue = SendIssue.LOCATION_OFF
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(SendIssue.LOCATION_OFF, r.sharing.serviceState.value.issue)
+        assertTrue("the share stays", r.sharing.serviceState.value.active)
+        r.platform.issue = SendIssue.NONE
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+    }
+
+    @Test
+    fun aPermissionTakenAwayShowsInTheStateNotAsASilentFailure() = runTest {
+        val r = rig()
+        r.provider.failWith = SecurityException()
+        r.begin()
+        r.settle()
+        assertEquals(SendIssue.NO_PERMISSION, r.sharing.serviceState.value.issue)
+    }
+
+    @Test
+    fun aRefusedServiceIsSaidUnlessTheAppIsInFront() = runTest {
+        val r = rig()
+        r.platform.refuse = true
+        r.begin()
+        assertEquals(SendIssue.SERVICE, r.sharing.serviceState.value.issue)
+        r.sharing.setInFront(true)
+        r.settle()
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+    }
+
+    @Test
+    fun theDueStateIsPausedNotAnIssue() = runTest {
+        val r = rig()
+        r.begin()
+        due = true
+        r.elapse(Duration.ofSeconds(6))
+        assertTrue(r.sharing.serviceState.value.paused)
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+    }
+
+    // --- strict reading of location.share.list (M3) ---
+
+    private fun read(vararg entries: String): List<OutgoingShare>? =
+        ShareWire.outgoing(obj("""{"outgoing":[${entries.joinToString(",")}]}"""), "dev-this", emptySet(), t0)
+
+    private fun entry(
+        mode: String = "continuous",
+        interval: String? = """"interval_seconds":60,""",
+        history: String = "false",
+        expires: Instant = t0.plusSeconds(3_600),
+    ) = """{"share_id":"s","connection_id":"c","mode":"$mode","precision":"approximate",${interval ?: ""}"history":$history,"device_id":"d","started_at":"$t0","expires_at":"$expires"}"""
+
+    @Test
+    fun aWellFormedListIsRead() {
+        assertEquals(1, read(entry())!!.size)
+        assertEquals(1, read(entry(mode = "once", interval = null, expires = t0.plusSeconds(900)))!!.size)
+        assertEquals(1, read(entry(expires = t0.plusSeconds(604_800)))!!.size)
+        assertEquals(1, read(entry(interval = """"interval_seconds":10,"""))!!.size)
+        assertEquals(1, read(entry(interval = """"interval_seconds":3600,"""))!!.size)
+    }
+
+    @Test
+    fun oneBadEntryMakesTheWholeListUnreadable() {
+        assertNull("continuous without an interval", read(entry(), entry(interval = null)))
+        assertNull(read(entry(interval = """"interval_seconds":9,""")))
+        assertNull(read(entry(interval = """"interval_seconds":3601,""")))
+        assertNull(read(entry(interval = """"interval_seconds":"60",""")))
+        assertNull("a once share with an interval", read(entry(mode = "once")))
+        assertNull("history is not a boolean", read(entry(history = "\"false\"")))
+        assertNull(read(entry(history = "1")))
+        assertNull("more than 7 days ahead", read(entry(expires = t0.plusSeconds(604_800 + 3_600))))
+    }
+
+    @Test
+    fun anUnreadableListIsNeverApplied() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${entry(interval = null)}]"
+        r.sharing.resume()
+        r.settle()
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
     }
 
     private companion object {

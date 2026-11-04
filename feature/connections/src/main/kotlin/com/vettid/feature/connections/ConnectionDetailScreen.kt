@@ -248,7 +248,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
         if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
-            LocationCard(state.location, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
+            LocationCard(state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
         }
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.

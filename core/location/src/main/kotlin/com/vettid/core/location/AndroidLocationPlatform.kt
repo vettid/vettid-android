@@ -4,9 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import android.location.LocationManager
 import com.vettid.core.data.location.LocationPlatform
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.PositionProvider
+import com.vettid.core.data.location.SendIssue
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -35,6 +37,17 @@ class AndroidLocationPlatform(
     override fun startService(): Boolean = LocationService.start(app)
 
     override fun stopService() = LocationService.stop(app)
+
+    override fun issue(): SendIssue {
+        val fine = ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val manager = app.getSystemService(LocationManager::class.java)
+        return when {
+            !fine && !coarse -> SendIssue.NO_PERMISSION
+            manager != null && !manager.isLocationEnabled -> SendIssue.LOCATION_OFF
+            else -> SendIssue.NONE
+        }
+    }
 
     override fun precise(): Boolean =
         ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED

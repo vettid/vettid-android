@@ -58,6 +58,17 @@ class SharingTextTest {
     }
 
     @Test
+    fun whyNothingIsSentIsSaidInPlainWords() {
+        fun issue(i: com.vettid.core.data.location.SendIssue) = title(state("c1").copy(issue = i))
+        assertEquals("Not sending until your vault has stopped a share.", issue(com.vettid.core.data.location.SendIssue.STOP_PENDING))
+        assertEquals("Not sending: location is off for VettID.", issue(com.vettid.core.data.location.SendIssue.NO_PERMISSION))
+        assertEquals("Not sending: location is off on this phone.", issue(com.vettid.core.data.location.SendIssue.LOCATION_OFF))
+        assertEquals("Not sending: open VettID to carry on.", issue(com.vettid.core.data.location.SendIssue.SERVICE))
+        // Paused by the daily check says its own words first.
+        assertEquals("Paused until your daily check.", title(state("c1", paused = true).copy(issue = com.vettid.core.data.location.SendIssue.NO_PERMISSION)))
+    }
+
+    @Test
     fun withoutAnameNoNameIsSaid() {
         // The app lock's cover is up, or the name is not known yet.
         assertEquals("Sharing your location", title(state("c1"), emptyMap()))

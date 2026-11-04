@@ -9,8 +9,6 @@
     <!-- DRAFT: ANDROID-PLAN §4 Location. -->
     <string name="core_location_notification_resumed">Sharing your location with %1$s again, until %2$s.</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location. -->
-    <string name="core_location_notification_paused">Paused until your daily check.</string>
-    <!-- DRAFT: ANDROID-PLAN §4 Location. -->
     <string name="core_location_stop_all">Stop all</string>
     <!-- NEW: not in the plan (the action of the paused notification; the plan names "Check now"). -->
     <string name="core_location_check_now">Check now</string>
