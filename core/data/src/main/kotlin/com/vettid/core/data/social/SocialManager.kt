@@ -1382,16 +1382,16 @@ class SocialManager internal constructor(
         return ListRead(listed, grantsOk, criticalOk, sharesOk)
     }
 
+    /** Test hook: runs between an approvals read and its guarded write. */
+    @Volatile
+    internal var approvalsHook: (() -> Unit)? = null
+
     /**
      * Runs a read of the lists and takes it in. What happens while it is on its way (the vault answers it as of when it
      * looked): share items decided meanwhile stay out of it, and a `share.pending` batch that arrived meanwhile stays in,
      * in the order the app received them (VAULT-MESSAGING 0.55.7 §10.12 "Share questions that change while the app reads
      * the lists"). Several reads may overlap.
      */
-    /** Test hook: runs between an approvals read and its guarded write. */
-    @Volatile
-    internal var approvalsHook: (() -> Unit)? = null
-
     internal suspend fun refreshApprovalsFrom(t: Instant, read: suspend () -> ListRead) {
         val epoch = lockEpoch.get()
         val hold = holdEpoch.get()

@@ -14,15 +14,15 @@ import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertNull
+import org.junit.Assert.fail
+import java.lang.management.ManagementFactory
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
@@ -35,6 +35,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
 
 /** A read answered after a lock (or a clear) puts nothing back: not the old vault's names, not its older messages. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -161,33 +163,58 @@ class LockRaceTest {
         m.approvalsHook = {
             m.forgetOpenVault()
             m.reopen()
-            runBlocking { m.batch("r2", "X") } // an approval that arrived after the unlock
+            // A grant request that arrived after the unlock: the stale list does not hold it, so a prune would drop it.
+            runBlocking { m.onEvent(event("grant.pending", """{"request_id":"g1","connection_id":"c1","exp":"2026-10-08T13:00:00.000Z"}""")) }
         }
         m.refreshApprovalsFrom(now) { stale }
         m.approvalsHook = null
         runCurrent()
         assertNull("the stale list is not taken in", m.shareItems("r1"))
-        assertEquals("the new event stays", listOf("X"), m.shareItems("r2"))
+        assertTrue("the new grant request stays", m.approvals.value.any { it is Approval.GrantRequest && it.requestId == "g1" })
     }
 
     @Test
-    fun overlappingApprovalsReadsDoNotDeadlock() = runBlocking {
-        val m = SocialManager(
-            CoroutineScope(Dispatchers.Default),
-            api = { throw VaultFailure(FailureKind.OTHER) },
-            credential = credential,
-            clock = Clock.fixed(now, ZoneOffset.UTC),
-        )
-        m.batch("r1", "A")
-        val r = listRead(shareEntry("r1", "A"))
-        // Real threads and a real-time timeout: virtual time would fire it at once.
-        withContext(Dispatchers.Default) {
-            withTimeout(30_000) {
-                repeat(300) {
-                    listOf(async { m.refreshApprovalsFrom(now) { r } }, async { m.refreshApprovalsFrom(now) { r } }, async { m.batch("r1", "B") }).awaitAll()
+    fun overlappingApprovalsReadsDoNotDeadlock() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val m = SocialManager(
+                scope,
+                api = { throw VaultFailure(FailureKind.OTHER) },
+                credential = credential,
+                clock = Clock.fixed(now, ZoneOffset.UTC),
+            )
+            val r = runBlocking {
+                m.batch("r1", "A")
+                listRead(shareEntry("r1", "A"))
+            }
+            // Plain daemon threads: a thread blocked entering a monitor cannot be cancelled, so this must fail, not hang.
+            val start = CountDownLatch(1)
+            val threads = List(4) { n ->
+                thread(isDaemon = true, name = "approvals-$n") {
+                    start.await()
+                    runBlocking {
+                        repeat(300) {
+                            m.refreshApprovalsFrom(now) { r }
+                            m.refreshApprovalsFrom(now) { r }
+                            m.batch("r1", "B")
+                        }
+                    }
                 }
             }
+            start.countDown()
+            val bean = ManagementFactory.getThreadMXBean()
+            val deadline = System.nanoTime() + 30_000_000_000L
+            while (threads.any { it.isAlive } && System.nanoTime() < deadline) {
+                bean.findDeadlockedThreads()?.let { ids ->
+                    val stuck = bean.getThreadInfo(ids, 20).joinToString("\n") { "${it.threadName}: ${it.lockName} held by ${it.lockOwnerName}\n" + it.stackTrace.joinToString("\n") }
+                    fail("deadlock:\n$stuck")
+                }
+                Thread.sleep(100)
+            }
+            assertTrue("every thread finished", threads.none { it.isAlive })
+            assertEquals(setOf("A", "B"), m.shareItems("r1")?.toSet())
+        } finally {
+            scope.cancel()
         }
-        assertEquals(setOf("A", "B"), m.shareItems("r1")?.toSet())
     }
 }
