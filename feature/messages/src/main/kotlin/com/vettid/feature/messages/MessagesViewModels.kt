@@ -229,6 +229,22 @@ class ConversationViewModel @Inject constructor(
             }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
+    // Every field the `init` coroutines read is declared above `init`: `viewModelScope` runs on `Main.immediate`, so a
+    // coroutine can run inside the constructor, before a field declared below `init` is set (a cached connection made
+    // the presence query read a null [shown]).
+
+    /** The screen is at least STARTED or stopped ([setVisible]): presence is asked only while it is shown. */
+    private val shown = MutableStateFlow(true)
+
+    /** The upload being sent, kept for Retry (the same request) or Cancel (a discard). */
+    private var pendingPhoto: PendingPhoto? = null
+
+    /** The pass that reads and prepares picked pictures, the send loop, and whether the member cancelled. */
+    private var photoJob: Job? = null
+
+    @Volatile
+    private var photosCancelled = false
+
     init {
         viewModelScope.launch {
             // The calls of this conversation: read when the vault is known to have calls, and again after each call
@@ -288,8 +304,6 @@ class ConversationViewModel @Inject constructor(
             }
         }
     }
-
-    private val shown = MutableStateFlow(true)
 
     /** The screen is at least STARTED ([shown]) or stopped: presence is asked only while it is shown. */
     fun setVisible(visible: Boolean) {
@@ -384,18 +398,9 @@ class ConversationViewModel @Inject constructor(
 
     // --- photos (ANDROID-PLAN 0.1.39) ---
 
-    /** The upload being sent, kept for Retry (the same request) or Cancel (a discard). */
-    private var pendingPhoto: PendingPhoto? = null
-
     fun startCapture() = local.update { it.copy(capturing = true) }
 
     fun stopCapture() = local.update { it.copy(capturing = false) }
-
-    /** The pass that reads and prepares picked pictures, the send loop, and whether the member cancelled. */
-    private var photoJob: Job? = null
-
-    @Volatile
-    private var photosCancelled = false
 
     /**
      * Pictures the Photo Picker handed over, read into memory and prepared one at a time (bounds, orientation, JPEG,
