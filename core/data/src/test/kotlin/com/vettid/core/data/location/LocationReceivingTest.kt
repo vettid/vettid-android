@@ -528,6 +528,14 @@ class LocationReceivingTest {
     }
 
     @Test
+    fun aStartedThatComesAfterItsOwnStoppedDoesNotBringTheShareIn() {
+        val r = rig(TestScope())
+        r.onEvent(event("stopped", id = "s9"))
+        r.onEvent(event("started", id = "s9", extra = ""","mode":"once","precision":"city","expires_at":"${t0.plusSeconds(900)}""""))
+        assertTrue(r.incoming.value.isEmpty())
+    }
+
+    @Test
     fun clearDropsEverythingReceived() {
         val r = rig(TestScope())
         r.take(entry("s1", last = position()))

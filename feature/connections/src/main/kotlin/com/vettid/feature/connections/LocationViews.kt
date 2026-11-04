@@ -557,7 +557,12 @@ class PositionViewModel @Inject constructor(
     /** The screen is at least STARTED: the phone's own place is asked for only then. */
     private val shown = MutableStateFlow(true)
 
-    private val held = ownerCheck.ownerCheck.map { it?.gated(Instant.now()) == true }
+    /** Bumped by the screen's clock ([look]): the check can come due by time alone, so the gate is judged again then. */
+    private val looks = MutableStateFlow(0)
+    private val held = combine(ownerCheck.ownerCheck, looks) { v, _ -> v?.gated(Instant.now()) == true }.distinctUntilChanged()
+
+    /** The screen's clock ticked (every 30 s while shown): the daily check is looked at again. */
+    fun look() = looks.update { it + 1 }
 
     val uiState: StateFlow<PositionUiState> = combine(
         local,
@@ -712,7 +717,7 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
                 noMaps = try {
                     context.startActivity(Intent(Intent.ACTION_VIEW, geoUri(p.lat, p.lon)))
                     false
-                } catch (_: android.content.ActivityNotFoundException) {
+                } catch (_: RuntimeException) { // no activity for it, or the system refused the hand-off
                     true
                 }
             },

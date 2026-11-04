@@ -279,6 +279,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
         // The phone's own place is asked for only while the screen is shown.
         LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
         LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
+        // The daily check can come due by time alone: it is looked at again with the screen's own clock.
+        val tick = rememberNow()
+        androidx.compose.runtime.LaunchedEffect(tick) { vm.look() }
         PositionScreen(state, host.onBack, vm::refresh, vm::askMaps, vm::dismissMaps)
     }
     composable<InviteRoute> {

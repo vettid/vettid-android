@@ -12,6 +12,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -19,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.SendIssue
+import com.vettid.core.data.location.ShareTime
 import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.social.Approval
@@ -56,8 +63,13 @@ internal fun LocationRequestScreen(
         // Granted: the share starts, once. Refused: the request stays and says why, with Open settings.
         actions.onPermissionAnswered(granted.values.any { it })
     }
-    val hasPermission = permissionsGranted(context)
-    val canShare = !a.connectionService
+    var hasPermission by remember { mutableStateOf(permissionsGranted(context)) }
+    // Back from Android's settings: a permission given there clears the explanation and the stale reason.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        hasPermission = permissionsGranted(context)
+        if (hasPermission) actions.onPermissionNowGranted()
+    }
+    val canShare = !a.connectionService && state.sharingUntil == null
     FormScaffold(
         title = locationTitle(a),
         body = null,
@@ -69,8 +81,7 @@ internal fun LocationRequestScreen(
                 actions.onShareOnce()
             } else {
                 // Busy before the system's prompt is up, so that a second tap cannot start a second request.
-                actions.onPermissionAsked()
-                ask.launch(PERMISSIONS)
+                if (actions.onPermissionAsked()) ask.launch(PERMISSIONS)
             }
         },
         busy = state.busy,
@@ -91,6 +102,16 @@ internal fun LocationRequestScreen(
         a.exp?.let {
             Spacer(Modifier.height(Spacing.s))
             Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall)
+        }
+        state.sharingUntil?.let { until ->
+            Spacer(Modifier.height(Spacing.m))
+            val who = AccountNames.isolateOrNull(a.firstName) ?: AccountNames.isolateOrNull(a.connectionName)
+                ?: stringResource(R.string.approvals_a_connection)
+            Text(
+                stringResource(R.string.approvals_location_already_sharing, who, ShareTime.format(context, until)),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.testTag("location_request_already_sharing"),
+            )
         }
         PermissionNotes(canShare && !hasPermission, state.locationIssue)
         state.error?.let {

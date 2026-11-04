@@ -258,4 +258,6 @@
     <string name="approvals_location_permission_denied">Location is off for VettID. Allow it in Android settings to share your location.</string>
     <!-- NEW: not in the plan (the same words as the share sheet) -->
     <string name="approvals_location_open_settings">Open settings</string>
+    <!-- NEW: not in the plan (the asker already has a share from this phone; lead decision) -->
+    <string name="approvals_location_already_sharing">You\'re already sharing your location with %1$s until %2$s.</string>
 </resources>

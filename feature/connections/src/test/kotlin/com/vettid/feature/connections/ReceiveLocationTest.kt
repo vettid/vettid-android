@@ -492,6 +492,16 @@ class ReceiveLocationTest {
     }
 
     @Test
+    fun theScreensClockLooksAtTheDailyCheckAgainWithoutLoopingInTheViewModel() = runTest {
+        location.incoming.value = listOf(share())
+        val vm = positionVm()
+        advanceUntilIdle() // would never return if the view model ticked by itself
+        vm.look()
+        advanceUntilIdle()
+        assertFalse(read(vm.uiState).held)
+    }
+
+    @Test
     fun theGlanceDescriptionIsOneSentenceWithoutTheAge() {
         val r = org.robolectric.RuntimeEnvironment.getApplication().resources
         assertEquals("Shares their location with you", r.getString(R.string.connections_location_glance))

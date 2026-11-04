@@ -129,6 +129,8 @@ internal class LocationReceiving(
                 if (epoch != lockEpoch) return
                 if (drop(id)) publish()
                 changedAt[id] = ++seq
+                // A `started` that comes after its own `stopped` (out of order) must not bring it in, held or not.
+                markEnded(id)
             }
             "started" -> if (open) onStarted(id, b, epoch)
             "snapshot" -> if (open) onSnapshot(id, b, epoch)
@@ -360,15 +362,17 @@ internal class LocationReceiving(
         if (timers[share.shareId]?.isActive != true) timers[share.shareId] = scope.launch { expire(share.shareId) }
     }
 
+    private fun markEnded(id: String) {
+        ended += id
+        if (ended.size > MAX_TOMBS) ended.remove(ended.first())
+    }
+
     /** True when the share was there. */
     private fun drop(id: String): Boolean {
         timers.remove(id)?.cancel()
         addedAt.remove(id)
         val had = shares.remove(id) != null
-        if (had) {
-            ended += id
-            if (ended.size > MAX_TOMBS) ended.remove(ended.first())
-        }
+        if (had) markEnded(id)
         return had
     }
 

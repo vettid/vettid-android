@@ -203,6 +203,53 @@ class LocationRequestTest {
     }
 
     @Test
+    fun whileSharingWithTheAskerShareIsRefusedAndOnlyNotNowIsOffered() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        val share = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.started.clear()
+        runCurrent()
+        val s = m.uiState.value
+        assertEquals(share.expiresAt, s.sharingUntil)
+        m.shareOnce()
+        runCurrent()
+        assertTrue("refused in the view model, not only by the button", location.started.isEmpty())
+        rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
+        rule.onNodeWithTag("location_request_already_sharing").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Share once").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Share for a while…").fetchSemanticsNodes().size)
+        rule.onNodeWithText("Not now").assertIsDisplayed()
+        // the share ends: the actions are back
+        location.stop(share.shareId)
+        runCurrent()
+        assertNull(m.uiState.value.sharingUntil)
+        m.shareOnce()
+        runCurrent()
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun aSecondTapInTheSameFrameDoesNotAskThePermissionAgain() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        assertTrue(m.permissionAsked())
+        assertFalse("the screen launches the prompt only when this is true", m.permissionAsked())
+    }
+
+    @Test
+    fun comingBackFromSettingsWithThePermissionClearsTheStaleReason() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        m.permissionAsked()
+        m.permissionAnswered(false)
+        runCurrent()
+        assertEquals(SendIssue.NO_PERMISSION, m.uiState.value.locationIssue)
+        m.permissionNowGranted()
+        runCurrent()
+        assertNull(m.uiState.value.locationIssue)
+    }
+
+    @Test
     fun aRefusedPermissionKeepsTheRequestWithTheReasonAndOpenSettings() = runTest {
         val m = vm(ask())
         runCurrent()
