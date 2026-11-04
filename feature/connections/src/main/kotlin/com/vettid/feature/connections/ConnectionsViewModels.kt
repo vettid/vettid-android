@@ -655,7 +655,14 @@ data class ConnectionDetailUiState(
  * The incoming card: "{First}'s location · {age} · within {accuracy}" / "Until {time}". [at] and [accuracyM] are the latest
  * position's time and accuracy, null before one arrives; the coordinates are not here.
  */
-data class DetailIncoming(val shareId: String, val until: Instant, val at: Instant?, val accuracyM: Double?)
+data class DetailIncoming(
+    val shareId: String,
+    val until: Instant,
+    val at: Instant?,
+    val accuracyM: Double?,
+    /** How exactly the sharer shows their position (the plan's card says it beside the age). */
+    val precision: com.vettid.core.data.location.SharePrecision = com.vettid.core.data.location.SharePrecision.APPROXIMATE,
+)
 
 /** Fits a note in the vault's byte bound at a character boundary. */
 internal object NoteBytes {
@@ -805,7 +812,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 location = shared.location,
                 locationMissed = shared.missed,
                 locationOffered = offered != LocationAvailability.UNSUPPORTED,
-                incoming = incoming?.let { DetailIncoming(it.shareId, it.expiresAt, it.last?.at, it.last?.accuracyM) },
+                incoming = incoming?.let { DetailIncoming(it.shareId, it.expiresAt, it.last?.at, it.last?.accuracyM, it.precision) },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 

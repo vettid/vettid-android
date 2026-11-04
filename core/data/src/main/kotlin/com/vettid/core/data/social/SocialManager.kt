@@ -209,7 +209,13 @@ class SocialManager internal constructor(
     private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
 
     override suspend fun dismissLocationRequest(requestId: String) {
-        synchronized(localLock) { dismissedLocationFlow.update { it + "location:$requestId" } }
+        // A tap just before a lock or a hold must not put the set back after it: the epochs are read at entry, checked at the write.
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
+        synchronized(localLock) {
+            if (stale(epoch, hold)) return
+            dismissedLocationFlow.update { it + "location:$requestId" }
+        }
         // Nothing is sent and the vault's feed item is not touched: the plan has no decline, only a local hide.
         closeFeedKey("location:$requestId")
         dropApproval("location:$requestId")

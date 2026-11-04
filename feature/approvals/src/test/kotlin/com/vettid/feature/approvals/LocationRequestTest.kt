@@ -229,6 +229,34 @@ class LocationRequestTest {
     }
 
     @Test
+    fun shareOnceIsRefusedWhenTheRequestWasClosedElsewhereMeanwhile() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        m.permissionAsked()
+        social.approvals.value = emptyList() // closed elsewhere while the prompt was up
+        runCurrent()
+        m.permissionAnswered(true)
+        runCurrent()
+        assertTrue(location.started.isEmpty())
+    }
+
+    @Test
+    fun shareForAWhileIsRefusedByTheViewModelWhileSharingOrClosed() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        assertEquals("r1", m.shareWhileTarget()?.requestId)
+        location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        runCurrent()
+        assertNull(m.shareWhileTarget())
+        location.stopAll()
+        runCurrent()
+        assertEquals("r1", m.shareWhileTarget()?.requestId)
+        social.approvals.value = emptyList()
+        runCurrent()
+        assertNull(m.shareWhileTarget())
+    }
+
+    @Test
     fun aSecondTapInTheSameFrameDoesNotAskThePermissionAgain() = runTest {
         val m = vm(ask())
         runCurrent()

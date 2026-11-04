@@ -174,7 +174,7 @@ internal class LocationReceiving(
     private fun onUpdate(b: JsonObject, epoch: Int) {
         val id = VaultJson.str(b, "share_id")?.takeIf { it.isNotEmpty() } ?: return
         val connection = VaultJson.str(b, "connection_id")?.takeIf { it.isNotEmpty() } ?: return
-        val p = ShareWire.position(b, notAfter = skewLimit()) ?: return
+        val p = ShareWire.position(b, requireAccuracy = true, notAfter = skewLimit()) ?: return
         val at = now()
         synchronized(lock) {
             if (epoch != lockEpoch) return

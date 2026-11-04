@@ -140,6 +140,8 @@ data class ShareLocationUiState(
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
     val issue: SendIssue? = null,
+    /** Opened from a request while a share to this connection is active: nothing is started (another would replace it). */
+    val alreadySharing: Boolean = false,
 ) {
     /** The vault is known to have location. */
     val available: Boolean get() = availability == LocationAvailability.AVAILABLE
@@ -187,6 +189,11 @@ class ShareLocationViewModel @Inject constructor(
 
     init {
         if (requestId != null) open()
+    }
+
+    /** An outgoing share to [connection] that has not ended, is not over, and is not a once share already delivered. */
+    private fun activeShareTo(connection: String): Boolean = location.outgoing.value.any {
+        it.connectionId == connection && it.expiresAt.isAfter(java.time.Instant.now()) && !(it.once && it.lastSentAt != null)
     }
 
     /** Opens the sheet with the defaults: For a while, 1 hour, Approximate, every minute, no trail. */
@@ -247,6 +254,11 @@ class ShareLocationViewModel @Inject constructor(
         val known = location.availability.value == LocationAvailability.AVAILABLE
         val inFlight = s.busy || s.startedId != null
         if (inFlight || s.permission == LocationPermission.NONE || !known) return
+        // Answering a request while already sharing with this connection is off (as Share once is): the view model refuses it too.
+        if (requestId != null && activeShareTo(id)) {
+            local.update { it.copy(alreadySharing = true) }
+            return
+        }
         val timing = if (s.once) ShareTiming.Once else ShareTiming.ForAWhile(s.length, s.interval)
         local.update { it.copy(busy = true, error = null, errorCode = null, issue = null) }
         viewModelScope.launch {
@@ -441,6 +453,14 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             title = stringResource(R.string.connections_error_title),
             body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
             modifier = Modifier.testTag("share_location_error"),
+        )
+    }
+    if (state.alreadySharing) {
+        Text(
+            stringResource(R.string.connections_location_already_sharing, name),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.testTag("share_location_already_sharing"),
         )
     }
     PrimaryButton(

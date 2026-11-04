@@ -651,9 +651,18 @@ class ApprovalDetailViewModel @Inject constructor(
      * One share per tap: a second tap (or the permission result of the first) while a start is out does nothing; and none while
      * already sharing with this connection (a share not ended, not being stopped, not over): another would replace it.
      */
-    private fun mayShareOnce(a: Approval.LocationRequest): Boolean =
-        !local.value.busy && !a.connectionService && !expiredNow(a) &&
-            sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) == null
+    private fun mayShareOnce(a: Approval.LocationRequest): Boolean = !local.value.busy && mayShare(a)
+
+    /**
+     * Whether this request may be answered by sharing at all: not from a service, not expired, still listed (it may have been closed
+     * elsewhere while the permission prompt was up), and no share to the asker active. Share once and Share for a while both follow it.
+     */
+    private fun mayShare(a: Approval.LocationRequest): Boolean = !a.connectionService && !expiredNow(a) &&
+        repo.approvals.value.any { it.key == a.key } &&
+        sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) == null
+
+    /** **Share for a while…**: the request to open the connection's share sheet for, or null when it may not be answered by sharing. */
+    fun shareWhileTarget(): Approval.LocationRequest? = (uiState.value.approval as? Approval.LocationRequest)?.takeIf { mayShare(it) }
 
     /** The phone's permission is being asked for (the system's prompt is up): taps wait, and the result starts the share once. */
     fun permissionAsked(): Boolean {

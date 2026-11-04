@@ -45,6 +45,7 @@ import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.PositionOffset
 import com.vettid.core.data.location.PositionText
 import com.vettid.core.data.location.ReceivedPosition
+import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareTime
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
@@ -75,7 +76,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
@@ -144,6 +144,12 @@ internal fun IncomingLocationCard(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("detail_incoming_until"),
+        )
+        Text(
+            stringResource(precisionLabel(incoming.precision)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("detail_incoming_precision"),
         )
         Row(
             Modifier.fillMaxWidth(),
@@ -272,7 +278,7 @@ data class OutgoingRow(
     val shareId: String,
     val connectionId: String,
     val name: String?,
-    val precision: com.vettid.core.data.location.SharePrecision,
+    val precision: SharePrecision,
     val until: Instant,
     val lastSentAt: Instant?,
     val stopping: Boolean,
@@ -517,10 +523,10 @@ private fun Header(text: Int) {
     )
 }
 
-private fun precisionLabel(p: com.vettid.core.data.location.SharePrecision): Int = when (p) {
-    com.vettid.core.data.location.SharePrecision.APPROXIMATE -> R.string.connections_location_approximate
-    com.vettid.core.data.location.SharePrecision.EXACT -> R.string.connections_location_exact
-    com.vettid.core.data.location.SharePrecision.CITY -> R.string.connections_location_city
+private fun precisionLabel(p: SharePrecision): Int = when (p) {
+    SharePrecision.APPROXIMATE -> R.string.connections_location_approximate
+    SharePrecision.EXACT -> R.string.connections_location_exact
+    SharePrecision.CITY -> R.string.connections_location_city
 }
 
 // --- the position (no map in L1) ---
@@ -534,7 +540,7 @@ data class PositionUiState(
     val confirmMaps: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
-    /** The daily owner check is due or held: what was received is gone from memory, and nothing new is said about the share. */
+    /** The daily owner check is due or held, or overdue locally while the state is still OK: nothing of the share is shown or said. */
     val held: Boolean = false,
 ) {
     /** The "hands the position to another app" question is open: the daily check waits for the decision. */
@@ -575,7 +581,7 @@ class PositionViewModel @Inject constructor(
         PositionUiState(
             loaded = true,
             name = cs.firstOrNull { it.id == id }?.let { sharingName(it) },
-            share = share,
+            share = share.takeIf { !h },
             offset = o.takeIf { !h },
             confirmMaps = s.confirmMaps,
             error = s.error,
@@ -591,12 +597,15 @@ class PositionViewModel @Inject constructor(
         viewModelScope.launch {
             val mine = location.incoming.map { l -> l.firstOrNull { it.connectionId == id }?.last }.distinctUntilChanged()
             combine(mine, shown) { last, v -> last to v }
-                .filter { (last, visible) -> last != null && visible }
-                .collectLatest {
-                    offset.value = try {
-                        location.offsetFromHere(id)
-                    } catch (_: VaultFailure) {
-                        null
+                .collectLatest { (last, visible) ->
+                    // An old distance is never shown beside a new position: cleared before each recompute (and when none is left).
+                    offset.value = null
+                    if (last != null && visible) {
+                        offset.value = try {
+                            location.offsetFromHere(id)
+                        } catch (_: VaultFailure) {
+                            null
+                        }
                     }
                 }
         }
@@ -633,11 +642,26 @@ internal fun geoUri(lat: Double, lon: Double): Uri {
 
 /** The latest position as text: coordinates (the same in every locale), accuracy, age and, when known, the offset from this phone. */
 @Composable
-private fun PositionCard(p: ReceivedPosition, offset: PositionOffset?, now: Instant) {
+private fun PositionCard(
+    p: ReceivedPosition,
+    offset: PositionOffset?,
+    now: Instant,
+    precision: SharePrecision,
+) {
     val context = LocalContext.current
     DetailCard(Modifier.testTag("position_card")) {
         val coordinates = String.format(Locale.ROOT, "%.5f, %.5f", p.lat, p.lon)
         Text(coordinates, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("position_coordinates"))
+        Text(stringResource(precisionLabel(precision)), modifier = Modifier.testTag("position_precision"))
+        if (precision != SharePrecision.EXACT) {
+            // The point stands for an area (about 1 km, or 10 km for City), not for the place itself.
+            Text(
+                stringResource(R.string.connections_location_position_area),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("position_area"),
+            )
+        }
         PositionText.accuracy(context.resources, p.accuracyM)?.let {
             Text(stringResource(R.string.connections_location_position_within, it), modifier = Modifier.testTag("position_accuracy"))
         }
@@ -650,7 +674,9 @@ private fun PositionCard(p: ReceivedPosition, offset: PositionOffset?, now: Inst
             },
             modifier = Modifier.testTag("position_age"),
         )
-        offset?.let { Text(PositionText.offset(context.resources, it, p.accuracyM), modifier = Modifier.testTag("position_offset")) }
+        offset?.let {
+            Text(PositionText.offset(context.resources, it, p.accuracyM, precision), modifier = Modifier.testTag("position_offset"))
+        }
     }
 }
 
@@ -692,7 +718,9 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
                     stringResource(R.string.connections_location_position_waiting),
                     modifier = Modifier.testTag("position_waiting"),
                 )
-                p != null -> PositionCard(p, state.offset, now)
+                p != null -> {
+                    PositionCard(p, state.offset, now, share?.precision ?: SharePrecision.APPROXIMATE)
+                }
             }
             if (noMaps) {
                 Text(stringResource(R.string.connections_location_no_maps), modifier = Modifier.testTag("position_no_maps"))

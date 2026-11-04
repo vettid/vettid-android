@@ -506,4 +506,90 @@ class ReceiveLocationTest {
         val r = org.robolectric.RuntimeEnvironment.getApplication().resources
         assertEquals("Shares their location with you", r.getString(R.string.connections_location_glance))
     }
+
+    // --- precision, L1-L4 ---
+
+    @Test
+    fun theOffsetThresholdIsTheLargerOfTheAccuracyAndTheSharesOwnArea() {
+        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
+        val text = com.vettid.core.data.location.PositionText
+        val approx = SharePrecision.APPROXIMATE
+        val city = SharePrecision.CITY
+        // City, accuracy unknown: 5 km from the centre of a ~11 km area is still "near"
+        assertEquals("Near this phone", text.offset(r, PositionOffset(5_000.0, 10.0), null, city))
+        assertTrue(text.offset(r, PositionOffset(15_000.0, 0.0), null, city).contains("north"))
+        assertEquals("Near this phone", text.offset(r, PositionOffset(800.0, 10.0), 0.0, approx))
+        assertTrue(text.offset(r, PositionOffset(3_000.0, 0.0), null, approx).contains("north"))
+        // Exact with no accuracy: a direction is given from 800 m
+        assertTrue(text.offset(r, PositionOffset(800.0, 0.0), null, SharePrecision.EXACT).contains("north"))
+    }
+
+    @Test
+    fun theCardAndThePositionScreenSayThePrecisionAndMarkAnAreaWhenNotExact() {
+        val c = FakeSocial.connection("c1", "Sam")
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), null, SharePrecision.CITY))
+        rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
+        rule.onNodeWithTag("detail_incoming_precision").assertIsDisplayed()
+        rule.onNodeWithText("City").assertIsDisplayed()
+    }
+
+    @Test
+    fun thePositionScreenMarksAnApproximateAreaButNotAnExactSpot() {
+        val city = share().copy(precision = SharePrecision.CITY)
+        rule.setContent { PositionScreen(PositionUiState(loaded = true, name = "Sam", share = city), {}, {}, {}, {}) }
+        rule.onNodeWithTag("position_area").assertIsDisplayed()
+        rule.onNodeWithTag("position_precision").assertIsDisplayed()
+    }
+
+    @Test
+    fun anExactShareHasNoAreaMark() {
+        val exact = share().copy(precision = SharePrecision.EXACT)
+        rule.setContent { PositionScreen(PositionUiState(loaded = true, name = "Sam", share = exact), {}, {}, {}, {}) }
+        assertEquals(0, rule.onAllNodesWithTag("position_area").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun anOverdueCheckHidesThePositionEvenWhileTheStateIsStillOk() = runTest {
+        location.incoming.value = listOf(share())
+        vault.ownerCheck.value = com.vettid.core.data.vault.OwnerCheckView(
+            com.vettid.core.data.vault.OwnerCheckState.OK, Instant.now().minusSeconds(60), 86_400, 0, false, null,
+        )
+        val vm = positionVm()
+        val s = read(vm.uiState)
+        assertTrue(s.held)
+        assertNull(s.share)
+        assertNull(s.offset)
+    }
+
+    @Test
+    fun aStaleDistanceIsClearedWhenThePositionChangesOrGoes() = runTest {
+        location.offset = PositionOffset(3_000.0, 0.0)
+        location.incoming.value = listOf(share())
+        val vm = positionVm()
+        assertEquals(3_000.0, read(vm.uiState).offset!!.meters, 0.0)
+        // a new position: the next recompute answers null (e.g. no fix), and the old distance does not stay
+        location.offset = null
+        location.incoming.value = listOf(share(last = position(lat = 52.9)))
+        assertNull(read(vm.uiState).offset)
+        location.offset = PositionOffset(10_000.0, 0.0)
+        location.incoming.value = listOf(share(last = position(lat = 53.0)))
+        assertEquals(10_000.0, read(vm.uiState).offset!!.meters, 0.0)
+        // the position goes: the distance goes with it
+        location.incoming.value = listOf(share(last = null))
+        assertNull(read(vm.uiState).offset)
+    }
+
+    @Test
+    fun theDistanceUsesTheLocalesOwnDigitsWithoutStringSurgery() {
+        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
+        val old = java.util.Locale.getDefault()
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
+        try {
+            val t = com.vettid.core.data.location.PositionText.distance(r, 12_000.0)
+            assertTrue(t, t.any { it in '\u0660'..'\u0669' })
+            assertTrue(t, t.none { it in '0'..'9' })
+        } finally {
+            java.util.Locale.setDefault(old)
+        }
+    }
 }

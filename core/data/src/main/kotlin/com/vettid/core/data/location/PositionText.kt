@@ -18,6 +18,8 @@ object PositionText {
     private const val KM = 1_000.0
     private const val KM_ONE_DECIMAL_BELOW = 10.0
     private const val METRE_STEP = 10
+    private const val APPROXIMATE_RADIUS_M = 1_000.0
+    private const val CITY_RADIUS_M = 11_000.0
     private const val SECTOR = 45.0
     private const val SECTORS = 8
 
@@ -45,11 +47,11 @@ object PositionText {
             return r.getString(R.string.data_location_metres, n)
         }
         val km = meters / KM
-        val text = if (km < KM_ONE_DECIMAL_BELOW) {
-            String.format(Locale.getDefault(), "%.1f", km).removeSuffix(".0").removeSuffix(",0")
-        } else {
-            km.roundToInt().toString()
-        }
+        // The locale's own digits and separator; a whole number has no decimals.
+        val format = java.text.NumberFormat.getNumberInstance(Locale.getDefault())
+        format.maximumFractionDigits = if (km < KM_ONE_DECIMAL_BELOW) 1 else 0
+        format.minimumFractionDigits = 0
+        val text = format.format(km)
         return r.getString(R.string.data_location_kilometres, text)
     }
 
@@ -65,12 +67,20 @@ object PositionText {
      * "About 3 km north-east of this phone"; "Near this phone" (no direction) when the distance is within the position's own accuracy,
      * or under 10 m: a direction from a circle one is inside would be made up.
      */
-    fun offset(r: Resources, o: PositionOffset, accuracyM: Double? = null): String {
-        val inside = accuracyM != null && accuracyM > 0 && o.meters < accuracyM
-        return if (inside || o.meters < METRE_STEP) {
+    fun offset(r: Resources, o: PositionOffset, accuracyM: Double? = null, precision: SharePrecision = SharePrecision.EXACT): String {
+        // The position stands for a circle: its accuracy, or the share's own area when that is larger (Approximate ~1 km, City ~11 km).
+        val radius = maxOf(accuracyM ?: 0.0, nominalRadius(precision))
+        return if (o.meters < radius || o.meters < METRE_STEP) {
             r.getString(R.string.data_location_near_here)
         } else {
             r.getString(R.string.data_location_from_here, distance(r, o.meters), direction(r, o.bearingDeg))
         }
+    }
+
+    /** About how far from the real place a position of this precision may be (the vault's cells: 0.01 and 0.1 degrees). */
+    fun nominalRadius(precision: SharePrecision): Double = when (precision) {
+        SharePrecision.EXACT -> 0.0
+        SharePrecision.APPROXIMATE -> APPROXIMATE_RADIUS_M
+        SharePrecision.CITY -> CITY_RADIUS_M
     }
 }

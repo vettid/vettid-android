@@ -593,4 +593,21 @@ class ShareLocationTest {
         vm2.dismiss()
         assertNull(handle2.get<String?>(ConnectionDetailRoute.ARG_REQUEST))
     }
+
+    @Test
+    fun answeringARequestWhileSharingWithThatConnectionStartsNothing() = runTest {
+        location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.started.clear()
+        val vm = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1", ConnectionDetailRoute.ARG_REQUEST to "r1")), location)
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        assertTrue(read(vm.uiState).alreadySharing)
+        // without a request, the sheet still replaces a share, as before
+        val plain = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location)
+        plain.open()
+        plain.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals(1, location.started.size)
+    }
 }

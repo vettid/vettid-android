@@ -536,6 +536,14 @@ class LocationReceivingTest {
     }
 
     @Test
+    fun aLiveUpdateWithoutAccuracyIsNotAPosition() {
+        val r = rig(TestScope())
+        r.take(entry("s1"))
+        r.onEvent(message("location.update", """{"connection_id":"c1","share_id":"s1","lat":10.0,"lon":13.4,"at":"$t0"}"""))
+        assertNull(r.incoming.value.single().last)
+    }
+
+    @Test
     fun clearDropsEverythingReceived() {
         val r = rig(TestScope())
         r.take(entry("s1", last = position()))

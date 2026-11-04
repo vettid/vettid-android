@@ -150,10 +150,7 @@ fun NavGraphBuilder.approvalsDestination(
                 onPermissionAsked = vm::permissionAsked,
                 onPermissionNowGranted = vm::permissionNowGranted,
                 onPermissionAnswered = vm::permissionAnswered,
-                onShareWhile = {
-                    (state.approval as? Approval.LocationRequest)?.takeIf { state.sharingUntil == null }
-                        ?.let { onShareLocation(it.connectionId, it.requestId) }
-                },
+                onShareWhile = { vm.shareWhileTarget()?.let { onShareLocation(it.connectionId, it.requestId) } },
                 onNotNow = vm::notNow,
             ),
         )
