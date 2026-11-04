@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -146,6 +147,8 @@ fun VaultStatusContent(
     retry: () -> Unit,
     onBack: () -> Unit,
     signerDetails: Boolean = false,
+    credentialKey: CredentialKeyUi? = null,
+    onRetryCredentialKey: () -> Unit = {},
     onChangePin: () -> Unit = {},
     onChangePassword: () -> Unit = {},
 ) {
@@ -243,6 +246,10 @@ fun VaultStatusContent(
                             },
                             icon = Icons.Outlined.Restore,
                         )
+                        credentialKey?.let { ck ->
+                            SettingsDivider()
+                            CredentialKeyRow(ck, onRetryCredentialKey)
+                        }
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_provisional),
@@ -318,6 +325,72 @@ private fun RecoveryNotices(r: com.vettid.core.data.vault.RecoveryStatusView, on
 }
 
 private const val RECOVERY_ATTEMPTS = 10
+
+/**
+ * The Credential key row of Vault status (ANDROID-PLAN 0.1.119 §4 "Owner check and status"): the fingerprint with the
+ * line for admins and an ordinary (non-sensitive) copy; a progress line while it is asked; "cannot be checked right now"
+ * with Retry; "none yet". Never blank.
+ */
+@Composable
+private fun CredentialKeyRow(ck: CredentialKeyUi, onRetry: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val label = stringResource(R.string.settings_status_credential_key_label)
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = Spacing.xl, vertical = Spacing.m).testTag("credential_key_row"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(Spacing.xl))
+        Column(Modifier.weight(1f)) {
+            when (ck) {
+                CredentialKeyUi.Loading -> {
+                    Text(label, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        stringResource(R.string.settings_loading),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("credential_key_loading"),
+                    )
+                }
+                CredentialKeyUi.None -> Text(
+                    stringResource(R.string.settings_status_credential_key_none),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.testTag("credential_key_none"),
+                )
+                CredentialKeyUi.Unknown -> {
+                    Text(
+                        stringResource(R.string.settings_status_credential_key_unknown),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.testTag("credential_key_unknown"),
+                    )
+                    TextButton(onClick = onRetry, modifier = Modifier.testTag("credential_key_retry")) {
+                        Text(stringResource(R.string.settings_retry))
+                    }
+                }
+                is CredentialKeyUi.Shown -> {
+                    Text(
+                        stringResource(R.string.settings_status_credential_key, ck.fingerprint),
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.testTag("credential_key"),
+                    )
+                    Text(
+                        stringResource(R.string.settings_status_credential_key_admins),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = {
+                            com.vettid.core.ui.components.SecureClipboard.copy(context, label, ck.fingerprint, sensitive = false)
+                        },
+                        modifier = Modifier.testTag("credential_key_copy"),
+                    ) {
+                        Text(stringResource(R.string.settings_transfer_copy))
+                    }
+                }
+            }
+        }
+    }
+}
 
 /** A [StatusText] in words. */
 @Composable

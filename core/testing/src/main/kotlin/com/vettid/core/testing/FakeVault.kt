@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.CredentialAlarm
+import com.vettid.core.data.vault.CredentialKeyAnswer
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.CredentialStatus
 import com.vettid.core.data.vault.EnrollStep
@@ -41,7 +42,9 @@ import com.vettid.core.data.vault.SetupCodeInput
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import java.time.Instant
 
 /**
@@ -507,6 +510,21 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override suspend fun lock() {
         call("lock")
         phase.value = AppPhase.Locked
+    }
+
+    /** What the next `credentialKey()` answers (`credential.version`); a failure is `fail["credentialKey"]`. */
+    var credentialKeyAnswer = CredentialKeyAnswer(true, null)
+    private val keyUpdates = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    override val credentialKeyUpdates: SharedFlow<String> = keyUpdates
+
+    /** A test: the vault answered a create, rotate or reset whose key has this [fingerprint]. */
+    fun answerWithKey(fingerprint: String) {
+        keyUpdates.tryEmit(fingerprint)
+    }
+
+    override suspend fun credentialKey(): CredentialKeyAnswer {
+        call("credentialKey")
+        return credentialKeyAnswer
     }
 
     override suspend fun overview(): VaultOverview {

@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.TypedRecoveryCode
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 
@@ -201,6 +202,18 @@ interface VaultRepository {
      * /api/vault/status`): null when none is pending.
      */
     val pendingDeletion: StateFlow<DeletionView?> get() = NO_DELETION
+
+    /**
+     * (ANDROID-PLAN 0.1.119 §4 "Owner check and status") `credential.version` for the Credential key row of Vault status,
+     * asked each time the screen opens. Throws [VaultFailure] when it cannot be asked (an error, a timeout, a locked vault).
+     */
+    suspend fun credentialKey(): CredentialKeyAnswer
+
+    /**
+     * The fingerprint of the `key` of every `credential.create`, `.rotate`, `.reset` (and recovery or transfer) answer the
+     * vault gives this phone, so that the row shows the new one at once. Not replayed.
+     */
+    val credentialKeyUpdates: SharedFlow<String>
 
     /** Cancels the pending start-over (`POST /api/vault/deletion/cancel`, signed by the app key). True when cancelled. */
     suspend fun cancelDeletion(): Boolean = false

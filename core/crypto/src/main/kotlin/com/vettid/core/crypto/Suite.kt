@@ -113,4 +113,7 @@ object Labels {
 
     /** The identity-key fingerprint apps show for a connection (VAULT-MESSAGING 0.18.0 §10.8). */
     const val IK_FP = "vettid/vms/2/ik-fp"
+
+    /** The credential-key fingerprint apps show in Vault status (VAULT-MESSAGING 0.83.8 §10.8). */
+    const val CK_FP = "vettid/vms/2/ck-fp"
 }

@@ -34,6 +34,7 @@ import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -168,14 +169,63 @@ data class LoadState<T>(
     val errorCode: String? = null,
 )
 
+/**
+ * The Credential key row of Vault status (ANDROID-PLAN 0.1.119 §4 "Owner check and status"): never blank, and never an old
+ * value without saying so. [Unknown] is an error, a timeout or a locked vault.
+ */
+sealed interface CredentialKeyUi {
+    /** `credential.version` is being asked. */
+    data object Loading : CredentialKeyUi
+
+    /** The vault could not be asked right now; Retry asks again. */
+    data object Unknown : CredentialKeyUi
+
+    /** `exists: false`. */
+    data object None : CredentialKeyUi
+
+    /** The fingerprint of the credential key, `e939 754d 09aa a93a`. Not a secret. */
+    data class Shown(val fingerprint: String) : CredentialKeyUi
+}
+
 /** Vault status (advisory member API status + the vault's own `vault.status`). */
 @HiltViewModel
 class VaultStatusViewModel @Inject constructor(private val vault: VaultRepository) : ViewModel() {
     private val state = MutableStateFlow(LoadState<VaultOverview>())
     val uiState: StateFlow<LoadState<VaultOverview>> = state.asStateFlow()
 
+    private val key = MutableStateFlow<CredentialKeyUi>(CredentialKeyUi.Loading)
+    val credentialKey: StateFlow<CredentialKeyUi> = key.asStateFlow()
+    private var keyJob: Job? = null
+
     init {
         load()
+        loadCredentialKey()
+        // A create, rotate or reset (or a transfer or recovery) answered while this screen is up: the new fingerprint.
+        viewModelScope.launch {
+            vault.credentialKeyUpdates.collect {
+                keyJob?.cancel() // an ask still out may be older than this answer
+                key.value = CredentialKeyUi.Shown(it)
+            }
+        }
+    }
+
+    /** Asks `credential.version` (each time the screen opens, and Retry). A newer ask replaces an older one. */
+    fun loadCredentialKey() {
+        keyJob?.cancel()
+        key.value = CredentialKeyUi.Loading
+        keyJob = viewModelScope.launch {
+            key.value = try {
+                val a = vault.credentialKey()
+                val fp = a.fingerprint
+                when {
+                    !a.exists -> CredentialKeyUi.None
+                    fp != null -> CredentialKeyUi.Shown(fp)
+                    else -> CredentialKeyUi.Unknown
+                }
+            } catch (_: VaultFailure) {
+                CredentialKeyUi.Unknown
+            }
+        }
     }
 
     fun load() {
