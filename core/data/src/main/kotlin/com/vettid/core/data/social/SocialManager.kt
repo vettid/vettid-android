@@ -16,6 +16,7 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +58,7 @@ import java.time.Instant
  * forwards them); nothing here touches transport or crypto beyond the typed API.
  */
 @Suppress("TooManyFunctions", "LargeClass")
-class SocialManager(
+class SocialManager internal constructor(
     private val scope: CoroutineScope,
     private val api: suspend () -> VaultApi,
     private val credential: CredentialRepository,
@@ -94,9 +95,16 @@ class SocialManager(
     private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
     /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
     private val deviceListed: (String) -> Boolean = { false },
-    /** One `message.list` page, newest first (a seam for tests; the vault client in the app). */
-    private val readPage: suspend (connectionId: String, limit: Int) -> com.vettid.core.vault.MessagePage =
-        { id, limit -> api().messagePage(id, limit) },
+    /** One `message.list` page, newest first, or the one [before] a position (a seam for tests; the vault client in the app). */
+    private val readPage: suspend (connectionId: String, limit: Int, before: String?) -> com.vettid.core.vault.MessagePage =
+        { id, limit, before -> api().messagePage(id, limit, before) },
+    /** `connection.list` and `authenticate.list` (a seam for tests; the vault client in the app). */
+    private val readConnections: suspend () -> ConnectionRead = { readConnectionsFrom(api()) },
+    /** `connection.request.list` (a seam for tests; the vault client in the app). */
+    private val readRequests: suspend () -> JsonObject = { api().requestList() },
+    /** `message.send` (a seam for tests; the vault client in the app). */
+    private val sendMessage: suspend (connectionId: String, text: String) -> com.vettid.core.vault.SentMessage =
+        { id, text -> api().messageSend(id, text) },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -135,6 +143,9 @@ class SocialManager(
 
     /** Bumped at the start of every [refreshConversations]: only the latest-started reload writes the failure state. */
     private val reloadSeq = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Bumped by a hold ([forgetPending]) and a lock: a request or approval list read across either writes nothing. */
+    private val holdEpoch = java.util.concurrent.atomic.AtomicInteger()
     private val reloadsRunning = java.util.concurrent.atomic.AtomicInteger()
     private val reloadingFlow = MutableStateFlow(false)
 
@@ -259,6 +270,7 @@ class SocialManager(
     internal var editHook: (() -> Unit)? = null
 
     /** Test hook: runs between a page's read and its guarded write (a test locks here). */
+    @Volatile
     internal var pageHook: (() -> Unit)? = null
 
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
@@ -287,11 +299,7 @@ class SocialManager(
         pendingFailureFlow.value = null
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
-        connectionsFlow.value = emptyList()
-        authFlow.value = emptyMap()
-        dropConversations()
-        listedFlow.value = emptyList()
-        requestsFlow.value = emptyList()
+        dropReads()
         dropLocal(close = true)
     }
 
@@ -302,19 +310,28 @@ class SocialManager(
      */
     fun forgetPending() {
         pendingFailureFlow.value = null
-        listedFlow.value = emptyList()
-        requestsFlow.value = emptyList()
+        synchronized(localLock) {
+            holdEpoch.incrementAndGet()
+            listedFlow.value = emptyList()
+            requestsFlow.value = emptyList()
+        }
         endsFlow.value = emptyMap()
         dropLocal()
     }
 
     /**
-     * The epoch is bumped and the conversations dropped under [localLock], the monitor every page write and failure
-     * write takes with its epoch check: a read from before the lock cannot land after this (an equal, empty map would
-     * let a bare compare-and-set succeed).
+     * The epoch is bumped and everything read from the vault (connections with their names, authentication states,
+     * conversations, request and approval lists) dropped under [localLock], the monitor every write of such a read takes
+     * with its epoch check: a read from before the lock cannot land after this (an equal, empty map would let a bare
+     * compare-and-set succeed).
      */
-    private fun dropConversations() = synchronized(localLock) {
+    private fun dropReads() = synchronized(localLock) {
         lockEpoch.incrementAndGet()
+        holdEpoch.incrementAndGet()
+        connectionsFlow.value = emptyList()
+        authFlow.value = emptyMap()
+        listedFlow.value = emptyList()
+        requestsFlow.value = emptyList()
         messagesFlow.value = emptyMap()
         loadedFlow.value = emptySet()
         reloadFailureFlow.value = null
@@ -326,11 +343,7 @@ class SocialManager(
         pendingFailureFlow.value = null
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
-        connectionsFlow.value = emptyList()
-        authFlow.value = emptyMap()
-        dropConversations()
-        listedFlow.value = emptyList()
-        requestsFlow.value = emptyList()
+        dropReads()
         endsFlow.value = emptyMap()
         ttls = null
         runCatching { obsoleteStore?.clear() }
@@ -376,10 +389,33 @@ class SocialManager(
     /** Every event of the vault (§9.1). */
     @Suppress("CyclomaticComplexMethod")
     suspend fun onEvent(m: VaultMessage) {
+        // The epoch of the session the event is taken in: every write of it checks the epoch under [localLock], so an
+        // event handled across a lock writes nothing (the lock's steps run beside the collector, not after it).
+        withContext(EventEpoch(lockEpoch.get())) { handle(m) }
+    }
+
+    /** The lock epoch an event was taken in, carried in the coroutine context of its handling. */
+    private class EventEpoch(val epoch: Int) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<EventEpoch>
+    }
+
+    /** The epoch the current event was taken in, or the present one outside an event. */
+    private suspend fun currentEpoch(): Int = kotlin.coroutines.coroutineContext[EventEpoch]?.epoch ?: lockEpoch.get()
+
+    /** Test hook: runs inside an event's handling before its write (a test locks here). */
+    @Volatile
+    internal var eventHook: (() -> Unit)? = null
+
+    @Suppress("CyclomaticComplexMethod")
+    private suspend fun handle(m: VaultMessage) {
         val b = m.body
+        val epoch = currentEpoch()
         when (m.type) {
             "message.new" -> runCatching { VaultJson.decode(com.vettid.core.vault.Message.serializer(), b) }
-                .getOrNull()?.let { upsert(ApprovalParser.message(it)) }
+                .getOrNull()?.let {
+                    eventHook?.invoke()
+                    synchronized(localLock) { if (epoch == lockEpoch.get()) upsert(ApprovalParser.message(it)) }
+                }
             in ApprovalParser.TYPES -> {
                 // §10.4.2: a creation event not later than the last list is already reflected by it. Decided inside the
                 // store's edit, so that no list merge falls between the decision and the write.
@@ -394,7 +430,9 @@ class SocialManager(
             "connection.event" -> onConnectionEvent(b)
             "connection.authenticate.result" -> {
                 val conn = VaultJson.str(b, "connection_id") ?: return
-                ApprovalParser.authResult(b, now(), authFlow.value[conn])?.let { s -> authFlow.update { it + (conn to s) } }
+                ApprovalParser.authResult(b, now(), authFlow.value[conn])?.let { s ->
+                    synchronized(localLock) { if (epoch == lockEpoch.get()) authFlow.update { it + (conn to s) } }
+                }
             }
             "sync.event" -> onSync(VaultJson.str(b, "kind") ?: "", b, m.ts)
         }
@@ -413,11 +451,13 @@ class SocialManager(
 
     private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null, ts: Instant? = null) {
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
+        val epoch = currentEpoch()
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
         // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
         if (parsed is Approval.ShareDecision) noteBatch(parsed)
         edit { l ->
+            if (epoch != lockEpoch.get()) return@edit l // taken in before a lock: nothing of it stays
             // A newer session request of the same device replaces an older (§6.8, by the event's ts): an older one that
             // arrives late is not shown, and the older ones already held go.
             val older = sessionsOfSameDevice(l.events, parsed)
@@ -477,7 +517,15 @@ class SocialManager(
     }
 
     /** A request event (`connection.request.pending` / `.outgoing`): shown at once, its code remembered. */
-    private fun onRequest(a: Approval, id: String) {
+    private suspend fun onRequest(a: Approval, id: String) {
+        val epoch = currentEpoch()
+        synchronized(localLock) {
+            if (epoch != lockEpoch.get()) return
+            putRequest(a, id)
+        }
+    }
+
+    private fun putRequest(a: Approval, id: String) {
         requestsFlow.update { l ->
             val old = l.firstOrNull { requestId(it) == id }
             val next = when {
@@ -518,12 +566,16 @@ class SocialManager(
         requestsFlow.update { l -> l.map { if (requestId(it) == id) f(it) else it } }
 
     private suspend fun endRequest(id: String, end: RequestEnd?) {
-        requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
-        // The other member's decline is what the member is told, whatever end follows it.
-        if (end != null) endsFlow.update { if (it[id] == RequestEnd.PEER_DECLINED) it else it + (id to end) }
-        // A bare `failed` keeps the name: an older ordering may still bring the peer's decline (0.10.5).
-        val keepName = end == RequestEnd.FAILED
-        edit { l -> l.copy(requestNames = if (keepName) l.requestNames else l.requestNames - id) }
+        val epoch = currentEpoch()
+        synchronized(localLock) {
+            if (epoch != lockEpoch.get()) return
+            requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
+            // The other member's decline is what the member is told, whatever end follows it.
+            if (end != null) endsFlow.update { if (it[id] == RequestEnd.PEER_DECLINED) it else it + (id to end) }
+            // A bare `failed` keeps the name: an older ordering may still bring the peer's decline (0.10.5).
+            val keepName = end == RequestEnd.FAILED
+            edit { l -> l.copy(requestNames = if (keepName) l.requestNames else l.requestNames - id) }
+        }
     }
 
     /**
@@ -533,16 +585,20 @@ class SocialManager(
      * the accepter's side, also as `connection.event{failed, reason: "declined"}`, in either order.
      */
     private suspend fun onPeerDeclined(id: String, outgoing: Boolean) {
-        val name = requestsFlow.value.firstOrNull { requestId(it) == id }?.let(::nameOf) ?: local.requestNames[id]?.name
-        val first = notedDeclines.add(id) && local.declines.none { it.id == id }
-        requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
-        endsFlow.update { it + (id to RequestEnd.PEER_DECLINED) }
-        val at = now().toEpochMilli()
-        edit { l ->
-            l.copy(
-                requestNames = l.requestNames - id,
-                declines = if (first) l.declines + StoredDecline(id, name, outgoing, at) else l.declines,
-            )
+        val epoch = currentEpoch()
+        synchronized(localLock) {
+            if (epoch != lockEpoch.get()) return
+            val name = requestsFlow.value.firstOrNull { requestId(it) == id }?.let(::nameOf) ?: local.requestNames[id]?.name
+            val first = notedDeclines.add(id) && local.declines.none { it.id == id }
+            requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
+            endsFlow.update { it + (id to RequestEnd.PEER_DECLINED) }
+            val at = now().toEpochMilli()
+            edit { l ->
+                l.copy(
+                    requestNames = l.requestNames - id,
+                    declines = if (first) l.declines + StoredDecline(id, name, outgoing, at) else l.declines,
+                )
+            }
         }
     }
 
@@ -557,15 +613,26 @@ class SocialManager(
         }
     }
 
+    /** Test hook: runs between a request-list read and its guarded write. */
+    @Volatile
+    internal var requestsHook: (() -> Unit)? = null
+
     override suspend fun refreshRequests() {
-        val list = vaultGuard(resend = true) { api().requestList() }
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
+        val list = vaultGuard(resend = true) { readRequests() }
         val t = now()
         fun entries(k: String) = (list[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
             entries("outgoing").mapNotNull { ApprovalParser.outgoing(it, t) }
-        // A request already known as a service stays one if the list entry lacks the marker.
-        requestsFlow.value = RequestKinds.keepServices(requestsFlow.value, parsed)
-        rememberNames(parsed.mapNotNull { a -> requestId(a)?.let { id -> nameOf(a)?.let { id to it } } })
+        requestsHook?.invoke()
+        synchronized(localLock) {
+            // A lock or a hold came while the list was read: nothing of it stays.
+            if (epoch != lockEpoch.get() || hold != holdEpoch.get()) return
+            // A request already known as a service stays one if the list entry lacks the marker.
+            requestsFlow.value = RequestKinds.keepServices(requestsFlow.value, parsed)
+            rememberNames(parsed.mapNotNull { a -> requestId(a)?.let { id -> nameOf(a)?.let { id to it } } })
+        }
     }
 
     private suspend fun onConnectionEvent(b: JsonObject) {
@@ -815,28 +882,52 @@ class SocialManager(
 
     // --- ConnectionsRepository ---
 
-    override suspend fun refresh(): Unit = vaultGuard(resend = true) {
-        val a = api()
-        connectionsFlow.value = a.connectionList().filter { it.kind == "connection" }.map(ApprovalParser::connection)
-        val states = try {
-            (a.authenticateList()["states"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(ApprovalParser::authState) }
-        } catch (_: com.vettid.core.vault.VaultOpException) {
-            null
-        }
-        if (states != null) {
-            authFlow.update { old ->
-                states.associateBy { it.connectionId }.mapValues { (id, s) ->
-                    val prev = old[id]
-                    s.copy(waitingUntil = prev?.waitingUntil?.takeIf { it.isAfter(now()) }, keyChanged = prev?.keyChanged ?: false)
-                } + old.filterKeys { k -> states.none { it.connectionId == k } }
+    /** What `connection.list` and `authenticate.list` answered; [authFailure] is thrown after the connections are taken in. */
+    internal class ConnectionRead(
+        val connections: List<ConnectionInfo>,
+        val states: List<AuthenticationState>?,
+        val authFailure: Exception? = null,
+    )
+
+    /** Test hook: runs between a connection read and its guarded write (a test locks here). */
+    @Volatile
+    internal var refreshHook: (() -> Unit)? = null
+
+    override suspend fun refresh(): Unit {
+        val epoch = lockEpoch.get() // before the read: a lock after this voids what it answers
+        vaultGuard(resend = true) {
+            val read = readConnections()
+            refreshHook?.invoke()
+            // Epoch check and writes under [localLock], where a lock bumps the epoch and clears (see [dropReads]).
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get()) {
+                    connectionsFlow.value = read.connections
+                    read.states?.let { states ->
+                        authFlow.update { old ->
+                            states.associateBy { it.connectionId }.mapValues { (id, st) ->
+                                val prev = old[id]
+                                val waiting = prev?.waitingUntil?.takeIf { it.isAfter(now()) }
+                                st.copy(waitingUntil = waiting, keyChanged = prev?.keyChanged ?: false)
+                            } + old.filterKeys { k -> states.none { it.connectionId == k } }
+                        }
+                    }
+                }
             }
+            read.authFailure?.let { throw it }
         }
     }
 
-    override suspend fun connection(id: String): ConnectionInfo = vaultGuard(resend = true) {
-        val c = ApprovalParser.connection(api().connectionGet(id))
-        connectionsFlow.update { l -> if (l.any { it.id == id }) l.map { if (it.id == id) c else it } else l + c }
-        c
+    override suspend fun connection(id: String): ConnectionInfo {
+        val epoch = lockEpoch.get()
+        return vaultGuard(resend = true) {
+            val c = ApprovalParser.connection(api().connectionGet(id))
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get()) {
+                    connectionsFlow.update { l -> if (l.any { it.id == id }) l.map { if (it.id == id) c else it } else l + c }
+                }
+            }
+            c
+        }
     }
 
     override suspend fun inviteTtls(): List<InviteTtl> = ttls ?: vaultGuard(resend = true) {
@@ -867,6 +958,8 @@ class SocialManager(
             InviteLinks.Parsed.NotAConnection -> throw VaultFailure(FailureKind.INVITE_NOT_CONNECTION)
             InviteLinks.Parsed.Invalid -> throw VaultFailure(FailureKind.INVITE_INVALID)
         }
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
         val r = vaultGuard {
             try {
                 val a = api().inviteAccept(link)
@@ -888,14 +981,25 @@ class SocialManager(
             )
             // The outgoing event may already have arrived (it follows hs.resp): keep it then.
             // An event that already arrived is kept, and learns the kind the accept's answer gave.
-            requestsFlow.update { l -> RequestKinds.withAccepted(l, waiting) }
-            endsFlow.update { it - r.connectionId }
-            r.name?.let { rememberNames(listOf(r.connectionId to it)) }
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get() && hold == holdEpoch.get()) {
+                    requestsFlow.update { l -> RequestKinds.withAccepted(l, waiting) }
+                    endsFlow.update { it - r.connectionId }
+                    r.name?.let { rememberNames(listOf(r.connectionId to it)) }
+                }
+            }
         }
         return r
     }
 
-    private suspend fun updateMeta(id: String, change: suspend (VaultApi, Long) -> Unit) = vaultGuard {
+    private suspend fun updateMeta(id: String, change: suspend (VaultApi, Long) -> Unit) {
+        val epoch = lockEpoch.get()
+        vaultGuard {
+            updateMetaIn(id, epoch, change)
+        }
+    }
+
+    private suspend fun updateMetaIn(id: String, epoch: Int, change: suspend (VaultApi, Long) -> Unit) {
         val a = api()
         val version = connectionsFlow.value.firstOrNull { it.id == id }?.version ?: a.connectionGet(id).version
         try {
@@ -905,7 +1009,9 @@ class SocialManager(
             change(a, a.connectionGet(id).version) // another device changed it first: retry once on the current version
         }
         val c = ApprovalParser.connection(a.connectionGet(id))
-        connectionsFlow.update { l -> l.map { if (it.id == id) c else it } }
+        synchronized(localLock) {
+            if (epoch == lockEpoch.get()) connectionsFlow.update { l -> l.map { if (it.id == id) c else it } }
+        }
     }
 
     override suspend fun setFavorite(id: String, favorite: Boolean) =
@@ -924,13 +1030,20 @@ class SocialManager(
         authFlow.update { it - id }
     }
 
-    override suspend fun requestAuthentication(id: String, context: String?): String = vaultGuard {
-        val rid = api().authenticateRequest(id, context?.takeIf { it.isNotBlank() })
-        authFlow.update { m ->
-            val base = m[id] ?: AuthenticationState(id)
-            m + (id to base.copy(lastResult = "requested", lastAt = now(), waitingUntil = now().plus(AUTH_WAIT)))
+    override suspend fun requestAuthentication(id: String, context: String?): String {
+        val epoch = lockEpoch.get()
+        return vaultGuard {
+            val rid = api().authenticateRequest(id, context?.takeIf { it.isNotBlank() })
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get()) {
+                    authFlow.update { m ->
+                        val base = m[id] ?: AuthenticationState(id)
+                        m + (id to base.copy(lastResult = "requested", lastAt = now(), waitingUntil = now().plus(AUTH_WAIT)))
+                    }
+                }
+            }
+            rid
         }
-        rid
     }
 
     override suspend fun setAsksMuted(id: String, muted: Boolean) {
@@ -1050,7 +1163,7 @@ class SocialManager(
     }
 
     private suspend fun loadPage(connectionId: String, fresh: Boolean, epoch: Int) = vaultGuard(resend = true) {
-        val page = pageFitting { limit -> readPage(connectionId, limit) }
+        val page = pageFitting { limit -> readPage(connectionId, limit, null) }
         val list = page.messages.map(ApprovalParser::message)
         pages.withLock {
             val current = messagesFlow.value[connectionId].orEmpty()
@@ -1075,14 +1188,19 @@ class SocialManager(
         }
     }
 
+    /** Test hook: runs between an older page's read and its guarded write (a test locks here). */
+    @Volatile
+    internal var olderHook: (() -> Unit)? = null
+
     /**
      * The next older page, before the oldest loaded one (§10.5.2). A position the vault no longer holds
      * (`not_found`: the message was deleted meanwhile, on another device) starts again from the newest page.
      */
     override suspend fun loadOlder(connectionId: String) {
+        val epoch = lockEpoch.get() // before anything is read, the position included
         val before = pagingFlow.value[connectionId]?.nextBefore ?: return
         val page = try {
-            vaultGuard(resend = true) { pageFitting { limit -> api().messagePage(connectionId, limit, before) } }
+            vaultGuard(resend = true) { pageFitting { limit -> readPage(connectionId, limit, before) } }
         } catch (e: VaultFailure) {
             if (e.kind != FailureKind.NOT_FOUND) throw e
             null
@@ -1091,12 +1209,16 @@ class SocialManager(
             load(connectionId, fresh = true)
         } else {
             val list = page.messages.map(ApprovalParser::message)
+            olderHook?.invoke()
             pages.withLock {
-                // A reload may have replaced the position meanwhile: then this page is not the next one.
-                if (pagingFlow.value[connectionId]?.nextBefore == before) {
-                    val merged = MessagePages.older(list, page.nextBefore, messagesFlow.value[connectionId].orEmpty())
-                    messagesFlow.update { it + (connectionId to merged.messages) }
-                    pagingFlow.update { it + (connectionId to merged.paging) }
+                // Epoch check and writes under [localLock] (see [dropReads]): a page read across a lock writes nothing.
+                synchronized(localLock) {
+                    // A reload may have replaced the position meanwhile: then this page is not the next one.
+                    if (epoch == lockEpoch.get() && pagingFlow.value[connectionId]?.nextBefore == before) {
+                        val merged = MessagePages.older(list, page.nextBefore, messagesFlow.value[connectionId].orEmpty())
+                        messagesFlow.update { it + (connectionId to merged.messages) }
+                        pagingFlow.update { it + (connectionId to merged.paging) }
+                    }
                 }
             }
         }
@@ -1141,7 +1263,9 @@ class SocialManager(
     override suspend fun send(connectionId: String, text: String): MessageInfo {
         val size = text.toByteArray(Charsets.UTF_8).size
         if (size == 0 || size > MessagesRepository.MAX_TEXT_BYTES) throw VaultFailure(FailureKind.LIMIT)
-        val sent = vaultGuard { api().messageSend(connectionId, text) }
+        val epoch = lockEpoch.get()
+        val sent = vaultGuard { sendMessage(connectionId, text) }
+        sendHook?.invoke()
         val m = MessageInfo(
             connectionId,
             sent.messageId,
@@ -1151,9 +1275,13 @@ class SocialManager(
             delivered = false,
             read = false,
         )
-        upsert(m)
+        synchronized(localLock) { if (epoch == lockEpoch.get()) upsert(m) }
         return m
     }
+
+    /** Test hook: runs between a `message.send` answer and its write (a test locks here). */
+    @Volatile
+    internal var sendHook: (() -> Unit)? = null
 
     override suspend fun markRead(connectionId: String) {
         feedRead(setOf(com.vettid.core.data.feed.FeedAsks.MESSAGE_RECEIVED), null, connectionId)
@@ -1308,6 +1436,14 @@ class SocialManager(
         return ListRead(listed, grantsOk, criticalOk, sharesOk)
     }
 
+    /** Test hook: runs between an approvals read and its guarded write. */
+    @Volatile
+    internal var approvalsHook: (() -> Unit)? = null
+
+    /** Test hook: runs between an approvals read's list write and its prune of the kept events. */
+    @Volatile
+    internal var pruneHook: (() -> Unit)? = null
+
     /**
      * Runs a read of the lists and takes it in. What happens while it is on its way (the vault answers it as of when it
      * looked): share items decided meanwhile stay out of it, and a `share.pending` batch that arrived meanwhile stays in,
@@ -1315,20 +1451,32 @@ class SocialManager(
      * the lists"). Several reads may overlap.
      */
     internal suspend fun refreshApprovalsFrom(t: Instant, read: suspend () -> ListRead) {
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
         val since = beginRead()
         try {
             val r = read()
-            val listed = synchronized(readLock) {
-                // A list the vault did not answer covers nothing: what was known of it stays (§10.12).
-                val kept = listedFlow.value.filterNot { covered(it, r) }
-                (shareChangesSince(r.listed, since) + kept).also { listedFlow.value = it }
+            approvalsHook?.invoke()
+            // [localLock] outermost, then [readLock]: [edit] (which holds localLock) reaches keptItems (readLock) below.
+            val listed = synchronized(localLock) {
+                synchronized(readLock) {
+                    // A list the vault did not answer covers nothing: what was known of it stays (§10.12).
+                    // A read across a lock or a hold writes nothing, and prunes nothing (below).
+                    if (stale(epoch, hold)) return
+                    val kept = listedFlow.value.filterNot { covered(it, r) }
+                    (shareChangesSince(r.listed, since) + kept).also { listedFlow.value = it }
+                }
             }
             // The lists are authoritative for what they cover: drop decided or expired requests kept from events.
             val keys = listed.map { it.key }.toSet()
             val listedItems = listed.filterIsInstance<Approval.ShareDecision>()
                 .associate { d -> d.key to d.items.mapTo(mutableSetOf()) { it.itemId } }
             val subjects = r.listed.filterIsInstance<Approval.ShareDecision>().associate { it.ruleId to ShareQuestions.subjectKey(it) }
+            pruneHook?.invoke()
             edit { l ->
+                // Under [localLock]: a lock (and an unlock, and new events) in the gap since the list was taken in
+                // means this read prunes nothing.
+                if (stale(epoch, hold)) return@edit l
                 l.copy(
                     events = l.events.mapNotNull { e ->
                         val p = parsed(e) ?: return@mapNotNull null
@@ -1346,8 +1494,11 @@ class SocialManager(
         } finally {
             endRead(since)
         }
-        nowFlow.value = t
+        synchronized(localLock) { if (!stale(epoch, hold)) nowFlow.value = t }
     }
+
+    /** A lock or a hold came since [epoch] and [hold] were taken. */
+    private fun stale(epoch: Int, hold: Int) = epoch != lockEpoch.get() || hold != holdEpoch.get()
 
     /** Whether [a] is of a list [r] read: the vault answered that list, so it says what of it is still asked. */
     private fun covered(a: Approval, r: ListRead): Boolean =
@@ -1866,4 +2017,18 @@ internal object RequestKinds {
     /** The fingerprint a request [now] shows: its own `ik`'s; none when that `ik` is invalid; the [earlier] one when it sent no `ik`. */
     fun fingerprint(earlier: String?, now: Approval.OutgoingRequest): String? =
         if (now.peerIkInvalid) null else now.peerFingerprint ?: earlier
+}
+
+/** `connection.list` and `authenticate.list` as the vault answered them; a failed state read is kept for the caller to throw. */
+private suspend fun readConnectionsFrom(a: VaultApi): SocialManager.ConnectionRead {
+    val connections = a.connectionList().filter { it.kind == "connection" }.map(ApprovalParser::connection)
+    return try {
+        val states = (a.authenticateList()["states"] as? JsonArray).orEmpty()
+            .mapNotNull { (it as? JsonObject)?.let(ApprovalParser::authState) }
+        SocialManager.ConnectionRead(connections, states)
+    } catch (_: com.vettid.core.vault.VaultOpException) {
+        SocialManager.ConnectionRead(connections, null)
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        SocialManager.ConnectionRead(connections, null, e)
+    }
 }
