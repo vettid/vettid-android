@@ -54,6 +54,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -67,6 +69,8 @@ import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.BottomFloatingControls
+import com.vettid.core.data.presence.PresenceReading
+import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DayDivider
@@ -137,6 +141,9 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
     }
     composable<ConversationRoute> {
         val vm: ConversationViewModel = hiltViewModel()
+        // Presence is asked only while the conversation is shown (a question counts as activity).
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         val state by vm.uiState.collectAsStateWithLifecycle()
         ConversationScreen(
             state = state,
@@ -386,6 +393,8 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     ) {
         Column(Modifier.fillMaxSize()) {
             CenteredTitle(name)
+            // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
+            state.presence?.let { ConversationPresenceLine(it) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
@@ -645,3 +654,21 @@ private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
 
 private val LIST_BOTTOM = 96.dp
 private const val COMPOSER_LINES = 5
+
+/** "Available · active 10 min ago", "Checking…" or "Status unknown", under the conversation's title. */
+@Composable
+internal fun ConversationPresenceLine(reading: PresenceReading) {
+    // Our own failure is said with the failure's text; "Status unknown" is only a timeout.
+    val text = if (reading is PresenceReading.Failed) {
+        failureText(reading.kind.messageRes(), reading.kind.vaultCode(reading.code))
+    } else {
+        PresenceText.line(androidx.compose.ui.platform.LocalResources.current, reading, java.time.Instant.now())
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.s).testTag("conversation_presence"),
+    )
+}

@@ -33,6 +33,8 @@ import com.vettid.core.data.devices.DevicesManager
 import com.vettid.core.data.devices.PairingManager
 import com.vettid.core.data.devices.VaultPairingOps
 import com.vettid.core.data.devices.VaultDevicesOps
+import com.vettid.core.data.presence.PresenceManager
+import com.vettid.core.data.presence.VaultPresenceOps
 import com.vettid.core.data.votes.OkHttpVoteSite
 import com.vettid.core.data.votes.VaultVoteOps
 import com.vettid.core.data.votes.VotesManager
@@ -1019,6 +1021,16 @@ class VaultManager(
         unlockTtl = { status().unlockTtlSeconds },
     )
 
+    /**
+     * Presence (ANDROID-PLAN §4 "Presence", VAULT-MESSAGING §10.17): the member's policy and what connections answer, memory
+     * only, cleared with [votes]. Nothing is sent while the vault is not open or the daily owner check is due or held.
+     */
+    val presence = PresenceManager(
+        scope,
+        ops = { VaultPresenceOps(openApi()) },
+        closed = { phaseFlow.value != AppPhase.Unlocked || ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
+    )
+
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
         ops = { VaultAuditOps(openApi()) },
@@ -1090,6 +1102,7 @@ class VaultManager(
                 clearFeed = { feed.clear() },
                 clearDevices = { devices.clear() },
                 clearVotes = { votes.clear() },
+                clearPresence = { presence.clear() },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -1114,6 +1127,7 @@ class VaultManager(
                     launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
                     items.refreshQuietly()
                     votes.startSync() // the list, the public site and the results that are due: now, then every hour
+                    presence.start() // whether the vault has presence, and the member's policy
                     feed.open()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
@@ -1125,8 +1139,13 @@ class VaultManager(
         // Held or due (§3.6.3): no cached feed content is shown; after the check (here or on another device), a full read.
         scope.launch {
             var held = false
+            var wasGated = false
             ownerCheck.ownerCheck.collectSurviving("owner check") { v ->
                 val now = OwnProfileStep.held(v)
+                // Presence is sent only while the check is neither due nor held: the probe is asked again when that ends.
+                val gated = v?.gated(java.time.Instant.now()) == true
+                val gatedEnded = wasGated && !gated
+                wasGated = gated
                 // Kept first: nothing that throws below leaves it wrong for the next value.
                 val wasHeld = held
                 held = now
@@ -1136,14 +1155,18 @@ class VaultManager(
                     steps.step { feed.clear() }
                     steps.step { devices.clear() }
                     steps.step { votes.clear() }
+                    steps.step { presence.clear() } // held or due: no presence is asked or shown
                     steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     steps.step { feed.open() }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
+                    steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 }
+                // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
+                if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { presence.start() }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {
@@ -1518,6 +1541,7 @@ class VaultManager(
             steps.step { feed.clear() }
             steps.step { devices.clear() }
             steps.step { votes.clear() }
+            steps.step { presence.clear() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -1596,6 +1620,7 @@ class VaultManager(
             sharing.onEvent(m)
             devices.onEvent(m)
             votes.onEvent(m)
+            presence.onEvent(m)
             pairing.onEvent(m)
             social.onEvent(m)
             attachments.onEvent(m.type, m.body)
@@ -2870,6 +2895,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { presence.clear() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2921,6 +2947,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { presence.clear() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -4521,6 +4548,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { presence.clear() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null

@@ -161,6 +161,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onDismissError = vm::dismissError,
                 onDismissPeerDecline = vm::dismissPeerDecline,
                 onQuery = vm::setQuery,
+                onPresenceShare = vm::shareWithEveryone,
+                onPresenceNotNow = vm::notNow,
             ),
         )
     }
@@ -169,6 +171,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
         val state by vm.uiState.collectAsStateWithLifecycle()
         // Back from the rule editor or the shared items: both directions are read again.
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.loadSharing() }
+        // Presence is asked only while the page is shown (a question counts as activity).
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         ConnectionDetailScreen(
             state = state,
             actions = DetailActions(
@@ -191,6 +196,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onMuteAsks = vm::muteAsks,
                 onResumeAsks = vm::resumeAsks,
                 onOpenVotes = { host.onOpenVotes(state.connectionId) },
+                onRefreshPresence = vm::refreshPresence,
+                onSetPresenceShared = vm::setPresenceShared,
             ),
         )
     }
@@ -260,6 +267,9 @@ data class ConnectionsActions(
     val onDismissError: () -> Unit = {},
     val onDismissPeerDecline: (String) -> Unit = {},
     val onQuery: (String) -> Unit = {},
+    /** The one-time presence card's buttons (ANDROID-PLAN §4 "Presence"). */
+    val onPresenceShare: () -> Unit = {},
+    val onPresenceNotNow: () -> Unit = {},
 )
 
 /**
@@ -354,6 +364,11 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
                     modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.connections_ok)) } },
                 )
+            }
+        }
+        if (state.presenceCard && !state.searching) {
+            item(key = "presence-card") {
+                PresenceCard(actions.onPresenceShare, actions.onPresenceNotNow, Modifier.padding(vertical = Spacing.s))
             }
         }
         // While searching, only the matching connections show.

@@ -11,28 +11,54 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.R
+import com.vettid.core.data.presence.PresenceState
+import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.SubscriptionInfo
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.AvatarSheet
+import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.NoticeCard
+import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.feature.settings.ChoiceDialog
 import com.vettid.feature.settings.SharedProfileIcon
 import com.vettid.feature.settings.nameStatusText
 import java.time.Instant
+
+/**
+ * The avatar sheet's status row (ANDROID-PLAN §4 "Presence"): the member's own [state], and what picking another one does.
+ * Passed only where the vault has presence.
+ */
+data class SheetPresence(
+    val state: PresenceState,
+    val error: PresenceFailure? = null,
+    /** A pick is on its way to the vault: the row waits (dimmed, not tappable). */
+    val busy: Boolean = false,
+    val onPick: (PresenceState) -> Unit,
+)
 
 /**
  * Avatar sheet (ANDROID-PLAN §4, 0.1.10): "Lock vault" first, right under the name (owner feedback 2026-10-08: at the
@@ -53,6 +79,7 @@ fun AccountSheet(
     onChangeName: () -> Unit = {},
     onSharedProfile: () -> Unit = {},
     photo: androidx.compose.ui.graphics.ImageBitmap? = null,
+    presence: SheetPresence? = null,
 ) {
     // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the initial tile, no name and
     // no address (not even the masked hint).
@@ -66,7 +93,7 @@ fun AccountSheet(
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
-        AccountSheetOptions(shown, portalUrl, onLockVault, now, onChangeName, onSharedProfile)
+        AccountSheetOptions(shown, portalUrl, onLockVault, now, onChangeName, onSharedProfile, presence)
     }
 }
 
@@ -80,6 +107,7 @@ fun AccountSheetOptions(
     now: Instant = Instant.now(),
     onChangeName: () -> Unit = {},
     onSharedProfile: () -> Unit = {},
+    presence: SheetPresence? = null,
 ) {
     val uri = LocalUriHandler.current
     SettingsGroup(Modifier.testTag("account_lock")) {
@@ -92,6 +120,8 @@ fun AccountSheetOptions(
             modifier = Modifier.testTag("account_lock_vault"),
         )
     }
+    // The status sits right after Lock vault, which stays first under the name (owner, 2026-10-08).
+    presence?.let { StatusGroup(it) }
     AccountNamesGroup(account, now, onChangeName, onSharedProfile)
     AccountEmailGroup(account)
     AccountDetails(account, now)
@@ -111,6 +141,42 @@ fun AccountSheetOptions(
             showChevron = false,
             supporting = stringResource(R.string.account_portal_body),
             modifier = Modifier.testTag("account_portal"),
+        )
+    }
+}
+
+/** One row under the name, "Status: Available", opening a short picker of the four states (the same `presence.set`). */
+@Composable
+fun StatusGroup(presence: SheetPresence) {
+    var picking by rememberSaveable { mutableStateOf(false) }
+    SettingsGroup(Modifier.testTag("account_status")) {
+        SettingsRow(
+            stringResource(R.string.account_presence_status, stringResource(PresenceText.stateName(presence.state))),
+            { if (!presence.busy) picking = true },
+            icon = Icons.Outlined.Visibility,
+            showChevron = false,
+            modifier = Modifier.alpha(if (presence.busy) BUSY_ALPHA else 1f).testTag("account_status_row"),
+        )
+    }
+    presence.error?.let { e ->
+        NoticeCard(
+            kind = NoticeKind.WARNING,
+            title = "",
+            body = failureText(e.kind.messageRes(), e.kind.vaultCode(e.code)),
+            modifier = Modifier.padding(horizontal = Spacing.s).testTag("account_status_error"),
+        )
+    }
+    if (picking) {
+        ChoiceDialog(
+            title = stringResource(R.string.account_presence_picker),
+            options = PresenceState.entries,
+            selected = presence.state,
+            label = { stringResource(PresenceText.stateName(it)) },
+            onPick = {
+                picking = false
+                if (it != presence.state) presence.onPick(it)
+            },
+            onDismiss = { picking = false },
         )
     }
 }
@@ -247,3 +313,4 @@ private fun subscriptionText(s: SubscriptionInfo?, now: Instant): String {
 }
 
 private const val STATE_MEMBER = "member"
+private const val BUSY_ALPHA = 0.38f

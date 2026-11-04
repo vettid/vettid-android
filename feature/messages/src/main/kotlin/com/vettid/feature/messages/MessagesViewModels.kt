@@ -9,6 +9,11 @@ import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.NoCallAccess
 import android.graphics.Bitmap
+import com.vettid.core.data.presence.NoPresence
+import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresenceReading
+import com.vettid.core.data.presence.PresenceRepository
+import com.vettid.core.data.presence.queryWhileAvailable
 import com.vettid.core.data.social.AttachmentManager
 import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -33,6 +38,9 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -145,6 +153,11 @@ data class ConversationUiState(
     val photoDraft: PhotoDraft? = null,
     /** Changes at every clear of the attachment memory: the bubbles drop their decoded thumbnails. */
     val photoGeneration: Long = 0,
+    /**
+     * What presence knows of this person (ANDROID-PLAN §4 "Presence"): the line under the title. Null for a service, for a
+     * connection that is not active, and where the vault has no presence.
+     */
+    val presence: PresenceReading? = null,
 ) {
     val canSend: Boolean
         get() = connection?.state == ConnectionState.ACTIVE && draft.isNotBlank() && !sending && !tooLong && !noComposer
@@ -179,6 +192,7 @@ class ConversationViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     private val attachments: AttachmentsRepository,
     private val calls: CallAccess = NoCallAccess,
+    private val presence: PresenceRepository = NoPresence,
 ) : ViewModel() {
     private val connectionId: String = checkNotNull(savedState[ConversationRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConversationUiState(connectionId))
@@ -198,6 +212,12 @@ class ConversationViewModel @Inject constructor(
                 photosAvailable = photos,
             )
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
+            .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
+            .combine(presence.readings) { (s, on), r ->
+                // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
+                val reading = r[connectionId] ?: PresenceReading.Checking
+                s.copy(presence = reading.takeIf { on && s.connection?.askable == true && it != PresenceReading.Closed })
+            }
             .stateIn(viewModelScope, SharingStarted.Eagerly, ConversationUiState(connectionId))
 
     init {
@@ -242,6 +262,11 @@ class ConversationViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            // Presence is asked when the conversation opens, and only then (ANDROID-PLAN §4 "Presence"): never from a list.
+            val c = uiState.map { it.connection }.filterNotNull().first()
+            if (c.askable) presence.queryWhileAvailable(connectionId, shown)
+        }
+        viewModelScope.launch {
             // Read while open: every new incoming message is marked read (best effort).
             messages.messages(connectionId).collect { ms ->
                 if (ms.any { !it.outgoing && !it.read }) {
@@ -254,6 +279,16 @@ class ConversationViewModel @Inject constructor(
             }
         }
     }
+
+    private val shown = MutableStateFlow(true)
+
+    /** The screen is at least STARTED ([shown]) or stopped: presence is asked only while it is shown. */
+    fun setVisible(visible: Boolean) {
+        shown.value = visible
+    }
+
+    /** Presence is asked of a person who is connected, never of a service (a service is not a person). */
+    private val ConnectionInfo.askable: Boolean get() = state == ConnectionState.ACTIVE && !service
 
     fun setDraft(v: String) = local.update {
         it.copy(draft = v, tooLong = v.toByteArray(Charsets.UTF_8).size > MessagesRepository.MAX_TEXT_BYTES)

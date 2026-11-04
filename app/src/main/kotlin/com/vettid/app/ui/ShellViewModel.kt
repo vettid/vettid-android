@@ -6,6 +6,10 @@ import com.vettid.core.data.feed.FeedBadge
 import com.vettid.core.data.feed.FeedRepository
 import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.presence.PresenceAvailability
+import com.vettid.core.data.presence.PresenceRepository
+import com.vettid.core.data.presence.PresenceState
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.notify.NotificationOpenInbox
 import com.vettid.core.notify.NotifyVisibility
 import com.vettid.core.notify.Visible
@@ -25,6 +29,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -40,6 +46,9 @@ data class ShellBadges(
     val walletShown: Boolean = false,
 )
 
+/** A refused change of the member's status: the failure and the vault code it may name (shown with `failureText`). */
+data class PresenceFailure(val kind: com.vettid.core.data.vault.FailureKind, val code: String?)
+
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
 @Suppress("LongParameterList") // injected: what the shell shows comes from each of these
@@ -54,6 +63,7 @@ class ShellViewModel @Inject constructor(
     private val visibility: NotifyVisibility,
     votes: VotesRepository,
     wallet: WalletAccess,
+    private val presence: PresenceRepository,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -103,6 +113,43 @@ class ShellViewModel @Inject constructor(
     init {
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
     }
+
+    /** The member's own status for the avatar sheet's row (ANDROID-PLAN §4 "Presence"); null where the vault has no presence. */
+    val presenceState: StateFlow<PresenceState?> = combine(presence.availability, presence.policy) { a, p ->
+        p?.state?.takeIf { a == PresenceAvailability.AVAILABLE }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** The sheet's picker: the same `presence.set` as Settings → Privacy → Presence. A refused change leaves the row as it was. */
+    fun setPresenceState(state: PresenceState) {
+        if (presenceBusyFlow.value) return
+        presenceFailure.value = null
+        presenceBusyFlow.value = true
+        viewModelScope.launch {
+            try {
+                presence.update { it.copy(state = state) }
+            } catch (e: VaultFailure) {
+                // The row keeps the state the vault still has, and the sheet says why: a failed "Invisible" must not look done.
+                presenceFailure.value = PresenceFailure(e.kind, e.shownCode)
+            } finally {
+                presenceBusyFlow.value = false
+            }
+        }
+    }
+
+    private val presenceBusyFlow = MutableStateFlow(false)
+
+    /** A status pick is on its way to the vault: the sheet's row waits. */
+    val presenceBusy: StateFlow<Boolean> = presenceBusyFlow.asStateFlow()
+
+    /** The sheet opened: an earlier refusal is not shown again. */
+    fun presenceErrorSeen() {
+        presenceFailure.value = null
+    }
+
+    private val presenceFailure = MutableStateFlow<PresenceFailure?>(null)
+
+    /** The last refused status pick of the avatar sheet, until the next pick. */
+    val presenceError: StateFlow<PresenceFailure?> = presenceFailure.asStateFlow()
 
     /** An opened invitation link waiting for the connect flow. */
     val inviteLink: StateFlow<String?> = invites.link

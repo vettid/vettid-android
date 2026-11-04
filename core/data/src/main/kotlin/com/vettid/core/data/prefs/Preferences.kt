@@ -98,6 +98,12 @@ data class AppPreferences(
     val notificationsNoteShown: Boolean = false,
     val push: PushMemory = PushMemory(),
     /**
+     * The one-time card on Connections ("Let your connections see when you're around?", ANDROID-PLAN §4 "Presence",
+     * question 23) was answered on this phone. A choice about what this phone shows, not presence data: the policy itself
+     * is the vault's and is never kept here.
+     */
+    val presenceCardAnswered: Boolean = false,
+    /**
      * The preferences file was corrupt and was replaced by an empty one (A6 audit P4): every preference is back at
      * its default (the app lock is off) until the member has been told ([PreferencesRepository.acknowledgeReset]).
      */
@@ -142,6 +148,9 @@ interface PreferencesRepository {
     suspend fun setNotificationsNoteShown()
 
     suspend fun setPushMemory(m: PushMemory)
+
+    /** The member answered the one-time presence card ([AppPreferences.presenceCardAnswered]). */
+    suspend fun setPresenceCardAnswered() {}
 
     /** The member saw the notice that the preferences were reset ([AppPreferences.wasReset]). */
     suspend fun acknowledgeReset() {}
@@ -204,7 +213,12 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
                 p[PUSH_UNREGISTER_PENDING] ?: false,
                 p[PUSH_CONFIRM_PENDING] ?: false,
             ),
+            presenceCardAnswered = p[PRESENCE_CARD_ANSWERED] ?: false,
         )
+    }
+
+    override suspend fun setPresenceCardAnswered() {
+        store.edit { it[PRESENCE_CARD_ANSWERED] = true }
     }
 
     override suspend fun setNotificationMode(mode: NotificationMode) {
@@ -296,6 +310,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val PUSH_LIMITED_UNTIL = longPreferencesKey("push_limited_until_ms")
         val PUSH_UNREGISTER_PENDING = booleanPreferencesKey("push_unregister_pending")
         val PUSH_CONFIRM_PENDING = booleanPreferencesKey("push_confirm_pending")
+        val PRESENCE_CARD_ANSWERED = booleanPreferencesKey("presence_card_answered")
     }
 }
 
@@ -330,6 +345,8 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setNotificationsNoteShown() = state.update { it.copy(notificationsNoteShown = true) }
 
     override suspend fun setPushMemory(m: PushMemory) = state.update { it.copy(push = m) }
+
+    override suspend fun setPresenceCardAnswered() = state.update { it.copy(presenceCardAnswered = true) }
 
     override suspend fun acknowledgeReset() = state.update { it.copy(wasReset = false) }
 
