@@ -241,6 +241,14 @@ class LockRaceTest {
     }
 
     @Test
+    fun aCriticalUseReadAcrossAHoldKeepsNothing() = runTest {
+        val m = criticalManager { it.forgetPending() }
+        m.loadCriticalUse("U1")
+        runCurrent()
+        assertTrue("nothing of the read is kept", m.approvals.value.none { it.key == "critical:U1" })
+    }
+
+    @Test
     fun aCriticalUseReadAcrossALockKeepsNothing() = runTest {
         val m = criticalManager { it.forgetOpenVault() }
         m.loadCriticalUse("U1")

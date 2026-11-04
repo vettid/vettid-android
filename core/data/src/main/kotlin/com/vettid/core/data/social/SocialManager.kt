@@ -471,11 +471,11 @@ class SocialManager internal constructor(
         val (epoch, hold) = epochsAt(readEpoch, readHold)
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
-        // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
-        if (parsed is Approval.ShareDecision) noteBatch(parsed)
         var kept = false
         edit { l ->
             if (stale(epoch, hold)) return@edit l // taken in before a lock or a hold: nothing of it stays
+            // Noted under the same monitor as the prunes (localLock, then readLock), and only for an event that is not stale.
+            if (parsed is Approval.ShareDecision) noteBatch(parsed)
             // A newer session request of the same device replaces an older (§6.8, by the event's ts): an older one that
             // arrives late is not shown, and the older ones already held go.
             val older = sessionsOfSameDevice(l.events, parsed)
