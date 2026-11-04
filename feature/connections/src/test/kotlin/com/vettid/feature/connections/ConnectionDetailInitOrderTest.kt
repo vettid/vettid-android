@@ -1,10 +1,12 @@
 package com.vettid.feature.connections
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
 import com.vettid.core.testing.FakePresence
 import com.vettid.core.testing.FakeSharing
 import com.vettid.core.testing.FakeSocial
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -26,12 +28,17 @@ class ConnectionDetailInitOrderTest {
     val main = MainDispatcherRule(UnconfinedTestDispatcher())
 
     @Test
-    fun aCachedPersonPageOpensAndAsksPresence() {
+    fun aCachedPersonPageOpensAndAsksPresenceOnce() {
         val social = FakeSocial().apply { seed(listOf(FakeSocial.connection("c1", "Ada", last = "Lovelace"))) }
         val presence = FakePresence()
         val route = SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1"))
         val vm = ConnectionDetailViewModel(route, social, FakeSharing(), presence = presence)
         assertEquals("c1", vm.uiState.value.connection?.id)
-        assertEquals(listOf("c1"), presence.queries.distinct())
+        assertEquals(listOf("c1"), presence.queries)
+        // The page's visibility reaches the same flow the query reads.
+        vm.setVisible(false)
+        vm.setVisible(true)
+        assertEquals(listOf("c1", "c1"), presence.queries)
+        vm.viewModelScope.cancel()
     }
 }

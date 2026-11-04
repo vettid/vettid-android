@@ -1,10 +1,12 @@
 package com.vettid.feature.messages
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
 import com.vettid.core.testing.FakeAttachments
 import com.vettid.core.testing.FakePresence
 import com.vettid.core.testing.FakeSocial
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -37,5 +39,6 @@ class ConversationInitOrderTest {
         vm.setVisible(false)
         vm.setVisible(true)
         assertEquals(listOf("c1", "c1"), presence.queries)
+        vm.viewModelScope.cancel()
     }
 }
