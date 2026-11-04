@@ -14,6 +14,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,9 +42,13 @@ class MoveNotFinishedApprovalTest {
 
     @Test
     fun theChallengeIsKeptAndTheNewTextIsShown() = runTest {
+        var sent = 0
         val m = SocialManager(
             backgroundScope,
-            api = { throw VaultOpException("connection.authenticate.approve", "transfer_incomplete") },
+            api = {
+                sent++
+                throw VaultOpException("connection.authenticate.approve", "transfer_incomplete")
+            },
             credential = credential,
             clock = clock,
         )
@@ -58,12 +63,15 @@ class MoveNotFinishedApprovalTest {
             assertMoveNotFinished(e.kind)
         }
         assertEquals(listOf("auth:r1"), m.approvals.value.map { it.key })
-        // Approved again after the move: still the same open challenge, and a second answer is sent.
+        val first = sent
+        // Approved again: still the same open challenge, and the approval goes to the vault again.
         try {
             m.approveAuthentication("r1", "pw-fake-1")
             fail("no failure")
         } catch (e: VaultFailure) {
             assertMoveNotFinished(e.kind)
         }
+        assertTrue("the second approval reached the vault", sent > first)
+        assertEquals(listOf("auth:r1"), m.approvals.value.map { it.key })
     }
 }
