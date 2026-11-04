@@ -57,7 +57,13 @@ interface MessagesRepository {
     /** The messages with one connection, oldest first, as loaded and as they arrive. */
     fun messages(connectionId: String): Flow<List<MessageInfo>>
 
-    /** Reloads every conversation (`message.list` per connection). */
+    /**
+     * Why the quiet reload after an unlock or a passed check could not load every conversation, or null: cleared by a
+     * good reload and a lock. The Messages screen shows it with a retry.
+     */
+    val reloadFailure: StateFlow<com.vettid.core.data.vault.VaultFailure?>
+
+    /** Reloads every conversation (`message.list` per connection); every one is tried, the first failure is thrown after. */
     suspend fun refreshConversations()
 
     /** Reloads one conversation's newest page (VAULT-MESSAGING 0.32.0 §10.5.2), keeping older pages already loaded. */

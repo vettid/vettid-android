@@ -229,6 +229,16 @@ class ChangePasswordViewModel @Inject constructor(
     private val state = MutableStateFlow(ChangePasswordUiState(askPin = vault.usesPhoneSecret, newRules = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePasswordUiState> = state.asStateFlow()
 
+    // Declared above `init`: viewModelScope runs on Main.immediate, so `init` can reach this before a later declaration is set.
+    /**
+     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
+     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
+     */
+    private var following = false
+
+    /** (ANDROID-PLAN 0.1.88) This screen sent the change it follows (set by [submit]). */
+    private var sentHere = false
+
     init {
         // §11.14.9: a password change whose answer was lost is decided by VettID; this screen shows where that stands.
         viewModelScope.launch {
@@ -253,15 +263,6 @@ class ChangePasswordViewModel @Inject constructor(
         following = false
         vault.acknowledgeChangeCheck()
     }
-
-    /**
-     * This screen follows a change: one it sent, or one being decided when it opened. Only then is a decision shown here
-     * (and acknowledged); an old decision never opens the screen as "done" (the shell's notice says it once).
-     */
-    private var following = false
-
-    /** (ANDROID-PLAN 0.1.88) This screen sent the change it follows (set by [submit]). */
-    private var sentHere = false
 
     private fun onCheck(c: ChangeCheck) {
         if (c.open) following = true

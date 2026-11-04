@@ -79,13 +79,16 @@ class MessagesViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
-    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, everything ->
+    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations, repo.reloadFailure) { s, everything, reload ->
         // ANDROID-PLAN 0.1.90: a service is never listed here and has no conversation (it can't message the member).
         val all = everything.filterNot { it.connection.service }
         s.copy(
             conversations = (if (s.unreadOnly) all.filter { it.unread > 0 } else all).filter { it.matches(s.query) },
             noConnections = all.none { it.connection.state == ConnectionState.ACTIVE },
             searchable = all.isNotEmpty(),
+            // A quiet reload (after an unlock) that failed is shown like this screen's own failure: no silent failure.
+            error = s.error ?: reload?.kind,
+            errorCode = if (s.error != null) s.errorCode else reload?.shownCode,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())
 
@@ -94,7 +97,7 @@ class MessagesViewModel @Inject constructor(
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+                if (uiState.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
             }
         }
     }

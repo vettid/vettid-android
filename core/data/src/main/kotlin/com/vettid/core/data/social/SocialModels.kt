@@ -253,6 +253,8 @@ data class ConversationSummary(
     val connection: ConnectionInfo,
     val last: MessageInfo?,
     val unread: Int,
+    /** The newest page was read since the vault opened; false: [last] null means "not read yet", not "no messages". */
+    val loaded: Boolean = true,
 )
 
 /**

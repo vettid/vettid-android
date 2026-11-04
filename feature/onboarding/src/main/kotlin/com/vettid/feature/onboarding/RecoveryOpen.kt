@@ -176,11 +176,12 @@ class RecoveryOpenViewModel @Inject constructor(
     private val state = MutableStateFlow(RecoveryOpenUiState(used = move.recoveryAttemptsUsed))
     val uiState: StateFlow<RecoveryOpenUiState> = state.asStateFlow()
 
+    // Declared above `init`: viewModelScope runs on Main.immediate, so `init` can reach this before a later declaration is set.
+    private var refreshing: Job? = null
+
     init {
         refresh()
     }
-
-    private var refreshing: Job? = null
 
     /**
      * Reads where the recovery stands again (the start, a return to this pane from the code steps): a recovery the vault already

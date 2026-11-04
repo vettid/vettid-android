@@ -15,6 +15,7 @@ import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -92,6 +93,9 @@ class SocialManager(
     private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
     /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
     private val deviceListed: (String) -> Boolean = { false },
+    /** One `message.list` page, newest first (a seam for tests; the vault client in the app). */
+    private val readPage: suspend (connectionId: String, limit: Int) -> com.vettid.core.vault.MessagePage =
+        { id, limit -> api().messagePage(id, limit) },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -120,6 +124,10 @@ class SocialManager(
     private val connectionsFlow = MutableStateFlow<List<ConnectionInfo>>(emptyList())
     private val authFlow = MutableStateFlow<Map<String, AuthenticationState>>(emptyMap())
     private val messagesFlow = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
+
+    /** The connections whose newest page was read since the last clear: a row of any other is "not loaded", never "empty". */
+    private val loadedFlow = MutableStateFlow<Set<String>>(emptySet())
+    private val reloadFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
     /** Per conversation, where its loaded history stands (§10.5.2); dropped with its messages. */
     private val pagingFlow = MutableStateFlow<Map<String, MessagePaging>>(emptyMap())
@@ -150,8 +158,10 @@ class SocialManager(
     override val connections: StateFlow<List<ConnectionInfo>> = connectionsFlow.asStateFlow()
     override val authentication: StateFlow<Map<String, AuthenticationState>> = authFlow.asStateFlow()
 
+    override val reloadFailure: StateFlow<VaultFailure?> = reloadFailureFlow.asStateFlow()
+
     override val conversations: StateFlow<List<ConversationSummary>> =
-        combine(connectionsFlow, messagesFlow) { cs, ms -> summaries(cs, ms) }
+        combine(connectionsFlow, messagesFlow, loadedFlow) { cs, ms, loaded -> summaries(cs, ms, loaded) }
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** The feed items (memory only), for the asks known only from them (AA5); set by the vault manager. */
@@ -267,6 +277,8 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        loadedFlow.value = emptySet()
+        reloadFailureFlow.value = null
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
@@ -294,6 +306,8 @@ class SocialManager(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
+        loadedFlow.value = emptySet()
+        reloadFailureFlow.value = null
         pagingFlow.value = emptyMap()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
@@ -325,7 +339,15 @@ class SocialManager(
     fun refreshAllQuietly() {
         scope.launch {
             runCatching { refresh() }
-            runCatching { refreshConversations() }
+            try {
+                refreshConversations()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultFailure) {
+                reloadFailureFlow.value = e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                reloadFailureFlow.value = VaultFailure(FailureKind.OTHER, cause = e)
+            }
             runCatching { refreshApprovals() }
             retryPendingOnce()
         }
@@ -542,6 +564,7 @@ class SocialManager(
             }
             "removed" -> {
                 messagesFlow.update { it - conn }
+                loadedFlow.update { it - conn }
                 pagingFlow.update { it - conn }
                 authFlow.update { it - conn }
             }
@@ -871,6 +894,7 @@ class SocialManager(
     private fun forget(id: String) {
         connectionsFlow.update { l -> l.filterNot { it.id == id } }
         messagesFlow.update { it - id }
+        loadedFlow.update { it - id }
         pagingFlow.update { it - id }
         authFlow.update { it - id }
     }
@@ -906,9 +930,27 @@ class SocialManager(
     override fun messages(connectionId: String): Flow<List<MessageInfo>> =
         messagesFlow.map { it[connectionId] ?: emptyList() }.distinctUntilChanged()
 
+    /** Test seam: the connections as `connection.list` would have left them. */
+    internal fun seedConnections(list: List<ConnectionInfo>) {
+        connectionsFlow.value = list
+    }
+
     override suspend fun refreshConversations() {
         if (connectionsFlow.value.isEmpty()) refresh()
-        connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }.forEach { load(it.id) }
+        // Every thread is tried even when one fails (a vault just restarted may fail the first only); the first failure
+        // is thrown after the rest, and a thread that failed stays "not loaded".
+        var first: Exception? = null
+        for (c in connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }) {
+            try {
+                load(c.id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                if (first == null) first = e
+            }
+        }
+        first?.let { throw it }
+        reloadFailureFlow.value = null
     }
 
     override fun olderAvailable(connectionId: String): Flow<Boolean> =
@@ -921,7 +963,7 @@ class SocialManager(
     override suspend fun load(connectionId: String) = load(connectionId, fresh = false)
 
     private suspend fun load(connectionId: String, fresh: Boolean) = vaultGuard(resend = true) {
-        val page = pageFitting { limit -> api().messagePage(connectionId, limit) }
+        val page = pageFitting { limit -> readPage(connectionId, limit) }
         val list = page.messages.map(ApprovalParser::message)
         pages.withLock {
             val current = messagesFlow.value[connectionId].orEmpty()
@@ -929,6 +971,7 @@ class SocialManager(
             val merged = MessagePages.newest(list, page.nextBefore, current, paging)
             messagesFlow.update { it + (connectionId to merged.messages) }
             pagingFlow.update { it + (connectionId to merged.paging) }
+            loadedFlow.update { it + connectionId }
         }
     }
 
@@ -1624,11 +1667,15 @@ class SocialManager(
         listedFlow.update { l -> l.filterNot { it is Approval.DeviceRequest && it.deviceId == deviceId } }
     }
 
-    private fun summaries(cs: List<ConnectionInfo>, ms: Map<String, List<MessageInfo>>): List<ConversationSummary> =
+    private fun summaries(
+        cs: List<ConnectionInfo>,
+        ms: Map<String, List<MessageInfo>>,
+        loaded: Set<String>,
+    ): List<ConversationSummary> =
         cs.filter { it.state == ConnectionState.ACTIVE || ms[it.id].orEmpty().isNotEmpty() }
             .map { c ->
                 val list = ms[c.id].orEmpty()
-                ConversationSummary(c, list.lastOrNull(), list.count { !it.outgoing && !it.read })
+                ConversationSummary(c, list.lastOrNull(), list.count { !it.outgoing && !it.read }, loaded = c.id in loaded)
             }
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
