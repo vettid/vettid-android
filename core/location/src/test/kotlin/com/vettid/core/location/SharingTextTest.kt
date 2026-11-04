@@ -1,0 +1,79 @@
+package com.vettid.core.location
+
+import android.app.Application
+import org.robolectric.RuntimeEnvironment
+import com.vettid.core.data.location.ServiceState
+import com.vettid.core.data.location.ShareTime
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import java.time.Instant
+import java.time.ZoneOffset
+
+/** The notification's words (ANDROID-PLAN §4 "Location", Texts (drafts)), word for word. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36], qualifiers = "en-rUS")
+class SharingTextTest {
+    private val app: Application = RuntimeEnvironment.getApplication()
+    private val now = Instant.parse("2026-11-03T12:00:00Z")
+    private val until = Instant.parse("2026-11-03T15:30:00Z")
+
+    private fun state(vararg ids: String, paused: Boolean = false, resumed: Boolean = false) =
+        ServiceState(ids.map { ServiceState.Target(it, until) }, paused, resumed)
+
+    private fun title(s: ServiceState, names: Map<String, String> = mapOf("c1" to "Sam", "c2" to "Riley")) = SharingText.title(app, s, names, now)
+
+    @Test
+    fun oneShareNamesThePersonAndTheTime() {
+        val t = title(state("c1"))
+        assertTrue(t, t.startsWith("Sharing your location with "))
+        assertTrue(t, t.contains("Sam") && t.contains(" until "))
+        assertFalse(t.endsWith("."))
+    }
+
+    @Test
+    fun severalSharesSayHowManyPeople() {
+        assertEquals("Sharing your location with 2 people", title(state("c1", "c2")))
+        assertEquals("Sharing your location with 3 people", title(state("c1", "c2", "c3")))
+    }
+
+    @Test
+    fun aResumedShareSaysAgainWithAFullStop() {
+        val t = title(state("c1", resumed = true))
+        assertTrue(t, t.startsWith("Sharing your location with ") && t.contains(" again, until ") && t.endsWith("."))
+        assertTrue(t.contains("Sam"))
+    }
+
+    @Test
+    fun pausedSaysSo() {
+        assertEquals("Paused until your daily check.", title(state("c1", paused = true)))
+        assertEquals("Paused until your daily check.", title(state("c1", "c2", paused = true)))
+    }
+
+    @Test
+    fun withoutAnameNoNameIsSaid() {
+        // The app lock's cover is up, or the name is not known yet.
+        assertEquals("Sharing your location", title(state("c1"), emptyMap()))
+        assertEquals("Sharing your location", title(state("c9")))
+        // Several people: a count, never a name.
+        assertEquals("Sharing your location with 2 people", title(state("c1", "c2"), emptyMap()))
+    }
+
+    @Test
+    fun theTimeIsTheTimeOfDayToday() {
+        val t = ShareTime.format(app, until, now, ZoneOffset.UTC)
+        assertTrue(t, t == "3:30 PM" || t == "15:30" || t.contains("3:30") || t.contains("15:30"))
+        assertFalse(t, t.contains(","))
+    }
+
+    @Test
+    fun anotherDayComesFirst() {
+        val t = ShareTime.format(app, until.plusSeconds(3 * 86_400), now, ZoneOffset.UTC)
+        assertTrue(t, t.contains(","))
+        assertTrue(t, t.contains("Nov"))
+    }
+}

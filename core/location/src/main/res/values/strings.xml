@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The ongoing notification of sharing the member's location (the "Location sharing" channel). Words marked DRAFT are the
+         plan's (ANDROID-PLAN §4 "Location", Texts (drafts)); words marked NEW are not in the plan. None is approved. -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location. %1$s the connection's first name, %2$s the time (or day and time) the share ends. -->
+    <string name="core_location_notification_one">Sharing your location with %1$s until %2$s</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location. %1$d is 2 or more. -->
+    <string name="core_location_notification_many">Sharing your location with %1$d people</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location. -->
+    <string name="core_location_notification_resumed">Sharing your location with %1$s again, until %2$s.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location. -->
+    <string name="core_location_notification_paused">Paused until your daily check.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location. -->
+    <string name="core_location_stop_all">Stop all</string>
+    <!-- NEW: not in the plan (the action of the paused notification; the plan names "Check now"). -->
+    <string name="core_location_check_now">Check now</string>
+    <!-- NEW: not in the plan. No name: the name is not known yet, or the app lock's cover is up. -->
+    <string name="core_location_notification_unnamed">Sharing your location</string>
+</resources>

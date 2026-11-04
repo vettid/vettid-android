@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Sharing the member's location (ANDROID-PLAN §4 "Location", question 24: foreground only). Asked for at the first
+         share, with the plan's permission text; with only the approximate one granted, Exact is not offered. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- NO ACCESS_BACKGROUND_LOCATION, here or anywhere: a share starts from the member's tap while the app is visible, and the
+         foreground service keeps receiving positions with the screen off. `:app:check<Variant>BackgroundLocation` fails a build
+         whose merged manifest has it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Only the location features of the platform that the app can do without: a phone with no GPS can still share a network
+         position. -->
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <application>
+        <service
+            android:name=".LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+    </application>
+</manifest>
