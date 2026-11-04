@@ -52,7 +52,12 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     override val peerDeclines = MutableStateFlow<List<PeerDecline>>(emptyList())
     override val withdrawn = MutableStateFlow<Set<String>>(emptySet())
     override val pendingReadFailure = MutableStateFlow<com.vettid.core.data.vault.VaultFailure?>(null)
+    override val reloading = MutableStateFlow(false)
+    override val reloadFailure = MutableStateFlow<com.vettid.core.data.vault.VaultFailure?>(null)
     override val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
+
+    /** Connections whose newest page counts as not read yet (their rows are not loaded); set before [seed]. */
+    val notLoaded = mutableSetOf<String>()
 
     /** Sets the connections and messages and recomputes [conversations]. */
     fun seed(connections: List<ConnectionInfo>, messages: Map<String, List<MessageInfo>> = emptyMap()) {
@@ -67,7 +72,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     private fun summaries() = connections.value.filter { it.state == ConnectionState.ACTIVE }.map { c ->
         val l = messageMap.value[c.id].orEmpty()
-        ConversationSummary(c, l.lastOrNull(), l.count { !it.outgoing && !it.read })
+        ConversationSummary(c, l.lastOrNull(), l.count { !it.outgoing && !it.read }, loaded = c.id !in notLoaded)
     }.sortedByDescending { it.last?.sentAt ?: Instant.EPOCH }
 
     private fun call(name: String) {
@@ -151,7 +156,16 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     override fun messages(connectionId: String): Flow<List<MessageInfo>> = messageMap.map { it[connectionId].orEmpty() }
 
-    override suspend fun refreshConversations() = call("refreshConversations")
+    override suspend fun refreshConversations() {
+        // As the real manager: every caller's failure is the one reload failure, cleared by a good reload.
+        try {
+            call("refreshConversations")
+            reloadFailure.value = null
+        } catch (e: com.vettid.core.data.vault.VaultFailure) {
+            reloadFailure.value = e
+            throw e
+        }
+    }
 
     override suspend fun load(connectionId: String) = call("load")
 

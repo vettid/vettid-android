@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -79,13 +80,25 @@ class MessagesViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
-    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, everything ->
+    val uiState: StateFlow<MessagesUiState> = combine(
+        local,
+        repo.conversations,
+        repo.reloadFailure,
+        repo.reloading,
+    ) { s, everything, reload, running ->
         // ANDROID-PLAN 0.1.90: a service is never listed here and has no conversation (it can't message the member).
         val all = everything.filterNot { it.connection.service }
         s.copy(
             conversations = (if (s.unreadOnly) all.filter { it.unread > 0 } else all).filter { it.matches(s.query) },
             noConnections = all.none { it.connection.state == ConnectionState.ACTIVE },
             searchable = all.isNotEmpty(),
+            // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
+            // set by the repository and cleared by its next good load. Shown only while a row is still not loaded.
+            // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
+            // set by the repository and cleared by its next good load; the held one shows as the held notice.
+            error = reload?.kind,
+            loading = s.loading || running,
+            errorCode = reload?.shownCode,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())
 
@@ -94,20 +107,24 @@ class MessagesViewModel @Inject constructor(
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+                if (uiState.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
             }
         }
     }
 
     fun refresh() {
-        // Loading again with the error cleared: a list without rows must not flash "No messages" meanwhile.
-        local.update { it.copy(error = null, loading = true) }
+        local.update { it.copy(loading = true) }
         viewModelScope.launch {
             try {
                 repo.refreshConversations()
+            } catch (_: VaultFailure) {
+                // Noted by the repository in reloadFailure, which is what the screen shows.
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                // Not a crash in viewModelScope: the repository noted it (as FailureKind.OTHER) in reloadFailure.
+            } finally {
                 local.update { it.copy(loading = false) }
-            } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }
@@ -116,7 +133,6 @@ class MessagesViewModel @Inject constructor(
 
     fun setQuery(q: String) = local.update { it.copy(query = q) }
 
-    fun dismissError() = local.update { it.copy(error = null) }
 }
 
 /** Immutable UI state of a conversation. */
