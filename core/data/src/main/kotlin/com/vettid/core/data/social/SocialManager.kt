@@ -134,6 +134,8 @@ class SocialManager(
 
     /** Bumped at the start of every [refreshConversations]: only the latest-started reload writes the failure state. */
     private val reloadSeq = java.util.concurrent.atomic.AtomicInteger()
+    private val reloadsRunning = java.util.concurrent.atomic.AtomicInteger()
+    private val reloadingFlow = MutableStateFlow(false)
 
     /** Per conversation, where its loaded history stands (§10.5.2); dropped with its messages. */
     private val pagingFlow = MutableStateFlow<Map<String, MessagePaging>>(emptyMap())
@@ -165,6 +167,7 @@ class SocialManager(
     override val authentication: StateFlow<Map<String, AuthenticationState>> = authFlow.asStateFlow()
 
     override val reloadFailure: StateFlow<VaultFailure?> = reloadFailureFlow.asStateFlow()
+    override val reloading: StateFlow<Boolean> = reloadingFlow.asStateFlow()
 
     override val conversations: StateFlow<List<ConversationSummary>> =
         combine(connectionsFlow, messagesFlow, loadedFlow) { cs, ms, loaded -> summaries(cs, ms, loaded) }
@@ -275,7 +278,6 @@ class SocialManager(
      * lock). An unlock reads the lists again.
      */
     fun forgetOpenVault() {
-        lockEpoch.incrementAndGet()
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
@@ -283,10 +285,7 @@ class SocialManager(
         synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
-        messagesFlow.value = emptyMap()
-        loadedFlow.value = emptySet()
-        reloadFailureFlow.value = null
-        pagingFlow.value = emptyMap()
+        dropConversations()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         dropLocal(close = true)
@@ -305,18 +304,27 @@ class SocialManager(
         dropLocal()
     }
 
+    /**
+     * The epoch is bumped and the conversations dropped under [localLock], the monitor every page write and failure
+     * write takes with its epoch check: a read from before the lock cannot land after this (an equal, empty map would
+     * let a bare compare-and-set succeed).
+     */
+    private fun dropConversations() = synchronized(localLock) {
+        lockEpoch.incrementAndGet()
+        messagesFlow.value = emptyMap()
+        loadedFlow.value = emptySet()
+        reloadFailureFlow.value = null
+        pagingFlow.value = emptyMap()
+    }
+
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
-        lockEpoch.incrementAndGet()
         pendingFailureFlow.value = null
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
-        messagesFlow.value = emptyMap()
-        loadedFlow.value = emptySet()
-        reloadFailureFlow.value = null
-        pagingFlow.value = emptyMap()
+        dropConversations()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
@@ -955,17 +963,22 @@ class SocialManager(
     override suspend fun refreshConversations() {
         val epoch = lockEpoch.get()
         val seq = reloadSeq.incrementAndGet()
-        val first = try {
+        reloadsRunning.incrementAndGet()
+        reloadingFlow.value = true
+        val failed = try {
             if (connectionsFlow.value.isEmpty()) refresh()
             loadEveryThread()
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             e
+        } finally {
+            if (reloadsRunning.decrementAndGet() == 0) reloadingFlow.value = false
         }
-        val failed = first
         if (failed == null) {
-            if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = null
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = null
+            }
         } else {
             noteReloadFailure(failed, epoch, seq)
             throw failed
@@ -985,18 +998,26 @@ class SocialManager(
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 if (first == null || e.isHeld() && !first.isHeld()) first = e
+                // A failure that every thread would meet (held, offline, no answer, signed out): no more requests.
+                if (e.meetsEveryThread()) break
             }
         }
         return first
     }
 
-    private fun allActiveLoaded() = connectionsFlow.value.none { it.state == ConnectionState.ACTIVE && it.id !in loadedFlow.value }
+    /** The list's rows are the active, non-service connections (Messages never lists a service). */
+    private fun allActiveLoaded() =
+        connectionsFlow.value.none { it.state == ConnectionState.ACTIVE && !it.service && it.id !in loadedFlow.value }
+
+    private fun Exception.meetsEveryThread() = (this as? VaultFailure)?.kind in ALL_THREADS
 
     private fun Exception.isHeld() = this is VaultFailure && kind == FailureKind.OWNER_CHECK_REQUIRED
 
     private fun noteReloadFailure(e: Exception, epoch: Int, seq: Int) {
         val failure = e as? VaultFailure ?: VaultFailure(FailureKind.OTHER, cause = e)
-        if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = failure
+        synchronized(localLock) {
+            if (epoch == lockEpoch.get() && seq == reloadSeq.get()) reloadFailureFlow.value = failure
+        }
     }
 
     override fun olderAvailable(connectionId: String): Flow<Boolean> =
@@ -1020,14 +1041,18 @@ class SocialManager(
             val current = messagesFlow.value[connectionId].orEmpty()
             val paging = if (fresh) MessagePaging() else pagingFlow.value[connectionId] ?: MessagePaging()
             val merged = MessagePages.newest(list, page.nextBefore, current, paging)
-            // The epoch is checked inside each update: a lock bumps it before it clears, so a page read across a lock
-            // either sees the new epoch and writes nothing, or loses to the clear. It never touches a newer session's data.
-            messagesFlow.update { if (epoch != lockEpoch.get()) it else it + (connectionId to merged.messages) }
-            pagingFlow.update { if (epoch != lockEpoch.get()) it else it + (connectionId to merged.paging) }
-            loadedFlow.update { if (epoch != lockEpoch.get()) it else it + connectionId }
-            if (epoch == lockEpoch.get() && reloadFailureFlow.value != null && allActiveLoaded()) {
-                // This page completed the list: a load error no longer describes it.
-                reloadFailureFlow.value = null
+            // Epoch check and writes under [localLock], where a lock bumps the epoch and clears: a page read across a
+            // lock writes nothing, whatever the maps held (an empty map equals its clear, so a bare update could land).
+            synchronized(localLock) {
+                if (epoch == lockEpoch.get()) {
+                    messagesFlow.update { it + (connectionId to merged.messages) }
+                    pagingFlow.update { it + (connectionId to merged.paging) }
+                    loadedFlow.update { it + connectionId }
+                    if (reloadFailureFlow.value != null && allActiveLoaded()) {
+                        // This page completed the list: a load error no longer describes it.
+                        reloadFailureFlow.value = null
+                    }
+                }
             }
         }
     }
@@ -1737,6 +1762,16 @@ class SocialManager(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
+        /** Failures every thread would meet: a reload stops sending `message.list` after one of these. */
+        private val ALL_THREADS = setOf(
+            FailureKind.OWNER_CHECK_REQUIRED,
+            FailureKind.NETWORK,
+            FailureKind.NO_RESPONSE,
+            FailureKind.UNAUTHORIZED,
+            FailureKind.VAULT_UNAVAILABLE,
+            FailureKind.SERVICE_PAUSED,
+        )
+
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
 

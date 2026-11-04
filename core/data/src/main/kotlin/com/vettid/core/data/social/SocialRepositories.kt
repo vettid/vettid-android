@@ -63,6 +63,9 @@ interface MessagesRepository {
      */
     val reloadFailure: StateFlow<com.vettid.core.data.vault.VaultFailure?>
 
+    /** Whether a reload of the conversations is running (any caller): the list shows it is loading, not failed. */
+    val reloading: StateFlow<Boolean>
+
     /** Reloads every conversation (`message.list` per connection); every one is tried, the first failure is thrown after. */
     suspend fun refreshConversations()
 

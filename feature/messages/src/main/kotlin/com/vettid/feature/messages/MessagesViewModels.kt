@@ -80,7 +80,12 @@ class MessagesViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(MessagesUiState())
 
-    val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations, repo.reloadFailure) { s, everything, reload ->
+    val uiState: StateFlow<MessagesUiState> = combine(
+        local,
+        repo.conversations,
+        repo.reloadFailure,
+        repo.reloading,
+    ) { s, everything, reload, running ->
         // ANDROID-PLAN 0.1.90: a service is never listed here and has no conversation (it can't message the member).
         val all = everything.filterNot { it.connection.service }
         s.copy(
@@ -89,8 +94,10 @@ class MessagesViewModel @Inject constructor(
             searchable = all.isNotEmpty(),
             // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
             // set by the repository and cleared by its next good load. Shown only while a row is still not loaded.
-            // The held notice shows over loaded rows too (and its re-read needs the error).
-            error = reload?.kind?.takeIf { it == FailureKind.OWNER_CHECK_REQUIRED || all.isEmpty() || all.any { c -> !c.loaded } },
+            // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
+            // set by the repository and cleared by its next good load; the held one shows as the held notice.
+            error = reload?.kind,
+            loading = s.loading || running,
             errorCode = reload?.shownCode,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())

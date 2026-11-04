@@ -4,6 +4,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.vault.FailureKind
@@ -115,11 +116,30 @@ class MessagesLoadedTest {
     }
 
     @Test
-    fun aFullyLoadedListNeverShowsALoadError() = runTest {
+    fun aLoadErrorShowsOverFullyLoadedRowsToo() = runTest {
         val (social, vm) = model(loaded = true)
         social.reloadFailure.value = VaultFailure(FailureKind.NETWORK)
         advanceUntilIdle()
-        assertEquals(null, vm.uiState.value.error)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+        compose.setContent {
+            val state by vm.uiState.collectAsState()
+            MessagesScreen(state, chrome)
+        }
+        compose.onNodeWithText("Could not load messages").assertIsDisplayed()
+        compose.onNodeWithText("Try again").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRunningReloadShowsTheProgressBarOverRowsAndNotTheError() = runTest {
+        val (social, vm) = model(loaded = true)
+        social.reloading.value = true
+        advanceUntilIdle()
+        compose.setContent {
+            val state by vm.uiState.collectAsState()
+            MessagesScreen(state, chrome)
+        }
+        compose.onNodeWithTag("messages_reloading").assertIsDisplayed()
+        compose.onNodeWithText("Could not load messages").assertDoesNotExist()
     }
 
     @Test

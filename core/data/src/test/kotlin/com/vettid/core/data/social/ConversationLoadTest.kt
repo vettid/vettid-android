@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -32,6 +33,9 @@ class ConversationLoadTest {
 
     /** Connections whose page fails; the others answer one message. */
     private val failing = mutableSetOf<String>()
+
+    /** What a failing thread answers: a thread's own error by default. */
+    private var failWith = FailureKind.OTHER
     private val asked = mutableListOf<String>()
     private val first1 = java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -39,7 +43,7 @@ class ConversationLoadTest {
     private val heldStarted = CompletableDeferred<Unit>()
 
     private fun refuse(id: String, held: Set<String>) {
-        val kind = if (id in held) FailureKind.OWNER_CHECK_REQUIRED else FailureKind.NETWORK.takeIf { id in failing }
+        val kind = if (id in held) FailureKind.OWNER_CHECK_REQUIRED else failWith.takeIf { id in failing }
         if (kind != null) throw VaultFailure(kind)
     }
 
@@ -61,7 +65,9 @@ class ConversationLoadTest {
                     oldGate?.await()
                 }
                 refuse(id, held)
-                MessagePage(listOf(Message(id, "m-$id", "in", "hi", "2026-10-04T12:00:00Z")), null)
+                // The held (pre-lock) read answers another message than the new session's.
+                val mid = if (holdThis) "m-old" else "m-$id"
+                MessagePage(listOf(Message(id, mid, "in", "hi", "2026-10-04T12:00:00Z")), null)
             },
         )
         m.seedConnections(listOf("Sam", "Alex", "Jo").mapIndexed { i, n -> FakeSocial.connection("c${i + 1}", n) })
@@ -86,7 +92,7 @@ class ConversationLoadTest {
             m.refreshConversations()
             fail("the failure is thrown")
         } catch (e: VaultFailure) {
-            assertEquals(FailureKind.NETWORK, e.kind)
+            assertEquals(FailureKind.OTHER, e.kind)
         }
         runCurrent()
         assertEquals(listOf("c1", "c2", "c3"), asked)
@@ -120,7 +126,7 @@ class ConversationLoadTest {
         failing += "c2"
         m.refreshAllQuietly()
         // The reads run on the IO dispatcher (vaultGuard), so the test waits for the signal itself.
-        assertEquals(FailureKind.NETWORK, m.reloadFailure.first { it != null }?.kind)
+        assertEquals(FailureKind.OTHER, m.reloadFailure.first { it != null }?.kind)
         // Once the summaries caught up with the pages that did load: c1 and c3 are loaded, c2 is not.
         m.conversations.first { s -> s.count { it.loaded } == 2 }
         assertEquals(listOf("c1", "c3"), m.loaded())
@@ -163,7 +169,7 @@ class ConversationLoadTest {
         } catch (_: VaultFailure) {
             // noted below
         }
-        assertEquals(FailureKind.NETWORK, m.reloadFailure.value?.kind)
+        assertEquals(FailureKind.OTHER, m.reloadFailure.value?.kind)
         failing.clear()
         m.refreshConversations()
         assertNull(m.reloadFailure.value)
@@ -216,5 +222,74 @@ class ConversationLoadTest {
         val row = m.conversations.value.single()
         assertTrue("still loaded", row.loaded)
         assertEquals("m-c1", row.last?.messageId)
+        assertEquals("the old page is absent", listOf("m-c1"), m.messages("c1").first().map { it.messageId })
+    }
+
+    @Test
+    fun aFailureEveryThreadWouldMeetStopsTheRequests() = runTest {
+        val m = manager()
+        failing += "c1"
+        failWith = FailureKind.NETWORK
+        try {
+            m.refreshConversations()
+            fail("thrown")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.NETWORK, e.kind)
+        }
+        assertEquals("no more requests after the transport failed", listOf("c1"), asked)
+        assertEquals(FailureKind.NETWORK, m.reloadFailure.value?.kind)
+    }
+
+    @Test
+    fun aHeldAnswerStopsTheRequestsToo() = runTest {
+        val m = manager(held = setOf("c1"))
+        try {
+            m.refreshConversations()
+            fail("thrown")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OWNER_CHECK_REQUIRED, e.kind)
+        }
+        assertEquals(listOf("c1"), asked)
+    }
+
+    @Test
+    fun aThreadsOwnErrorDoesNotStopTheOthers() = runTest {
+        val m = manager()
+        failing += "c1"
+        failWith = FailureKind.NOT_FOUND
+        try {
+            m.refreshConversations()
+        } catch (_: VaultFailure) {
+            // noted
+        }
+        assertEquals(listOf("c1", "c2", "c3"), asked)
+    }
+
+    @Test
+    fun aServiceThreadDoesNotKeepTheFailureAlive() = runTest {
+        val m = manager()
+        m.seedConnections(listOf(FakeSocial.connection("c1", "Bank").copy(service = true), FakeSocial.connection("c2", "Alex")))
+        failing += "c1"
+        try {
+            m.refreshConversations()
+        } catch (_: VaultFailure) {
+            // noted
+        }
+        assertEquals(FailureKind.OTHER, m.reloadFailure.value?.kind)
+        failing.clear()
+        m.load("c2")
+        assertNull("the list's rows are all loaded (a service is not one)", m.reloadFailure.value)
+    }
+
+    @Test
+    fun reloadingIsTrueWhileAReloadRuns() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val m = manager(gate = gate)
+        val job = launch { runCatching { m.refreshConversations() } }
+        runCurrent()
+        assertTrue(m.reloading.value)
+        gate.complete(Unit)
+        job.join()
+        assertFalse(m.reloading.value)
     }
 }

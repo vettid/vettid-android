@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -252,6 +253,10 @@ fun MessagesScreen(
                 ),
             )
             else -> LazyColumn(Modifier.fillMaxSize().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
+                // A reload runs and rows exist: loading, not failed.
+                if (state.loading) {
+                    item(key = "reloading") { LinearProgressIndicator(Modifier.fillMaxWidth().testTag("messages_reloading")) }
+                }
                 // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
                 if (error == FailureKind.OWNER_CHECK_REQUIRED) {
                     item(key = "held-notice") { MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
