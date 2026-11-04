@@ -43,6 +43,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -213,7 +214,13 @@ class VaultDeviceTest {
     }
 
     @After
-    fun stop() = relay.close()
+    fun stop() {
+        keyCollectors.cancel()
+        relay.close()
+    }
+
+    /** The collectors of [collectKeyChanges]: apart from each test's scope, which waits for its children. */
+    private val keyCollectors = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
 
     /** The phone's monotonic clock as [DeviceConfig.elapsedMs] reads it (milliseconds), for the vault-clock test. */
     @Volatile
@@ -4278,6 +4285,120 @@ class VaultDeviceTest {
             answer(d, v, "credential.version", """{"exists":true,"version":7,"key":"a2V5LW9uZQ==",$alarmJson}""")
             assertEquals("rotation_required", (rotate.await().exceptionOrNull() as VaultOpException).code)
             assertNull("no fetch, no retry", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** Collects [VaultDevice.credentialKeyChanges] from now on (Unconfined: subscribed before this returns). */
+    private fun collectKeyChanges(d: VaultDevice): MutableList<String?> {
+        val seen = java.util.Collections.synchronizedList(mutableListOf<String?>())
+        keyCollectors.launch { d.credentialKeyChanges.collect { seen.add(it) } }
+        return seen
+    }
+
+    /** Vault status's Credential key row (ANDROID-PLAN 0.1.119): a credential kept with a key says so, once, and a keep without one says nothing. */
+    @Test
+    fun aKeptCredentialWithAKeyEmitsItOnce() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val seen = collectKeyChanges(d)
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            assertEquals(listOf<String?>("key-one"), seen.toList())
+            d.keepCredential("QkxPQjQ=", 4) // no key given: nothing to say
+            assertEquals(listOf<String?>("key-one"), seen.toList())
+        }
+    }
+
+    @Test
+    fun aKeepThatCannotBeSavedEmitsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val (d, _) = pairedDevice(this, store)
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val seen = collectKeyChanges(d)
+            store.failNext = true
+            assertThrows(java.io.IOException::class.java) { runBlocking { d.keepCredential("TkVX", 4, "key-two") } }
+            assertTrue(seen.isEmpty())
+            assertEquals("key-one", d.credentialKey)
+        }
+    }
+
+    /** A cached answer that [CredentialOps] strips of its blob (the credential moved on) keeps no blob, so it names no key either. */
+    @Test
+    fun aLateAnswerThatIsNotKeptEmitsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            val change = async(Dispatchers.IO) { runCatching { api.pinChange("975310", "135792", "password one", ByteArray(32) { 7 }) } }
+            answerVersion(d, v, 3)
+            val get = v.open(nextDeposit().second)
+            d.handle(v.seal(get.type, """{"utks":[${utkJson("00112233445566d7", KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+            (1..3).map { v.open(nextDeposit().second) }
+            val e = change.await().exceptionOrNull() as ChangeUnansweredException
+            d.keepCredential("TkVXNQ==", 5, "key-five")
+            val seen = collectKeyChanges(d)
+            val again = async(Dispatchers.IO) { api.changeResend(e.kept) }
+            val r = v.open(nextDeposit().second)
+            d.handle(v.seal(r.type, """{"credential":"TkVXNA==","version":4,"key":"key-four","utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            api.changeSettle(e.kept, again.await()!!)
+            assertEquals("TkVXNQ==", d.credentialBlob())
+            assertEquals("key-five", d.credentialKey)
+            assertTrue("nothing emitted: ${seen.toList()}", seen.isEmpty())
+        }
+    }
+
+    private suspend fun CoroutineScope.rotateAndWatchKeys(answerKey: String): List<String?> {
+        val (d, v) = pairedDevice(this)
+        val api = VaultApi(d)
+        d.keepCredential("U0VWRU4=", 7, "a2V5LW9uZQ==")
+        val seen = collectKeyChanges(d)
+        val rotate = async(Dispatchers.IO) { runCatching { api.credentialRotate("password one") } }
+        var r = v.open(nextDeposit().second)
+        while (r.type != "credential.rotate") {
+            val body = if (r.type == "credential.version") {
+                """{"exists":true,"version":7,"key":"a2V5LW9uZQ=="}"""
+            } else {
+                assertEquals("credential.utk.get", r.type)
+                """{"utks":[${utkJson("00112233445569d1", KemPrivateKey.generate())}]}"""
+            }
+            d.handle(v.seal(r.type, body, re = r.id, status = Inner.STATUS_OK))
+            r = v.open(nextDeposit().second)
+        }
+        d.handle(v.seal(r.type, """{"credential":"VFdP","version":8,$answerKey"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+        answer(d, v, "credential.ack", "{}")
+        assertTrue(rotate.await().isSuccess)
+        return seen.toList()
+    }
+
+    /** A rotation's answer names the new key: emitted. */
+    @Test
+    fun aRotateAnswerEmitsItsKey() = runBlocking<Unit> {
+        withTimeout(30_000) { assertEquals(listOf<String?>("a2V5LXRocmVl"), rotateAndWatchKeys(""""key":"a2V5LXRocmVl",""")) }
+    }
+
+    /** One that names none replaced the credential all the same: "key unknown" (null), never silence. */
+    @Test
+    fun aRotateAnswerWithoutAKeySaysTheKeyIsUnknown() = runBlocking<Unit> {
+        withTimeout(30_000) { assertEquals(listOf<String?>(null), rotateAndWatchKeys("")) }
+    }
+
+    /** A reset's answer without a `key` (it replaces the key) says so as well. */
+    @Test
+    fun aResetAnswerWithoutAKeySaysTheKeyIsUnknownToo() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val seen = collectKeyChanges(d)
+            val reset = async(Dispatchers.IO) { runCatching { api.credentialResetHolder("975310", "old password", "new password!") } }
+            answerVersion(d, v, 3, key = "key-one")
+            answer(d, v, "credential.utk.get", """{"utks":[${utkJson("00112233445569d9", KemPrivateKey.generate())}]}""")
+            val req = v.open(nextDeposit().second)
+            assertEquals("credential.reset", req.type)
+            d.handle(v.seal(req.type, """{"credential":"TkVX","version":1,"utks":[]}""", re = req.id, status = Inner.STATUS_OK))
+            answer(d, v, "credential.ack", "{}")
+            assertTrue(reset.await().isSuccess)
+            assertEquals(listOf<String?>(null), seen.toList())
         }
     }
 

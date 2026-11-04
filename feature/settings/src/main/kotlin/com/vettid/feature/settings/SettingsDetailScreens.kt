@@ -246,10 +246,6 @@ fun VaultStatusContent(
                             },
                             icon = Icons.Outlined.Restore,
                         )
-                        credentialKey?.let { ck ->
-                            SettingsDivider()
-                            CredentialKeyRow(ck, onRetryCredentialKey)
-                        }
                         SettingsDivider()
                         SettingsInfoRow(
                             stringResource(R.string.settings_status_provisional),
@@ -276,6 +272,10 @@ fun VaultStatusContent(
                         modifier = Modifier.padding(horizontal = Spacing.gutter + Spacing.xs, vertical = Spacing.l),
                     )
                 }
+            }
+            // Whatever the overview did (loading, failed, loaded): the key is asked on its own.
+            credentialKey?.let { ck ->
+                SettingsGroup { CredentialKeyRow(ck, onRetryCredentialKey) }
             }
         }
     }

@@ -76,7 +76,10 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // Item operations carry the item's version as `version` and the credential's as `credential_version` (§10.6).
         val v = VaultJson.long(o, "credential_version") ?: VaultJson.long(o, "version")
             ?: throw VaultStateException("credential without version")
-        d.keepCredential(blob, v, VaultJson.str(o, "key") ?: d.credentialKey.takeIf { sameKey })
+        val answerKey = VaultJson.str(o, "key")
+        d.keepCredential(blob, v, answerKey ?: d.credentialKey.takeIf { sameKey })
+        // A rotate, reset or fetch that names no key replaced the credential: the key shown for it is no longer known to be right.
+        if (answerKey == null && !sameKey) d.signalKeyUnknown()
         d.op("credential.ack", buildJsonObject { put("version", v) })
     }
 

@@ -184,7 +184,9 @@ sealed interface CredentialKeyUi {
     data object None : CredentialKeyUi
 
     /** The fingerprint of the credential key, `e939 754d 09aa a93a`. Not a secret. */
-    data class Shown(val fingerprint: String) : CredentialKeyUi
+    data class Shown(val fingerprint: String) : CredentialKeyUi {
+        override fun toString(): String = "CredentialKeyUi.Shown"
+    }
 }
 
 /** Vault status (advisory member API status + the vault's own `vault.status`). */
@@ -199,12 +201,16 @@ class VaultStatusViewModel @Inject constructor(private val vault: VaultRepositor
 
     init {
         load()
-        loadCredentialKey()
-        // A create, rotate or reset (or a transfer or recovery) answered while this screen is up: the new fingerprint.
+        // A create, rotate or reset (or a transfer or recovery) answered while this screen is up: the new fingerprint, or,
+        // when the answer named no key, a new ask (the old fingerprint is not shown unflagged).
         viewModelScope.launch {
             vault.credentialKeyUpdates.collect {
-                keyJob?.cancel() // an ask still out may be older than this answer
-                key.value = CredentialKeyUi.Shown(it)
+                if (it == null) {
+                    loadCredentialKey()
+                } else {
+                    keyJob?.cancel() // an ask still out may be older than this answer
+                    key.value = CredentialKeyUi.Shown(it)
+                }
             }
         }
     }
@@ -229,6 +235,7 @@ class VaultStatusViewModel @Inject constructor(private val vault: VaultRepositor
     }
 
     fun load() {
+        loadCredentialKey() // Try again asks the key too
         state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             state.value = try {

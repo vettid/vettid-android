@@ -2,6 +2,7 @@ package com.vettid.feature.settings
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -15,8 +16,10 @@ import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.testing.FakeVault
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -145,5 +148,74 @@ class CredentialKeyRowTest {
         vault.answerWithKey("1111 2222 3333 4444")
         advanceUntilIdle()
         assertEquals(CredentialKeyUi.Shown("1111 2222 3333 4444"), vm.credentialKey.value)
+    }
+
+    @Test
+    fun anOlderAskAnsweringAfterANewerAnswerDoesNotReplaceIt() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val gate = CompletableDeferred<Unit>()
+        vault.credentialKeyGate = gate
+        val vm = VaultStatusViewModel(vault)
+        advanceUntilIdle() // the ask is out, unanswered
+        assertEquals(CredentialKeyUi.Loading, vm.credentialKey.value)
+        vault.answerWithKey("1111 2222 3333 4444") // a rotation answered meanwhile
+        advanceUntilIdle()
+        assertEquals(CredentialKeyUi.Shown("1111 2222 3333 4444"), vm.credentialKey.value)
+        gate.complete(Unit) // the older ask now answers with the old key
+        advanceUntilIdle()
+        assertEquals(CredentialKeyUi.Shown("1111 2222 3333 4444"), vm.credentialKey.value)
+    }
+
+    @Test
+    fun anAnswerThatNamedNoKeyAsksAgainInsteadOfKeepingTheOldFingerprint() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val vm = VaultStatusViewModel(vault)
+        advanceUntilIdle()
+        assertEquals(CredentialKeyUi.Shown(fp), vm.credentialKey.value)
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, "5555 6666 7777 8888")
+        val gate = CompletableDeferred<Unit>()
+        vault.credentialKeyGate = gate
+        vault.answerWithKey(null)
+        runCurrent()
+        assertEquals(CredentialKeyUi.Loading, vm.credentialKey.value)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "credentialKey" })
+        assertEquals(CredentialKeyUi.Shown("5555 6666 7777 8888"), vm.credentialKey.value)
+    }
+
+    @Test
+    fun tryAgainOnTheOverviewAsksTheKeyToo() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val vm = VaultStatusViewModel(vault)
+        advanceUntilIdle()
+        vm.load()
+        assertEquals(CredentialKeyUi.Loading, vm.credentialKey.value)
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "credentialKey" })
+    }
+
+    @Test
+    fun shownPrintsItsTypeNameOnly() {
+        assertEquals("CredentialKeyUi.Shown", CredentialKeyUi.Shown(fp).toString())
+    }
+
+    @Test
+    fun theRowIsShownWhetherTheOverviewFailedOrIsStillLoading() {
+        rule.setContent {
+            Column {
+                VaultStatusContent(
+                    LoadState<VaultOverview>(false, null, FailureKind.NETWORK), {}, {},
+                    credentialKey = CredentialKeyUi.Shown(fp),
+                )
+            }
+        }
+        rule.onNodeWithText("Credential key: $fp").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun theRowIsShownWhileTheOverviewLoads() {
+        rule.setContent { VaultStatusContent(LoadState<VaultOverview>(), {}, {}, credentialKey = CredentialKeyUi.Unknown) }
+        rule.onNodeWithText("Credential key: cannot be checked right now.").performScrollTo().assertIsDisplayed()
     }
 }

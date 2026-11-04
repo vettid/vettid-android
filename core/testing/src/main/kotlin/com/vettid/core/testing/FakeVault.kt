@@ -514,17 +514,22 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     /** What the next `credentialKey()` answers (`credential.version`); a failure is `fail["credentialKey"]`. */
     var credentialKeyAnswer = CredentialKeyAnswer(true, null)
-    private val keyUpdates = MutableSharedFlow<String>(extraBufferCapacity = 4)
-    override val credentialKeyUpdates: SharedFlow<String> = keyUpdates
+    private val keyUpdates = MutableSharedFlow<String?>(extraBufferCapacity = 4)
+    override val credentialKeyUpdates: SharedFlow<String?> = keyUpdates
 
-    /** A test: the vault answered a create, rotate or reset whose key has this [fingerprint]. */
-    fun answerWithKey(fingerprint: String) {
+    /** A test: when set, `credentialKey()` waits for it (after recording the call), to hold an ask open. */
+    var credentialKeyGate: CompletableDeferred<Unit>? = null
+
+    /** A test: the vault answered a create, rotate or reset whose key has this [fingerprint]; null: it named no key. */
+    fun answerWithKey(fingerprint: String?) {
         keyUpdates.tryEmit(fingerprint)
     }
 
     override suspend fun credentialKey(): CredentialKeyAnswer {
         call("credentialKey")
-        return credentialKeyAnswer
+        val answer = credentialKeyAnswer // the answer as the vault gave it when asked, whatever is released later
+        credentialKeyGate?.await()
+        return answer
     }
 
     override suspend fun overview(): VaultOverview {

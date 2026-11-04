@@ -786,7 +786,7 @@ class VaultManager(
     private val accountFlow = MutableStateFlow(local.toInfo())
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val credentialKeyFlow =
-        MutableSharedFlow<String>(extraBufferCapacity = KEY_UPDATE_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        MutableSharedFlow<String?>(extraBufferCapacity = KEY_UPDATE_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val windowFlow = MutableStateFlow<Instant?>(null)
     private val pausedFlow = MutableStateFlow(false)
     private val deletionFlow = MutableStateFlow<DeletionView?>(null)
@@ -863,12 +863,7 @@ class VaultManager(
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
     override val account: StateFlow<AccountInfo?> = accountFlow.asStateFlow()
     override val alarm: StateFlow<CredentialAlarm?> = alarmFlow.asStateFlow()
-    override val credentialKeyUpdates: SharedFlow<String> = credentialKeyFlow.asSharedFlow()
 
-    override suspend fun credentialKey(): CredentialKeyAnswer = guard {
-        val info = session().openApi.credentialVersion()
-        CredentialKeyAnswer(info.exists, info.key?.let { CredentialKeyFingerprint.formatB64(it) })
-    }
     override val unlockWindow: StateFlow<Instant?> = windowFlow.asStateFlow()
     override val servicePaused: StateFlow<Boolean> = pausedFlow.asStateFlow()
     override val devHint: String? get() = gateway.devHint
@@ -1614,7 +1609,7 @@ class VaultManager(
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
-                CredentialKeyFingerprint.formatB64(k)?.let { credentialKeyFlow.tryEmit(it) }
+                credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }
             launch { s.device.ownerCheckRequired.collectSurviving("owner check required") { ownerCheck.onRequired() } }
             // A vault.locking or vault.held arrives here (onEvent): one failure on one event never ends the observer.
@@ -3072,6 +3067,13 @@ class VaultManager(
     }
 
     // --- CredentialRepository ---
+
+    override val credentialKeyUpdates: SharedFlow<String?> = credentialKeyFlow.asSharedFlow()
+
+    override suspend fun credentialKey(): CredentialKeyAnswer = guard {
+        val info = session().openApi.credentialVersion()
+        CredentialKeyAnswer(info.exists, info.key?.let { CredentialKeyFingerprint.formatB64(it) })
+    }
 
     override suspend fun status(): CredentialStatus = guard {
         val s = session()

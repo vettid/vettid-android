@@ -211,9 +211,10 @@ interface VaultRepository {
 
     /**
      * The fingerprint of the `key` of every `credential.create`, `.rotate`, `.reset` (and recovery or transfer) answer the
-     * vault gives this phone, so that the row shows the new one at once. Not replayed.
+     * vault gives this phone, so that the row shows the new one at once. Null: the credential changed and its key is not
+     * known (an answer without one), so the screen asks again. Not replayed.
      */
-    val credentialKeyUpdates: SharedFlow<String>
+    val credentialKeyUpdates: SharedFlow<String?>
 
     /** Cancels the pending start-over (`POST /api/vault/deletion/cancel`, signed by the app key). True when cancelled. */
     suspend fun cancelDeletion(): Boolean = false
