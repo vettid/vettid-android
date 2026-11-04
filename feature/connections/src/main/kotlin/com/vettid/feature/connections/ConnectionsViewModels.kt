@@ -13,6 +13,8 @@ import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.location.LocationRepository
+import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.presence.NoPresence
@@ -607,7 +609,12 @@ data class ConnectionDetailUiState(
      * has no presence (nothing of it is shown then).
      */
     val presence: DetailPresence? = null,
+    /** The member shares their location with this connection until [DetailLocation.until] (ANDROID-PLAN §4 "Location"). */
+    val location: DetailLocation? = null,
 )
+
+/** An active outgoing location share with the connection: "Sharing your location until {time}" with **Stop**. */
+data class DetailLocation(val shareId: String, val until: Instant)
 
 /**
  * What the connection's page shows of presence: the [reading] under the name, and whether the member's own status is
@@ -684,13 +691,19 @@ class ConnectionDetailViewModel @Inject constructor(
     private val calls: CallAccess = NoCallAccess,
     private val votes: VotesRepository = NoVotes,
     private val presence: PresenceRepository = NoPresence,
+    private val location: LocationRepository = NoLocation,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
     val uiState: StateFlow<ConnectionDetailUiState> =
-        combine(local, repo.connections, repo.authentication, combine(calls.availability, ownVotes()) { c, v -> c to v }, ownPresence()) {
-            s, cs, auth, (call, v), p ->
+        combine(
+            local,
+            repo.connections,
+            repo.authentication,
+            combine(calls.availability, ownVotes()) { c, v -> c to v },
+            combine(ownPresence(), ownLocation()) { p, l -> p to l },
+        ) { s, cs, auth, (call, v), (p, shared) ->
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
                 connection = c,
@@ -701,6 +714,7 @@ class ConnectionDetailViewModel @Inject constructor(
                     // Not asked yet is "Checking…" (it is being asked); closed shows no line at all.
                     DetailPresence(it.reading ?: PresenceReading.Checking, it.shared, it.invisible, it.canRefresh)
                 },
+                location = shared,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
@@ -714,6 +728,17 @@ class ConnectionDetailViewModel @Inject constructor(
         } else {
             null
         }
+    }
+
+    /** The member's outgoing location share with this connection, if one is active (ANDROID-PLAN §4 "Location"). */
+    private fun ownLocation() = location.outgoing.map { shares ->
+        shares.firstOrNull { it.connectionId == id }?.let { DetailLocation(it.shareId, it.expiresAt) }
+    }
+
+    /** **Stop** on "Sharing your location until …": sending ends at once, the vault is told (a refused stop shows its error). */
+    fun stopSharingLocation() {
+        val share = uiState.value.location ?: return
+        act { location.stop(share.shareId) }
     }
 
     /** Presence is asked of a person who is connected, never of a service (a service is not a person). */
