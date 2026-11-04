@@ -206,6 +206,7 @@ import com.vettid.feature.settings.SettingsActions
 import com.vettid.feature.settings.SettingsContent
 import com.vettid.feature.settings.SettingsUiState
 import com.vettid.feature.settings.VaultStatusContent
+import com.vettid.feature.settings.CredentialKeyUi
 import java.time.Instant
 
 /** No-op actions for the catalog. */
@@ -1027,6 +1028,19 @@ object ScreenCatalog {
         "settings.status_signer_development" to { VaultStatusContent(LoadState(false, signerOverview(SignerClass.DEVELOPMENT)), {}, {}) },
         "settings.status_signer_details" to {
             VaultStatusContent(LoadState(false, signerOverview(SignerClass.GOOGLE_PLAY)), {}, {}, signerDetails = true)
+        },
+        // The Credential key row (ANDROID-PLAN 0.1.119 §4): shown, being asked, cannot be checked (Retry), none yet.
+        "settings.status_credential_key" to {
+            VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}, credentialKey = CredentialKeyUi.Shown("e939 754d 09aa a93a"))
+        },
+        "settings.status_credential_key_loading" to {
+            VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}, credentialKey = CredentialKeyUi.Loading)
+        },
+        "settings.status_credential_key_unknown" to {
+            VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}, credentialKey = CredentialKeyUi.Unknown)
+        },
+        "settings.status_credential_key_none" to {
+            VaultStatusContent(LoadState(false, signerOverview(SignerClass.VETTID)), {}, {}, credentialKey = CredentialKeyUi.None)
         },
         "settings.pin" to { ChangePinContent(ChangePinUiState(current = "975310", pin = "1111"), {}, {}, {}, {}, {}) },
         "settings.recovery" to {

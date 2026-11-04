@@ -363,6 +363,22 @@ class VaultDevice private constructor(
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
+    private val credentialKeys =
+        MutableSharedFlow<String?>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The credential key (§10.6 `key`, base64) of every credential this device keeps from an answer that names one
+     * (`credential.create`, `.rotate`, `.reset`, `.recover`, a fetch): what Vault status shows the fingerprint of. Null:
+     * the credential was replaced by an answer that named no key, so the key is not known here. Not a secret
+     * (VAULT-MESSAGING 0.83.8 §10.8), and never logged.
+     */
+    val credentialKeyChanges: SharedFlow<String?> = credentialKeys.asSharedFlow()
+
+    /** A key-replacing answer was kept without a `key`: the credential changed and its key is not known. */
+    internal fun signalKeyUnknown() {
+        credentialKeys.tryEmit(null)
+    }
+
     private val timeDrops = MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
@@ -1854,6 +1870,9 @@ class VaultDevice private constructor(
             st.credential = prev
             throw e
         }
+        // Only a key that differs from the one held before: a key-keeping operation says nothing (a stale held key must not
+        // replace a fresher `credential.version` answer on screen).
+        if (key != null && key != prev?.key) credentialKeys.tryEmit(key)
     }
 
     internal suspend fun endRecovery() = lock.withLock {

@@ -125,6 +125,12 @@
     <string name="settings_status_devices">Devices</string>
     <string name="settings_status_connections">Connections</string>
     <string name="settings_status_provisional">Confirmed</string>
+    <!-- NEW, PENDING owner approval: ANDROID-PLAN 0.1.119 §4 "Owner check and status", Credential key row (VAULT-MESSAGING 0.83.8 §10.8) -->
+    <string name="settings_status_credential_key">Credential key: %1$s</string>
+    <string name="settings_status_credential_key_admins">If you are an admin of a service, the other admins may ask you to read this out when you become an admin, or after you reset your credential. It is not a secret.</string>
+    <string name="settings_status_credential_key_unknown">Credential key: cannot be checked right now.</string>
+    <string name="settings_status_credential_key_none">Credential key: none yet</string>
+    <string name="settings_status_credential_key_label">Credential key</string>
     <!-- The vault's signer binding (ANDROID-PLAN 0.1.36 §7; the wording is the requirement) -->
     <string name="settings_signer_installed_google_play">Installed from: Google Play (signed by Google)</string>
     <string name="settings_signer_installed_vettid">Installed from: F-Droid or direct (signed by VettID)</string>
