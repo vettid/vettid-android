@@ -123,7 +123,21 @@ class LocationRequestsTest {
         }
         runCurrent()
         assertTrue(loc(m).isEmpty())
-        assertEquals(setOf("location.request") to "r1", read.single())
+        // Nothing is sent and the vault's feed item is not touched.
+        assertTrue(read.isEmpty())
+    }
+
+    @Test
+    fun aRequestFromTheListIsRemovedByTheClosingEvent() = runTest {
+        val m = manager()
+        m.refreshPendingFrom {
+            PendingPage(listOf(VaultJson.parseObject("""{"kind":"location","body":${pending("r5")}}""".toByteArray())), null, now.minusSeconds(60))
+        }
+        runCurrent()
+        assertEquals(listOf("location:r5"), loc(m).map { it.key })
+        m.onEvent(event("sync.event", """{"kind":"location.request.closed","request_id":"r5","reason":"expired"}""", now))
+        runCurrent()
+        assertTrue(loc(m).isEmpty())
     }
 
     @Test

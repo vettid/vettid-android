@@ -58,6 +58,9 @@ internal class LocationReceiving(
     private val changedAt = HashMap<String, Long>()
     private val addedAt = HashMap<String, Long>()
 
+    /** Ids of shares that ended in this session (memory only, cleared with [clear]): an event does not bring one back. */
+    private val ended = LinkedHashSet<String>()
+
     /** When this member last asked each connection (memory): the minutes left of the vault's allowance of one per 10. */
     private val asked = HashMap<String, Instant>()
 
@@ -80,6 +83,7 @@ internal class LocationReceiving(
         val listed = ShareWire.incoming(body, now()) ?: return
         synchronized(lock) {
             if (token.epoch != lockEpoch || !unlocked()) return
+            sweep()
             val ids = listed.map { it.shareId }.toSet()
             shares.keys.filter { it !in ids && (addedAt[it] ?: 0L) <= token.seq }.forEach { drop(it) }
             for (l in listed) {
@@ -100,37 +104,55 @@ internal class LocationReceiving(
 
     // --- events ---
 
-    /** `location.event`, the ephemeral `location.update` and the feed item `location.shared`. */
-    fun onEvent(m: VaultMessage) {
-        if (!unlocked() || gated()) return
+    /**
+     * `location.event`, the ephemeral `location.update` and the feed item `location.shared`. The epoch is taken at entry and checked
+     * under [lock] at every write, so an event handled across a lock or a hold adds nothing. A share's end (`stopped`, `ended`) is
+     * taken whatever the daily check says: it only removes, so the position does not stay shown while the check is due.
+     */
+    fun onEvent(m: VaultMessage) = handle(m, begin().epoch)
+
+    /** [onEvent] with the epoch the event was taken in (a test hands an older one to stand for an event across a lock). */
+    internal fun handle(m: VaultMessage, epoch: Int) {
+        val open = unlocked() && !gated()
         when (m.type) {
-            "location.event" -> onLocationEvent(m.body)
-            "location.update" -> onUpdate(m.body)
-            "feed.event" -> if (VaultJson.str(m.body, "kind") == "location.shared") onShared(m.body)
+            "location.event" -> onLocationEvent(m.body, epoch, open)
+            "location.update" -> if (open) onUpdate(m.body, epoch)
+            "feed.event" -> if (open && VaultJson.str(m.body, "kind") == "location.shared") onShared(m.body)
         }
     }
 
-    private fun onLocationEvent(b: JsonObject) {
+    private fun onLocationEvent(b: JsonObject, epoch: Int, open: Boolean) {
         if (VaultJson.str(b, "direction") != "in") return
         val id = VaultJson.str(b, "share_id")?.takeIf { it.isNotEmpty() } ?: return
         when (VaultJson.str(b, "event")) {
-            "started" -> {
-                val share = ShareWire.startedEvent(b, now())
-                if (share != null) synchronized(lock) { replaceFor(share); publish() }
-                // The interval, the trail flag and a position that was already there come from the list.
-                relist()
-            }
             "stopped", "ended" -> synchronized(lock) {
+                if (epoch != lockEpoch) return
                 if (drop(id)) publish()
                 changedAt[id] = ++seq
             }
-            "snapshot" -> onSnapshot(id, b)
+            "started" -> if (open) onStarted(id, b, epoch)
+            "snapshot" -> if (open) onSnapshot(id, b, epoch)
         }
     }
 
-    private fun onSnapshot(id: String, b: JsonObject) {
-        val points = ShareWire.points(b["points"], SNAPSHOT_MAX) ?: return
+    private fun onStarted(id: String, b: JsonObject, epoch: Int) {
+        val share = ShareWire.startedEvent(b, now())
         synchronized(lock) {
+            // A share that ended in this session does not come back by an event (the vault's list is the truth for that).
+            if (share != null && epoch == lockEpoch && id !in ended) {
+                replaceFor(share)
+                publish()
+            }
+        }
+        // The interval, the trail flag and a position that was already there come from the list.
+        relist()
+    }
+
+    private fun onSnapshot(id: String, b: JsonObject, epoch: Int) {
+        val points = ShareWire.points(b["points"], SNAPSHOT_MAX, notAfter = skewLimit()) ?: return
+        synchronized(lock) {
+            if (epoch != lockEpoch) return
+            sweep()
             val s = shares[id] ?: return
             if (s.connectionId != VaultJson.str(b, "connection_id")) return
             shares[id] = s.copy(snapshot = points)
@@ -143,13 +165,17 @@ internal class LocationReceiving(
         if (synchronized(lock) { id !in shares && (changedAt[id] ?: 0L) == 0L }) relist()
     }
 
+    /** A sample's `at` may be this far ahead of this phone's clock (clock skew); further is not a position. */
+    private fun skewLimit(): Instant = now().plus(SKEW)
+
     /** A live position: only for a known incoming share of the connection that is named. Dropped silently otherwise. */
-    private fun onUpdate(b: JsonObject) {
+    private fun onUpdate(b: JsonObject, epoch: Int) {
         val id = VaultJson.str(b, "share_id")?.takeIf { it.isNotEmpty() } ?: return
         val connection = VaultJson.str(b, "connection_id")?.takeIf { it.isNotEmpty() } ?: return
-        val p = ShareWire.position(b) ?: return
+        val p = ShareWire.position(b, notAfter = skewLimit()) ?: return
         val at = now()
         synchronized(lock) {
+            if (epoch != lockEpoch) return
             sweep()
             val s = shares[id] ?: return
             if (s.connectionId != connection || !s.expiresAt.isAfter(at)) return
@@ -168,7 +194,11 @@ internal class LocationReceiving(
      */
     suspend fun open(connectionId: String) {
         requireOpen()
-        val known = synchronized(lock) { shares.values.firstOrNull { it.connectionId == connectionId } }
+        // A share that ended while the phone slept (the timer runs on uptime) is not shown, nor asked about.
+        val known = synchronized(lock) {
+            sweep()
+            shares.values.firstOrNull { it.connectionId == connectionId }
+        }
         val token = begin()
         val body = try {
             vaultGuard(resend = true) { ops().get(connectionId, history = known?.trail == true) }
@@ -256,12 +286,21 @@ internal class LocationReceiving(
         return ((left + SECONDS_PER_MINUTE - 1) / SECONDS_PER_MINUTE).toInt()
     }
 
-    /** Distance and direction from this phone to the connection's latest position, when the phone's own place is known. */
+    /**
+     * Distance and direction from this phone to the connection's latest position, when the phone's own place is known. Nothing is
+     * asked of the platform while the vault is locked or the check is due or held; an answer that comes back across a lock or a
+     * hold is dropped.
+     */
     suspend fun offsetFromHere(connectionId: String): PositionOffset? {
-        val p = synchronized(lock) { shares.values.firstOrNull { it.connectionId == connectionId }?.last } ?: return null
-        val me = here() ?: return null
-        return Offsets.between(me.lat, me.lon, p.lat, p.lon)
+        if (!unlocked() || gated()) return null
+        val (epoch, p) = synchronized(lock) { lockEpoch to shares.values.firstOrNull { it.connectionId == connectionId }?.last }
+        val me = if (p == null) null else here()
+        val stillOpen = synchronized(lock) { epoch == lockEpoch } && unlocked() && !gated()
+        return if (p != null && me != null && stillOpen) Offsets.between(me.lat, me.lon, p.lat, p.lon) else null
     }
+
+    /** The app came to the front: shares that ended while the phone slept go (the timer runs on uptime). */
+    fun onForeground() = synchronized(lock) { sweep() }
 
     // --- locks ---
 
@@ -274,6 +313,7 @@ internal class LocationReceiving(
             shares.clear()
             changedAt.clear()
             addedAt.clear()
+            ended.clear()
             asked.clear()
             flow.value = emptyList()
         }
@@ -300,7 +340,18 @@ internal class LocationReceiving(
                 drop(old)
                 changedAt[old] = ++seq
             }
-        put(shares[share.shareId]?.let { share.copy(last = it.last) } ?: share)
+        // A share already held keeps what it has (the position, the trail, the snapshot, the interval the list told).
+        put(
+            shares[share.shareId]?.let {
+                share.copy(
+                    last = it.last,
+                    trailPoints = it.trailPoints,
+                    snapshot = it.snapshot,
+                    trail = it.trail,
+                    intervalSeconds = it.intervalSeconds,
+                )
+            } ?: share,
+        )
     }
 
     private fun put(share: IncomingShare) {
@@ -313,7 +364,12 @@ internal class LocationReceiving(
     private fun drop(id: String): Boolean {
         timers.remove(id)?.cancel()
         addedAt.remove(id)
-        return shares.remove(id) != null
+        val had = shares.remove(id) != null
+        if (had) {
+            ended += id
+            if (ended.size > MAX_TOMBS) ended.remove(ended.first())
+        }
+        return had
     }
 
     /** Ends the shares whose `expires_at` has passed by the wall clock (the timer runs on uptime, which stops in deep sleep). */
@@ -350,6 +406,7 @@ internal class LocationReceiving(
     }
 
     private companion object {
+        val SKEW: Duration = Duration.ofMinutes(5)
         const val TRAIL_MAX = 1_000
         const val SNAPSHOT_MAX = 500
         const val MAX_TOMBS = 1_024

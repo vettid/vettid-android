@@ -276,6 +276,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
     composable<PositionRoute> {
         val vm: PositionViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // The phone's own place is asked for only while the screen is shown.
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         PositionScreen(state, host.onBack, vm::refresh, vm::askMaps, vm::dismissMaps)
     }
     composable<InviteRoute> {

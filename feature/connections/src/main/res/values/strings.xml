@@ -356,7 +356,7 @@
         <item quantity="other">You asked %1$s a few minutes ago. You can ask again in %2$d minutes.</item>
     </plurals>
     <!-- NEW: not in the plan (the glance\'s icon description; %1$s is the age, empty before the first position) -->
-    <string name="connections_location_glance">Shares their location with you %1$s</string>
+    <string name="connections_location_glance">Shares their location with you</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
     <string name="connections_location_sharing_with">You\'re sharing with</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
@@ -391,6 +391,12 @@
     <string name="connections_location_position_within">Within %1$s</string>
     <!-- NEW: not in the plan -->
     <string name="connections_location_position_age">Updated %1$s ago</string>
+    <!-- NEW: not in the plan (an update under a minute old) -->
+    <string name="connections_location_position_age_now">Updated just now</string>
+    <!-- NEW: not in the plan (no maps app on the phone) -->
+    <string name="connections_location_no_maps">No maps app can open this.</string>
+    <!-- NEW: not in the plan (a pasted note was cut) -->
+    <string name="connections_location_ask_trimmed">The note was shortened to fit.</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, A position ("Open in maps app") -->
     <string name="connections_location_open_maps">Open in maps app</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, Open in maps -->

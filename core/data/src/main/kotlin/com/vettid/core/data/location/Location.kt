@@ -320,7 +320,10 @@ sealed interface AskResult {
 }
 
 /** Distance in metres and the bearing in degrees (0 = north, clockwise) from this phone to a position. */
-data class PositionOffset(val meters: Double, val bearingDeg: Double)
+data class PositionOffset(val meters: Double, val bearingDeg: Double) {
+    /** Prints its type name only: an offset from this phone says where it is. */
+    override fun toString(): String = "PositionOffset"
+}
 
 /**
  * One position of a connection's share, held in memory only (never in Room, a file, DataStore, `SavedStateHandle`, a log or a

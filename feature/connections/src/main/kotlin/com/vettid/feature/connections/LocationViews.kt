@@ -44,6 +44,7 @@ import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.PositionOffset
 import com.vettid.core.data.location.PositionText
+import com.vettid.core.data.location.ReceivedPosition
 import com.vettid.core.data.location.ShareTime
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
@@ -73,6 +74,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -196,6 +201,9 @@ fun AskLocationDialog(ask: LocationAsk, name: String, onNote: (String) -> Unit, 
                         modifier = Modifier.fillMaxWidth().testTag("ask_location_note"),
                     )
                 }
+                if (ask.trimmed && !ask.sent) {
+                    Text(stringResource(R.string.connections_location_ask_trimmed), modifier = Modifier.testTag("ask_location_trimmed"))
+                }
                 ask.limitedMinutes?.let { n ->
                     Text(
                         pluralStringResource(R.plurals.connections_location_ask_limit, n, name, n),
@@ -239,7 +247,7 @@ internal fun LocationGlanceLine(glance: LocationGlance) {
     val context = LocalContext.current
     val now = rememberNow()
     val age = glance.at?.let { PositionText.age(context.resources, it, now) }
-    val description = stringResource(R.string.connections_location_glance, age ?: "")
+    val description = stringResource(R.string.connections_location_glance)
     Row(
         Modifier.padding(top = Spacing.xs).testTag("connection_glance"),
         verticalAlignment = Alignment.CenterVertically,
@@ -268,10 +276,19 @@ data class OutgoingRow(
     val until: Instant,
     val lastSentAt: Instant?,
     val stopping: Boolean,
+    /** A stop was just tapped and is out: the button waits. */
+    val busy: Boolean = false,
 )
 
 /** A connection's share with the member. */
-data class IncomingRow(val shareId: String, val connectionId: String, val name: String?, val at: Instant?, val until: Instant)
+data class IncomingRow(
+    val shareId: String,
+    val connectionId: String,
+    val name: String?,
+    val at: Instant?,
+    val until: Instant,
+    val busy: Boolean = false,
+)
 
 /** A pending request: "{First} asks where you are". */
 data class RequestRow(val key: String, val connectionId: String, val name: String?)
@@ -283,6 +300,8 @@ data class LocationUiState(
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** Share ids whose stop is out (a second tap waits). */
+    val stoppingIds: Set<String> = emptySet(),
 ) {
     val empty: Boolean get() = outgoing.isEmpty() && incoming.isEmpty() && requests.isEmpty()
 }
@@ -305,13 +324,15 @@ class LocationViewModel @Inject constructor(
     ) { s, out, inc, (cs, asks, service), availability ->
         val names = cs.associate { it.id to firstNameOf(it) }
         s.copy(
-            outgoing = out.map {
+            outgoing = out.filter { it.expiresAt.isAfter(Instant.now()) }.map {
                 OutgoingRow(
                     it.shareId, it.connectionId, names[it.connectionId], it.precision, it.expiresAt, it.lastSentAt,
-                    it.connectionId in service.stopping,
+                    it.connectionId in service.stopping, it.shareId in s.stoppingIds,
                 )
             },
-            incoming = inc.map { IncomingRow(it.shareId, it.connectionId, names[it.connectionId], it.last?.at, it.expiresAt) },
+            incoming = inc.filter { it.expiresAt.isAfter(Instant.now()) }.map {
+                IncomingRow(it.shareId, it.connectionId, names[it.connectionId], it.last?.at, it.expiresAt, it.shareId in s.stoppingIds)
+            },
             requests = asks.filterIsInstance<Approval.LocationRequest>()
                 .map { RequestRow(it.key, it.connectionId, names[it.connectionId]) },
             availability = availability,
@@ -319,19 +340,23 @@ class LocationViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocationUiState())
 
     /** **Stop** on an outgoing share. */
-    fun stopSharing(shareId: String) = run { location.stop(shareId) }
+    fun stopSharing(shareId: String) = run(shareId) { location.stop(shareId) }
 
     /** **Stop receiving** on an incoming share. */
-    fun stopReceiving(shareId: String) = run { location.stopReceiving(shareId) }
+    fun stopReceiving(shareId: String) = run(shareId) { location.stopReceiving(shareId) }
 
     fun dismissError() = local.update { it.copy(error = null, errorCode = null) }
 
-    private fun run(block: suspend () -> Unit) {
+    private fun run(shareId: String, block: suspend () -> Unit) {
+        if (shareId in local.value.stoppingIds) return
+        local.update { it.copy(stoppingIds = it.stoppingIds + shareId) }
         viewModelScope.launch {
             try {
                 block()
             } catch (e: VaultFailure) {
                 local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
+            } finally {
+                local.update { it.copy(stoppingIds = it.stoppingIds - shareId) }
             }
         }
     }
@@ -416,6 +441,7 @@ private fun OutgoingSection(rows: List<OutgoingRow>, actions: LocationActions) {
             }
             TextButton(
                 onClick = { actions.onStopSharing(r.shareId) },
+                enabled = !r.stopping && !r.busy,
                 modifier = Modifier.heightIn(min = 48.dp).testTag("location_out_stop_${r.shareId}"),
             ) {
                 Text(
@@ -446,7 +472,8 @@ private fun IncomingSection(rows: List<IncomingRow>, actions: LocationActions) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row {
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow {
                 if (r.at != null) {
                     TextButton(onClick = { actions.onOpenPosition(r.connectionId) }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text(stringResource(R.string.connections_location_position_open))
@@ -457,6 +484,7 @@ private fun IncomingSection(rows: List<IncomingRow>, actions: LocationActions) {
                 }
                 TextButton(
                     onClick = { actions.onStopReceiving(r.shareId) },
+                    enabled = !r.busy,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("location_in_stop_${r.shareId}"),
                 ) { Text(stringResource(R.string.connections_location_stop_receiving)) }
             }
@@ -506,6 +534,8 @@ data class PositionUiState(
     val confirmMaps: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** The daily owner check is due or held: what was received is gone from memory, and nothing new is said about the share. */
+    val held: Boolean = false,
 ) {
     /** The "hands the position to another app" question is open: the daily check waits for the decision. */
     val holdsInput: Boolean get() = confirmMaps
@@ -518,35 +548,58 @@ class PositionViewModel @Inject constructor(
     savedState: androidx.lifecycle.SavedStateHandle,
     private val location: LocationRepository = NoLocation,
     private val connections: ConnectionsRepository,
+    private val ownerCheck: com.vettid.core.data.vault.OwnerCheckRepository,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[PositionRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(PositionUiState())
     private val offset = MutableStateFlow<PositionOffset?>(null)
 
-    val uiState: StateFlow<PositionUiState> = combine(local, location.incoming, connections.connections, offset) { s, shares, cs, o ->
+    /** The screen is at least STARTED: the phone's own place is asked for only then. */
+    private val shown = MutableStateFlow(true)
+
+    private val held = ownerCheck.ownerCheck.map { it?.gated(Instant.now()) == true }
+
+    val uiState: StateFlow<PositionUiState> = combine(
+        local,
+        combine(location.incoming, held) { shares, h ->
+            shares.firstOrNull { it.connectionId == id }?.takeIf { it.expiresAt.isAfter(Instant.now()) } to h
+        },
+        connections.connections,
+        offset,
+    ) { s, (share, h), cs, o ->
         PositionUiState(
             loaded = true,
             name = cs.firstOrNull { it.id == id }?.let { sharingName(it) },
-            share = shares.firstOrNull { it.connectionId == id },
-            offset = o,
+            share = share,
+            offset = o.takeIf { !h },
             confirmMaps = s.confirmMaps,
             error = s.error,
             errorCode = s.errorCode,
+            held = h,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, PositionUiState())
 
     init {
         viewModelScope.launch { read() }
-        // The offset is worked out again whenever a new position arrives; the permission is never asked for here.
+        // The offset is worked out again only when THIS connection's latest position changes, and only while the screen is shown;
+        // the permission is never asked for here.
         viewModelScope.launch {
-            location.incoming.collect {
-                offset.value = try {
-                    location.offsetFromHere(id)
-                } catch (_: VaultFailure) {
-                    null
+            val mine = location.incoming.map { l -> l.firstOrNull { it.connectionId == id }?.last }.distinctUntilChanged()
+            combine(mine, shown) { last, v -> last to v }
+                .filter { (last, visible) -> last != null && visible }
+                .collectLatest {
+                    offset.value = try {
+                        location.offsetFromHere(id)
+                    } catch (_: VaultFailure) {
+                        null
+                    }
                 }
-            }
         }
+    }
+
+    /** The screen is at least STARTED or stopped. */
+    fun setVisible(visible: Boolean) {
+        shown.value = visible
     }
 
     private suspend fun read() {
@@ -573,12 +626,36 @@ internal fun geoUri(lat: Double, lon: Double): Uri {
     return Uri.parse("geo:$point?q=$point")
 }
 
+/** The latest position as text: coordinates (the same in every locale), accuracy, age and, when known, the offset from this phone. */
 @Composable
-@Suppress("LongMethod")
+private fun PositionCard(p: ReceivedPosition, offset: PositionOffset?, now: Instant) {
+    val context = LocalContext.current
+    DetailCard(Modifier.testTag("position_card")) {
+        val coordinates = String.format(Locale.ROOT, "%.5f, %.5f", p.lat, p.lon)
+        Text(coordinates, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("position_coordinates"))
+        PositionText.accuracy(context.resources, p.accuracyM)?.let {
+            Text(stringResource(R.string.connections_location_position_within, it), modifier = Modifier.testTag("position_accuracy"))
+        }
+        val justNow = java.time.Duration.between(p.at, now).seconds < MINUTE
+        Text(
+            if (justNow) {
+                stringResource(R.string.connections_location_position_age_now)
+            } else {
+                stringResource(R.string.connections_location_position_age, PositionText.age(context.resources, p.at, now))
+            },
+            modifier = Modifier.testTag("position_age"),
+        )
+        offset?.let { Text(PositionText.offset(context.resources, it, p.accuracyM), modifier = Modifier.testTag("position_offset")) }
+    }
+}
+
+@Composable
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> Unit, onAskMaps: () -> Unit, onDismissMaps: () -> Unit) {
     HoldsInput(state.holdsInput)
     val context = LocalContext.current
     val now = rememberNow()
+    var noMaps by remember { mutableStateOf(false) }
     val name = AccountNames.isolate(state.name ?: stringResource(R.string.connections_name_not_shared))
     DetailScaffold(onBackClick = onBack) {
         Column(
@@ -602,7 +679,7 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
             val share = state.share
             val p = share?.last
             when {
-                share == null && state.loaded && state.error == null -> Text(
+                share == null && state.loaded && state.error == null && !state.held -> Text(
                     stringResource(R.string.connections_location_position_none, name),
                     modifier = Modifier.testTag("position_none"),
                 )
@@ -610,24 +687,10 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
                     stringResource(R.string.connections_location_position_waiting),
                     modifier = Modifier.testTag("position_waiting"),
                 )
-                p != null -> DetailCard(Modifier.testTag("position_card")) {
-                    val locale = androidx.compose.ui.platform.LocalLocale.current.platformLocale
-                    val coordinates = String.format(locale, "%.5f, %.5f", p.lat, p.lon)
-                    Text(coordinates, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("position_coordinates"))
-                    PositionText.accuracy(context.resources, p.accuracyM)?.let {
-                        Text(
-                            stringResource(R.string.connections_location_position_within, it),
-                            modifier = Modifier.testTag("position_accuracy"),
-                        )
-                    }
-                    Text(
-                        stringResource(R.string.connections_location_position_age, PositionText.age(context.resources, p.at, now)),
-                        modifier = Modifier.testTag("position_age"),
-                    )
-                    state.offset?.let {
-                        Text(PositionText.offset(context.resources, it), modifier = Modifier.testTag("position_offset"))
-                    }
-                }
+                p != null -> PositionCard(p, state.offset, now)
+            }
+            if (noMaps) {
+                Text(stringResource(R.string.connections_location_no_maps), modifier = Modifier.testTag("position_no_maps"))
             }
             if (p != null) {
                 PrimaryButton(
@@ -646,8 +709,12 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
             confirmLabel = stringResource(R.string.connections_location_open_maps_go),
             onConfirm = {
                 onDismissMaps()
-                val view = Intent(Intent.ACTION_VIEW, geoUri(p.lat, p.lon)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                runCatching { context.startActivity(view) }
+                noMaps = try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, geoUri(p.lat, p.lon)))
+                    false
+                } catch (_: android.content.ActivityNotFoundException) {
+                    true
+                }
             },
             onDismiss = onDismissMaps,
         )

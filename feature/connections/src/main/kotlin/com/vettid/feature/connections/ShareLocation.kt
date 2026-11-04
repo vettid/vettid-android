@@ -171,7 +171,14 @@ class ShareLocationViewModel @Inject constructor(
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     /** A request being answered (Approvals): the sheet opens at once and the start names it. */
-    private val requestId: String? = savedState.get<String?>(ConnectionDetailRoute.ARG_REQUEST)?.takeIf { it.isNotEmpty() }
+    private val saved = savedState
+    private var requestId: String? = savedState.get<String?>(ConnectionDetailRoute.ARG_REQUEST)?.takeIf { it.isNotEmpty() }
+
+    /** The request was used or the sheet was dismissed: it is not reused, and a recreated screen does not open the sheet again. */
+    private fun forgetRequest() {
+        requestId = null
+        saved[ConnectionDetailRoute.ARG_REQUEST] = null
+    }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
     val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability) { s, shares, a ->
@@ -198,7 +205,10 @@ class ShareLocationViewModel @Inject constructor(
     }
 
     /** Closes the sheet; a share that was started goes on. */
-    fun dismiss() = local.update { it.copy(open = false) }
+    fun dismiss() {
+        forgetRequest()
+        local.update { it.copy(open = false) }
+    }
 
     fun setOnce(once: Boolean) = local.update { it.copy(once = once) }
 
@@ -243,6 +253,7 @@ class ShareLocationViewModel @Inject constructor(
             try {
                 val precision = fitted(s.precision, s.permission)
                 val share = location.start(ShareRequest(id, timing, precision, trail = s.trail && !s.once, requestId = requestId))
+                forgetRequest()
                 local.update { it.copy(busy = false, startedId = share.shareId) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, issue = SendIssue.of(e.code)) }

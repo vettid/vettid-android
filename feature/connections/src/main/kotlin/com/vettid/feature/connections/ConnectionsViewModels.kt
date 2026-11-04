@@ -142,7 +142,7 @@ class ConnectionsViewModel @Inject constructor(
             peerDeclines = declines,
             searchable = cs.isNotEmpty(),
             presenceCard = card,
-            glances = shares.associate { it.connectionId to LocationGlance(it.last?.at) },
+            glances = shares.filter { it.expiresAt.isAfter(Instant.now()) }.associate { it.connectionId to LocationGlance(it.last?.at) },
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionsUiState())
 
@@ -657,6 +657,22 @@ data class ConnectionDetailUiState(
  */
 data class DetailIncoming(val shareId: String, val until: Instant, val at: Instant?, val accuracyM: Double?)
 
+/** Fits a note in the vault's byte bound at a character boundary. */
+internal object NoteBytes {
+    fun fit(text: String, maxBytes: Int): String {
+        var bytes = 0
+        var end = 0
+        while (end < text.length) {
+            val cp = text.codePointAt(end)
+            val n = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+            if (bytes + n > maxBytes) break
+            bytes += n
+            end += Character.charCount(cp)
+        }
+        return text.substring(0, end)
+    }
+}
+
 /** The **Ask for location** dialog: the optional note (at most 256 bytes) and the outcome. */
 data class LocationAsk(
     val open: Boolean = false,
@@ -666,6 +682,8 @@ data class LocationAsk(
     val sent: Boolean = false,
     /** One request per connection per 10 minutes: the minutes until the next. */
     val limitedMinutes: Int? = null,
+    /** A pasted note was cut to the 256 bytes the vault takes. */
+    val trimmed: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
 )
@@ -773,7 +791,7 @@ class ConnectionDetailViewModel @Inject constructor(
             val p = extras.presence
             val shared = extras.location
             val offered = extras.availability
-            val incoming = extras.incoming.firstOrNull { it.connectionId == id }
+            val incoming = extras.incoming.firstOrNull { it.connectionId == id && it.expiresAt.isAfter(Instant.now()) }
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
                 connection = c,
@@ -843,37 +861,44 @@ class ConnectionDetailViewModel @Inject constructor(
         }
     }
 
+    /** Counts the dialog's openings: an answer that comes back to a closed (or reopened) dialog is not applied to it. */
+    private var askGeneration = 0
+
     /** **Ask for location**: opens the dialog (a service connection is never asked). */
     fun openAsk() {
         if (uiState.value.connection?.service == true) return
+        askGeneration++
         local.update { it.copy(locationAsk = LocationAsk(open = true)) }
     }
 
-    fun closeAsk() = local.update { it.copy(locationAsk = LocationAsk()) }
+    fun closeAsk() {
+        askGeneration++
+        local.update { it.copy(locationAsk = LocationAsk()) }
+    }
 
-    /** The note is kept to 256 bytes of UTF-8 (the vault's bound); text over it is not taken. */
+    /** The note is kept to 256 bytes of UTF-8 (the vault's bound); a longer one (pasted) is cut at a character, and the dialog says so. */
     fun setAskNote(text: String) = local.update {
-        if (text.toByteArray(Charsets.UTF_8).size > NOTE_MAX_BYTES) {
-            it
-        } else {
-            it.copy(locationAsk = it.locationAsk.copy(note = text, error = null))
-        }
+        val fitted = NoteBytes.fit(text, NOTE_MAX_BYTES)
+        it.copy(locationAsk = it.locationAsk.copy(note = fitted, trimmed = fitted.length < text.length, error = null))
     }
 
     /** Sends `location.request`; a second ask within 10 minutes is answered by "You asked {First} a few minutes ago…". */
     fun sendAsk() {
         val ask = local.value.locationAsk
         if (!ask.open || ask.busy || ask.sent) return
+        val generation = askGeneration
         local.update { it.copy(locationAsk = ask.copy(busy = true, error = null, errorCode = null, limitedMinutes = null)) }
         viewModelScope.launch {
+            // Only the dialog this was sent from takes the answer.
+            fun apply(f: (LocationAsk) -> LocationAsk) =
+                local.update { if (generation == askGeneration) it.copy(locationAsk = f(it.locationAsk)) else it }
             try {
                 when (val r = location.ask(id, ask.note)) {
-                    AskResult.Sent -> local.update { it.copy(locationAsk = it.locationAsk.copy(busy = false, sent = true)) }
-                    is AskResult.Limited ->
-                        local.update { it.copy(locationAsk = it.locationAsk.copy(busy = false, limitedMinutes = r.minutes)) }
+                    AskResult.Sent -> apply { it.copy(busy = false, sent = true) }
+                    is AskResult.Limited -> apply { it.copy(busy = false, limitedMinutes = r.minutes) }
                 }
             } catch (e: VaultFailure) {
-                local.update { it.copy(locationAsk = it.locationAsk.copy(busy = false, error = e.kind, errorCode = e.shownCode)) }
+                apply { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
             }
         }
     }

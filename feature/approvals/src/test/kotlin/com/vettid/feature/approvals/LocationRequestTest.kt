@@ -127,6 +127,7 @@ class LocationRequestTest {
         runCurrent()
         assertTrue(location.started.isEmpty())
         val old = vm(ask(exp = now.minusSeconds(1)))
+        runCurrent()
         old.shareOnce()
         runCurrent()
         assertTrue(location.started.isEmpty())
@@ -170,5 +171,57 @@ class LocationRequestTest {
         val s = ApprovalDetailUiState("location:r1", approval = ask(), locationIssue = SendIssue.LOCATION_OFF)
         rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
         rule.onNodeWithTag("location_request_issue").assertIsDisplayed()
+    }
+
+    @Test
+    fun aDoubleTapSendsOneShare() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        location.startGate = gate
+        m.shareOnce()
+        m.shareOnce() // the second tap while the first start is out
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun thePermissionPromptHoldsTheScreenAndItsResultStartsTheShareOnce() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        m.permissionAsked()
+        runCurrent()
+        assertTrue(m.uiState.value.busy)
+        m.shareOnce() // a tap while the prompt is up does nothing
+        runCurrent()
+        assertTrue(location.started.isEmpty())
+        m.permissionAnswered(true)
+        runCurrent()
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun aRefusedPermissionKeepsTheRequestWithTheReasonAndOpenSettings() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        m.permissionAsked()
+        m.permissionAnswered(false)
+        runCurrent()
+        val s = m.uiState.value
+        assertFalse(s.busy)
+        assertEquals(SendIssue.NO_PERMISSION, s.locationIssue)
+        assertTrue(location.started.isEmpty())
+        rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
+        rule.onNodeWithTag("location_request_issue").assertIsDisplayed()
+        rule.onNodeWithTag("location_request_settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun thePermissionTextIsShownBeforeThePromptWhileNotGranted() {
+        val s = ApprovalDetailUiState("location:r1", approval = ask())
+        rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
+        rule.onNodeWithText("To share your location, VettID needs to know where this phone is.", substring = true).assertIsDisplayed()
     }
 }

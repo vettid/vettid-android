@@ -425,6 +425,7 @@ class HistoryEventTitlesTest {
         assertEquals("Location history sent to $sam", located("location.history.shared", "out"))
         assertEquals("Location history received from $sam", located("location.history.received", "in"))
         assertEquals("Location history deleted (12 positions)", located("location.history.deleted", null, ref = "12", name = null))
+        assertEquals("Location history deleted (1 position)", located("location.history.deleted", null, ref = "1", name = null))
     }
 
     @Test

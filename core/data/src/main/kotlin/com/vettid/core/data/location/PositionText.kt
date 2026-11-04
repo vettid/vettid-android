@@ -33,18 +33,23 @@ object PositionText {
     }
 
     /** "50 m" (to the nearest 10) under a kilometre, else "1 km", "2.5 km", "12 km". Null without an accuracy. */
-    fun accuracy(r: Resources, meters: Double?): String? = meters?.takeIf { it > 0.0 }?.let { distance(r, it, coarse = true) }
+    fun accuracy(r: Resources, meters: Double?): String? = meters?.takeIf { it > 0.0 }?.let { distance(r, it) }
 
-    /** The same figure for a distance from this phone. */
-    fun distance(r: Resources, meters: Double, coarse: Boolean = false): String {
+    /**
+     * The same figure for a distance from this phone. Coarse (a position is never that exact): the nearest 10 m under a kilometre
+     * (at least 10), 0.1 km under 10 km, whole kilometres above.
+     */
+    fun distance(r: Resources, meters: Double): String {
         if (meters < KM) {
-            val step = if (coarse) METRE_STEP else 1
-            val n = ((meters / step).roundToInt() * step).coerceAtLeast(step)
+            val n = ((meters / METRE_STEP).roundToInt() * METRE_STEP).coerceAtLeast(METRE_STEP)
             return r.getString(R.string.data_location_metres, n)
         }
         val km = meters / KM
-        val text = if (km < KM_ONE_DECIMAL_BELOW) String.format(Locale.getDefault(), "%.1f", km).removeSuffix(".0").removeSuffix(",0")
-        else km.roundToInt().toString()
+        val text = if (km < KM_ONE_DECIMAL_BELOW) {
+            String.format(Locale.getDefault(), "%.1f", km).removeSuffix(".0").removeSuffix(",0")
+        } else {
+            km.roundToInt().toString()
+        }
         return r.getString(R.string.data_location_kilometres, text)
     }
 
@@ -56,7 +61,16 @@ object PositionText {
     /** The compass word for [bearing] (0 = north, clockwise). */
     fun direction(r: Resources, bearing: Double): String = r.getString(COMPASS[((bearing / SECTOR).roundToInt()) % SECTORS])
 
-    /** "about 3 km north-east of this phone". */
-    fun offset(r: Resources, o: PositionOffset): String =
-        r.getString(R.string.data_location_from_here, distance(r, o.meters), direction(r, o.bearingDeg))
+    /**
+     * "About 3 km north-east of this phone"; "Near this phone" (no direction) when the distance is within the position's own accuracy,
+     * or under 10 m: a direction from a circle one is inside would be made up.
+     */
+    fun offset(r: Resources, o: PositionOffset, accuracyM: Double? = null): String {
+        val inside = accuracyM != null && accuracyM > 0 && o.meters < accuracyM
+        return if (inside || o.meters < METRE_STEP) {
+            r.getString(R.string.data_location_near_here)
+        } else {
+            r.getString(R.string.data_location_from_here, distance(r, o.meters), direction(r, o.bearingDeg))
+        }
+    }
 }

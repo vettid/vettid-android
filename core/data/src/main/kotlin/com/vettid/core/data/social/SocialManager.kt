@@ -208,9 +208,9 @@ class SocialManager internal constructor(
 
     override suspend fun dismissLocationRequest(requestId: String) {
         synchronized(localLock) { dismissedLocationFlow.update { it + "location:$requestId" } }
+        // Nothing is sent and the vault's feed item is not touched: the plan has no decline, only a local hide.
         closeFeedKey("location:$requestId")
         dropApproval("location:$requestId")
-        decided("location:$requestId")
     }
 
     override val approvals: StateFlow<List<Approval>> =
@@ -748,6 +748,8 @@ class SocialManager internal constructor(
             // §10.16: answered (a share named it) or expired; its feed item is read (the vault does not change it).
             "location.request.closed" -> s("request_id")?.let { id ->
                 closeAsk("location:$id", ts)
+                // A request that came from `pending.list` is in the listed asks, not only in the events.
+                synchronized(localLock) { listedFlow.update { l -> l.filterNot { it.key == "location:$id" } } }
                 decided("location:$id")
             }
         }

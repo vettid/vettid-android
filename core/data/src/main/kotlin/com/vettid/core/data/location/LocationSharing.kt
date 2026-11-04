@@ -137,6 +137,7 @@ class LocationSharing(
     private var positions: Job? = null
     private var watcher: Job? = null
     private var resumer: Job? = null
+    private var reopener: Job? = null
     private var onceTimer: Job? = null
     private var unsupported = false
 
@@ -161,8 +162,34 @@ class LocationSharing(
     /** The daily check came due and is held (§3.6.3), or the member's check hold began: what was received is dropped. */
     fun clearReceived() = receiving.clear()
 
-    /** The check passed or the hold ended: the incoming shares are read again (events were not taken meanwhile). */
-    fun reopenReceived() = refreshQuietly()
+    /**
+     * The check passed or the hold ended: the incoming shares are read again (events were not taken meanwhile). Tried again with the
+     * backoff of [resume] until it works or the vault closes.
+     */
+    fun reopenReceived() {
+        synchronized(lock) {
+            reopener?.cancel()
+            reopener = scope.launch { reopenLoop() }
+        }
+    }
+
+    private suspend fun reopenLoop() {
+        var n = 0
+        while (unlocked()) {
+            if (due()) {
+                delay(watchEvery.toMillis())
+                continue
+            }
+            try {
+                read(resume = false)
+                return
+            } catch (e: VaultFailure) {
+                if (e.kind == FailureKind.NOT_SUPPORTED) return
+                val wait = if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) watchEvery else retryDelays[minOf(n++, retryDelays.size - 1)]
+                delay(wait.toMillis())
+            }
+        }
+    }
 
     /** Attaches the platform's positions and service. Before the first [start] or [resume]. */
     fun attach(p: LocationPlatform) {
@@ -384,6 +411,8 @@ class LocationSharing(
             watcher = null
             resumer?.cancel()
             resumer = null
+            reopener?.cancel()
+            reopener = null
             onceTimer?.cancel()
             onceTimer = null
             held = null
@@ -473,6 +502,7 @@ class LocationSharing(
 
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
+        receiving.onForeground()
         synchronized(lock) {
             lookAgain()
             if (serviceWanted && !serviceStarted) {

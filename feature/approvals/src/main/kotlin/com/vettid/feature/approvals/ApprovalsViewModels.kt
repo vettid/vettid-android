@@ -616,7 +616,8 @@ class ApprovalDetailViewModel @Inject constructor(
      */
     fun shareOnce() {
         val a = uiState.value.approval as? Approval.LocationRequest ?: return
-        if (a.connectionService || expiredNow(a)) return
+        // One share per tap: a second tap (or the permission result of the first) while a start is out does nothing.
+        if (local.value.busy || a.connectionService || expiredNow(a)) return
         local.update { it.copy(busy = true, error = null, errorCode = null, locationIssue = null) }
         viewModelScope.launch {
             try {
@@ -637,6 +638,19 @@ class ApprovalDetailViewModel @Inject constructor(
                     it.copy(busy = false, error = e.kind.takeIf { issue == null }, errorCode = e.shownCode, locationIssue = issue)
                 }
             }
+        }
+    }
+
+    /** The phone's permission is being asked for (the system's prompt is up): taps wait, and the result starts the share once. */
+    fun permissionAsked() = local.update { it.copy(busy = true, error = null, errorCode = null, locationIssue = null) }
+
+    /** The permission prompt came back: granted, the share starts (once); refused, the request stays with its reason. */
+    fun permissionAnswered(granted: Boolean) {
+        local.update { it.copy(busy = false) }
+        if (granted) {
+            shareOnce()
+        } else {
+            local.update { it.copy(locationIssue = com.vettid.core.data.location.SendIssue.NO_PERMISSION) }
         }
     }
 

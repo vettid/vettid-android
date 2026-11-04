@@ -297,7 +297,10 @@
     <!-- NEW: not in the plan -->
     <string name="history_kind_location_requested_in_any">A connection asked for your location</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
-    <string name="history_kind_location_history_deleted_n">Location history deleted (%1$d positions)</string>
+    <plurals name="history_kind_location_history_deleted_n">
+        <item quantity="one">Location history deleted (%1$d position)</item>
+        <item quantity="other">Location history deleted (%1$d positions)</item>
+    </plurals>
     <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
     <string name="history_kind_location_history_shared_named">Location history sent to %1$s</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location, History -->

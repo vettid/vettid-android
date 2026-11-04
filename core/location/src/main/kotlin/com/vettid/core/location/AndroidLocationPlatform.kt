@@ -114,7 +114,10 @@ class AndroidLocationPlatform(
                 val signal = android.os.CancellationSignal()
                 cont.invokeOnCancellation { signal.cancel() }
                 manager.getCurrentLocation(provider, signal, app.mainExecutor) { location ->
-                    cont.resumeWith(Result.success(location?.let { PlatformPositionProvider.fixOf(it, java.time.Instant.now()) }))
+                    // A fix older than 2 minutes by the platform's uptime clock is no answer to "where is this phone now".
+                    val now = android.os.SystemClock.elapsedRealtimeNanos()
+                    val fresh = location?.takeIf { now - it.elapsedRealtimeNanos <= HERE_MAX_AGE_NANOS }
+                    cont.resumeWith(Result.success(fresh?.let { PlatformPositionProvider.fixOf(it, java.time.Instant.now()) }))
                 }
             }
         }
@@ -124,3 +127,4 @@ class AndroidLocationPlatform(
 }
 
 private const val HERE_WAIT_MS = 5_000L
+private const val HERE_MAX_AGE_NANOS = 120_000_000_000L

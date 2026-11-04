@@ -308,6 +308,8 @@
     <string name="data_location_kilometres">%1$s km</string>
     <!-- NEW: not in the plan (distance and direction from this phone) -->
     <string name="data_location_from_here">About %1$s %2$s of this phone</string>
+    <!-- NEW: not in the plan (the position is within its own accuracy of this phone) -->
+    <string name="data_location_near_here">Near this phone</string>
     <!-- NEW: not in the plan (eight compass words) -->
     <string name="data_location_dir_n">north</string>
     <string name="data_location_dir_ne">north-east</string>

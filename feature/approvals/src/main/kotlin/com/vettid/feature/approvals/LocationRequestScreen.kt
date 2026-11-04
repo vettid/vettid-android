@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -15,6 +18,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.SendIssue
+import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.vault.messageRes
@@ -47,19 +52,26 @@ internal fun LocationRequestScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        // Refused or not, the share is tried: it says why nothing can be sent (and the request stays).
-        actions.onShareOnce()
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        // Granted: the share starts, once. Refused: the request stays and says why, with Open settings.
+        actions.onPermissionAnswered(granted.values.any { it })
     }
+    val hasPermission = permissionsGranted(context)
     val canShare = !a.connectionService
     FormScaffold(
         title = locationTitle(a),
         body = null,
         primaryLabel = if (canShare) stringResource(R.string.approvals_location_once) else null,
         onPrimary = {
-            val permissions = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-            val granted = permissions.any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
-            if (granted) actions.onShareOnce() else ask.launch(permissions)
+            if (state.busy) {
+                Unit
+            } else if (permissionsGranted(context)) {
+                actions.onShareOnce()
+            } else {
+                // Busy before the system's prompt is up, so that a second tap cannot start a second request.
+                actions.onPermissionAsked()
+                ask.launch(PERMISSIONS)
+            }
         },
         busy = state.busy,
         secondaryLabel = stringResource(if (canShare) R.string.approvals_location_while else R.string.approvals_location_not_now),
@@ -80,10 +92,7 @@ internal fun LocationRequestScreen(
             Spacer(Modifier.height(Spacing.s))
             Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall)
         }
-        state.locationIssue?.textRes()?.let {
-            Spacer(Modifier.height(Spacing.m))
-            Text(stringResource(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("location_request_issue"))
-        }
+        PermissionNotes(canShare && !hasPermission, state.locationIssue)
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
             Text(
@@ -91,6 +100,39 @@ internal fun LocationRequestScreen(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.testTag("failure"),
             )
+        }
+    }
+}
+
+private val PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+/** Either location permission is already granted (it is never asked for before **Share once** is tapped). */
+private fun permissionsGranted(context: android.content.Context): Boolean =
+    PERMISSIONS.any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
+
+/** The plan's permission text before the system's prompt, and after a refusal the reason with **Open settings**. */
+@Composable
+private fun PermissionNotes(explain: Boolean, issue: SendIssue?) {
+    val context = LocalContext.current
+    if (explain) {
+        Spacer(Modifier.height(Spacing.m))
+        Text(
+            stringResource(R.string.approvals_location_permission),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.testTag("location_request_permission"),
+        )
+    }
+    if (issue != null) {
+        Spacer(Modifier.height(Spacing.m))
+        val text = if (issue == SendIssue.NO_PERMISSION) R.string.approvals_location_permission_denied else issue.textRes()
+        text?.let {
+            Text(stringResource(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("location_request_issue"))
+        }
+        issue.settingsIntent(context)?.let { intent ->
+            TextButton(
+                onClick = { runCatching { context.startActivity(intent) } },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("location_request_settings"),
+            ) { Text(stringResource(R.string.approvals_location_open_settings)) }
         }
     }
 }

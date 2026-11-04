@@ -60,6 +60,7 @@ class ReceiveLocationTest {
     val main = MainDispatcherRule()
 
     private val location = FakeLocation()
+    private val vault = com.vettid.core.testing.FakeVault()
     private val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"), FakeSocial.connection("c2", "Kim"))) }
     private val now = Instant.now()
 
@@ -160,7 +161,9 @@ class ReceiveLocationTest {
         vm.openAsk()
         assertTrue(read(vm.uiState).holdsInput)
         vm.setAskNote("Where are you?")
-        vm.setAskNote("x".repeat(257)) // over the vault's bound: not taken
+        vm.setAskNote("x".repeat(257)) // over the vault's bound: cut to it
+        assertEquals("x".repeat(256), read(vm.uiState).locationAsk.note)
+        vm.setAskNote("Where are you?")
         assertEquals("Where are you?", read(vm.uiState).locationAsk.note)
         vm.setAskNote("é".repeat(128)) // 256 bytes exactly
         assertEquals(128, read(vm.uiState).locationAsk.note.length)
@@ -289,7 +292,7 @@ class ReceiveLocationTest {
 
     // --- the position ---
 
-    private fun positionVm() = PositionViewModel(SavedStateHandle(mapOf(PositionRoute.ARG to "c1")), location, social)
+    private fun positionVm() = PositionViewModel(SavedStateHandle(mapOf(PositionRoute.ARG to "c1")), location, social, vault)
 
     @Test
     fun thePositionScreenShowsCoordinatesAccuracyAgeAndTheOffsetOnlyWhenKnown() = runTest {
@@ -348,5 +351,149 @@ class ReceiveLocationTest {
         assertFalse("$s".contains("52.5123"))
         assertEquals("PositionUiState", "$s")
         assertFalse(share(last = position(52.5123, 13.4567)).toString().contains("52.5123"))
+    }
+
+    // --- review fixes ---
+
+    @Test
+    fun theOffsetIsWorkedOutAgainOnlyWhenThisConnectionsPositionChangesAndOnlyWhileShown() = runTest {
+        location.incoming.value = listOf(share("in1", "c1"), share("in2", "c2"))
+        val vm = positionVm()
+        advanceUntilIdle()
+        val first = location.offsetCalls
+        assertEquals(1, first)
+        // another connection's position changes: nothing is asked
+        location.incoming.value = listOf(share("in1", "c1", last = location.incoming.value[0].last), share("in2", "c2", last = position(lat = 1.0)))
+        advanceUntilIdle()
+        assertEquals(first, location.offsetCalls)
+        // this connection's position changes: asked again
+        location.incoming.value = listOf(share("in1", "c1", last = position(lat = 52.6)), location.incoming.value[1])
+        advanceUntilIdle()
+        assertEquals(first + 1, location.offsetCalls)
+        // not shown (screen stopped): not asked
+        vm.setVisible(false)
+        location.incoming.value = listOf(share("in1", "c1", last = position(lat = 52.7)), location.incoming.value[1])
+        advanceUntilIdle()
+        assertEquals(first + 1, location.offsetCalls)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(first + 2, location.offsetCalls)
+    }
+
+    @Test
+    fun underAMinuteTheAgeSaysJustNowAndNearIsSaidInsideTheAccuracy() {
+        val p = position(ago = 10)
+        val s = PositionUiState(loaded = true, name = "Sam", share = share(last = p), offset = PositionOffset(500.0, 90.0))
+        rule.setContent { PositionScreen(s, {}, {}, {}, {}) }
+        rule.onNodeWithText("Updated just now").assertIsDisplayed()
+        // 500 m from a position that is only known to 1 km: no direction is made up
+        rule.onNodeWithText("Near this phone").assertIsDisplayed()
+    }
+
+    @Test
+    fun coordinatesAreFormattedTheSameInEveryLocale() {
+        java.util.Locale.setDefault(java.util.Locale.GERMANY)
+        try {
+            val s = PositionUiState(loaded = true, name = "Sam", share = share(last = position(52.52, 13.405)))
+            rule.setContent { PositionScreen(s, {}, {}, {}, {}) }
+            rule.onNodeWithText("52.52000, 13.40500").assertIsDisplayed()
+        } finally {
+            java.util.Locale.setDefault(java.util.Locale.US)
+        }
+    }
+
+    @Test
+    fun duringTheHoldTheScreenDoesNotSayTheyAreNotSharing() {
+        val s = PositionUiState(loaded = true, name = "Sam", held = true)
+        rule.setContent { PositionScreen(s, {}, {}, {}, {}) }
+        assertEquals(0, rule.onAllNodesWithTag("position_none").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theDistanceIsRoundedCoarselyAndNeverAboutOneMetre() {
+        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
+        assertEquals("10 m", com.vettid.core.data.location.PositionText.distance(r, 3.0))
+        assertEquals("1.2 km".replace(".", java.text.DecimalFormatSymbols.getInstance().decimalSeparator.toString()), com.vettid.core.data.location.PositionText.distance(r, 1_240.0))
+        assertEquals("340 m", com.vettid.core.data.location.PositionText.distance(r, 343.0))
+        assertEquals("14 km", com.vettid.core.data.location.PositionText.distance(r, 14_400.0))
+        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(4.0, 10.0), null))
+        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(800.0, 10.0), 1_000.0))
+        assertTrue(com.vettid.core.data.location.PositionText.offset(r, PositionOffset(3_000.0, 0.0), 1_000.0).contains("north"))
+    }
+
+    @Test
+    fun theIncomingCardAndTheAskDialogUseTheFirstName() = runTest {
+        val c = com.vettid.core.data.social.ConnectionInfo("c1", "Dr Lee (work)", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")
+        assertEquals(AccountNames.isolate("Sam"), firstOf(c, "x"))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0))
+        rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
+        rule.onNodeWithText("${AccountNames.isolate("Sam")}'s location", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun aPastedNoteIsCutAtACharacterAndTheDialogSaysSo() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vm.openAsk()
+        val pasted = "\u00e9".repeat(200) + "\uD83D\uDE00" // 400 bytes, then an emoji
+        vm.setAskNote(pasted)
+        val ask = read(vm.uiState).locationAsk
+        assertEquals(128, ask.note.length) // 128 two-byte letters = 256 bytes
+        assertTrue(ask.trimmed)
+        assertTrue(ask.note.toByteArray().size <= 256)
+        // no half of a surrogate pair
+        vm.setAskNote("a".repeat(255) + "\uD83D\uDE00")
+        assertEquals(255, read(vm.uiState).locationAsk.note.length)
+        vm.setAskNote("short")
+        assertFalse(read(vm.uiState).locationAsk.trimmed)
+    }
+
+    @Test
+    fun anAnswerForAClosedDialogDoesNotMarkAReopenedOneSent() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vm.openAsk()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        location.askGate = gate
+        vm.sendAsk()
+        vm.closeAsk()
+        vm.openAsk()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        val ask = read(vm.uiState).locationAsk
+        assertTrue(ask.open)
+        assertFalse(ask.sent)
+        assertFalse(ask.busy)
+    }
+
+    @Test
+    fun aStopOnTheLocationScreenWaitsWhileItsStopIsOut() = runTest {
+        location.incoming.value = listOf(share())
+        val vm = LocationViewModel(location, social, social)
+        advanceUntilIdle()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        location.stopGate = gate
+        vm.stopReceiving("in1")
+        vm.stopReceiving("in1") // a second tap
+        advanceUntilIdle()
+        assertTrue(read(vm.uiState).incoming.single().busy)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("in1"), location.stoppedReceiving)
+    }
+
+    @Test
+    fun aShareThatEndedIsNotShownEvenIfTheRepositoryStillHoldsIt() = runTest {
+        location.incoming.value = listOf(share().copy(expiresAt = now.minusSeconds(5)))
+        assertNull(read(detail().uiState).incoming)
+        val vm = LocationViewModel(location, social, social)
+        assertTrue(read(vm.uiState).incoming.isEmpty())
+        assertTrue(read(ConnectionsViewModel(social, social, vault, location = location).uiState).glances.isEmpty())
+    }
+
+    @Test
+    fun theGlanceDescriptionIsOneSentenceWithoutTheAge() {
+        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
+        assertEquals("Shares their location with you", r.getString(R.string.connections_location_glance))
     }
 }

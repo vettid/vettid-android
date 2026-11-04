@@ -84,6 +84,9 @@ object AuditKinds {
         data class Unknown(val kind: String) : Title
 
         /** [res] with a number read from the entry's `ref` ([n]) and the number of recovery attempts ([of]). */
+        /** [res] (a plural) for the number [n] read from the entry's `ref`. */
+        data class Plural(@param:androidx.annotation.PluralsRes val res: Int, val n: Int) : Title
+
         data class Counted(@param:StringRes val res: Int, val n: Int, val of: Int = RecoveryRefs.ATTEMPTS) : Title
 
         /**
@@ -153,7 +156,7 @@ object AuditKinds {
      */
     private fun locationTitle(kind: String, ref: String?, direction: String?): Title? = when {
         kind == "location.history.deleted" ->
-            ref?.toIntOrNull()?.takeIf { it >= 0 }?.let { Title.Counted(R.string.history_kind_location_history_deleted_n, it) }
+            ref?.toIntOrNull()?.takeIf { it >= 0 }?.let { Title.Plural(R.plurals.history_kind_location_history_deleted_n, it) }
         kind in LOCATION_DROPS -> named(R.string.history_kind_drop_location_named, R.string.history_kind_drop_location_any)
         else -> LOCATION_TITLES[kind to direction] ?: LOCATION_TITLES[kind to null]
     }

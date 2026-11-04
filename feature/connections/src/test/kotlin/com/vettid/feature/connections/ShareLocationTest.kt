@@ -577,4 +577,20 @@ class ShareLocationTest {
         assertEquals(listOf(share.shareId), location.stopped)
         assertNull(read(vm.uiState).location)
     }
+
+    @Test
+    fun theRequestIdIsUsedOnceAndThenForgotten() = runTest {
+        val handle = SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1", ConnectionDetailRoute.ARG_REQUEST to "r7"))
+        val vm = ShareLocationViewModel(handle, location)
+        assertTrue("the sheet opens with the request", read(vm.uiState).open)
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals("r7", location.started.single().requestId)
+        assertNull(handle.get<String?>(ConnectionDetailRoute.ARG_REQUEST))
+        // dismissed before starting: forgotten too, and a second start has none
+        val handle2 = SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c2", ConnectionDetailRoute.ARG_REQUEST to "r8"))
+        val vm2 = ShareLocationViewModel(handle2, location)
+        vm2.dismiss()
+        assertNull(handle2.get<String?>(ConnectionDetailRoute.ARG_REQUEST))
+    }
 }

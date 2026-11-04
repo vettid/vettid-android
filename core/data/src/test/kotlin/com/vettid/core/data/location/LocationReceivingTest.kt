@@ -13,6 +13,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -47,10 +48,12 @@ class LocationReceivingTest {
     private var gated = false
     private val relists = mutableListOf<Unit>()
     private var here: Fix? = null
+    private var hereCalls = 0
 
     private class Ops : LocationOps {
         var answerGet: (String, Boolean) -> JsonObject = { _, _ -> throw VaultOpException("location.get", "not_found") }
         var getGate: CompletableDeferred<Unit>? = null
+        var getAsked = CompletableDeferred<Unit>()
         val gets = mutableListOf<Pair<String, Boolean>>()
         var stopRefusal: String? = null
         val stops = mutableListOf<String>()
@@ -71,6 +74,7 @@ class LocationReceivingTest {
 
         override suspend fun get(connectionId: String, history: Boolean): JsonObject {
             synchronized(this) { gets += connectionId to history }
+            getAsked.complete(Unit)
             val answer = answerGet(connectionId, history)
             getGate?.await()
             return answer
@@ -89,7 +93,10 @@ class LocationReceivingTest {
         unlocked = { unlocked },
         gated = { gated },
         isService = { it in services },
-        here = { here },
+        here = {
+            hereCalls++
+            here
+        },
         now = { clock },
         relist = { relists += Unit },
     )
@@ -352,8 +359,9 @@ class LocationReceivingTest {
         ops.answerGet = { _, _ -> obj("""{"share_id":"s1","mode":"continuous","precision":"approximate","expires_at":"${t0.plusSeconds(3600)}","last":${position()}}""") }
         val gate = CompletableDeferred<Unit>()
         ops.getGate = gate
+        ops.getAsked = CompletableDeferred()
         val read = async(kotlinx.coroutines.Dispatchers.Default) { r.open("c1") }
-        while (synchronized(ops) { ops.gets.isEmpty() }) kotlinx.coroutines.delay(5)
+        withTimeout(10_000) { ops.getAsked.await() }
         r.clear() // a lock (or a hold) while the answer is on its way
         gate.complete(Unit)
         read.await()
@@ -388,7 +396,6 @@ class LocationReceivingTest {
         r.take(entry("s1"))
         gated = true
         r.onEvent(update(lat = 10.0))
-        r.onEvent(event("stopped"))
         r.take(entry("s2", "c2"))
         assertEquals(listOf("s1"), r.incoming.value.map { it.shareId })
         assertNull(r.incoming.value.single().last)
@@ -402,6 +409,122 @@ class LocationReceivingTest {
         unlocked = false
         r.onEvent(update(lat = 10.0))
         assertNull(r.incoming.value.single().last)
+    }
+
+    @Test
+    fun aShareThatEndedIsRemovedEvenWhileTheCheckIsDue() {
+        val r = rig(TestScope())
+        r.take(entry("s1", last = position()))
+        gated = true
+        r.onEvent(event("stopped"))
+        assertTrue("the position does not stay shown under the check", r.incoming.value.isEmpty())
+        // but a start is not taken while gated
+        r.onEvent(event("started", id = "s9", extra = ""","mode":"once","precision":"city","expires_at":"${t0.plusSeconds(900)}""""))
+        assertTrue(r.incoming.value.isEmpty())
+    }
+
+    @Test
+    fun anEventTakenInBeforeALockAddsNothing() {
+        val r = rig(TestScope())
+        val epoch = r.begin().epoch
+        r.clear()
+        r.handle(event("started", id = "s9", extra = ""","mode":"once","precision":"city","expires_at":"${t0.plusSeconds(900)}""""), epoch)
+        r.take(entry("s1"))
+        r.handle(update(lat = 10.0), epoch)
+        r.handle(event("snapshot", extra = ""","points":[${position()}]"""), epoch)
+        r.handle(event("stopped"), epoch)
+        val s = r.incoming.value.single()
+        assertEquals("s1", s.shareId)
+        assertNull(s.last)
+        assertTrue(s.snapshot.isEmpty())
+    }
+
+    @Test
+    fun aShareThatExpiredWhileThePhoneSleptIsNotShownOnOpen() = runBlocking {
+        val ops = Ops()
+        val r = rig(TestScope(), ops)
+        r.take(entry("s1", expires = t0.plusSeconds(60)))
+        clock = t0.plusSeconds(120) // the timer did not run: uptime stops in deep sleep
+        try {
+            r.open("c1")
+        } catch (_: VaultFailure) {
+            // the stand-in vault answers not_found
+        }
+        assertTrue(r.incoming.value.isEmpty())
+        r.take(entry("s2", "c2", expires = t0.plusSeconds(150)))
+        clock = t0.plusSeconds(200)
+        r.onForeground()
+        assertTrue(r.incoming.value.isEmpty())
+        r.take(entry("s3", "c3", expires = t0.plusSeconds(250)))
+        clock = t0.plusSeconds(300)
+        r.take(entry("s3", "c3", expires = t0.plusSeconds(250))) // a list that still names an expired share it holds
+        assertTrue(r.incoming.value.isEmpty())
+    }
+
+    @Test
+    fun aGetWithAPastExpiryIsRejected() {
+        val (r, res) = openWith(getBody(expires = "${t0.minusSeconds(1)}"))
+        assertTrue(res.isFailure)
+        assertNull(r.incoming.value.single().last)
+    }
+
+    @Test
+    fun aSampleMoreThanFiveMinutesAheadIsNotAPosition() {
+        val r = rig(TestScope())
+        r.take(entry("s1"))
+        r.onEvent(update(at = t0.plusSeconds(301)))
+        assertNull(r.incoming.value.single().last)
+        r.onEvent(update(at = t0.plusSeconds(299)))
+        assertNotNull(r.incoming.value.single().last)
+        // in a list or a get it makes the answer unreadable
+        r.take(entry("s2", "c2", last = position(at = t0.plusSeconds(400))))
+        assertEquals(listOf("s1"), r.incoming.value.map { it.shareId })
+        assertTrue(openWith(getBody(extra = ""","history":[${position(at = t0.plusSeconds(400))}]""")).second.isFailure)
+    }
+
+    @Test
+    fun theListsLastNeedsAccuracyAndTrailPointsReadReceivedAtStrictly() {
+        val r = rig(TestScope())
+        r.take(entry("s1", last = """{"lat":1,"lon":2,"at":"$t0"}"""))
+        assertTrue(r.incoming.value.isEmpty())
+        val badReceived = position(extra = ""","received_at":"not a time"""")
+        assertTrue(openWith(getBody(extra = ""","history":[$badReceived]""")).second.isFailure)
+        assertTrue(openWith(getBody(extra = ""","snapshot":[$badReceived]""")).second.isFailure)
+    }
+
+    @Test
+    fun aShareThatEndedIsNotBroughtBackByAStartedEventAndOneHeldKeepsItsTrail() {
+        val r = rig(TestScope())
+        r.take(entry("s1", extra = "").replace(""""history":false""", """"history":true"""))
+        r.onEvent(update())
+        r.onEvent(event("snapshot", extra = ""","points":[${position()}]"""))
+        val started = event("started", id = "s1", extra = ""","mode":"continuous","precision":"approximate","expires_at":"${t0.plusSeconds(3600)}"""")
+        r.onEvent(started)
+        val s = r.incoming.value.single()
+        assertEquals(1, s.trailPoints.size)
+        assertEquals(1, s.snapshot.size)
+        assertTrue(s.trail)
+        assertNotNull(s.last)
+        r.onEvent(event("stopped"))
+        r.onEvent(started)
+        assertTrue(r.incoming.value.isEmpty())
+    }
+
+    @Test
+    fun noPlatformFixIsAskedWhileLockedOrGated() = runBlocking {
+        val r = rig(TestScope())
+        r.take(entry("s1", last = position(lat = 52.0, lon = 13.0)))
+        here = Fix(51.0, 13.0, 10.0, null, null, null, t0)
+        gated = true
+        assertNull(r.offsetFromHere("c1"))
+        gated = false
+        unlocked = false
+        assertNull(r.offsetFromHere("c1"))
+        assertEquals(0, hereCalls)
+        unlocked = true
+        assertNotNull(r.offsetFromHere("c1"))
+        assertEquals(1, hereCalls)
+        assertEquals("PositionOffset", "${r.offsetFromHere("c1")}")
     }
 
     @Test

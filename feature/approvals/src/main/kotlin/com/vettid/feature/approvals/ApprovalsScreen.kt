@@ -147,6 +147,8 @@ fun NavGraphBuilder.approvalsDestination(
                 onChooseSeconds = vm::chooseSeconds,
                 onOpenPairing = onOpenPairing,
                 onShareOnce = vm::shareOnce,
+                onPermissionAsked = vm::permissionAsked,
+                onPermissionAnswered = vm::permissionAnswered,
                 onShareWhile = {
                     (state.approval as? Approval.LocationRequest)?.let { onShareLocation(it.connectionId, it.requestId) }
                 },
@@ -368,7 +370,7 @@ private fun kindTitleRes(a: Approval): Int =
         is Approval.CriticalUse -> R.string.approvals_type_critical
         is Approval.ShareDecision -> R.string.approvals_type_share
         is Approval.DeviceRequest -> R.string.approvals_held_other_title
-        is Approval.LocationRequest -> R.string.approvals_location_title_generic
+        is Approval.LocationRequest -> R.string.approvals_a_connection // titled by [locationTitle], never reached
     }
 
 @Composable
@@ -458,6 +460,8 @@ data class DecisionActions(
     val onOpenPairing: () -> Unit = {},
     /** A location request (L1b): **Share once** (the screen asks the phone's permission first), **Share for a while…**, **Not now**. */
     val onShareOnce: () -> Unit = {},
+    val onPermissionAsked: () -> Unit = {},
+    val onPermissionAnswered: (Boolean) -> Unit = {},
     val onShareWhile: () -> Unit = {},
     val onNotNow: () -> Unit = {},
 )
