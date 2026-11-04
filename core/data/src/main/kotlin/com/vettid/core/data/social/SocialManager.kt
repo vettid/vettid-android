@@ -258,6 +258,9 @@ class SocialManager(
     @Volatile
     internal var editHook: (() -> Unit)? = null
 
+    /** Test hook: runs between a page's read and its guarded write (a test locks here). */
+    internal var pageHook: (() -> Unit)? = null
+
     private fun edit(f: (Local) -> Local) = synchronized(localLock) {
         editHook?.invoke()
         val next = f(local)
@@ -994,7 +997,8 @@ class SocialManager(
      */
     private suspend fun loadEveryThread(): Exception? {
         var first: Exception? = null
-        for (c in connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE }) {
+        // Messages never lists a service, so no request is spent on one.
+        for (c in connectionsFlow.value.filter { it.state == ConnectionState.ACTIVE && !it.service }) {
             try {
                 load(c.id)
             } catch (e: CancellationException) {
@@ -1018,7 +1022,8 @@ class SocialManager(
      */
     private fun Exception.meetsEveryThread(): Boolean {
         val f = this as? VaultFailure ?: return false
-        return f.kind in ALL_THREADS || f.kind == FailureKind.NO_RESPONSE && f.code == MoveRepository.CODE_LOCK_PENDING
+        // The code whatever the kind: through the API a pending lock arrives as OTHER (or NO_RESPONSE).
+        return f.kind in ALL_THREADS || f.code == MoveRepository.CODE_LOCK_PENDING
     }
 
     private fun Exception.isHeld() = this is VaultFailure && kind == FailureKind.OWNER_CHECK_REQUIRED
@@ -1051,15 +1056,18 @@ class SocialManager(
             val current = messagesFlow.value[connectionId].orEmpty()
             val paging = if (fresh) MessagePaging() else pagingFlow.value[connectionId] ?: MessagePaging()
             val merged = MessagePages.newest(list, page.nextBefore, current, paging)
+            pageHook?.invoke()
             // Epoch check and writes under [localLock], where a lock bumps the epoch and clears: a page read across a
             // lock writes nothing, whatever the maps held (an empty map equals its clear, so a bare update could land).
             synchronized(localLock) {
                 if (epoch == lockEpoch.get()) {
                     messagesFlow.update { it + (connectionId to merged.messages) }
                     pagingFlow.update { it + (connectionId to merged.paging) }
+                    val wasLoaded = connectionId in loadedFlow.value
                     loadedFlow.update { it + connectionId }
-                    if (reloadFailureFlow.value != null && allActiveLoaded()) {
-                        // This page completed the list: a load error no longer describes it.
+                    if (!wasLoaded && reloadFailureFlow.value != null && allActiveLoaded()) {
+                        // This page was the last unloaded row: a load error no longer describes the list. (A page of a
+                        // row that was loaded before says nothing about the failed reload.)
                         reloadFailureFlow.value = null
                     }
                 }

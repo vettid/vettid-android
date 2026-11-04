@@ -150,6 +150,7 @@ class MessagesLoadedTest {
     @Test
     fun aRunningReloadShowsTheProgressBarOverRowsAndNotTheError() = runTest {
         val (social, vm) = model(loaded = true)
+        social.reloadFailure.value = VaultFailure(FailureKind.NETWORK) // the old failure, then a retry runs
         social.reloading.value = true
         advanceUntilIdle()
         compose.setContent {

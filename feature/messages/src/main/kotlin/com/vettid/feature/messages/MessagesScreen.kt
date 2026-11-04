@@ -262,7 +262,8 @@ fun MessagesScreen(
                     MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
                 // Some threads could not be read: the rows are what this phone has, and the failure has its retry.
-                if (error != null && error != FailureKind.OWNER_CHECK_REQUIRED) {
+                // Not while a retry runs: the bar shows instead of the old failure.
+                if (error != null && error != FailureKind.OWNER_CHECK_REQUIRED && !state.loading) {
                     ErrorNotice(error, onRetry, state.errorCode, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
                 LazyColumn(

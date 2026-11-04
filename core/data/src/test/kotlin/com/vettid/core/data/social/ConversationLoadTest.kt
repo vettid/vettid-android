@@ -265,9 +265,34 @@ class ConversationLoadTest {
         runCatching { m.refreshConversations() }
         assertEquals(listOf("c1", "c2", "c3"), asked)
         asked.clear()
+        failWith = FailureKind.OTHER // through the API a pending lock arrives as OTHER with the code
         failCode = com.vettid.core.data.vault.MoveRepository.CODE_LOCK_PENDING
         runCatching { m.refreshConversations() }
         assertEquals(listOf("c1"), asked)
+    }
+
+    @Test
+    fun aPageReadAcrossALockInTheGapWritesNothing() = runTest {
+        val m = manager()
+        m.pageHook = { m.forgetOpenVault() }
+        m.seedConnections(listOf(FakeSocial.connection("c1", "Sam")))
+        m.load("c1")
+        m.pageHook = null
+        runCurrent()
+        assertTrue("not loaded", m.loaded().isEmpty())
+        assertTrue("no messages", m.messages("c1").first().isEmpty())
+    }
+
+    @Test
+    fun aLoadOfARowThatWasLoadedBeforeKeepsTheReloadFailure() = runTest {
+        val m = manager()
+        m.refreshConversations() // every row loaded
+        failing += "c1"
+        runCatching { m.refreshConversations() } // c1's reload fails: noted, though its row stays loaded
+        assertEquals(FailureKind.OTHER, m.reloadFailure.value?.kind)
+        failing.clear()
+        m.load("c2") // opening one conversation
+        assertEquals("the card stays", FailureKind.OTHER, m.reloadFailure.value?.kind)
     }
 
     @Test
@@ -296,19 +321,13 @@ class ConversationLoadTest {
     }
 
     @Test
-    fun aServiceThreadDoesNotKeepTheFailureAlive() = runTest {
+    fun aServiceThreadIsNeverRequestedAndNeverFailsTheList() = runTest {
         val m = manager()
         m.seedConnections(listOf(FakeSocial.connection("c1", "Bank").copy(service = true), FakeSocial.connection("c2", "Alex")))
         failing += "c1"
-        try {
-            m.refreshConversations()
-        } catch (_: VaultFailure) {
-            // noted
-        }
-        assertEquals(FailureKind.OTHER, m.reloadFailure.value?.kind)
-        failing.clear()
-        m.load("c2")
-        assertNull("the list's rows are all loaded (a service is not one)", m.reloadFailure.value)
+        m.refreshConversations()
+        assertEquals(listOf("c2"), asked)
+        assertNull(m.reloadFailure.value)
     }
 
     @Test
