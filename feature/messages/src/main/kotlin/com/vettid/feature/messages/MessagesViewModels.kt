@@ -89,7 +89,8 @@ class MessagesViewModel @Inject constructor(
             searchable = all.isNotEmpty(),
             // The one list-load failure (this screen's refresh, the quiet reload after an unlock, a new connection's load),
             // set by the repository and cleared by its next good load. Shown only while a row is still not loaded.
-            error = reload?.kind?.takeIf { all.isEmpty() || all.any { !it.loaded } },
+            // The held notice shows over loaded rows too (and its re-read needs the error).
+            error = reload?.kind?.takeIf { it == FailureKind.OWNER_CHECK_REQUIRED || all.isEmpty() || all.any { c -> !c.loaded } },
             errorCode = reload?.shownCode,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())

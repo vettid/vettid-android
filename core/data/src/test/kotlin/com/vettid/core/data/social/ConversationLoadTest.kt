@@ -7,6 +7,8 @@ import com.vettid.core.testing.FakeSocial
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.MessagePage
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -33,20 +35,28 @@ class ConversationLoadTest {
     /** Connections whose page fails; the others answer one message. */
     private val failing = mutableSetOf<String>()
     private val asked = mutableListOf<String>()
+    private var first1 = true
 
     private fun refuse(id: String, held: Set<String>) {
         val kind = if (id in held) FailureKind.OWNER_CHECK_REQUIRED else FailureKind.NETWORK.takeIf { id in failing }
         if (kind != null) throw VaultFailure(kind)
     }
 
-    private fun TestScope.manager(held: Set<String> = emptySet(), gate: CompletableDeferred<Unit>? = null): SocialManager {
+    private fun TestScope.manager(
+        held: Set<String> = emptySet(),
+        gate: CompletableDeferred<Unit>? = null,
+        oldGate: CompletableDeferred<Unit>? = null,
+    ): SocialManager {
         val m = SocialManager(
             backgroundScope,
             api = { throw VaultFailure(FailureKind.OTHER) },
             credential = credential,
             readPage = { id, _ ->
+                val holdThis = id == "c1" && first1 && oldGate != null
+                if (holdThis) first1 = false
                 asked += id
                 gate?.await()
+                if (holdThis) oldGate?.await()
                 refuse(id, held)
                 MessagePage(listOf(Message(id, "m-$id", "in", "hi", "2026-10-04T12:00:00Z")), null)
             },
@@ -183,5 +193,25 @@ class ConversationLoadTest {
         job.join()
         assertNull("no failure after the clear", m.reloadFailure.value)
         assertTrue("and no page written back", m.loaded().isEmpty())
+    }
+
+    @Test
+    fun anOldReadThatLandsAfterTheNewSessionLoadedTheSameIdLeavesTheNewDataAlone() = runTest {
+        val old = CompletableDeferred<Unit>()
+        val m = manager(oldGate = old)
+        val job = launch { runCatching { m.load("c1") } } // the pre-lock read, held at the vault
+        runCurrent()
+        withContext(Dispatchers.Default) { while (asked.isEmpty()) Thread.yield() } // the read is at the vault now
+        m.forgetOpenVault()
+        m.seedConnections(listOf(FakeSocial.connection("c1", "Sam")))
+        m.load("c1") // the new session's own page (not held: the old read took the gate)
+        val before = m.conversations.first { s -> s.single().loaded }.single().last
+        assertEquals("m-c1", before?.messageId)
+        old.complete(Unit)
+        job.join()
+        runCurrent()
+        val row = m.conversations.value.single()
+        assertTrue("still loaded", row.loaded)
+        assertEquals("m-c1", row.last?.messageId)
     }
 }

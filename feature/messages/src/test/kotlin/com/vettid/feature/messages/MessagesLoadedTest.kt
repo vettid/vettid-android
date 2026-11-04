@@ -147,4 +147,22 @@ class MessagesLoadedTest {
         advanceUntilIdle()
         assertEquals(before + 1, social.calls.count { it == "refreshConversations" })
     }
+
+    @Test
+    fun aHeldReloadFailureOverFullyLoadedRowsShowsTheHeldNoticeAndReadsAgain() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.HELD) }
+        val (social, vm) = model(loaded = true, vault = vault)
+        social.reloadFailure.value = VaultFailure(FailureKind.OWNER_CHECK_REQUIRED)
+        advanceUntilIdle()
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, vm.uiState.value.error)
+        compose.setContent {
+            val state by vm.uiState.collectAsState()
+            MessagesScreen(state, chrome)
+        }
+        compose.onNodeWithText("Messages are on hold").assertIsDisplayed()
+        val before = social.calls.count { it == "refreshConversations" }
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertEquals(before + 1, social.calls.count { it == "refreshConversations" })
+    }
 }

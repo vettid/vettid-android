@@ -581,12 +581,13 @@ class SocialManager(
     private suspend fun onAdded(conn: String, req: String) {
         requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
         edit { l -> l.copy(requestNames = l.requestNames - req) }
+        val epoch = lockEpoch.get()
         try {
             load(conn)
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            noteReloadFailure(e, lockEpoch.get(), reloadSeq.incrementAndGet())
+            noteReloadFailure(e, epoch, reloadSeq.incrementAndGet())
         }
     }
 
@@ -1019,15 +1020,12 @@ class SocialManager(
             val current = messagesFlow.value[connectionId].orEmpty()
             val paging = if (fresh) MessagePaging() else pagingFlow.value[connectionId] ?: MessagePaging()
             val merged = MessagePages.newest(list, page.nextBefore, current, paging)
-            messagesFlow.update { it + (connectionId to merged.messages) }
-            pagingFlow.update { it + (connectionId to merged.paging) }
-            loadedFlow.update { it + connectionId }
-            if (epoch != lockEpoch.get()) {
-                // A lock came while the page was read: nothing of it stays (the clear may already have run).
-                messagesFlow.update { it - connectionId }
-                pagingFlow.update { it - connectionId }
-                loadedFlow.update { it - connectionId }
-            } else if (reloadFailureFlow.value != null && allActiveLoaded()) {
+            // The epoch is checked inside each update: a lock bumps it before it clears, so a page read across a lock
+            // either sees the new epoch and writes nothing, or loses to the clear. It never touches a newer session's data.
+            messagesFlow.update { if (epoch != lockEpoch.get()) it else it + (connectionId to merged.messages) }
+            pagingFlow.update { if (epoch != lockEpoch.get()) it else it + (connectionId to merged.paging) }
+            loadedFlow.update { if (epoch != lockEpoch.get()) it else it + connectionId }
+            if (epoch == lockEpoch.get() && reloadFailureFlow.value != null && allActiveLoaded()) {
                 // This page completed the list: a load error no longer describes it.
                 reloadFailureFlow.value = null
             }
