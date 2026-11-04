@@ -29,10 +29,11 @@ object HistoryText {
         ref: String? = null,
         names: EntryNames = EntryNames(),
         isolate: Boolean = true,
+        direction: String? = null,
     ): String =
         if (shownPhrase(kind, names)) {
             phraseShown(context, names, isolate)
-        } else when (val t = AuditKinds.title(kind, ref)) {
+        } else when (val t = AuditKinds.title(kind, ref, direction)) {
             is AuditKinds.Title.Known -> context.getString(t.res)
             is AuditKinds.Title.Summary -> context.getString(R.string.history_kind_summary, context.getString(t.res))
             is AuditKinds.Title.Dropped -> context.getString(R.string.history_kind_dropped, t.reason)
@@ -43,7 +44,8 @@ object HistoryText {
         }
 
     @Composable
-    fun title(kind: String, ref: String? = null, names: EntryNames = EntryNames()): String = when (val t = AuditKinds.title(kind, ref)) {
+    fun title(kind: String, ref: String? = null, names: EntryNames = EntryNames(), direction: String? = null): String =
+        when (val t = AuditKinds.title(kind, ref, direction)) {
         is AuditKinds.Title.Known -> if (shownPhrase(kind, names)) {
             AccountNames.isolateOrNull(names.item)?.let { stringResource(R.string.history_kind_wallet_phrase_shown_named, it) }
                 ?: stringResource(R.string.history_kind_wallet_phrase_shown)

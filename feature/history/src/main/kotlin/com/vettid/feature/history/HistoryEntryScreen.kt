@@ -122,6 +122,7 @@ private fun EntryDetail(
                 e.kind,
                 e.ref,
                 EntryNames(state.connectionName, deviceName, itemName, state.voteTitle, wallet = state.itemIsWallet),
+                e.direction,
             ),
             Modifier.testTag("history_entry_title"),
         )

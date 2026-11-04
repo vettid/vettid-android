@@ -262,4 +262,48 @@
     <string name="history_detail_leash_item_proxy">The secret went to your VettID connector, which added it to the agent\'s requests to a site you allowed. The agent was not given it.</string>
     <string name="history_detail_leash_item_read">The agent was given the item\'s values. Its app may keep them in its history.</string>
     <string name="history_detail_leash_item_used">Your vault gave the agent a code worked out from the value, not the value itself.</string>
+
+    <!-- Location (ANDROID-PLAN §4 "Location", History, L1b). DRAFT = the plan\'s text; NEW = not in the plan. History never shows a position. -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_started_named">Started sharing your location with %1$s</string>
+    <!-- NEW: not in the plan (the connection\'s name is not known) -->
+    <string name="history_kind_location_share_started_any">Started sharing your location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_stopped_out">Stopped sharing your location with %1$s</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_share_stopped_out_any">Stopped sharing your location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_stopped_in">Stopped receiving %1$s\'s location</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_share_stopped_in_any">Stopped receiving a location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_received_named">%1$s started sharing their location</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_share_received_any">A connection started sharing their location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_ended_in">%1$s\'s location share ended</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_share_ended_in_any">A location share ended</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_share_ended_out">%1$s stopped receiving your location</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_share_ended_out_any">A connection stopped receiving your location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_requested_out">Asked %1$s for their location</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_requested_out_any">Asked a connection for their location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_requested_in">%1$s asked for your location</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_location_requested_in_any">A connection asked for your location</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_history_deleted_n">Location history deleted (%1$d positions)</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_history_shared_named">Location history sent to %1$s</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_location_history_received_named">Location history received from %1$s</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, History -->
+    <string name="history_kind_drop_location_named">Location from %1$s dropped</string>
+    <!-- NEW: not in the plan -->
+    <string name="history_kind_drop_location_any">Location from a connection dropped</string>
 </resources>
