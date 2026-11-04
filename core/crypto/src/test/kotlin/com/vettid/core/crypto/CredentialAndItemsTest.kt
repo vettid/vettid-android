@@ -126,6 +126,20 @@ class CredentialAndItemsTest {
         // More than 32 statements in all: refused, even if the part from the pin is short.
         val long = List(32) { r1 } + listOf(r2)
         assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
+        // Exactly 32 in all is allowed.
+        val atCap = List(31) { r1 } + listOf(r2)
+        assertTrue(Bytes.constantTimeEquals(k3.publicKey, CredentialKeyRotation.followChain(k2.publicKey, atCap)))
+    }
+
+    /** A chain that comes back to the pinned key is followed from its first statement from the pin, to the same end. */
+    @Test
+    fun aCredentialChainThatReturnsToThePinIsFollowedFromItsFirstStatement() {
+        val k1 = Ed25519PrivateKey.generate()
+        val k2 = Ed25519PrivateKey.generate()
+        val k3 = Ed25519PrivateKey.generate()
+        val chain = listOf(CredentialKeyRotation.create(k1, k2), CredentialKeyRotation.create(k2, k1), CredentialKeyRotation.create(k1, k3))
+        assertTrue(Bytes.constantTimeEquals(k3.publicKey, CredentialKeyRotation.followChain(k1.publicKey, chain)))
+        assertTrue(Bytes.constantTimeEquals(k3.publicKey, CredentialKeyRotation.followChain(k2.publicKey, chain)))
     }
 
     @Test
