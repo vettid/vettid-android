@@ -13,6 +13,10 @@ import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.location.LocationAvailability
+import com.vettid.core.data.location.LocationRepository
+import com.vettid.core.data.location.NoLocation
+import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.presence.NoPresence
@@ -389,7 +393,10 @@ data class AcceptUiState(
      * `connection.request.outgoing`): the safety code screen says so, and the name is "Name given by the service".
      */
     val service: Boolean = false,
-    /** The fingerprint of the service's `ik` (§10.8) when the connection list has it; null otherwise. */
+    /**
+     * The fingerprint of the service's `ik`: the request's own (0.83.7 §10.4), else the connection list's (§10.8); null
+     * otherwise. Shown for a [service] only.
+     */
     val keyFingerprint: String? = null,
     val input: String = "",
     /** The member typed or pasted [input]; a value that came with a link or a scan is theirs to confirm, not input of theirs. */
@@ -468,7 +475,12 @@ class AcceptViewModel @Inject constructor(
                         req == null -> it
                         else -> it.copy(
                             service = it.service || req.service,
-                            keyFingerprint = cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
+                            // An invalid `ik` clears it, as in Approvals: no fallback to an earlier or the list's fingerprint.
+                            keyFingerprint = if (req.peerIkInvalid) {
+                                null
+                            } else {
+                                req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint
+                            },
                             sas = req.sas ?: it.sas,
                             name = it.name ?: req.name,
                             remote = req.remote,
@@ -607,6 +619,24 @@ data class ConnectionDetailUiState(
      * has no presence (nothing of it is shown then).
      */
     val presence: DetailPresence? = null,
+    /** The member shares their location with this connection until [DetailLocation.until] (ANDROID-PLAN §4 "Location"). */
+    val location: DetailLocation? = null,
+    /** Not offered on a vault known to have no location (shown while that is not known yet). */
+    val locationOffered: Boolean = true,
+    /** The member's once share to this connection ended without a position being found. */
+    val locationMissed: Boolean = false,
+)
+
+/** An active outgoing location share with the connection: "Sharing your location until {time}" with **Stop**. */
+data class DetailLocation(
+    val shareId: String,
+    val until: Instant,
+    /** The daily check is due or held: nothing is sent ("Paused until your daily check."). */
+    val paused: Boolean = false,
+    /** Why nothing is being sent although the share is active, or [SendIssue.NONE]. */
+    val issue: SendIssue = SendIssue.NONE,
+    /** The member stopped it and the vault has not taken the stop yet: "Stopping…" (Stop stays, it is tried again). */
+    val stopping: Boolean = false,
 )
 
 /**
@@ -684,13 +714,19 @@ class ConnectionDetailViewModel @Inject constructor(
     private val calls: CallAccess = NoCallAccess,
     private val votes: VotesRepository = NoVotes,
     private val presence: PresenceRepository = NoPresence,
+    private val location: LocationRepository = NoLocation,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
     val uiState: StateFlow<ConnectionDetailUiState> =
-        combine(local, repo.connections, repo.authentication, combine(calls.availability, ownVotes()) { c, v -> c to v }, ownPresence()) {
-            s, cs, auth, (call, v), p ->
+        combine(
+            local,
+            repo.connections,
+            repo.authentication,
+            combine(calls.availability, ownVotes()) { c, v -> c to v },
+            combine(ownPresence(), ownLocation(), location.availability) { p, l, a -> Triple(p, l, a) },
+        ) { s, cs, auth, (call, v), (p, shared, offered) ->
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
                 connection = c,
@@ -701,6 +737,9 @@ class ConnectionDetailViewModel @Inject constructor(
                     // Not asked yet is "Checking…" (it is being asked); closed shows no line at all.
                     DetailPresence(it.reading ?: PresenceReading.Checking, it.shared, it.invisible, it.canRefresh)
                 },
+                location = shared.location,
+                locationMissed = shared.missed,
+                locationOffered = offered != LocationAvailability.UNSUPPORTED,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
@@ -714,6 +753,29 @@ class ConnectionDetailViewModel @Inject constructor(
         } else {
             null
         }
+    }
+
+    /** The member's outgoing location share with this connection, if one is active (ANDROID-PLAN §4 "Location"). */
+    private class LocationView(val location: DetailLocation?, val missed: Boolean)
+
+    private fun ownLocation() = combine(location.outgoing, location.serviceState, location.missedOnce) { shares, service, missed ->
+        // A once share whose position went out has ended (the vault ends it with its first position).
+        val share = shares.firstOrNull { it.connectionId == id && !(it.once && it.lastSentAt != null) }
+        val sending = share?.let { service.targets.any { t -> t.connectionId == id } } == true
+        val stopping = id in service.stopping
+        LocationView(
+            share?.let {
+                val issue = if (sending) service.issue else SendIssue.NONE
+                DetailLocation(it.shareId, it.expiresAt, paused = sending && service.paused, issue = issue, stopping = stopping)
+            },
+            id in missed,
+        )
+    }
+
+    /** **Stop** on "Sharing your location until …": sending ends at once, the vault is told (a refused stop shows its error). */
+    fun stopSharingLocation() {
+        val share = uiState.value.location ?: return
+        act { location.stop(share.shareId) }
     }
 
     /** Presence is asked of a person who is connected, never of a service (a service is not a person). */

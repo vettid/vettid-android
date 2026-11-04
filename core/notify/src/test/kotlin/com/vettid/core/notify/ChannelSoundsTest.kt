@@ -113,6 +113,17 @@ class ChannelSoundsTest {
         assertFalse(channel(Channels.CONNECTION).canShowBadge())
     }
 
+    /** Location sharing (ANDROID-PLAN §4 "Location"): its own channel, low importance and silent, private on the lock screen. */
+    @Test
+    fun locationSharingIsLowAndSilent() {
+        Channels.ensure(app)
+        assertEquals("location_sharing", Channels.LOCATION)
+        assertEquals(app.getString(R.string.notify_channel_location), channel(Channels.LOCATION).name)
+        assertEquals(NotificationManager.IMPORTANCE_LOW, channel(Channels.LOCATION).importance)
+        assertNull(channel(Channels.LOCATION).sound)
+        assertEquals(Notification.VISIBILITY_PRIVATE, channel(Channels.LOCATION).lockscreenVisibility)
+    }
+
     @Test
     fun theOldIdsAreDeletedAtStart() {
         val old = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates")

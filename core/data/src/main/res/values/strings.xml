@@ -278,4 +278,16 @@
     <string name="data_presence_active_date">last seen %1$s</string> <!-- Owner-approved 2026-11-03 (2a) -->
     <string name="data_presence_active_today">last seen today</string> <!-- Owner-approved 2026-11-03 (last seen) -->
     <string name="data_presence_with_age">%1$s · %2$s</string> <!-- Owner-approved 2026-11-03 -->
+
+    <!-- Sharing the member's location (ANDROID-PLAN §4 "Location", L1a): why nothing is being sent, on the ongoing notification and the
+         connection's card. NEW: not in the plan; none is approved. DRAFT = the plan's words. -->
+    <string name="data_location_issue_stop_pending">Not sending until your vault has stopped a share.</string>
+    <string name="data_location_issue_no_permission">Not sending: location is off for VettID.</string>
+    <string name="data_location_issue_off">Not sending: location is off on this phone.</string>
+    <string name="data_location_issue_service">Not sending: open VettID to carry on.</string>
+    <string name="data_location_stopping">Stopping…</string>
+    <string name="data_location_open_settings">Open settings</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Paused). The same words as the ongoing notification's. -->
+    <string name="data_location_paused">Paused until your daily check.</string>
+    <string name="data_location_missed">No position was found, so nothing was sent.</string>
 </resources>
