@@ -38,6 +38,7 @@ class MessagesViewModelsTest {
     private val attachments = com.vettid.core.testing.FakeAttachments()
 
     private val social = FakeSocial().apply {
+        notLoaded += listOf("c1", "c2") // a failed list load shows its error while a row is not loaded
         seed(
             listOf(FakeSocial.connection("c1", "Sam", favorite = true), FakeSocial.connection("c2", "Alex")),
             mapOf(

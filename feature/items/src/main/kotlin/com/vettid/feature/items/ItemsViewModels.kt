@@ -429,6 +429,15 @@ class ItemEditViewModel @Inject constructor(
 
     /** The member confirmed the warning for leaving `critical` (for this save). */
     private var leaveConfirmed = false
+    // Declared above `init`: viewModelScope runs on Main.immediate, so a coroutine started by `init` can run in the
+    // constructor, before a field declared below it is set (a late `= emptyMap()` would wipe what the load stored).
+    /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
+    private val phoneRegion: String by lazy { PhoneInput.region(context) }
+
+    /** The item's name and fields as loaded, by field id: what the member did not edit is sent exactly as stored. */
+    private var storedName: String? = null
+    private var storedFields: Map<String, DraftField> = emptyMap()
+
     private val state = MutableStateFlow(ItemEditUiState(itemId = route.itemId))
     val uiState: StateFlow<ItemEditUiState> = state.asStateFlow()
 
@@ -539,13 +548,6 @@ class ItemEditViewModel @Inject constructor(
     /** The draft under the template's name when the member left the name empty. */
     private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =
         if (d.name.isBlank() && s.nameHint != null) d.copy(name = s.nameHint) else d
-
-    /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
-    private val phoneRegion: String by lazy { PhoneInput.region(context) }
-
-    /** The item's name and fields as loaded, by field id: what the member did not edit is sent exactly as stored. */
-    private var storedName: String? = null
-    private var storedFields: Map<String, DraftField> = emptyMap()
 
     /**
      * The draft as it is saved (VAULT-MESSAGING 0.55.3 §10.7 "Canonical forms"; ANDROID-PLAN 0.1.68): the name, the labels and the values

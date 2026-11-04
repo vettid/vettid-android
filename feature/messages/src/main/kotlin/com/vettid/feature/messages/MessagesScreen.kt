@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -251,12 +252,28 @@ fun MessagesScreen(
                     },
                 ),
             )
-            else -> LazyColumn(Modifier.fillMaxSize().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
+            else -> Column(Modifier.fillMaxSize()) {
+                // Above the list, not in it: an item inserted above a scrolled LazyColumn lands off screen, and a hidden
+                // failure is a silent one.
+                // A reload runs and rows exist: loading, not failed.
+                if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("messages_reloading"))
                 // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
                 if (error == FailureKind.OWNER_CHECK_REQUIRED) {
-                    item(key = "held-notice") { MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
+                    MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
-                items(state.conversations, key = { it.connection.id }) { c -> ConversationRow(c, onClick = { onOpen(c.connection.id) }) }
+                // Some threads could not be read: the rows are what this phone has, and the failure has its retry.
+                // Not while a retry runs: the bar shows instead of the old failure.
+                if (error != null && error != FailureKind.OWNER_CHECK_REQUIRED && !state.loading) {
+                    ErrorNotice(error, onRetry, state.errorCode, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
+                }
+                LazyColumn(
+                    Modifier.weight(1f).fillMaxWidth().testTag("conversations"),
+                    contentPadding = PaddingValues(bottom = LIST_BOTTOM),
+                ) {
+                    items(state.conversations, key = { it.connection.id }) { c ->
+                        ConversationRow(c, onClick = { onOpen(c.connection.id) })
+                    }
+                }
             }
         }
     }
@@ -280,7 +297,7 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalResources.current
     val preview = c.last?.let { m ->
         previewLine(m.text, m.outgoing, m.attachment != null, photo) { context.getString(R.string.messages_preview_you, it) }
-    } ?: stringResource(R.string.messages_preview_none)
+    } ?: if (c.loaded) stringResource(R.string.messages_preview_none) else "" // not read yet: nothing, never "No messages yet"
     val unread = c.unread > 0
     VettIdListRow(
         title = name,
@@ -316,14 +333,20 @@ internal fun ErrorState(kind: FailureKind, onRetry: () -> Unit, shownCode: Strin
         if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
             MessagesHeldNotice()
         } else {
-            NoticeCard(
-                kind = NoticeKind.WARNING,
-                title = stringResource(R.string.messages_error_title),
-                body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
-                actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
-            )
+            ErrorNotice(kind, onRetry, shownCode)
         }
     }
+}
+
+@Composable
+private fun ErrorNotice(kind: FailureKind, onRetry: () -> Unit, shownCode: String?, modifier: Modifier = Modifier) {
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = stringResource(R.string.messages_error_title),
+        body = failureText(kind.messageRes(), kind.vaultCode(shownCode)),
+        modifier = modifier.testTag("messages_error"),
+        actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.messages_retry)) } },
+    )
 }
 
 /** The vault holds requests while the daily owner check is due: said to be held, not failed; nothing to retry. */

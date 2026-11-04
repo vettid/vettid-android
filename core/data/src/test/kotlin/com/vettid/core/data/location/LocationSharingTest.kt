@@ -91,8 +91,12 @@ class LocationSharingTest {
         /** When set, `location.share.list` answers only after it is completed (a read in flight), with the list as it was asked. */
         var listGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
+        /** Completed when a `location.share.list` reaches the vault: a test sets a fresh one, then waits for its read to be in flight. */
+        @Volatile var listAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
+
         override suspend fun list(): JsonObject {
             synchronized(this) { lists++ }
+            listAsked.complete(Unit)
             listRefusal?.let { throw VaultOpException("location.share.list", it) }
             // The vault no longer lists a share it has stopped.
             val kept = (Json.parseToJsonElement(outgoing) as kotlinx.serialization.json.JsonArray).filter {
@@ -625,10 +629,17 @@ class LocationSharingTest {
     @Test
     fun aListReadDoesNotForgetAShareStartedAfterItWasAsked() = runTest {
         val r = rig()
-        // The list read starts; a share is started meanwhile and is not in the answer.
+        // The list read starts and is held at the vault; a share is started meanwhile and is not in the answer. The read is
+        // known to be in flight before the start (it used to race: when the read began after the start, the list rightly
+        // dropped the share).
         r.ops.outgoing = "[]"
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
         val read = backgroundScope.async { r.sharing.refresh() }
+        r.ops.listAsked.await()
         val share = r.sharing.start(ShareRequest("c1"))
+        gate.complete(Unit)
         read.await()
         r.settle()
         assertEquals(listOf(share.shareId), r.sharing.outgoing.value.map { it.shareId })
@@ -1009,8 +1020,10 @@ class LocationSharingTest {
         r.ops.outgoing = "[${listed(s.shareId, "dev-this", expires = s.expiresAt)}]"
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
         val read = backgroundScope.async { r.sharing.refresh() }
-        r.settle()
+        // The read is at the vault before the stop (with settle() alone it could arrive after, and then no longer test the guard).
+        r.ops.listAsked.await()
         r.sharing.stop(s.shareId)
         r.settle()
         // The read answers with the list as it was when asked, which still has the share.
