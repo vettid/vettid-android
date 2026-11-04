@@ -273,8 +273,10 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<VaultStatusRoute> {
         val vm: VaultStatusViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        val credentialKey by vm.credentialKey.collectAsStateWithLifecycle()
         VaultStatusContent(
             state, vm::load, host.onBack,
+            credentialKey = credentialKey, onRetryCredentialKey = vm::loadCredentialKey,
             onChangePin = { host.navigate(ChangePinRoute(fromAttempts = true)) },
             onChangePassword = host.onChangePassword,
         )
