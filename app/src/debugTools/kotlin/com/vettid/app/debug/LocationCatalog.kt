@@ -11,6 +11,25 @@ import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
+import com.vettid.core.data.location.IncomingShare
+import com.vettid.core.data.location.PositionOffset
+import com.vettid.core.data.location.ReceivedPosition
+import com.vettid.core.data.social.Approval
+import com.vettid.core.ui.components.ShellChrome
+import com.vettid.feature.approvals.ApprovalDetailScreen
+import com.vettid.feature.approvals.ApprovalDetailUiState
+import com.vettid.feature.approvals.DecisionActions
+import com.vettid.feature.connections.AskLocationDialog
+import com.vettid.feature.connections.DetailIncoming
+import com.vettid.feature.connections.IncomingRow
+import com.vettid.feature.connections.LocationActions
+import com.vettid.feature.connections.LocationAsk
+import com.vettid.feature.connections.LocationScreen
+import com.vettid.feature.connections.LocationUiState
+import com.vettid.feature.connections.OutgoingRow
+import com.vettid.feature.connections.PositionScreen
+import com.vettid.feature.connections.PositionUiState
+import com.vettid.feature.connections.RequestRow
 import com.vettid.feature.connections.ConnectionDetailScreen
 import com.vettid.feature.connections.ConnectionDetailUiState
 import com.vettid.feature.connections.DetailActions
@@ -38,6 +57,25 @@ internal object LocationCatalog {
     @Composable
     private fun Detail(location: DetailLocation) =
         ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, location = location), DetailActions())
+
+    private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
+
+    @Composable
+    private fun Incoming(i: DetailIncoming) =
+        ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, incoming = i), DetailActions())
+
+    @Composable
+    private fun Ask(ask: LocationAsk) {
+        ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false), DetailActions())
+        AskLocationDialog(ask, first, {}, {}, {})
+    }
+
+    @Composable
+    private fun Position(offset: PositionOffset?) {
+        val p = ReceivedPosition(52.5200, 13.4050, 1_000.0, null, null, null, Instant.now().minusSeconds(300), null)
+        val share = IncomingShare("in1", "c1", false, SharePrecision.APPROXIMATE, 60, false, null, Instant.now().plusSeconds(3_600), last = p)
+        PositionScreen(PositionUiState(loaded = true, name = "Samira", share = share, offset = offset), {}, {}, {}, {})
+    }
 
     private val open = ShareLocationUiState(
         "c1", open = true, permission = LocationPermission.PRECISE, availability = LocationAvailability.AVAILABLE,
@@ -73,6 +111,35 @@ internal object LocationCatalog {
         },
         "connections.detail_location_missed" to {
             ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, locationMissed = true), DetailActions())
+        },
+        // Receiving (L1b): the incoming card, Ask for location, the Location screen, the position as text, a request in Approvals.
+        "location.incoming" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(300), 1_000.0)) },
+        "location.incoming_waiting" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), null, null)) },
+        "location.ask" to { Ask(LocationAsk(open = true, note = "Are you near the station?")) },
+        "location.ask_limit" to { Ask(LocationAsk(open = true, limitedMinutes = 7)) },
+        "location.ask_sent" to { Ask(LocationAsk(open = true, sent = true)) },
+        "location.screen" to {
+            LocationScreen(
+                LocationUiState(
+                    outgoing = listOf(OutgoingRow("s1", "c1", "Samira", SharePrecision.APPROXIMATE, Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(120), false)),
+                    incoming = listOf(IncomingRow("in1", "c2", "Kim", Instant.now().minusSeconds(300), Instant.now().plusSeconds(7_200))),
+                    requests = listOf(RequestRow("location:r1", "c3", "Lee")),
+                    availability = LocationAvailability.AVAILABLE,
+                ),
+                chrome, LocationActions(),
+            )
+        },
+        "location.screen_empty" to { LocationScreen(LocationUiState(availability = LocationAvailability.AVAILABLE), chrome, LocationActions()) },
+        "location.position" to { Position(PositionOffset(3_200.0, 45.0)) },
+        "location.position_no_offset" to { Position(null) },
+        "location.request" to {
+            ApprovalDetailScreen(
+                ApprovalDetailUiState(
+                    "location:r1",
+                    approval = Approval.LocationRequest("r1", "c1", "Are you near the station?", Instant.now(), Instant.now().plusSeconds(86_400), connectionName = "Samira Rivera", firstName = "Samira"),
+                ),
+                DecisionActions(),
+            )
         },
         "connections.detail_location" to {
             ConnectionDetailScreen(

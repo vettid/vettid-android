@@ -242,4 +242,16 @@
     <string name="approvals_pair_compare_body">Compare the code on the agent with the one in VettID before you allow it.</string> <!-- new -->
     <string name="approvals_pair_compare">Compare the code</string> <!-- new -->
     <string name="approvals_pair_reject">Reject</string> <!-- new -->
+
+    <!-- Location requests (ANDROID-PLAN §4 "Location", L1b). DRAFT = the plan's text; NEW = not in the plan. -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_title">%1$s asks where you are</string>
+    <!-- NEW: not in the plan (a row's kind label when no name is known; the title says "A connection asks where you are") -->
+    <string name="approvals_location_title_generic">Someone asks where you are</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_once">Share once</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_while">Share for a while…</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_not_now">Not now</string>
 </resources>

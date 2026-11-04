@@ -170,11 +170,17 @@ class ShareLocationViewModel @Inject constructor(
     private val location: LocationRepository = NoLocation,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
+    /** A request being answered (Approvals): the sheet opens at once and the start names it. */
+    private val requestId: String? = savedState.get<String?>(ConnectionDetailRoute.ARG_REQUEST)?.takeIf { it.isNotEmpty() }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
     val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability) { s, shares, a ->
         s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
+
+    init {
+        if (requestId != null) open()
+    }
 
     /** Opens the sheet with the defaults: For a while, 1 hour, Approximate, every minute, no trail. */
     fun open() {
@@ -235,7 +241,8 @@ class ShareLocationViewModel @Inject constructor(
         local.update { it.copy(busy = true, error = null, errorCode = null, issue = null) }
         viewModelScope.launch {
             try {
-                val share = location.start(ShareRequest(id, timing, fitted(s.precision, s.permission), trail = s.trail && !s.once))
+                val precision = fitted(s.precision, s.permission)
+                val share = location.start(ShareRequest(id, timing, precision, trail = s.trail && !s.once, requestId = requestId))
                 local.update { it.copy(busy = false, startedId = share.shareId) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, issue = SendIssue.of(e.code)) }

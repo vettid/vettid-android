@@ -94,6 +94,8 @@ fun NavGraphBuilder.approvalsDestination(
     onLeaveDetail: (entryId: String) -> Unit = { onBack() },
     /** (AA5) Opens the comparison of the pairing this phone holds (Devices & agents). */
     onOpenPairing: () -> Unit = {},
+    /** **Share for a while…** on a location request: the connection's share sheet with the request's id (connection, request). */
+    onShareLocation: (String, String) -> Unit = { _, _ -> },
 ) {
     composable<ApprovalsRoute> {
         val vm: ApprovalsViewModel = hiltViewModel()
@@ -144,6 +146,11 @@ fun NavGraphBuilder.approvalsDestination(
                 onDismissMute = vm::dismissMute,
                 onChooseSeconds = vm::chooseSeconds,
                 onOpenPairing = onOpenPairing,
+                onShareOnce = vm::shareOnce,
+                onShareWhile = {
+                    (state.approval as? Approval.LocationRequest)?.let { onShareLocation(it.connectionId, it.requestId) }
+                },
+                onNotNow = vm::notNow,
             ),
         )
     }
@@ -339,12 +346,15 @@ private fun PausedNotice(
 /** The kind of request, as a row title. */
 @Composable
 fun titleOf(a: Approval, items: List<com.vettid.core.data.items.ItemSummary> = emptyList(), itemsLoaded: Boolean = true): String {
-    if (a is Approval.DeviceRequest) return deviceTitle(a, items, itemsLoaded)
     val name = (a as? Approval.Authentication)?.connectionName?.let { AuthContext.isolatedName(it) }
     val inline = stringResource(R.string.approvals_a_connection_inline)
-    return when ((a as? Approval.Authentication)?.purpose) {
-        AuthPurpose.SIGNIN -> stringResource(R.string.approvals_auth_signin_title, name ?: inline)
-        AuthPurpose.APPROVAL -> stringResource(R.string.approvals_auth_approval_title, name ?: inline)
+    return when {
+        a is Approval.DeviceRequest -> deviceTitle(a, items, itemsLoaded)
+        a is Approval.LocationRequest -> locationTitle(a)
+        (a as? Approval.Authentication)?.purpose == AuthPurpose.SIGNIN ->
+            stringResource(R.string.approvals_auth_signin_title, name ?: inline)
+        (a as? Approval.Authentication)?.purpose == AuthPurpose.APPROVAL ->
+            stringResource(R.string.approvals_auth_approval_title, name ?: inline)
         else -> stringResource(kindTitleRes(a))
     }
 }
@@ -358,6 +368,7 @@ private fun kindTitleRes(a: Approval): Int =
         is Approval.CriticalUse -> R.string.approvals_type_critical
         is Approval.ShareDecision -> R.string.approvals_type_share
         is Approval.DeviceRequest -> R.string.approvals_held_other_title
+        is Approval.LocationRequest -> R.string.approvals_location_title_generic
     }
 
 @Composable
@@ -365,6 +376,7 @@ private fun whoOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
     is Approval.OutgoingRequest -> AccountNames.isolateOrNull(a.name) ?: stringResource(R.string.approvals_name_not_shared)
     is Approval.DeviceRequest -> deviceWho(a)
+    is Approval.LocationRequest -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
     is Approval.ShareDecision -> AccountNames.isolateOrNull(a.connectionName)
         ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
     else -> AccountNames.isolateOrNull(a.connectionName) ?: stringResource(R.string.approvals_a_connection)
@@ -378,6 +390,7 @@ internal fun serviceLabelOf(a: Approval): String? {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun summaryOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> stringResource(
         if (a.state == RequestState.APPROVED) R.string.approvals_summary_waiting_peer else R.string.approvals_summary_sas,
@@ -396,6 +409,7 @@ private fun summaryOf(a: Approval): String? = when (a) {
     is Approval.CriticalUse -> criticalItem(a)
     is Approval.ShareDecision -> pluralStringResource(R.plurals.approvals_summary_items, a.items.size, a.items.size)
     is Approval.DeviceRequest -> a.requestType?.let { AccountNames.firstLineIsolated(it) }
+    is Approval.LocationRequest -> a.note?.let { AccountNames.firstLineIsolated(it) }
 }
 
 /** The kind of a desktop or agent request ("A desktop", "An agent"), or null for a kind this app does not name (§10.8). */
@@ -442,6 +456,10 @@ data class DecisionActions(
     val onChooseSeconds: (Int) -> Unit = {},
     /** (AA5) Opens the comparison of the pairing this phone holds. */
     val onOpenPairing: () -> Unit = {},
+    /** A location request (L1b): **Share once** (the screen asks the phone's permission first), **Share for a while…**, **Not now**. */
+    val onShareOnce: () -> Unit = {},
+    val onShareWhile: () -> Unit = {},
+    val onNotNow: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -465,6 +483,10 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     }
     if (a is Approval.DeviceRequest) {
         DeviceRequestScreen(a, state, actions, modifier)
+        return
+    }
+    if (a is Approval.LocationRequest) {
+        LocationRequestScreen(a, state, actions, modifier)
         return
     }
     FormScaffold(
@@ -1000,6 +1022,7 @@ private fun bodyOf(a: Approval): String? = when (a) {
             ?: stringResource(R.string.approvals_a_connection_inline),
     )
     is Approval.DeviceRequest -> null
+    is Approval.LocationRequest -> null
 }
 
 @Composable
@@ -1014,6 +1037,7 @@ private fun approveLabel(a: Approval): String? = when (a) {
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
     is Approval.ShareDecision -> stringResource(R.string.approvals_share_approve)
     is Approval.DeviceRequest -> null
+    is Approval.LocationRequest -> null
 }
 
 @Composable
@@ -1228,6 +1252,8 @@ private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: Stri
         }
         // A device request has its own screen (DeviceRequestScreen, AA5).
         is Approval.DeviceRequest -> Unit
+        // A location request has its own screen (LocationRequestScreen, L1b).
+        is Approval.LocationRequest -> Unit
     }
 }
 

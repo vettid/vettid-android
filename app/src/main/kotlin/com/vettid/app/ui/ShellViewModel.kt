@@ -44,6 +44,8 @@ data class ShellBadges(
     val votesShown: Boolean = false,
     /** The vault has wallets (ANDROID-PLAN §4 "Wallet"; never in a build without the wallet): the Wallet entry shows (W1c-2). */
     val walletShown: Boolean = false,
+    /** The vault has location (ANDROID-PLAN §4 "Location", L1b): the Location entry shows. */
+    val locationShown: Boolean = false,
 )
 
 /** A refused change of the member's status: the failure and the vault code it may name (shown with `failureText`). */
@@ -64,6 +66,7 @@ class ShellViewModel @Inject constructor(
     votes: VotesRepository,
     wallet: WalletAccess,
     private val presence: PresenceRepository,
+    location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -160,14 +163,15 @@ class ShellViewModel @Inject constructor(
         approvals.approvals,
         messages.conversations,
         combine(votes.votes, votes.reconnect, votes.availability, VoteRules::entry),
-        wallet.shown,
-    ) { a, c, v, w ->
+        combine(wallet.shown, location.availability) { w, l -> w to (l == com.vettid.core.data.location.LocationAvailability.AVAILABLE) },
+    ) { a, c, v, (w, l) ->
         ShellBadges(
             approvals = a.count { it.needsDecision },
             unread = unreadConversations(c),
             votes = v.badge,
             votesShown = v.shown,
             walletShown = w,
+            locationShown = l,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShellBadges())
 

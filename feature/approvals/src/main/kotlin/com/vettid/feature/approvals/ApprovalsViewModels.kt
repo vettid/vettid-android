@@ -282,6 +282,8 @@ data class ApprovalDetailUiState(
     val pairingName: String? = null,
     /** The item cache has been read (or failed): until then a held request's item is "Loading…", and nothing is approvable. */
     val itemsLoaded: Boolean = true,
+    /** A location request could not be answered by sharing because nothing could be sent (permission, location switch…). */
+    val locationIssue: com.vettid.core.data.location.SendIssue? = null,
 ) {
     /**
      * A request is open for the member's decision (any kind, a device's or an agent's too), typed or not: the daily owner check
@@ -356,6 +358,7 @@ class ApprovalDetailViewModel @Inject constructor(
     private val ownerCheck: OwnerCheckRepository,
     private val connections: ConnectionsRepository,
     private val pairing: PairingRepository,
+    private val location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val settled = ItemsSettled()
@@ -555,6 +558,7 @@ class ApprovalDetailViewModel @Inject constructor(
      * [shown]: for a share decision, the item ids the screen showed when the member tapped. Only those are decided, so a
      * `share.pending` batch that lands just before the tap is not included or declined unseen (§10.12).
      */
+    @Suppress("CyclomaticComplexMethod")
     fun approve(shown: List<String>? = null) {
         val s = local.value.copy(
             approval = uiState.value.approval ?: local.value.approval,
@@ -586,6 +590,8 @@ class ApprovalDetailViewModel @Inject constructor(
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
                 }
                 is Approval.DeviceRequest -> approveDevice(a, s.allowSeconds)
+                // Answered by Share once / Share for a while… (shareOnce, the share sheet), never by Approve.
+                is Approval.LocationRequest -> Unit
             }
         }
     }
@@ -602,6 +608,45 @@ class ApprovalDetailViewModel @Inject constructor(
             DeviceOutcome.Approved(d.result)
         }
         local.update { it.copy(outcome = outcome) }
+    }
+
+    /**
+     * **Share once** (ANDROID-PLAN §4 "Location", L1b): one position now at the sheet's default precision (Approximate), answering this
+     * request (`request_id`). The phone's permission is the screen's to ask first. Refused for a service.
+     */
+    fun shareOnce() {
+        val a = uiState.value.approval as? Approval.LocationRequest ?: return
+        if (a.connectionService || expiredNow(a)) return
+        local.update { it.copy(busy = true, error = null, errorCode = null, locationIssue = null) }
+        viewModelScope.launch {
+            try {
+                location.start(
+                    com.vettid.core.data.location.ShareRequest(
+                        a.connectionId,
+                        com.vettid.core.data.location.ShareTiming.Once,
+                        com.vettid.core.data.location.SharePrecision.APPROXIMATE,
+                        requestId = a.requestId,
+                    ),
+                )
+                repo.dismissLocationRequest(a.requestId)
+                local.update { it.copy(busy = false, done = true) }
+            } catch (e: VaultFailure) {
+                // Nothing could be sent (permission, location off, app not in front): the request stays, with the reason shown.
+                val issue = com.vettid.core.data.location.SendIssue.of(e.code)
+                local.update {
+                    it.copy(busy = false, error = e.kind.takeIf { issue == null }, errorCode = e.shownCode, locationIssue = issue)
+                }
+            }
+        }
+    }
+
+    /** **Not now**: nothing is sent (the vault has no decline); the request leaves the list and ends by itself after 24 hours. */
+    fun notNow() {
+        val a = uiState.value.approval as? Approval.LocationRequest ?: return
+        viewModelScope.launch {
+            repo.dismissLocationRequest(a.requestId)
+            local.update { it.copy(done = true) }
+        }
     }
 
     /** The length of access chosen for a session request (AA5, decision 6). */
@@ -621,6 +666,7 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)
                 is Approval.ShareDecision -> repo.decideShare(a.ruleId, include = emptyList(), decline = shown ?: a.items.map { it.itemId })
                 is Approval.DeviceRequest -> denyDevice(a)
+                is Approval.LocationRequest -> repo.dismissLocationRequest(a.requestId)
             }
         }
     }
