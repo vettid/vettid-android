@@ -117,7 +117,7 @@ class LocationService : Service() {
             .setPublicVersion(
                 NotificationCompat.Builder(this, Channels.LOCATION)
                     .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
-                    .setContentTitle(getString(R.string.core_location_notification_unnamed))
+                    .setContentTitle(SharingText.publicTitle(this, state))
                     .setSilent(true)
                     .build(),
             )

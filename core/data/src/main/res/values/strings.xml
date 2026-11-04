@@ -285,6 +285,7 @@
     <string name="data_location_issue_no_permission">Not sending: location is off for VettID.</string>
     <string name="data_location_issue_off">Not sending: location is off on this phone.</string>
     <string name="data_location_issue_service">Not sending: open VettID to carry on.</string>
+    <string name="data_location_stopping">Stopping…</string>
     <string name="data_location_open_settings">Open settings</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Paused). The same words as the ongoing notification's. -->
     <string name="data_location_paused">Paused until your daily check.</string>

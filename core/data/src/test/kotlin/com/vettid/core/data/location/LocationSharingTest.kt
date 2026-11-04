@@ -60,6 +60,9 @@ class LocationSharingTest {
         val starts = mutableListOf<ShareRequest>()
         val updates = mutableListOf<Sent>()
         val stops = mutableListOf<String>()
+
+        /** The stops the vault took: it lists those shares no more. */
+        val taken = mutableSetOf<String>()
         var lists = 0
         private var n = 0
 
@@ -81,6 +84,7 @@ class LocationSharingTest {
         override suspend fun stop(shareId: String): JsonObject {
             synchronized(this) { stops += shareId }
             stopRefusal?.let { throw VaultOpException("location.share.stop", it) }
+            synchronized(this) { taken += shareId }
             return obj("{}")
         }
 
@@ -93,7 +97,7 @@ class LocationSharingTest {
             // The vault no longer lists a share it has stopped.
             val kept = (Json.parseToJsonElement(outgoing) as kotlinx.serialization.json.JsonArray).filter {
                 val id = ((it as JsonObject)["share_id"] as JsonPrimitive).content
-                synchronized(this) { id !in stops }
+                synchronized(this) { id !in taken }
             }
             val answer = obj("""{"outgoing":${kotlinx.serialization.json.JsonArray(kept)},"incoming":[]}""")
             listGate?.await()
@@ -127,8 +131,13 @@ class LocationSharingTest {
         var refuse = false
         var precise = true
         var issue = SendIssue.NONE
+        var notRunning = mutableListOf<Boolean>()
 
         override fun issue() = issue
+
+        override fun showNotRunning(show: Boolean) {
+            notRunning += show
+        }
 
         override fun precise() = precise
 
@@ -171,7 +180,12 @@ class LocationSharingTest {
             watchEvery = Duration.ofSeconds(5),
             retryDelays = retry,
             elapsedNanos = { elapsed },
-        ).also { if (attach) it.attach(platform) }
+        ).also {
+            if (attach) {
+                it.attach(platform)
+                it.setInFront(true) // a share is started by the member's tap, with the app in front
+            }
+        }
 
         /** Time passes: the clock and the test scheduler together. */
         fun elapse(d: Duration) {
@@ -636,13 +650,13 @@ class LocationSharingTest {
         val r = rig()
         r.platform.refuse = true
         r.begin()
-        assertTrue("service refused, app not in front", r.provider.requests.isEmpty())
-        r.sharing.setInFront(true)
-        r.settle()
-        assertEquals("in front: collected without the service", 1, r.provider.requests.size)
+        assertEquals("the app is in front: collected without the service", 1, r.provider.requests.size)
         r.sharing.setInFront(false)
         r.settle()
-        assertEquals(0, r.provider.live)
+        assertEquals("service refused, app not in front", 0, r.provider.live)
+        r.sharing.setInFront(true)
+        r.settle()
+        assertEquals(1, r.provider.live)
     }
 
     @Test
@@ -652,6 +666,7 @@ class LocationSharingTest {
         assertEquals(1, r.provider.live)
         r.platform.refuse = true
         r.sharing.onServiceEnded()
+        r.sharing.setInFront(false)
         r.settle()
         assertEquals("no service, not in front: no positions", 0, r.provider.live)
         r.platform.refuse = false
@@ -1093,10 +1108,14 @@ class LocationSharingTest {
         val r = rig()
         r.platform.refuse = true
         r.begin()
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+        r.sharing.setInFront(false)
         assertEquals(SendIssue.SERVICE, r.sharing.serviceState.value.issue)
+        assertEquals("a plain notice is shown", listOf(true), r.platform.notRunning)
         r.sharing.setInFront(true)
         r.settle()
         assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+        assertEquals("and taken away", listOf(true, false), r.platform.notRunning)
     }
 
     @Test
@@ -1107,6 +1126,124 @@ class LocationSharingTest {
         r.elapse(Duration.ofSeconds(6))
         assertTrue(r.sharing.serviceState.value.paused)
         assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+    }
+
+    // --- round 3 ---
+
+    @Test
+    fun theStoppedSharesConnectionIsSaidToBeStoppingWhileItsStopIsPending() = runTest {
+        val r = rig()
+        val s = r.begin()
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(s.shareId) }
+        r.settle()
+        assertEquals(setOf("c1"), r.sharing.serviceState.value.stopping)
+        r.ops.stopRefusal = null
+        r.elapse(Duration.ofSeconds(6))
+        assertTrue(r.sharing.serviceState.value.stopping.isEmpty())
+    }
+
+    @Test
+    fun positionsResumeOnceThePermissionIsGivenAgain() = runTest {
+        val r = rig()
+        r.provider.failWith = SecurityException()
+        r.begin()
+        r.settle()
+        assertEquals(SendIssue.NO_PERMISSION, r.sharing.serviceState.value.issue)
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
+        // The member grants it again in Android's settings.
+        r.provider.failWith = null
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(SendIssue.NONE, r.sharing.serviceState.value.issue)
+        r.elapse(Duration.ofSeconds(60))
+        r.emit(r.fix())
+        assertEquals(1, r.ops.updates.size)
+    }
+
+    @Test
+    fun positionsResumeWhenTheAppComesBackAfterThePermissionWasGiven() = runTest {
+        val r = rig()
+        r.provider.failWith = SecurityException()
+        r.begin()
+        r.settle()
+        r.provider.failWith = null
+        r.sharing.onForeground()
+        r.settle()
+        assertEquals(1, r.provider.live)
+    }
+
+    @Test
+    fun aShareIsNotStartedThatCannotSend() = runTest {
+        val r = rig()
+        r.sharing.setInFront(false)
+        try {
+            r.sharing.start(ShareRequest("c1"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(SendIssue.SERVICE, SendIssue.of(e.code))
+        }
+        r.sharing.setInFront(true)
+        r.platform.issue = SendIssue.LOCATION_OFF
+        try {
+            r.sharing.start(ShareRequest("c1"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(SendIssue.LOCATION_OFF, SendIssue.of(e.code))
+        }
+        r.platform.issue = SendIssue.NO_PERMISSION
+        try {
+            r.sharing.start(ShareRequest("c1"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(SendIssue.NO_PERMISSION, SendIssue.of(e.code))
+        }
+        assertTrue("nothing reached the vault", r.ops.starts.isEmpty())
+        r.platform.issue = SendIssue.NONE
+        r.sharing.start(ShareRequest("c1"))
+        assertEquals(1, r.ops.starts.size)
+    }
+
+    @Test
+    fun aShareIsNotStartedWithoutAPlatform() = runTest {
+        val r = rig(attach = false)
+        try {
+            r.sharing.start(ShareRequest("c1"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(SendIssue.SERVICE, SendIssue.of(e.code))
+        }
+    }
+
+    @Test
+    fun aStopAskedAgainKeepsTheMarkAlreadyMade() = runTest {
+        val expires = t0.plusSeconds(3_600).toEpochMilli()
+        val store = MemStore(listOf(StoredShare("s7", "c-s7", expires, stopping = true)))
+        val r = rig(store = store)
+        r.ops.stopRefusal = "internal"
+        r.ops.outgoing = "[${listed("s7", "dev-this")}]"
+        r.sharing.resume()
+        r.settle()
+        runCatching { r.sharing.stop("s7") }
+        r.settle()
+        val kept = store.saved.single()
+        assertEquals("s7", kept.shareId)
+        assertEquals("c-s7", kept.connectionId)
+        assertEquals(expires, kept.expiresAtMs)
+        assertTrue(kept.stopping)
+    }
+
+    @Test
+    fun aHeldPositionIsNotSentWhenAStopWasAskedForMeanwhile() = runTest {
+        val r = rig()
+        val a = r.begin(id = "a")
+        r.begin(ShareTiming.Once, id = "b")
+        r.emit(r.fix(accuracy = 900.0))
+        assertTrue(r.ops.updates.isEmpty())
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(a.shareId) }
+        r.elapse(Duration.ofSeconds(61))
+        assertTrue("the held position stays unsent", r.ops.updates.isEmpty())
     }
 
     // --- strict reading of location.share.list (M3) ---

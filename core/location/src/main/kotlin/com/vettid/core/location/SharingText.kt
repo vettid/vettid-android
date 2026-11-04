@@ -14,6 +14,17 @@ import java.time.Instant
  * cover is up, and then no name is said.
  */
 internal object SharingText {
+    /**
+     * The lock-screen version: never a name; "Paused until your daily check." or why nothing is sent when that is the state,
+     * else just that a location is shared.
+     */
+    fun publicTitle(context: Context, state: ServiceState): String =
+        if (state.paused || state.issue != com.vettid.core.data.location.SendIssue.NONE) {
+            title(context, state.copy(targets = state.targets.take(1)), emptyMap())
+        } else {
+            context.getString(R.string.core_location_notification_unnamed)
+        }
+
     fun title(context: Context, state: ServiceState, names: Map<String, String>, now: Instant = Instant.now()): String {
         val targets = state.targets
         val first = targets.singleOrNull()?.let { t -> names[t.connectionId]?.let { AccountNames.isolate(it) } }

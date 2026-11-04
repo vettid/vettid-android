@@ -99,6 +99,7 @@ class DataDirectoryScanTest {
             io = StandardTestDispatcher(testScheduler),
         )
         sharing.attach(platform)
+        sharing.setInFront(true)
         // The real service shows the notification of the share.
         LocationService.source = object : LocationServiceSource {
             override val state = MutableStateFlow(ServiceState())

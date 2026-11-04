@@ -118,6 +118,8 @@ data class ServiceState(
     val resumed: Boolean = false,
     /** Why nothing is being sent although shares are active (shown on the notification and the card), or [SendIssue.NONE]. */
     val issue: SendIssue = SendIssue.NONE,
+    /** Connections with a share whose stop the vault has not taken yet (sending for them has ended): "Stopping…". */
+    val stopping: Set<String> = emptySet(),
 ) {
     data class Target(val connectionId: String, val expiresAt: Instant)
 
@@ -139,6 +141,14 @@ enum class SendIssue {
 
     /** The foreground service is not running and the app is not in front. */
     SERVICE,
+    ;
+
+    /** The failure code a refused start carries for this issue, and back ([of]). */
+    val code: String get() = "send_issue_" + name.lowercase()
+
+    companion object {
+        fun of(code: String?): SendIssue? = entries.firstOrNull { it != NONE && it.code == code }
+    }
 }
 
 /** One position of this phone, held only until it is sent. **Prints its type name only.** */
@@ -184,6 +194,12 @@ interface LocationPlatform {
     fun startService(): Boolean
 
     fun stopService()
+
+    /**
+     * Shows (or takes away) a plain notice that nothing is being sent because the service is not running and the app is not in
+     * front ([SendIssue.SERVICE]): "Not sending: open VettID to carry on.", opening the app.
+     */
+    fun showNotRunning(show: Boolean) = Unit
 
     /** Why the platform cannot deliver positions now (the permission, the phone's location switch), or [SendIssue.NONE]. */
     fun issue(): SendIssue = SendIssue.NONE

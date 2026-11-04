@@ -1,7 +1,12 @@
 package com.vettid.core.location
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.Context
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import com.vettid.core.notify.Channels
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.location.LocationManager
@@ -37,6 +42,38 @@ class AndroidLocationPlatform(
     override fun startService(): Boolean = LocationService.start(app)
 
     override fun stopService() = LocationService.stop(app)
+
+    /** A plain notice on the Location sharing channel, opening the app (nothing runs to show the service's own). */
+    override fun showNotRunning(show: Boolean) {
+        val manager = NotificationManagerCompat.from(app)
+        if (!show) {
+            manager.cancel(NOT_RUNNING_ID)
+            return
+        }
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        Channels.ensure(app)
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val open = app.packageManager.getLaunchIntentForPackage(app.packageName)?.let { PendingIntent.getActivity(app, 0, it, flags) }
+        val text = app.getString(com.vettid.core.data.R.string.data_location_issue_service)
+        fun builder() = NotificationCompat.Builder(app, Channels.LOCATION)
+            .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
+            .setContentTitle(text)
+            .setSilent(true)
+        val n = builder()
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(builder().build())
+            .setContentIntent(open)
+            .build()
+        runCatching { manager.notify(NOT_RUNNING_ID, n) }
+    }
+
+    private companion object {
+        const val NOT_RUNNING_ID = 0x10CA8
+    }
 
     override fun issue(): SendIssue {
         val fine = ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED

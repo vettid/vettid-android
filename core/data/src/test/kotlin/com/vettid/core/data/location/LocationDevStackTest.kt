@@ -84,6 +84,7 @@ class LocationDevStackTest {
             deviceId = { c.device.deviceId },
         )
         sharing.attach(NoService(fixes))
+        sharing.setInFront(true)
         // The vault's events reach the sharing as in VaultManager.
         val events = scope.launchEvents(c, sharing)
         try {

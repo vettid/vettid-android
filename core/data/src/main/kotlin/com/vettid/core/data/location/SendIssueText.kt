@@ -17,6 +17,10 @@ fun SendIssue.textRes(): Int? = when (this) {
     SendIssue.SERVICE -> R.string.data_location_issue_service
 }
 
+/** "Stopping…": the share's stop has not reached the vault yet. */
+@StringRes
+fun stoppingTextRes(): Int = R.string.data_location_stopping
+
 /**
  * Where the member can put it right: the app's page in Android's settings (the location permission), or the phone's location
  * settings. Null where there is nothing to open.

@@ -47,6 +47,7 @@ import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.OutgoingShare
+import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.location.ShareInterval
 import com.vettid.core.data.location.ShareLength
 import com.vettid.core.data.location.SharePrecision
@@ -137,6 +138,8 @@ data class ShareLocationUiState(
     val errorCode: String? = null,
     /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
+    /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
+    val issue: SendIssue? = null,
 ) {
     /** The vault is known to have location. */
     val available: Boolean get() = availability == LocationAvailability.AVAILABLE
@@ -229,13 +232,13 @@ class ShareLocationViewModel @Inject constructor(
         val inFlight = s.busy || s.startedId != null
         if (inFlight || s.permission == LocationPermission.NONE || !known) return
         val timing = if (s.once) ShareTiming.Once else ShareTiming.ForAWhile(s.length, s.interval)
-        local.update { it.copy(busy = true, error = null, errorCode = null) }
+        local.update { it.copy(busy = true, error = null, errorCode = null, issue = null) }
         viewModelScope.launch {
             try {
                 val share = location.start(ShareRequest(id, timing, fitted(s.precision, s.permission), trail = s.trail && !s.once))
                 local.update { it.copy(busy = false, startedId = share.shareId) }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
+                local.update { it.copy(busy = false, error = e.kind, errorCode = e.shownCode, issue = SendIssue.of(e.code)) }
             }
         }
     }
@@ -396,7 +399,25 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             )
         }
     }
-    state.error?.let { e ->
+    state.issue?.let { issue ->
+        val text = issue.textRes()
+        if (text != null) {
+            Text(
+                stringResource(text),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("share_location_issue"),
+            )
+        }
+        val context = LocalContext.current
+        issue.settingsIntent(context)?.let { intent ->
+            androidx.compose.material3.TextButton(
+                onClick = { runCatching { context.startActivity(intent) } },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("share_location_settings"),
+            ) { Text(stringResource(com.vettid.core.data.R.string.data_location_open_settings)) }
+        }
+    }
+    state.error?.takeIf { state.issue == null }?.let { e ->
         NoticeCard(
             kind = NoticeKind.WARNING,
             title = stringResource(R.string.connections_error_title),
@@ -503,6 +524,7 @@ internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Bool
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {
+                        location.stopping -> stringResource(com.vettid.core.data.location.stoppingTextRes())
                         location.paused -> stringResource(com.vettid.core.data.R.string.data_location_paused)
                         issueText != null -> stringResource(issueText)
                         else -> stringResource(R.string.connections_location_sharing_until, until)

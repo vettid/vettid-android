@@ -134,6 +134,27 @@ class LocationServiceTest {
     }
 
     @Test
+    fun theLockScreenVersionFollowsTheStateWithoutNames() {
+        LocationService.source = source
+        fun public(state: ServiceState): String {
+            source.state.value = state
+            val n = shadowOf(start().get()).lastForegroundNotification
+            return n.publicVersion.extras.getCharSequence(Notification.EXTRA_TITLE).toString()
+        }
+        val target = listOf(ServiceState.Target("c1", until))
+        assertEquals("Sharing your location", public(ServiceState(target)))
+        assertEquals("Paused until your daily check.", public(ServiceState(target, paused = true)))
+        assertEquals(
+            "Not sending: location is off on this phone.",
+            public(ServiceState(target, issue = com.vettid.core.data.location.SendIssue.LOCATION_OFF)),
+        )
+        assertEquals(
+            "Not sending until your vault has stopped a share.",
+            public(ServiceState(target, issue = com.vettid.core.data.location.SendIssue.STOP_PENDING)),
+        )
+    }
+
+    @Test
     fun theNotificationFollowsTheState() {
         LocationService.source = source
         source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)))

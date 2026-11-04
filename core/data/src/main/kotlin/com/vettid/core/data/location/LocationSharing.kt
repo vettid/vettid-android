@@ -108,6 +108,7 @@ class LocationSharing(
     private var refused = false
     private val availabilityFlow = MutableStateFlow(LocationAvailability.UNKNOWN)
     private var inFront = false
+    private var notRunningShown = false
 
     @Volatile
     private var platform: LocationPlatform? = null
@@ -163,7 +164,19 @@ class LocationSharing(
         }
     }
 
+    /** A share that cannot send is not started: the app in front, a platform attached, its permission and location switch on. */
+    private fun ensureCanSend() {
+        val blocked = synchronized(lock) {
+            when {
+                platform == null || !inFront -> SendIssue.SERVICE
+                else -> platform?.issue() ?: SendIssue.NONE
+            }
+        }
+        if (blocked != SendIssue.NONE) throw VaultFailure(FailureKind.OTHER, blocked.code)
+    }
+
     private suspend fun startOnce(request: ShareRequest): OutgoingShare {
+        ensureCanSend()
         val gen = synchronized(lock) { generation }
         val body = try {
             vaultGuard { ops().start(request) }
@@ -248,7 +261,8 @@ class LocationSharing(
                     stopTries.remove(id)
                     stopNext.remove(id)
                 }
-                stopMarks[id] = StoredShare(id, t?.share?.connectionId.orEmpty(), expires.toEpochMilli(), stopping = true)
+                // A stop asked again keeps the mark already made (and on disk): it is not rebuilt.
+                stopMarks.getOrPut(id) { StoredShare(id, t?.share?.connectionId.orEmpty(), expires.toEpochMilli(), stopping = true) }
             }
             recompute()
         }
@@ -354,6 +368,10 @@ class LocationSharing(
             availabilityFlow.value = LocationAvailability.UNKNOWN
             stopService()
             publish()
+            if (notRunningShown) {
+                notRunningShown = false
+                platform?.showNotRunning(false)
+            }
         }
     }
 
@@ -424,6 +442,7 @@ class LocationSharing(
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
         synchronized(lock) {
+            lookAgain()
             if (serviceWanted && !serviceStarted) {
                 serviceStarted = platform?.startService() == true
                 recompute()
@@ -453,23 +472,34 @@ class LocationSharing(
     private fun tick() {
         val retry = synchronized(lock) {
             if (!unlocked()) return
-            val active = sources()
-            if ((active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue) recompute()
+            lookAgain()
             if (tracked.isEmpty() && pendingStops.isEmpty()) {
                 watcher?.cancel()
                 watcher = null
             }
-            // A stop is tried again with a growing wait (the backoff of [retryDelays]), not at every look.
-            val t = now()
-            pendingStops.filter { id -> stopNext[id]?.let { !it.isAfter(t) } != false }.also { ready ->
-                ready.forEach { id ->
-                    val n = stopTries.getOrDefault(id, 0)
-                    stopTries[id] = n + 1
-                    stopNext[id] = t.plus(retryDelays[minOf(n, retryDelays.size - 1)])
-                }
-            }
+            dueStops(now())
         }
         if (retry.isNotEmpty()) scope.launch { retry.forEach { stopQuietly(it) } }
+    }
+
+    /** Under [lock]: the state is looked at again (the check, the permission, the platform, the positions' job). */
+    private fun lookAgain() {
+        val active = sources()
+        // The permission was given again: the positions are asked for again.
+        if (refused && platform?.issue() == SendIssue.NONE) refused = false
+        val changed = (active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue
+        if (changed || positionsDown(active)) recompute()
+    }
+
+    /** Under [lock]: the pending stops to try now; each is tried again with a growing wait (the backoff of [retryDelays]). */
+    private fun dueStops(t: Instant): List<String> {
+        val ready = pendingStops.filter { id -> stopNext[id]?.let { !it.isAfter(t) } != false }
+        for (id in ready) {
+            val n = stopTries.getOrDefault(id, 0)
+            stopTries[id] = n + 1
+            stopNext[id] = t.plus(retryDelays[minOf(n, retryDelays.size - 1)])
+        }
+        return ready
     }
 
     /** Under [lock]. */
@@ -632,7 +662,7 @@ class LocationSharing(
                 serviceStarted = platform?.startService() == true
             }
             // Positions are collected while the service runs, or while the app is in front (a refused service start).
-            val collecting = !paused && stopMarks.isEmpty() && (serviceStarted || inFront)
+            val collecting = !paused && !refused && stopMarks.isEmpty() && (serviceStarted || inFront)
             applyRequest(if (collecting) requestFor(active) else null)
             if (paused) held = null
             ensureWatcher()
@@ -643,11 +673,10 @@ class LocationSharing(
     /** Under [lock]: the platform is asked for [want] (null: nothing), again when the request changed or its job is not there. */
     private fun applyRequest(want: PositionRequest?) {
         val provider = platform?.positions
-        val missing = want != null && provider != null && positions == null
+        val missing = want != null && provider != null && positions?.isActive != true
         if (want == requested && !missing) return
         positions?.cancel()
         requested = want
-        refused = false
         positions = if (want != null && provider != null) scope.launch { collect(provider, want) } else null
     }
 
@@ -765,19 +794,26 @@ class LocationSharing(
         return Duration.ofSeconds(maxOf(2 * interval, LocationLimits.MIN_UPDATE_TTL_SECONDS))
     }
 
+    /** Sends the position unless a stop was asked for meanwhile (checked once more, right before it goes); false when not sent. */
+    private suspend fun deliver(sample: com.vettid.core.vault.LocationSample, ttl: Duration): Boolean {
+        val stillOpen = synchronized(lock) { stopMarks.isEmpty() && !paused && sources().isNotEmpty() }
+        return stillOpen && try {
+            ops().update(sample, ttl)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false // one position missed; the next fix goes
+        }
+    }
+
     private suspend fun send(plan: Plan) {
         val sample = try {
             plan.fix.sample(plan.withExtras)
         } catch (_: com.vettid.core.vault.LocationMessageException) {
             return // a fix out of range is not sent
         }
-        try {
-            ops().update(sample, plan.ttl)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            return // one position missed; the next fix goes
-        }
+        if (!deliver(sample, plan.ttl)) return
         val delivered = synchronized(lock) {
             val t = now()
             lastSent = t
@@ -797,6 +833,10 @@ class LocationSharing(
     }
 
     // --- state out ---
+
+    /** Under [lock]: the positions are wanted and their job is not running (it ended, e.g. refused and given again). */
+    private fun positionsDown(active: List<Tracked>): Boolean =
+        active.isNotEmpty() && requested != null && positions?.isActive != true && !refused
 
     /** Under [lock]: why nothing is being sent although a share is active, or [SendIssue.NONE]. */
     private fun issueOf(active: List<Tracked>): SendIssue {
@@ -821,7 +861,13 @@ class LocationSharing(
             paused = paused,
             resumed = resumed && active.isNotEmpty(),
             issue = issueOf(active),
+            stopping = stopMarks.values.mapNotNull { m -> m.connectionId.takeIf { it.isNotEmpty() } }.toSet(),
         )
+        val notRunning = stateFlow.value.issue == SendIssue.SERVICE
+        if (notRunning != notRunningShown) {
+            notRunningShown = notRunning
+            platform?.showNotRunning(notRunning)
+        }
     }
 
     /** Under [lock]. */

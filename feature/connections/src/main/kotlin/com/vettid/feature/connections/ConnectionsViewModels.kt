@@ -627,6 +627,8 @@ data class DetailLocation(
     val paused: Boolean = false,
     /** Why nothing is being sent although the share is active, or [SendIssue.NONE]. */
     val issue: SendIssue = SendIssue.NONE,
+    /** The member stopped it and the vault has not taken the stop yet: "Stopping…" (Stop stays, it is tried again). */
+    val stopping: Boolean = false,
 )
 
 /**
@@ -752,10 +754,11 @@ class ConnectionDetailViewModel @Inject constructor(
         // A once share whose position went out has ended (the vault ends it with its first position).
         val share = shares.firstOrNull { it.connectionId == id && !(it.once && it.lastSentAt != null) }
         val sending = share?.let { service.targets.any { t -> t.connectionId == id } } == true
+        val stopping = id in service.stopping
         LocationView(
             share?.let {
                 val issue = if (sending) service.issue else SendIssue.NONE
-                DetailLocation(it.shareId, it.expiresAt, paused = sending && service.paused, issue = issue)
+                DetailLocation(it.shareId, it.expiresAt, paused = sending && service.paused, issue = issue, stopping = stopping)
             },
             id in missed,
         )

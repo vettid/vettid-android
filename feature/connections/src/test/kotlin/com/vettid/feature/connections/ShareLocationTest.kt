@@ -517,6 +517,46 @@ class ShareLocationTest {
     }
 
     @Test
+    fun aStoppingShareIsSaidSoAndKeepsStop() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), stopping = true))
+        rule.onNodeWithText("Stopping…").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Sharing your location until", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theDetailViewModelSaysStoppingWhileTheStopIsPending() = runTest {
+        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
+        location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        advanceUntilIdle()
+        assertFalse(read(vm.uiState).location!!.stopping)
+        // The share's sending ended (it is no target any more) but its stop is not taken: still listed, "Stopping…".
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(stopping = setOf("c1"))
+        advanceUntilIdle()
+        assertTrue(read(vm.uiState).location!!.stopping)
+    }
+
+    @Test
+    fun aStartRefusedBecauseNothingCouldBeSentSaysWhyWithSettings() = runTest {
+        location.fail = VaultFailure(FailureKind.OTHER, com.vettid.core.data.location.SendIssue.LOCATION_OFF.code)
+        val vm = vm()
+        vm.open()
+        vm.setPermission(LocationPermission.PRECISE)
+        vm.start()
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.location.SendIssue.LOCATION_OFF, read(vm.uiState).issue)
+        sheet(read(vm.uiState))
+        rule.onNodeWithText("Not sending: location is off on this phone.").assertIsDisplayed()
+        rule.onNodeWithTag("share_location_settings").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("share_location_error").fetchSemanticsNodes().size)
+        // Tried again, the reason goes.
+        vm.start()
+        advanceUntilIdle()
+        assertNull(read(vm.uiState).issue)
+    }
+
+    @Test
     fun aServiceIsOfferedNoLocationSharing() {
         val svc = com.vettid.core.data.social.ConnectionInfo("s1", "Acme", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Acme", lastName = "Co-op", service = true)
         rule.setContent { ConnectionDetailScreen(ConnectionDetailUiState(svc.id, svc, null, loading = false), DetailActions()) }
