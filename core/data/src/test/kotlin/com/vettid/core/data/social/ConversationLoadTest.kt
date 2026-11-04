@@ -57,7 +57,7 @@ class ConversationLoadTest {
             backgroundScope,
             api = { throw VaultFailure(FailureKind.OTHER) },
             credential = credential,
-            readPage = { id, _ ->
+            readPage = { id, _, _ ->
                 val holdThis = id == "c1" && oldGate != null && first1.compareAndSet(true, false)
                 synchronized(asked) { asked += id }
                 gate?.await()
