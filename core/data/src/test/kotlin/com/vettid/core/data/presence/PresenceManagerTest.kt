@@ -10,6 +10,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -468,7 +469,11 @@ class PresenceManagerTest {
     @Test
     fun theSameConnectionIsAskedOnceAMinute() = runTest {
         val ops = Ops()
-        val m = open(ops)
+        // The minute is the manager's clock ([clock]), not its timers. The vault calls run on the IO dispatcher, and while
+        // the test waits for one, runTest's idle scheduler would run the timers ahead (the 30 s expiry turned the last
+        // "Checking…" into "Status unknown", depending on thread timing): they get a scheduler that is never advanced.
+        val timers = TestScope()
+        val m = PresenceManager(timers, ops = { ops }, closed = { closed }, now = { clock }).also { it.refreshPolicy() }
         m.query("c1")
         m.onEvent(result("ping-1"))
         // Opening the page again, or the refresh icon, inside the minute: the earlier answer stands, nothing is sent.
@@ -484,6 +489,7 @@ class PresenceManagerTest {
         m.query("c1")
         assertEquals(listOf("c1", "c2", "c1"), ops.queries)
         assertEquals(PresenceReading.Checking, m.readings.value["c1"])
+        timers.cancel()
     }
 
     @Test
