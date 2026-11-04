@@ -389,7 +389,10 @@ data class AcceptUiState(
      * `connection.request.outgoing`): the safety code screen says so, and the name is "Name given by the service".
      */
     val service: Boolean = false,
-    /** The fingerprint of the service's `ik` (§10.8) when the connection list has it; null otherwise. */
+    /**
+     * The fingerprint of the service's `ik`: the request's own (0.83.7 §10.4), else the connection list's (§10.8); null
+     * otherwise. Shown for a [service] only.
+     */
     val keyFingerprint: String? = null,
     val input: String = "",
     /** The member typed or pasted [input]; a value that came with a link or a scan is theirs to confirm, not input of theirs. */
@@ -468,7 +471,12 @@ class AcceptViewModel @Inject constructor(
                         req == null -> it
                         else -> it.copy(
                             service = it.service || req.service,
-                            keyFingerprint = cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
+                            // An invalid `ik` clears it, as in Approvals: no fallback to an earlier or the list's fingerprint.
+                            keyFingerprint = if (req.peerIkInvalid) {
+                                null
+                            } else {
+                                req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint
+                            },
                             sas = req.sas ?: it.sas,
                             name = it.name ?: req.name,
                             remote = req.remote,
