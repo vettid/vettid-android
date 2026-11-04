@@ -33,6 +33,9 @@ import com.vettid.core.data.devices.DevicesManager
 import com.vettid.core.data.devices.PairingManager
 import com.vettid.core.data.devices.VaultPairingOps
 import com.vettid.core.data.devices.VaultDevicesOps
+import com.vettid.core.data.location.KeystoreShareStore
+import com.vettid.core.data.location.LocationSharing
+import com.vettid.core.data.location.VaultLocationOps
 import com.vettid.core.data.presence.PresenceManager
 import com.vettid.core.data.presence.VaultPresenceOps
 import com.vettid.core.data.votes.OkHttpVoteSite
@@ -1031,6 +1034,20 @@ class VaultManager(
         closed = { phaseFlow.value != AppPhase.Unlocked || ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
     )
 
+    /**
+     * Sharing the member's location (ANDROID-PLAN §4 "Location", L1a; VAULT-MESSAGING §10.16): the sending side, memory only
+     * apart from the share ids in `location-shares.bin`. A lock ends it (the stored ids let the next unlock take it up again);
+     * the daily owner check pauses it. The platform's positions and service are attached by the app ([LocationSharing.attach]).
+     */
+    val location = LocationSharing(
+        scope,
+        ops = { VaultLocationOps(openApi()) },
+        store = KeystoreShareStore(KeystoreFileStore(File(app.noBackupFilesDir, LOCATION_FILE), "location-shares")),
+        unlocked = { phaseFlow.value == AppPhase.Unlocked },
+        due = { ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
+        deviceId = { session?.device?.deviceId },
+    )
+
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(
         ops = { VaultAuditOps(openApi()) },
@@ -1103,6 +1120,7 @@ class VaultManager(
                 clearDevices = { devices.clear() },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
+                clearLocation = { location.clear() },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -1128,6 +1146,7 @@ class VaultManager(
                     items.refreshQuietly()
                     votes.startSync() // the list, the public site and the results that are due: now, then every hour
                     presence.start() // whether the vault has presence, and the member's policy
+                    location.resume() // the location shares this phone is the source of are taken up again
                     feed.open()
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
@@ -1175,6 +1194,8 @@ class VaultManager(
                         OwnProfileStep.NONE -> Unit
                     }
                 }
+                // A check that came due pauses the location sharing, one that passed lets it go on (and a refused stop is tried again).
+                steps.step { location.onGateChanged() }
                 steps.finish()
             }
         }
@@ -1542,6 +1563,7 @@ class VaultManager(
             steps.step { devices.clear() }
             steps.step { votes.clear() }
             steps.step { presence.clear() }
+            steps.step { location.clear() }
             steps.step { ownerCheck.clear() }
             steps.step { forgetOwnProfile() }
             steps.step { phoneSecrets.delete(local.phone) }
@@ -1621,6 +1643,7 @@ class VaultManager(
             devices.onEvent(m)
             votes.onEvent(m)
             presence.onEvent(m)
+            location.onEvent(m)
             pairing.onEvent(m)
             social.onEvent(m)
             attachments.onEvent(m.type, m.body)
@@ -2896,6 +2919,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
+        steps.step { location.clear() }
         steps.step { deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
@@ -2948,6 +2972,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
+        steps.step { location.clear() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
@@ -4549,6 +4574,7 @@ class VaultManager(
         steps.step { devices.clear() }
         steps.step { votes.clear() }
         steps.step { presence.clear() }
+        steps.step { location.clear() }
         steps.step { canary.removeCanaryManifest() }
         openTransferId = null
         alarmFlow.value = null
@@ -4757,6 +4783,7 @@ class VaultManager(
         private const val PENDING_ASKS_FILE = "pending-asks.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
+        private const val LOCATION_FILE = "location-shares.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
