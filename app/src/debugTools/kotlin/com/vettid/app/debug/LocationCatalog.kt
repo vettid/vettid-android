@@ -5,6 +5,7 @@ package com.vettid.app.debug
 
 import androidx.compose.runtime.Composable
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.OutgoingShare
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.social.ConnectionInfo
@@ -33,7 +34,9 @@ internal object LocationCatalog {
         ShareLocationSheet(state, first, ShareLocationActions())
     }
 
-    private val open = ShareLocationUiState("c1", open = true, permission = LocationPermission.PRECISE)
+    private val open = ShareLocationUiState(
+        "c1", open = true, permission = LocationPermission.PRECISE, availability = LocationAvailability.AVAILABLE,
+    )
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         // The defaults: For a while, 1 hour, Approximate, every minute, no trail.

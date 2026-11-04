@@ -24,6 +24,10 @@ object RouteScan {
         return text + doubles + floats + fixed
     }
 
+    /** Whether [bytes] hold any form of any coordinate of [route]. */
+    fun contains(bytes: ByteArray, route: List<Pair<Double, Double>>): Boolean =
+        route.flatMap { listOf(it.first, it.second) }.flatMap { forms(it) }.any { indexOf(bytes, it) >= 0 }
+
     /** The files under [root] (recursively) that contain any form of any coordinate of [route], with the form's name. */
     fun find(root: File, route: List<Pair<Double, Double>>): List<String> {
         val needles = route.flatMap { listOf(it.first, it.second) }.flatMap { forms(it) }

@@ -13,6 +13,7 @@ import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
@@ -611,6 +612,8 @@ data class ConnectionDetailUiState(
     val presence: DetailPresence? = null,
     /** The member shares their location with this connection until [DetailLocation.until] (ANDROID-PLAN §4 "Location"). */
     val location: DetailLocation? = null,
+    /** Not offered on a vault known to have no location (shown while that is not known yet). */
+    val locationOffered: Boolean = true,
 )
 
 /** An active outgoing location share with the connection: "Sharing your location until {time}" with **Stop**. */
@@ -702,8 +705,8 @@ class ConnectionDetailViewModel @Inject constructor(
             repo.connections,
             repo.authentication,
             combine(calls.availability, ownVotes()) { c, v -> c to v },
-            combine(ownPresence(), ownLocation()) { p, l -> p to l },
-        ) { s, cs, auth, (call, v), (p, shared) ->
+            combine(ownPresence(), ownLocation(), location.availability) { p, l, a -> Triple(p, l, a) },
+        ) { s, cs, auth, (call, v), (p, shared, offered) ->
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
                 connection = c,
@@ -715,6 +718,7 @@ class ConnectionDetailViewModel @Inject constructor(
                     DetailPresence(it.reading ?: PresenceReading.Checking, it.shared, it.invisible, it.canRefresh)
                 },
                 location = shared,
+                locationOffered = offered != LocationAvailability.UNSUPPORTED,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
 
@@ -732,7 +736,9 @@ class ConnectionDetailViewModel @Inject constructor(
 
     /** The member's outgoing location share with this connection, if one is active (ANDROID-PLAN §4 "Location"). */
     private fun ownLocation() = location.outgoing.map { shares ->
-        shares.firstOrNull { it.connectionId == id }?.let { DetailLocation(it.shareId, it.expiresAt) }
+        // A once share whose position went out has ended (the vault ends it with its first position).
+        shares.firstOrNull { it.connectionId == id && !(it.once && it.lastSentAt != null) }
+            ?.let { DetailLocation(it.shareId, it.expiresAt) }
     }
 
     /** **Stop** on "Sharing your location until …": sending ends at once, the vault is told (a refused stop shows its error). */

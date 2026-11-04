@@ -281,10 +281,8 @@
 
     <!-- Sharing the member's location (ANDROID-PLAN §4 "Location", L1a). DRAFT = the plan's words, word for word; NEW = not in the
          plan (labels from its prose, or the app's own). None is approved by the owner. -->
-    <!-- NEW: not in the plan (the plan names the sheet "Share my location"). -->
+    <!-- NEW: not in the plan (the plan names the sheet "Share my location"); also the label of the connection page's button. -->
     <string name="connections_location_title">Share my location</string>
-    <!-- NEW: not in the plan (the same label on the connection page's button). -->
-    <string name="connections_location_share">Share my location</string>
     <!-- NEW: not in the plan (words from its screen notes). -->
     <string name="connections_location_once">Once</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (screen notes: Once). -->
@@ -326,7 +324,7 @@
     <string name="connections_location_exact_unavailable">Exact needs precise location in Android settings.</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Started). %1$s the first name, %2$s the time the share ends. -->
     <string name="connections_location_started">Sharing your location with %1$s until %2$s.</string>
-    <!-- NEW: not in the plan (the words are the plan's, from its Provider paragraph). -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location (Provider: the share sheet says "Finding your location…"). -->
     <string name="connections_location_finding">Finding your location…</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (screen notes: Connection detail). %1$s the time the share ends. -->
     <string name="connections_location_sharing_until">Sharing your location until %1$s</string>

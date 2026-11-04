@@ -247,7 +247,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
         }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
-        if (c.state == ConnectionState.ACTIVE && !c.service) {
+        if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
             LocationCard(state.location, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
         }
         if (c.service) {

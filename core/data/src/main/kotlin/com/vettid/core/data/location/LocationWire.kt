@@ -75,7 +75,8 @@ internal object ShareWire {
                 trail = (o["history"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
                 expiresAt = expires!!,
                 lastSentAt = instant(VaultJson.str(o, "last_sent_at")),
-                fromThisPhone = id in mine || (self != null && VaultJson.str(o, "device_id") == self),
+                // The vault's `device_id` decides when this phone's id is known; the stored ids are the fallback when it is not.
+                fromThisPhone = if (self != null) VaultJson.str(o, "device_id") == self else id in mine,
             )
         }
     }

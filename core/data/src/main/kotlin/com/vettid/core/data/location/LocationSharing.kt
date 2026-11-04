@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.os.SystemClock
 import java.time.Duration
 import java.time.Instant
 
@@ -28,7 +29,7 @@ import java.time.Instant
  *
  * - **Who sends.** This phone, for the active shares it is the source of (it started them, or `location.share.list` names its
  *   `device_id`). Nothing is sent when it is the source of none, while the vault is locked, or while the daily owner check is
- *   due or held ("paused"; the vault would drop the positions and refuses a stop).
+ *   due or held ("paused"; the vault would drop the positions; a stop is still allowed, §3.6.3).
  * - **Cadence.** The platform is asked for the shortest interval among the continuous shares. Each fix is one ephemeral
  *   `location.update`, with altitude, speed and heading only when some share is exact; a fix older than 5 minutes is dropped.
  *   A `once` share waits up to 60 s for 100 m or better, then sends the best it has; the first position delivers it.
@@ -52,6 +53,8 @@ class LocationSharing(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val watchEvery: Duration = WATCH,
     private val retryDelays: List<Duration> = RETRY,
+    /** The uptime clock a fix's age is judged by (a fix carries the same clock's reading); the wall clock may jump. */
+    private val elapsedNanos: () -> Long = SystemClock::elapsedRealtimeNanos,
 ) : LocationRepository {
     private class Tracked(var share: OutgoingShare, var timer: Job?) {
         /** This phone feeds the share with positions. */
@@ -65,6 +68,9 @@ class LocationSharing(
 
         /** When this phone began waiting for a `once` share's position. */
         var waitingSince: Instant? = null
+
+        /** The order in which shares were added: a list read does not forget one added after the read began. */
+        var seq: Long = 0
     }
 
     private val lock = Any()
@@ -73,6 +79,15 @@ class LocationSharing(
     private val stateFlow = MutableStateFlow(ServiceState())
     private val writes = Mutex()
     private val pendingStops = mutableSetOf<String>()
+
+    /**
+     * The shares the member stopped (ids only, with `stopping` set in the stored settings), kept across [clear]: a stop the vault
+     * has not taken must never be undone by a lock or a restart. A share in here is never sent for; the stop is sent for it.
+     */
+    private val stopMarks = LinkedHashMap<String, StoredShare>()
+    private var seq = 0L
+    private val availabilityFlow = MutableStateFlow(LocationAvailability.UNKNOWN)
+    private var inFront = false
 
     @Volatile
     private var platform: LocationPlatform? = null
@@ -96,6 +111,7 @@ class LocationSharing(
 
     override val outgoing: StateFlow<List<OutgoingShare>> = outgoingFlow.asStateFlow()
     override val serviceState: StateFlow<ServiceState> = stateFlow.asStateFlow()
+    override val availability: StateFlow<LocationAvailability> = availabilityFlow.asStateFlow()
 
     /** Attaches the platform's positions and service. Before the first [start] or [resume]. */
     fun attach(p: LocationPlatform) {
@@ -117,7 +133,13 @@ class LocationSharing(
         if (!request.withinBounds()) throw VaultFailure(FailureKind.OTHER, "bad_request")
         requireOpen()
         val gen = synchronized(lock) { generation }
-        val body = vaultGuard { ops().start(request) }
+        val body = try {
+            vaultGuard { ops().start(request) }
+        } catch (e: VaultFailure) {
+            if (e.kind == FailureKind.NOT_SUPPORTED) availabilityFlow.value = LocationAvailability.UNSUPPORTED
+            throw e
+        }
+        availabilityFlow.value = LocationAvailability.AVAILABLE
         val started = ShareWire.started(body) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
         val share = OutgoingShare(
             shareId = started.shareId,
@@ -151,14 +173,13 @@ class LocationSharing(
     // --- stopping ---
 
     override suspend fun stop(shareId: String) {
-        synchronized(lock) {
-            tracked[shareId]?.let {
-                it.muted = true
-                recompute()
-            }
-        }
+        markStopping(listOf(shareId))
+        // Written before anything is sent: a lock or the process ending cannot bring the share back.
+        save()
         try {
-            requireOpen()
+            // Stopping is allowed while the check is due or held (VAULT-MESSAGING 0.37.0 §3.6.3), as locking is: only a locked
+            // vault cannot take it.
+            if (!unlocked()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
             vaultGuard { ops().stop(shareId) }
             end(shareId)
         } catch (e: VaultFailure) {
@@ -167,38 +188,50 @@ class LocationSharing(
                 return
             }
             synchronized(lock) {
-                if (shareId in tracked) {
-                    pendingStops += shareId
-                    ensureWatcher()
-                }
+                pendingStops += shareId
+                ensureWatcher()
             }
             throw e
         }
     }
 
     override fun stopAll() {
-        val ids = synchronized(lock) {
-            tracked.filterValues { it.source && !it.muted && !it.delivered }.keys.toList().also { ids ->
-                ids.forEach { tracked[it]?.muted = true }
-                recompute()
-            }
+        val ids = synchronized(lock) { tracked.filterValues { it.source && !it.muted && !it.delivered }.keys.toList() }
+        markStopping(ids)
+        scope.launch {
+            save()
+            ids.forEach { id -> stopQuietly(id) }
         }
-        scope.launch { ids.forEach { id -> stopQuietly(id) } }
+    }
+
+    /** Sending stops for [ids] at once, and the stop is remembered (memory now, disk at [save]). */
+    private fun markStopping(ids: List<String>) {
+        synchronized(lock) {
+            for (id in ids) {
+                val t = tracked[id]
+                t?.muted = true
+                val expires = t?.share?.expiresAt ?: now()
+                stopMarks[id] = StoredShare(id, t?.share?.connectionId.orEmpty(), expires.toEpochMilli(), stopping = true)
+            }
+            recompute()
+        }
     }
 
     private suspend fun stopQuietly(id: String) {
         try {
             stop(id)
         } catch (_: VaultFailure) {
-            // Kept in the pending stops, tried again when the vault can take it.
+            // Kept in the pending stops and on disk, tried again when the vault can take it.
         }
     }
 
     /** The share is over (expired, stopped, ended by the other side or the vault): forgotten here, nothing sent. */
     private fun end(shareId: String) {
         synchronized(lock) {
-            if (forget(shareId) == null) return
-            recompute()
+            val had = forget(shareId) != null
+            val marked = stopMarks.remove(shareId) != null
+            if (!had && !marked) return
+            if (had) recompute()
         }
         persist()
     }
@@ -215,7 +248,8 @@ class LocationSharing(
     private fun add(share: OutgoingShare, source: Boolean, since: Instant?) {
         tracked.remove(share.shareId)?.timer?.cancel()
         val t = Tracked(share, null)
-        t.source = source
+        t.seq = ++seq
+        t.source = source && share.shareId !in stopMarks
         t.waitingSince = since.takeIf { source && share.once && share.lastSentAt == null }
         t.delivered = share.once && share.lastSentAt != null
         t.timer = scope.launch { expire(share.shareId) }
@@ -247,7 +281,7 @@ class LocationSharing(
             generation++
             tracked.values.forEach { it.timer?.cancel() }
             tracked.clear()
-            pendingStops.clear()
+            pendingStops.clear() // the stop marks stay: they are on disk too
             positions?.cancel()
             positions = null
             requested = null
@@ -262,6 +296,7 @@ class LocationSharing(
             resumed = false
             paused = false
             unsupported = false
+            availabilityFlow.value = LocationAvailability.UNKNOWN
             stopService()
             publish()
         }
@@ -291,7 +326,9 @@ class LocationSharing(
                 return
             } catch (e: VaultFailure) {
                 if (e.kind == FailureKind.NOT_SUPPORTED) return
-                if (e.kind != FailureKind.OWNER_CHECK_REQUIRED) delay(retryDelays[minOf(n++, retryDelays.size - 1)].toMillis())
+                // Never a tight loop: at least the watch interval, or the backoff for a failure that says nothing about the feature.
+                val wait = if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) watchEvery else retryDelays[minOf(n++, retryDelays.size - 1)]
+                delay(wait.toMillis())
             }
         }
     }
@@ -301,7 +338,31 @@ class LocationSharing(
 
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
-        synchronized(lock) { if (serviceWanted && !serviceStarted) serviceStarted = platform?.startService() == true }
+        synchronized(lock) {
+            if (serviceWanted && !serviceStarted) {
+                serviceStarted = platform?.startService() == true
+                recompute()
+            }
+        }
+    }
+
+    /** The app is in front or not: positions are collected without the service only while it is. */
+    override fun setInFront(front: Boolean) {
+        synchronized(lock) {
+            if (inFront == front) return
+            inFront = front
+            if (front) onForeground()
+            recompute()
+        }
+    }
+
+    /** The service ended itself (the system refused it, or it failed): it is started again when the app is in front. */
+    override fun onServiceEnded() {
+        synchronized(lock) {
+            if (!serviceWanted) return
+            serviceStarted = false
+            recompute()
+        }
     }
 
     private fun tick() {
@@ -312,7 +373,7 @@ class LocationSharing(
                 watcher?.cancel()
                 watcher = null
             }
-            if (!due() && pendingStops.isNotEmpty()) pendingStops.toList() else emptyList()
+            pendingStops.toList()
         }
         if (retry.isNotEmpty()) scope.launch { retry.forEach { stopQuietly(it) } }
     }
@@ -337,32 +398,59 @@ class LocationSharing(
     private suspend fun read(resume: Boolean) {
         if (unsupported) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         requireOpen()
-        val gen = synchronized(lock) { generation }
+        val (gen, startSeq) = synchronized(lock) { generation to seq }
         val body = try {
             vaultGuard(resend = true) { ops().list() }
         } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED) synchronized(lock) { if (gen == generation) unsupported = true }
+            if (e.kind == FailureKind.NOT_SUPPORTED) {
+                synchronized(lock) {
+                    if (gen == generation) {
+                        unsupported = true
+                        availabilityFlow.value = LocationAvailability.UNSUPPORTED
+                    }
+                }
+            }
             throw e
         }
-        val listed = readable(body)
-        synchronized(lock) {
+        val stored = withContext(io) { store.load() }
+        val listed = readable(body, stored)
+        val toStop = synchronized(lock) {
             if (gen != generation) return
-            apply(listed, resume)
+            availabilityFlow.value = LocationAvailability.AVAILABLE
+            val stops = apply(listed, stored, resume, startSeq)
             recompute()
+            stops
         }
         persist()
+        // A share the member stopped is never taken up: the stop is sent for it, and the mark goes when the vault took it.
+        if (toStop.isNotEmpty()) scope.launch { toStop.forEach { stopQuietly(it) } }
     }
 
-    /** The vault's outgoing shares; the share ids kept on disk also name this phone as a source (when its device id is not known yet). */
-    private suspend fun readable(body: kotlinx.serialization.json.JsonObject): List<OutgoingShare> {
-        val mine = withContext(io) { store.load() }.map { it.shareId }.toSet()
+    /** The vault's outgoing shares; the stored ids name this phone as a source only when its device id is not known. */
+    private fun readable(body: kotlinx.serialization.json.JsonObject, stored: List<StoredShare>): List<OutgoingShare> {
+        val mine = stored.filter { !it.stopping }.map { it.shareId }.toSet()
         return ShareWire.outgoing(body, deviceId(), mine) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
     }
 
-    /** Under [lock]: the vault's list is the truth for what is active; this phone's own state for a share is kept. */
-    private fun apply(listed: List<OutgoingShare>, resume: Boolean) {
+    /**
+     * Under [lock]: the vault's list is the truth for what is active; this phone's own state for a share is kept, and a share
+     * added after the read began is not forgotten. Returns the shares to send a stop for.
+     */
+    private fun apply(listed: List<OutgoingShare>, stored: List<StoredShare>, resume: Boolean, startSeq: Long): List<String> {
+        stored.filter { it.stopping }.forEach { stopMarks.putIfAbsent(it.shareId, it) }
         val ids = listed.map { it.shareId }.toSet()
-        tracked.keys.filter { it !in ids }.toList().forEach { forget(it) }
+        tracked.entries.filter { it.key !in ids && it.value.seq <= startSeq }.map { it.key }.forEach { forget(it) }
+        // A mark for a share the vault no longer lists is over.
+        stopMarks.keys.filter { it !in ids }.forEach { stopMarks.remove(it) }
+        if (takeUp(listed, resume)) resumed = true
+        val stops = stopMarks.keys.toList()
+        pendingStops += stops
+        if (stops.isNotEmpty()) ensureWatcher()
+        return stops
+    }
+
+    /** Under [lock]: adds the listed shares not tracked yet (a stopped one is never a source); true when one was taken up at a resume. */
+    private fun takeUp(listed: List<OutgoingShare>, resume: Boolean): Boolean {
         var taken = false
         for (s in listed) {
             val held = tracked[s.shareId]
@@ -370,11 +458,13 @@ class LocationSharing(
                 held.share = s.copy(lastSentAt = held.share.lastSentAt ?: s.lastSentAt)
                 continue
             }
-            val needs = s.fromThisPhone && !(s.once && s.lastSentAt != null)
+            val stopping = s.shareId in stopMarks
+            val needs = s.fromThisPhone && !stopping && !(s.once && s.lastSentAt != null)
             add(s, source = needs, since = now())
+            if (stopping) tracked[s.shareId]?.muted = true
             if (needs && resume) taken = true
         }
-        if (taken) resumed = true
+        return taken
     }
 
     /** `location.event` and `sync.event{location.share.changed}` from the vault. */
@@ -439,7 +529,9 @@ class LocationSharing(
                 serviceWanted = true
                 serviceStarted = platform?.startService() == true
             }
-            applyRequest(if (paused) null else requestFor(active))
+            // Positions are collected while the service runs, or while the app is in front (a refused service start).
+            val collecting = !paused && (serviceStarted || inFront)
+            applyRequest(if (collecting) requestFor(active) else null)
             if (paused) held = null
             ensureWatcher()
         }
@@ -488,7 +580,7 @@ class LocationSharing(
         val t = now()
         val sending = active.isNotEmpty() && !paused
         val open = sending && unlocked() && !due()
-        if (!open || Duration.between(fix.at, t) > LocationLimits.MAX_FIX_AGE) return null
+        if (!open || ageOf(fix) > LocationLimits.MAX_FIX_AGE) return null
         val waiting = active.filter { it.share.once }
         val send = if (waiting.isEmpty()) {
             fix.takeIf { dueForCadence(active, t) }
@@ -496,6 +588,12 @@ class LocationSharing(
             holdForOnce(fix, waiting, t)
         }
         return send?.let { Plan(it, active.any { s -> s.share.precision == SharePrecision.EXACT }, ttlFor(active)) }
+    }
+
+    /** A fix's age by the uptime clock when the fix carries its reading (the wall clock may have been set), else by the date. */
+    private fun ageOf(fix: Fix): Duration {
+        val at = fix.elapsedNanos
+        return if (at != null) Duration.ofNanos(elapsedNanos() - at) else Duration.between(fix.at, now())
     }
 
     /** Under [lock]: one position per 0.9 x the shortest interval (the vault drops those in between). */
@@ -513,7 +611,8 @@ class LocationSharing(
         val best = better(held, fix)
         val since = waiting.mapNotNull { it.waitingSince }.minOrNull() ?: t
         val deadline = since.plus(ONCE_WAIT)
-        val good = (best.accuracyM ?: Double.MAX_VALUE) <= ONCE_GOOD_M
+        // With approximate access only 100 m cannot be reached: the first fix is the answer.
+        val good = platform?.precise() == false || (best.accuracyM ?: Double.MAX_VALUE) <= ONCE_GOOD_M
         if (good || !t.isBefore(deadline)) {
             held = null
             return best
@@ -540,7 +639,7 @@ class LocationSharing(
             val f = held ?: return
             held = null
             val active = sources()
-            if (active.isEmpty() || paused || Duration.between(f.at, now()) > LocationLimits.MAX_FIX_AGE) {
+            if (active.isEmpty() || paused || ageOf(f) > LocationLimits.MAX_FIX_AGE) {
                 null
             } else {
                 Plan(f, active.any { it.share.precision == SharePrecision.EXACT }, ttlFor(active))
@@ -602,25 +701,27 @@ class LocationSharing(
     /** Under [lock]. */
     private fun stopService() {
         if (serviceWanted) {
+            // Only a service that runs is told to go (it may have ended itself, or never started).
+            val running = serviceStarted
             serviceWanted = false
             serviceStarted = false
-            platform?.stopService()
+            if (running) platform?.stopService()
         }
     }
 
-    /** Writes the ids that are active with this phone as their source (the latest state when the write runs). */
+    /** Under [lock]: what is kept on disk: the shares sent for, and the stops not yet taken. Ids and expiries only. */
+    private fun snapshot(): List<StoredShare> = tracked.values
+        .filter { it.source && !it.delivered && it.share.shareId !in stopMarks }
+        .map { StoredShare(it.share.shareId, it.share.connectionId, it.share.expiresAt.toEpochMilli()) } + stopMarks.values
+
+    /** Writes the latest state, now. A write that fails leaves the old file (ids of shares that are over go at the next list). */
+    private suspend fun save() {
+        withContext(io) { writes.withLock { runCatching { store.save(synchronized(lock) { snapshot() }) } } }
+    }
+
+    /** The same, in the background. */
     private fun persist() {
-        scope.launch(io) {
-            writes.withLock {
-                val snapshot = synchronized(lock) {
-                    tracked.values.filter { it.source && !it.delivered }.map {
-                        StoredShare(it.share.shareId, it.share.connectionId, it.share.expiresAt.toEpochMilli())
-                    }
-                }
-                // A write that fails leaves the old file: ids of shares that are over are dropped at the next read of the list.
-                runCatching { store.save(snapshot) }
-            }
-        }
+        scope.launch(io) { writes.withLock { runCatching { store.save(synchronized(lock) { snapshot() }) } } }
     }
 
     private companion object {

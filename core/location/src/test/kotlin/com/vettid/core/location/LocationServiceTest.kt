@@ -39,6 +39,11 @@ class LocationServiceTest {
         override val state = MutableStateFlow(ServiceState())
         override val names = MutableStateFlow(mapOf("c1" to "Sam"))
         var stopAlls = 0
+        var ended = 0
+
+        override fun serviceEnded() {
+            ended++
+        }
 
         override fun stopAll() {
             stopAlls++
@@ -142,6 +147,27 @@ class LocationServiceTest {
         idle()
         assertEquals(1, source.stopAlls)
         assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+    }
+
+    @Test
+    fun anAskToStopShowsTheServiceThenEndsItAndIsNotAFailure() {
+        LocationService.source = source
+        source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)))
+        val controller = start(LocationService.ACTION_STOP)
+        assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+        assertEquals(0, source.ended)
+        controller.destroy()
+        assertEquals("destroyed on request: not told as a failure", 0, source.ended)
+    }
+
+    @Test
+    fun aServiceDestroyedWhileSharesAreActiveTellsTheSharing() {
+        LocationService.source = source
+        source.state.value = ServiceState(listOf(ServiceState.Target("c1", until)))
+        val controller = start()
+        idle()
+        controller.destroy()
+        assertEquals(1, source.ended)
     }
 
     @Test

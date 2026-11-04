@@ -8,15 +8,17 @@ import kotlinx.serialization.json.Json
 
 /**
  * What the app keeps on disk of its location sharing (ANDROID-PLAN §4 "Local state"): the outgoing `share_id`s with their
- * `connection_id` and `expires_at`, and nothing else. **No position, and no precision, interval or name:** these three are all
- * that is needed to resume or stop sending (the rest is read again from `location.share.list`). `LocationPrivacyTest` holds
- * the schema to strings and one number.
+ * `connection_id` and `expires_at` (and whether the member stopped it), and nothing else. **No position, and no precision,
+ * interval or name:** these are all that is needed to resume or stop sending (the rest is read again from
+ * `location.share.list`). `LocationPrivacyTest` holds the schema to strings, a number and a flag.
  */
 @Serializable
 data class StoredShare(
     @SerialName("share_id") val shareId: String,
     @SerialName("connection_id") val connectionId: String,
     @SerialName("expires_at_ms") val expiresAtMs: Long,
+    /** The member stopped it and the vault has not taken the stop yet: never sent for, never taken up again, only stopped. */
+    val stopping: Boolean = false,
 ) {
     override fun toString(): String = "StoredShare"
 }

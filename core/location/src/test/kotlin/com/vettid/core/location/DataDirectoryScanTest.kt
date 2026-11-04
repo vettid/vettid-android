@@ -75,14 +75,18 @@ class DataDirectoryScanTest {
         File(app.filesDir, "datastore").apply { mkdirs() }.resolve("settings.preferences_pb").writeText("theme=dark")
         File(app.cacheDir, "x.tmp").writeText("cache")
         File(app.noBackupFilesDir, "other.bin").writeText("other")
+        // The scan covers the whole data directory, databases included, and finds a coordinate put in no_backup (a positive control).
+        assertTrue(app.getDatabasePath("x").parentFile!!.path.startsWith(app.dataDir.path))
+        val control = File(app.noBackupFilesDir, "control.bin").apply { writeBytes(byteArrayOf(7) + Route.points[1].first.toString().encodeToByteArray()) }
+        assertEquals(listOf(control.path), RouteScan.find(app.dataDir, Route.points))
+        control.delete()
 
         val sink = SinkOps(t0)
         val provider = FlowProvider()
         val platform = RecordingPlatform(provider)
         var clock = t0
-        val store = KeystoreShareStore(
-            KeystoreFileStore(File(app.noBackupFilesDir, "location-shares.bin"), "location-shares", key = { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }),
-        )
+        val sealed = KeystoreFileStore(File(app.noBackupFilesDir, "location-shares.bin"), "location-shares", key = { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") })
+        val store = KeystoreShareStore(sealed)
         var unlocked = true
         val sharing = LocationSharing(
             backgroundScope,
@@ -100,13 +104,11 @@ class DataDirectoryScanTest {
             override val state = MutableStateFlow(ServiceState())
             override val names = MutableStateFlow(mapOf("c-once" to "Sam"))
             override fun stopAll() = sharing.stopAll()
+
+            override fun serviceEnded() = sharing.onServiceEnded()
         }.also { src -> backgroundScope.launch { sharing.serviceState.collect { src.state.value = it } } }
 
         fun settle() {
-            repeat(4) {
-                runCurrent()
-                Thread.sleep(15)
-            }
             runCurrent()
             shadowOf(Looper.getMainLooper()).idle()
         }
@@ -142,9 +144,13 @@ class DataDirectoryScanTest {
         assertEquals(emptyList<String>(), RouteScan.find(app.dataDir, Route.points))
         // The scan covers every place a position could be put.
         listOf(app.filesDir, app.noBackupFilesDir, app.cacheDir, app.codeCacheDir).forEach { assertTrue(it.path, it.path.startsWith(app.dataDir.path)) }
-        // And the encrypted settings hold the share ids only (no plain text of anything else).
-        val stored = File(app.noBackupFilesDir, "location-shares.bin").readBytes()
-        assertTrue(String(stored, Charsets.ISO_8859_1).let { !it.contains("share_id") && !it.contains("c-exact") })
+        // And the encrypted settings, opened with the test's key: the share ids, and no coordinate in the plain text.
+        val stored = File(app.noBackupFilesDir, "location-shares.bin")
+        assertTrue(stored.exists())
+        assertTrue(String(stored.readBytes(), Charsets.ISO_8859_1).let { !it.contains("share_id") && !it.contains("c-exact") })
+        val plain = sealed.open(stored.readBytes())
+        assertTrue(String(plain).contains("share_id"))
+        assertTrue(!RouteScan.contains(plain, Route.points))
         LocationService.source = null
     }
 }

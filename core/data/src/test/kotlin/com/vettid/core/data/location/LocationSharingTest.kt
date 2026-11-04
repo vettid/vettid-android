@@ -11,6 +11,7 @@ import com.vettid.core.vault.LocationSample
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flow
@@ -44,12 +45,14 @@ private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObjec
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
+@Suppress("LargeClass")
 class LocationSharingTest {
     private val t0 = Instant.parse("2026-11-03T12:00:00Z")
     private var clock = t0
     private var unlocked = true
     private var due = false
     private var device: String? = "dev-this"
+    private var elapsed = 1_000_000_000_000L
 
     private class Sent(val body: JsonObject, val ttl: Duration)
 
@@ -108,6 +111,9 @@ class LocationSharingTest {
         var starts = 0
         var stops = 0
         var refuse = false
+        var precise = true
+
+        override fun precise() = precise
 
         override fun startService(): Boolean {
             starts++
@@ -141,11 +147,13 @@ class LocationSharingTest {
             io = StandardTestDispatcher(scope.testScheduler),
             watchEvery = Duration.ofSeconds(5),
             retryDelays = listOf(Duration.ofSeconds(5)),
+            elapsedNanos = { elapsed },
         ).also { if (attach) it.attach(platform) }
 
         /** Time passes: the clock and the test scheduler together. */
         fun elapse(d: Duration) {
             clock = clock.plus(d)
+            elapsed += d.toNanos()
             scope.advanceTimeBy(d.toMillis())
             scope.runCurrent()
             settle()
@@ -163,6 +171,10 @@ class LocationSharingTest {
 
         fun fix(accuracy: Double? = 20.0, age: Duration = Duration.ZERO, lat: Double = 52.52, lon: Double = 13.405) =
             Fix(lat, lon, accuracy, 34.0, 1.5, 90.0, clock.minus(age))
+
+        /** A fix that carries the platform's uptime reading, [ago] before now by that clock, whatever its date says. */
+        fun upFix(ago: Duration, dated: Duration = Duration.ZERO) =
+            Fix(52.52, 13.405, 20.0, null, null, null, clock.minus(dated), elapsedNanos = elapsed - ago.toNanos())
 
         suspend fun emit(f: Fix) {
             provider.fixes.emit(f)
@@ -453,25 +465,234 @@ class LocationSharingTest {
     }
 
     @Test
-    fun aStopTheVaultRefusesWhileTheCheckIsDueIsTriedAgainWhenItPasses() = runTest {
+    fun aStopIsSentAtOnceWhileTheCheckIsDueOrHeld() = runTest {
+        // VAULT-MESSAGING 0.37.0 §3.6.3: stopping is allowed while the vault is due or held, as locking is.
         val r = rig()
         val s = r.begin()
         due = true
         r.elapse(Duration.ofSeconds(5))
-        try {
-            r.sharing.stop(s.shareId)
-            fail("expected a refusal")
-        } catch (e: VaultFailure) {
-            assertEquals(FailureKind.OWNER_CHECK_REQUIRED, e.kind)
-        }
-        // Nothing was sent to the vault, and the phone sends nothing for the share meanwhile.
-        assertTrue(r.ops.stops.isEmpty())
-        assertEquals(1, r.sharing.outgoing.value.size)
-        assertFalse(r.sharing.serviceState.value.active)
-        due = false
-        r.elapse(Duration.ofSeconds(6))
+        r.sharing.stop(s.shareId)
+        r.settle()
         assertEquals(listOf(s.shareId), r.ops.stops)
         assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertTrue(r.store.saved.isEmpty())
+    }
+
+    @Test
+    fun aStopTheVaultFailsIsKeptOnDiskAndTriedAgain() = runTest {
+        val r = rig()
+        val s = r.begin()
+        r.ops.stopRefusal = "internal"
+        try {
+            r.sharing.stop(s.shareId)
+            fail("expected a failure")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OTHER, e.kind)
+        }
+        // Sending stopped at once; the stop is on disk before and after the failure.
+        assertFalse(r.sharing.serviceState.value.active)
+        assertEquals(listOf(StoredShare(s.shareId, "c1", s.expiresAt.toEpochMilli(), stopping = true)), r.store.saved)
+        r.ops.stopRefusal = null
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(2, r.ops.stops.size)
+        assertTrue(r.store.saved.isEmpty())
+    }
+
+    @Test
+    fun aStoppedShareNeverComesBackAfterALockEvenIfTheVaultStillListsIt() = runTest {
+        val r = rig()
+        val s = r.begin()
+        r.ops.stopRefusal = "internal"
+        runCatching { r.sharing.stop(s.shareId) }
+        r.settle()
+        assertEquals(1, r.platform.starts)
+        unlocked = false
+        r.sharing.clear()
+        r.settle()
+        assertEquals("the mark survives the lock", listOf(true), r.store.saved.map { it.stopping })
+        // The unlock: the vault still lists the share with this phone as its source.
+        unlocked = true
+        r.ops.stopRefusal = null
+        r.ops.outgoing = "[${listed(s.shareId, "dev-this", expires = s.expiresAt)}]"
+        r.sharing.resume()
+        r.settle()
+        assertEquals("no service", 1, r.platform.starts)
+        assertEquals("no positions", 0, r.provider.live)
+        assertFalse(r.sharing.serviceState.value.active)
+        assertFalse(r.sharing.serviceState.value.resumed)
+        r.emit(r.fix())
+        assertTrue("no update", r.ops.updates.isEmpty())
+        assertEquals("a stop was sent again", 2, r.ops.stops.count { it == s.shareId })
+        assertTrue(r.store.saved.isEmpty())
+    }
+
+    @Test
+    fun aStoppedShareNeverComesBackAfterTheProcessEnds() = runTest {
+        val store = MemStore(listOf(StoredShare("s7", "c-s7", t0.plusSeconds(3_600).toEpochMilli(), stopping = true)))
+        val r = rig(store = store)
+        r.ops.outgoing = "[${listed("s7", "dev-this", interval = 30)}]"
+        r.sharing.resume()
+        r.settle()
+        assertEquals(0, r.platform.starts)
+        assertTrue(r.provider.requests.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        assertEquals(listOf("s7"), r.ops.stops)
+        assertTrue(store.saved.isEmpty())
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
+    }
+
+    @Test
+    fun aStopMarkForAShareTheVaultNoLongerListsIsDropped() = runTest {
+        val store = MemStore(listOf(StoredShare("gone", "c1", t0.plusSeconds(3_600).toEpochMilli(), stopping = true)))
+        val r = rig(store = store)
+        r.sharing.resume()
+        r.settle()
+        assertTrue(r.ops.stops.isEmpty())
+        assertTrue(store.saved.isEmpty())
+    }
+
+    @Test
+    fun stopAllIsOnDiskBeforeAnythingIsSent() = runTest {
+        val r = rig()
+        r.begin(id = "a")
+        r.ops.stopRefusal = "internal"
+        r.sharing.stopAll()
+        r.settle()
+        assertEquals(listOf(true), r.store.saved.map { it.stopping })
+    }
+
+    @Test
+    fun theResumeNeverLoopsTightlyWhileTheVaultRefuses() = runTest {
+        val r = rig()
+        r.ops.listRefusal = "owner_check_required"
+        r.sharing.resume()
+        r.settle()
+        val first = r.ops.lists
+        r.elapse(Duration.ofSeconds(4))
+        assertEquals("not again before the watch interval", first, r.ops.lists)
+        r.elapse(Duration.ofSeconds(2))
+        assertTrue(r.ops.lists > first)
+        assertTrue("a few tries, not hundreds", r.ops.lists < 5)
+    }
+
+    @Test
+    fun aListReadDoesNotForgetAShareStartedAfterItWasAsked() = runTest {
+        val r = rig()
+        // The list read starts; a share is started meanwhile and is not in the answer.
+        r.ops.outgoing = "[]"
+        val read = backgroundScope.async { r.sharing.refresh() }
+        val share = r.sharing.start(ShareRequest("c1"))
+        read.await()
+        r.settle()
+        assertEquals(listOf(share.shareId), r.sharing.outgoing.value.map { it.shareId })
+    }
+
+    @Test
+    fun theVaultsDeviceIdDecidesAndTheStoredIdsAreOnlyAFallback() = runTest {
+        // This phone's id is known and the vault names another device: not ours, though the id is on disk.
+        val store = MemStore(listOf(StoredShare("x1", "c-x1", t0.plusSeconds(3_600).toEpochMilli())))
+        val r = rig(store = store)
+        r.ops.outgoing = "[${listed("x1", "dev-other")}]"
+        r.sharing.resume()
+        r.settle()
+        assertFalse(r.sharing.serviceState.value.active)
+        assertFalse(r.sharing.outgoing.value.single().fromThisPhone)
+    }
+
+    // --- the service and the app in front ---
+
+    @Test
+    fun positionsAreNotCollectedWithoutTheServiceUnlessTheAppIsInFront() = runTest {
+        val r = rig()
+        r.platform.refuse = true
+        r.begin()
+        assertTrue("service refused, app not in front", r.provider.requests.isEmpty())
+        r.sharing.setInFront(true)
+        r.settle()
+        assertEquals("in front: collected without the service", 1, r.provider.requests.size)
+        r.sharing.setInFront(false)
+        r.settle()
+        assertEquals(0, r.provider.live)
+    }
+
+    @Test
+    fun aServiceThatEndedItselfIsStartedAgainWhenTheAppComesToTheFront() = runTest {
+        val r = rig()
+        r.begin()
+        assertEquals(1, r.provider.live)
+        r.platform.refuse = true
+        r.sharing.onServiceEnded()
+        r.settle()
+        assertEquals("no service, not in front: no positions", 0, r.provider.live)
+        r.platform.refuse = false
+        r.sharing.setInFront(true)
+        r.settle()
+        assertEquals(2, r.platform.starts)
+        assertEquals(1, r.provider.live)
+        // Told again after the app left: nothing happens while no share is wanted.
+        r.sharing.stopAll()
+        r.settle()
+        r.sharing.onServiceEnded()
+    }
+
+    @Test
+    fun anEndedServiceNobodyWantedIsNotRestarted() = runTest {
+        val r = rig()
+        r.sharing.onServiceEnded()
+        r.sharing.setInFront(true)
+        assertEquals(0, r.platform.starts)
+    }
+
+    // --- availability ---
+
+    @Test
+    fun theVaultHasLocationWhenTheListAnswersAndNotWhenItIsUnsupported() = runTest {
+        val r = rig()
+        assertEquals(LocationAvailability.UNKNOWN, r.sharing.availability.value)
+        r.sharing.resume()
+        r.settle()
+        assertEquals(LocationAvailability.AVAILABLE, r.sharing.availability.value)
+        unlocked = false
+        r.sharing.clear()
+        assertEquals(LocationAvailability.UNKNOWN, r.sharing.availability.value)
+        unlocked = true
+        r.ops.listRefusal = "unsupported_type"
+        r.sharing.resume()
+        r.settle()
+        assertEquals(LocationAvailability.UNSUPPORTED, r.sharing.availability.value)
+    }
+
+    @Test
+    fun aStartLearnsAvailabilityToo() = runTest {
+        val r = rig()
+        r.begin()
+        assertEquals(LocationAvailability.AVAILABLE, r.sharing.availability.value)
+    }
+
+    // --- a fix's age, by the uptime clock ---
+
+    @Test
+    fun aFixIsJudgedByTheUptimeClockNotTheDate() = runTest {
+        val r = rig()
+        r.begin()
+        // Dated now, but six minutes old by the uptime clock (the date was set forward): dropped.
+        r.emit(r.upFix(ago = Duration.ofMinutes(6)))
+        assertTrue(r.ops.updates.isEmpty())
+        // Dated an hour ago (the date was set back), one second old by the uptime clock: sent.
+        r.emit(r.upFix(ago = Duration.ofSeconds(1), dated = Duration.ofMinutes(60)))
+        assertEquals(1, r.ops.updates.size)
+    }
+
+    // --- once with approximate access only ---
+
+    @Test
+    fun withApproximateAccessOnlyAOnceShareSendsTheFirstFix() = runTest {
+        val r = rig()
+        r.platform.precise = false
+        r.begin(ShareTiming.Once)
+        r.emit(r.fix(accuracy = 2_000.0))
+        assertEquals(1, r.ops.updates.size)
     }
 
     @Test

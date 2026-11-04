@@ -155,7 +155,10 @@ suspend fun VaultApi.locationUpdate(sample: LocationSample, ttl: Duration) {
     device.sendOnce("location.update", sample.body(), device.clockNow().plus(ttl))
 }
 
-/** `location.share.stop{share_id}`: `{}`; `not_found`. Refused with `owner_check_required` while the daily check is due or held. */
+/**
+ * `location.share.stop{share_id}`: `{}`; `not_found`. Allowed while the daily check is due or held (VAULT-MESSAGING 0.37.0 §3.6.3),
+ * as locking is.
+ */
 suspend fun VaultApi.locationShareStop(shareId: String): JsonObject =
     device.op("location.share.stop", buildJsonObject { put("share_id", shareId) })
 

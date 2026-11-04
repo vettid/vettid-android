@@ -131,6 +131,8 @@ class Fix(
     val speedMps: Double?,
     val headingDeg: Double?,
     val at: Instant,
+    /** The platform's uptime reading for this fix (`elapsedRealtimeNanos`): its age is judged by it, not by [at]. */
+    val elapsedNanos: Long? = null,
 ) {
     /** The sample sent to the vault; the optional members only when [withExtras] (some share is exact). */
     internal fun sample(withExtras: Boolean) = LocationSample(
@@ -163,6 +165,9 @@ interface LocationPlatform {
     fun startService(): Boolean
 
     fun stopService()
+
+    /** Whether precise (fine) location is allowed: with approximate access only, a once share cannot wait for 100 m. */
+    fun precise(): Boolean = true
 }
 
 /** The vault calls behind [LocationSharing] (§10.16), so that it can be tested without a vault. */
@@ -196,8 +201,9 @@ interface LocationRepository {
     suspend fun start(request: ShareRequest): OutgoingShare
 
     /**
-     * Stops sending for [shareId] at once, then tells the vault (`location.share.stop`). A stop the vault did not take (the check
-     * is due, no connection) is thrown and tried again when the vault can take it; the phone sends nothing for it meanwhile.
+     * Stops sending for [shareId] at once, remembers the stop on disk (ids only), then tells the vault (`location.share.stop`,
+     * allowed while the daily check is due or held). A stop the vault did not take (no connection, a locked vault) is thrown and
+     * tried again; the phone sends nothing for the share meanwhile, and a lock or a restart never takes it up again.
      */
     suspend fun stop(shareId: String)
 
@@ -207,14 +213,29 @@ interface LocationRepository {
     /** Reads `location.share.list` again. */
     suspend fun refresh()
 
+    /** Whether this vault has location: learnt from `location.share.list` (at unlock) or the first start. */
+    val availability: StateFlow<LocationAvailability> get() = NO_AVAILABILITY
+
     /** The app came to the front: a service start the system refused in the background is tried again. */
     fun onForeground() = Unit
+
+    /** The app is in front or not (the process's lifecycle): positions are collected without the service only while it is. */
+    fun setInFront(front: Boolean) = Unit
+
+    /** The foreground service ended itself (the system refused it, or it failed): it is started again when the app is in front. */
+    fun onServiceEnded() = Unit
 }
+
+/** Whether this vault has location: learnt by asking, since no message lists a release's features. */
+enum class LocationAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
+
+private val NO_AVAILABILITY: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 
 /** Sharing where there is none (a screen's default): nothing is shared or sent. */
 object NoLocation : LocationRepository {
     override val outgoing: StateFlow<List<OutgoingShare>> = MutableStateFlow(emptyList())
     override val serviceState: StateFlow<ServiceState> = MutableStateFlow(ServiceState())
+    override val availability: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 
     override suspend fun start(request: ShareRequest): OutgoingShare = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 

@@ -22,10 +22,10 @@ class LocationPrivacyTest {
     fun theStoredSettingsHoldTheShareIdTheConnectionIdAndTheExpiryOnly() {
         val d = StoredShare.serializer().descriptor
         val names = (0 until d.elementsCount).map { d.getElementName(it) }
-        assertEquals(listOf("share_id", "connection_id", "expires_at_ms"), names)
-        // Two strings and a whole number: no member that could hold a coordinate (a double or a float, a list, an object).
+        assertEquals(listOf("share_id", "connection_id", "expires_at_ms", "stopping"), names)
+        // Two strings, a whole number and a flag: no member that could hold a coordinate (a double or a float, a list, an object).
         val kinds = (0 until d.elementsCount).map { d.getElementDescriptor(it).kind }
-        assertEquals(listOf(PrimitiveKind.STRING, PrimitiveKind.STRING, PrimitiveKind.LONG), kinds)
+        assertEquals(listOf(PrimitiveKind.STRING, PrimitiveKind.STRING, PrimitiveKind.LONG, PrimitiveKind.BOOLEAN), kinds)
         assertTrue(kinds.none { it == PrimitiveKind.DOUBLE || it == PrimitiveKind.FLOAT || it !is PrimitiveKind && it is SerialKind })
         val banned = listOf("lat", "lon", "accuracy", "altitude", "speed", "heading", "bearing", "position", "coordinate", "fix")
         names.forEach { n -> banned.forEach { b -> assertFalse("$n", n.contains(b)) } }

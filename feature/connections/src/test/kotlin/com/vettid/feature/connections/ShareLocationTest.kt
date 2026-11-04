@@ -184,7 +184,7 @@ class ShareLocationTest {
     // --- the sheet's life, and the daily check ---
 
     @Test
-    fun theSheetHoldsInputWhileItIsOpenAndUntilTheFirstPositionGoes() = runTest {
+    fun theSheetHoldsInputWhileChoosingAndWhileTheStartIsOutButNotWhileFinding() = runTest {
         val vm = vm()
         assertFalse("closed: nothing is held", read(vm.uiState).holdsInput)
         vm.open()
@@ -193,11 +193,84 @@ class ShareLocationTest {
         vm.start()
         advanceUntilIdle()
         val s = read(vm.uiState)
-        assertTrue("waiting for the first position", s.finding && s.holdsInput)
+        assertTrue("the start went out: Finding your location…", s.finding && s.visible)
+        assertFalse("nothing is waiting for the member", s.holdsInput)
         location.sent(s.startedId!!)
         advanceUntilIdle()
         assertFalse(read(vm.uiState).visible)
         assertFalse(read(vm.uiState).holdsInput)
+    }
+
+    @Test
+    fun theStartInFlightHoldsInput() {
+        assertTrue(ShareLocationUiState("c1", open = true, busy = true, startedId = null).holdsInput)
+    }
+
+    // --- vaults without location ---
+
+    @Test
+    fun theSheetReadsWhetherTheVaultHasLocationBeforeAnythingIsAsked() = runTest {
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+        val vm = vm()
+        vm.open()
+        vm.setPermission(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals(1, location.refreshes)
+        assertTrue(read(vm.uiState).available)
+    }
+
+    @Test
+    fun nothingStartsAndNoPermissionIsAskedWhileTheVaultIsNotKnownToHaveLocation() = runTest {
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+        location.fail = VaultFailure(FailureKind.NOT_SUPPORTED)
+        val vm = vm()
+        vm.open()
+        vm.setPermission(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertFalse(read(vm.uiState).available)
+        assertEquals(FailureKind.NOT_SUPPORTED, read(vm.uiState).error)
+        vm.start()
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+    }
+
+    @Test
+    fun theStartButtonWaitsForTheVaultToBeKnownToHaveLocation() {
+        sheet(open.copy(availability = com.vettid.core.data.location.LocationAvailability.UNKNOWN))
+        rule.onNodeWithTag("share_location_start").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theCardIsHiddenOnAVaultWithoutLocationAndShownWhileItIsNotKnown() = runTest {
+        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
+        assertTrue(read(vm.uiState).locationOffered)
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNSUPPORTED
+        assertFalse(read(vm.uiState).locationOffered)
+        val c = FakeSocial.connection("c1", "Sam")
+        rule.setContent { ConnectionDetailScreen(ConnectionDetailUiState("c1", c, null, loading = false, locationOffered = false), DetailActions()) }
+        assertEquals(0, rule.onAllNodesWithTag("detail_location").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aDeliveredOnceShareIsNotShownAsSharing() = runTest {
+        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
+        val share = location.start(com.vettid.core.data.location.ShareRequest("c1", ShareTiming.Once))
+        advanceUntilIdle()
+        assertEquals(share.shareId, read(vm.uiState).location?.shareId)
+        location.sent(share.shareId)
+        advanceUntilIdle()
+        assertNull(read(vm.uiState).location)
+    }
+
+    @Test
+    fun onceComesBeforeForAWhileOnTheSheet() {
+        sheet(open)
+        val once = rule.onNodeWithTag("share_location_once").getUnclippedBoundsInRoot().top
+        val whileTop = rule.onNodeWithTag("share_location_while").getUnclippedBoundsInRoot().top
+        assertTrue(once < whileTop)
     }
 
     @Test
@@ -260,7 +333,9 @@ class ShareLocationTest {
         rule.setContent { ShareLocationSheet(state, sam, actions) }
     }
 
-    private val open = ShareLocationUiState("c1", open = true, permission = LocationPermission.PRECISE)
+    private val open = ShareLocationUiState(
+        "c1", open = true, permission = LocationPermission.PRECISE, availability = com.vettid.core.data.location.LocationAvailability.AVAILABLE,
+    )
 
     @Test
     fun theDefaultSheetSaysTheWordsOfThePlan() {

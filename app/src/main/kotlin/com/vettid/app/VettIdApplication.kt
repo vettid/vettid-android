@@ -128,7 +128,15 @@ class VettIdApplication : DistributionApplication() {
                 if (!open) SecureClipboard.vaultClosed(this@VettIdApplication)
             }
         }
-        registerActivityLifecycleCallbacks(Foreground({ onForeground() }, ownerCheck::setForeground))
+        registerActivityLifecycleCallbacks(
+            Foreground(
+                { onForeground() },
+                {
+                    ownerCheck.setForeground(it)
+                    location.setInFront(it)
+                },
+            ),
+        )
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()
         // The notification modes (ANDROID-PLAN 0.1.23 D7): the channels, feed items as notifications, and the

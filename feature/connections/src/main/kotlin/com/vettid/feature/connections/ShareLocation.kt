@@ -43,6 +43,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.OutgoingShare
@@ -132,7 +133,12 @@ data class ShareLocationUiState(
     val startedId: String? = null,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
+    val availability: LocationAvailability = LocationAvailability.UNKNOWN,
 ) {
+    /** The vault is known to have location. */
+    val available: Boolean get() = availability == LocationAvailability.AVAILABLE
+
     /** Exact needs precise location: not offered once the member allowed only approximate (before the first ask it is). */
     val exactAvailable: Boolean get() = permission != LocationPermission.APPROXIMATE
 
@@ -143,10 +149,11 @@ data class ShareLocationUiState(
     val visible: Boolean get() = open && (startedId == null || finding)
 
     /**
-     * The member is in the middle of a decision, or the share they started is waiting for its first position: the daily owner
-     * check waits for them (VAULT-MESSAGING §3.6.5; `HoldsInput`). The sheet holds choices, not typed text.
+     * The member is in the middle of a decision, or the start is out: the daily owner check waits for them (VAULT-MESSAGING §3.6.5;
+     * `HoldsInput`). Not while "Finding your location…" is shown after the start went out: nothing is then waiting for the member.
+     * The sheet holds choices, not typed text.
      */
-    val holdsInput: Boolean get() = visible
+    val holdsInput: Boolean get() = visible && (startedId == null || busy)
 
     /** The ongoing text of a trail and an interval is for a share that lasts. */
     val ongoing: Boolean get() = !once
@@ -160,13 +167,23 @@ class ShareLocationViewModel @Inject constructor(
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
-    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing) { s, shares ->
-        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } })
+    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability) { s, shares, a ->
+        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
 
     /** Opens the sheet with the defaults: For a while, 1 hour, Approximate, every minute, no trail. */
-    fun open() = local.update {
-        ShareLocationUiState(id, open = true, permission = it.permission)
+    fun open() {
+        local.update { ShareLocationUiState(id, open = true, permission = it.permission) }
+        // Whether the vault has location is read first when it is not known yet (the permission waits for it).
+        if (location.availability.value == LocationAvailability.UNKNOWN) {
+            viewModelScope.launch {
+                try {
+                    location.refresh()
+                } catch (e: VaultFailure) {
+                    local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
+                }
+            }
+        }
     }
 
     /** Closes the sheet; a share that was started goes on. */
@@ -206,7 +223,9 @@ class ShareLocationViewModel @Inject constructor(
     /** **Start sharing**: `location.share.start`, then the service. Needs the permission (asked first by the screen). */
     fun start() {
         val s = local.value
-        if (s.busy || s.permission == LocationPermission.NONE || s.startedId != null) return
+        val known = location.availability.value == LocationAvailability.AVAILABLE
+        val inFlight = s.busy || s.startedId != null
+        if (inFlight || s.permission == LocationPermission.NONE || !known) return
         val timing = if (s.once) ShareTiming.Once else ShareTiming.ForAWhile(s.length, s.interval)
         local.update { it.copy(busy = true, error = null, errorCode = null) }
         viewModelScope.launch {
@@ -291,10 +310,10 @@ private fun Finding(started: OutgoingShare, name: String) {
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocationActions) {
     val busy = state.busy
-    Choice(!state.once, R.string.connections_location_while, null, !busy, "share_location_while") { actions.onOnce(false) }
     Choice(state.once, R.string.connections_location_once, R.string.connections_location_once_note, !busy, "share_location_once") {
         actions.onOnce(true)
     }
+    Choice(!state.once, R.string.connections_location_while, null, !busy, "share_location_while") { actions.onOnce(false) }
     if (state.ongoing) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
             ShareLength.entries.forEach { l ->
@@ -386,7 +405,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
     PrimaryButton(
         stringResource(R.string.connections_location_start),
         actions.onStart,
-        enabled = !busy,
+        enabled = !busy && state.available,
         busy = busy,
         modifier = Modifier.testTag("share_location_start"),
     )
@@ -461,7 +480,7 @@ internal fun LocationCard(location: DetailLocation?, busy: Boolean, onShare: () 
     DetailCard(Modifier.testTag("detail_location")) {
         if (location == null) {
             SecondaryButton(
-                stringResource(R.string.connections_location_share),
+                stringResource(R.string.connections_location_title),
                 onShare,
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().testTag("detail_location_share"),

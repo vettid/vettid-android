@@ -36,7 +36,13 @@ class PlatformPositionProvider(context: Context) : PositionProvider {
         // A provider the phone has: the fused one, else every other that is on. A permission refusal is a SecurityException,
         // which ends this flow (the collector stops; the permission is the member's).
         val providers = providersOf(manager)
-        for (p in providers) manager.requestLocationUpdates(p, updates, executor, listener)
+        try {
+            for (p in providers) manager.requestLocationUpdates(p, updates, executor, listener)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // The second provider refused: the first one's listener is not left behind.
+            manager.removeUpdates(listener)
+            throw e
+        }
         awaitClose { manager.removeUpdates(listener) }
     }.conflate()
 
@@ -60,6 +66,7 @@ class PlatformPositionProvider(context: Context) : PositionProvider {
             speedMps = location.speed.toDouble().takeIf { location.hasSpeed() },
             headingDeg = location.bearing.toDouble().takeIf { location.hasBearing() }?.let { if (it >= FULL_TURN) it % FULL_TURN else it },
             at = if (location.time > 0) Instant.ofEpochMilli(location.time) else now,
+            elapsedNanos = location.elapsedRealtimeNanos.takeIf { it > 0 },
         )
 
         private const val FULL_TURN = 360.0
