@@ -2,6 +2,7 @@ package com.vettid.core.data.social
 
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.DeviceStateStore
@@ -963,8 +964,10 @@ class SocialManager(
     override suspend fun refreshConversations() {
         val epoch = lockEpoch.get()
         val seq = reloadSeq.incrementAndGet()
-        reloadsRunning.incrementAndGet()
-        reloadingFlow.value = true
+        synchronized(localLock) { // count and flag change together: a late "false" cannot overwrite a newer reload's "true"
+            reloadsRunning.incrementAndGet()
+            reloadingFlow.value = true
+        }
         val failed = try {
             if (connectionsFlow.value.isEmpty()) refresh()
             loadEveryThread()
@@ -973,7 +976,7 @@ class SocialManager(
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             e
         } finally {
-            if (reloadsRunning.decrementAndGet() == 0) reloadingFlow.value = false
+            synchronized(localLock) { reloadingFlow.value = reloadsRunning.decrementAndGet() > 0 }
         }
         if (failed == null) {
             synchronized(localLock) {
@@ -1009,7 +1012,14 @@ class SocialManager(
     private fun allActiveLoaded() =
         connectionsFlow.value.none { it.state == ConnectionState.ACTIVE && !it.service && it.id !in loadedFlow.value }
 
-    private fun Exception.meetsEveryThread() = (this as? VaultFailure)?.kind in ALL_THREADS
+    /**
+     * Held, signed out, paused, offline, or a lock pending: every thread would meet it. Not `VAULT_UNAVAILABLE` (the
+     * vault restarting for its update fails the first thread, and the others may well load) nor any other no-answer.
+     */
+    private fun Exception.meetsEveryThread(): Boolean {
+        val f = this as? VaultFailure ?: return false
+        return f.kind in ALL_THREADS || f.kind == FailureKind.NO_RESPONSE && f.code == MoveRepository.CODE_LOCK_PENDING
+    }
 
     private fun Exception.isHeld() = this is VaultFailure && kind == FailureKind.OWNER_CHECK_REQUIRED
 
@@ -1766,9 +1776,7 @@ class SocialManager(
         private val ALL_THREADS = setOf(
             FailureKind.OWNER_CHECK_REQUIRED,
             FailureKind.NETWORK,
-            FailureKind.NO_RESPONSE,
             FailureKind.UNAUTHORIZED,
-            FailureKind.VAULT_UNAVAILABLE,
             FailureKind.SERVICE_PAUSED,
         )
 

@@ -36,6 +36,7 @@ class ConversationLoadTest {
 
     /** What a failing thread answers: a thread's own error by default. */
     private var failWith = FailureKind.OTHER
+    private var failCode: String? = null
     private val asked = mutableListOf<String>()
     private val first1 = java.util.concurrent.atomic.AtomicBoolean(true)
 
@@ -44,7 +45,7 @@ class ConversationLoadTest {
 
     private fun refuse(id: String, held: Set<String>) {
         val kind = if (id in held) FailureKind.OWNER_CHECK_REQUIRED else failWith.takeIf { id in failing }
-        if (kind != null) throw VaultFailure(kind)
+        if (kind != null) throw VaultFailure(kind, failCode)
     }
 
     private fun TestScope.manager(
@@ -238,6 +239,35 @@ class ConversationLoadTest {
         }
         assertEquals("no more requests after the transport failed", listOf("c1"), asked)
         assertEquals(FailureKind.NETWORK, m.reloadFailure.value?.kind)
+    }
+
+    @Test
+    fun aRestartingVaultOnTheFirstThreadStillLoadsTheOthers() = runTest {
+        val m = manager()
+        failing += "c1"
+        failWith = FailureKind.VAULT_UNAVAILABLE
+        try {
+            m.refreshConversations()
+            fail("thrown")
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.VAULT_UNAVAILABLE, e.kind)
+        }
+        assertEquals(listOf("c1", "c2", "c3"), asked)
+        m.conversations.first { s -> s.count { it.loaded } == 2 }
+        assertEquals(listOf("c2", "c3"), m.loaded())
+    }
+
+    @Test
+    fun aPlainNoAnswerDoesNotStopButALockPendingDoes() = runTest {
+        val m = manager()
+        failing += "c1"
+        failWith = FailureKind.NO_RESPONSE
+        runCatching { m.refreshConversations() }
+        assertEquals(listOf("c1", "c2", "c3"), asked)
+        asked.clear()
+        failCode = com.vettid.core.data.vault.MoveRepository.CODE_LOCK_PENDING
+        runCatching { m.refreshConversations() }
+        assertEquals(listOf("c1"), asked)
     }
 
     @Test

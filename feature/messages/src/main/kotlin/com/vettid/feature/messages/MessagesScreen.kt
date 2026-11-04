@@ -252,22 +252,22 @@ fun MessagesScreen(
                     },
                 ),
             )
-            else -> LazyColumn(Modifier.fillMaxSize().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
+            else -> Column(Modifier.fillMaxSize()) {
+                // Above the list, not in it: an item inserted above a scrolled LazyColumn lands off screen, and a hidden
+                // failure is a silent one.
                 // A reload runs and rows exist: loading, not failed.
-                if (state.loading) {
-                    item(key = "reloading") { LinearProgressIndicator(Modifier.fillMaxWidth().testTag("messages_reloading")) }
-                }
+                if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("messages_reloading"))
                 // The daily check is due: the rows are what this phone knows; the list reads again when it passes.
                 if (error == FailureKind.OWNER_CHECK_REQUIRED) {
-                    item(key = "held-notice") { MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s)) }
+                    MessagesHeldNotice(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
                 // Some threads could not be read: the rows are what this phone has, and the failure has its retry.
                 if (error != null && error != FailureKind.OWNER_CHECK_REQUIRED) {
-                    item(key = "reload-error") {
-                        ErrorNotice(error, onRetry, state.errorCode, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
-                    }
+                    ErrorNotice(error, onRetry, state.errorCode, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
                 }
-                items(state.conversations, key = { it.connection.id }) { c -> ConversationRow(c, onClick = { onOpen(c.connection.id) }) }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("conversations"), contentPadding = PaddingValues(bottom = LIST_BOTTOM)) {
+                    items(state.conversations, key = { it.connection.id }) { c -> ConversationRow(c, onClick = { onOpen(c.connection.id) }) }
+                }
             }
         }
     }

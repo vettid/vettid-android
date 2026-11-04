@@ -1,6 +1,8 @@
 package com.vettid.feature.messages
 
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -127,6 +129,22 @@ class MessagesLoadedTest {
         }
         compose.onNodeWithText("Could not load messages").assertIsDisplayed()
         compose.onNodeWithText("Try again").assertIsDisplayed()
+    }
+
+    @Test
+    fun theBarAndTheCardAppearOnScreenWhenRowsAreAlreadyShown() {
+        var state by mutableStateOf(MessagesUiState(loading = false, conversations = listOf(row(true)), noConnections = false))
+        compose.setContent { MessagesScreen(state, chrome) }
+        compose.onNodeWithTag("conversation_c1").assertIsDisplayed()
+        compose.onNodeWithTag("messages_reloading").assertDoesNotExist()
+        state = state.copy(loading = true)
+        compose.onNodeWithTag("messages_reloading").assertIsDisplayed()
+        state = state.copy(loading = false, error = FailureKind.NETWORK)
+        compose.onNodeWithText("Could not load messages").assertIsDisplayed()
+        compose.onNodeWithText("Try again").assertIsDisplayed()
+        state = state.copy(error = FailureKind.OWNER_CHECK_REQUIRED)
+        compose.onNodeWithText("Messages are on hold").assertIsDisplayed()
+        compose.onNodeWithTag("conversation_c1").assertIsDisplayed()
     }
 
     @Test
