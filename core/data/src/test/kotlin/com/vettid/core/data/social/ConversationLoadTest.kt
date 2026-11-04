@@ -7,8 +7,6 @@ import com.vettid.core.testing.FakeSocial
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.MessagePage
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -35,7 +33,10 @@ class ConversationLoadTest {
     /** Connections whose page fails; the others answer one message. */
     private val failing = mutableSetOf<String>()
     private val asked = mutableListOf<String>()
-    private var first1 = true
+    private val first1 = java.util.concurrent.atomic.AtomicBoolean(true)
+
+    /** Completed when the held c1 read reaches the vault. */
+    private val heldStarted = CompletableDeferred<Unit>()
 
     private fun refuse(id: String, held: Set<String>) {
         val kind = if (id in held) FailureKind.OWNER_CHECK_REQUIRED else FailureKind.NETWORK.takeIf { id in failing }
@@ -52,11 +53,13 @@ class ConversationLoadTest {
             api = { throw VaultFailure(FailureKind.OTHER) },
             credential = credential,
             readPage = { id, _ ->
-                val holdThis = id == "c1" && first1 && oldGate != null
-                if (holdThis) first1 = false
-                asked += id
+                val holdThis = id == "c1" && oldGate != null && first1.compareAndSet(true, false)
+                synchronized(asked) { asked += id }
                 gate?.await()
-                if (holdThis) oldGate?.await()
+                if (holdThis) {
+                    heldStarted.complete(Unit)
+                    oldGate?.await()
+                }
                 refuse(id, held)
                 MessagePage(listOf(Message(id, "m-$id", "in", "hi", "2026-10-04T12:00:00Z")), null)
             },
@@ -201,7 +204,7 @@ class ConversationLoadTest {
         val m = manager(oldGate = old)
         val job = launch { runCatching { m.load("c1") } } // the pre-lock read, held at the vault
         runCurrent()
-        withContext(Dispatchers.Default) { while (asked.isEmpty()) Thread.yield() } // the read is at the vault now
+        heldStarted.await() // the read is at the vault now
         m.forgetOpenVault()
         m.seedConnections(listOf(FakeSocial.connection("c1", "Sam")))
         m.load("c1") // the new session's own page (not held: the old read took the gate)
