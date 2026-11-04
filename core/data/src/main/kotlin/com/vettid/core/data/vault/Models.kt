@@ -269,6 +269,15 @@ data class CredentialStatus(
     val criticalItems: Int?,
 )
 
+/**
+ * `credential.version` as Vault status needs it (VAULT-MESSAGING 0.83.8 §10.8): whether the vault holds a credential and,
+ * if so, the [fingerprint] of its `key` as shown (`e939 754d 09aa a93a`; null when the answer named no key, or one that is
+ * not 32 bytes). The key itself does not leave `:core:data`. Not a secret, but never printed.
+ */
+class CredentialKeyAnswer(val exists: Boolean, val fingerprint: String?) {
+    override fun toString(): String = "CredentialKeyAnswer"
+}
+
 /** Vault status for Settings: the member API's advisory status plus the vault's own. */
 data class VaultOverview(
     val vaultId: String?,
