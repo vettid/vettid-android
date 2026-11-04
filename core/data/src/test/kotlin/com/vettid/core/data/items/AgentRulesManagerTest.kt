@@ -32,6 +32,8 @@ import java.time.Instant
  * subject, and `auto` refused for a new rule on a vault without `item_ways`.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [36])
 class AgentRulesManagerTest {
     private val now = Instant.parse("2026-11-02T12:00:00Z")
 
@@ -40,7 +42,7 @@ class AgentRulesManagerTest {
         val events = mutableListOf<String>()
         var windowUntil: Instant? = null
         var unlockFailure: VaultFailure? = null
-        var setFailure: VaultFailure? = null
+        var setFailure: Throwable? = null
         var lockFailure: VaultFailure? = null
         var setGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var unlockGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -161,6 +163,19 @@ class AgentRulesManagerTest {
         m.saveAgentRule(draft(), "pw-fake-1")
         m.saveAgentRule(draft(ruleId = "r1"), "pw-fake-2")
         assertEquals(listOf("unlock", "set", "lock", "unlock", "set", "lock"), log.events)
+    }
+
+    /** VAULT-MESSAGING 0.83.11 section 11.14.10: before "Finish the move" the save says so, not the unlock's text. */
+    @Test
+    fun transferIncompleteIsTheMoveNotFinishedTextAndTheWindowIsLocked() = runTest {
+        log.setFailure = com.vettid.core.vault.VaultOpException("share.rule.set", "transfer_incomplete")
+        try {
+            manager().saveAgentRule(draft(), "pw-fake-1")
+            fail()
+        } catch (e: VaultFailure) {
+            com.vettid.core.data.vault.assertMoveNotFinished(e.kind)
+        }
+        assertEquals(listOf("unlock", "set", "lock"), log.events)
     }
 
     @Test

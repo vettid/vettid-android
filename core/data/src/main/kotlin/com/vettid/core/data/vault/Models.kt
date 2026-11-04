@@ -468,6 +468,12 @@ enum class FailureKind {
     /** The move to this phone did not finish (`transfer_incomplete`): the old phone approves it again. */
     TRANSFER_INCOMPLETE,
 
+    /**
+     * (VAULT-MESSAGING 0.83.11 §11.14.10) `transfer_incomplete` to one of [VaultCodes.MOVE_GATED]: the move to this phone
+     * is not finished ("Finish the move" is still to do). Not [TRANSFER_INCOMPLETE], which is the unlock's.
+     */
+    MOVE_NOT_FINISHED,
+
     /** The service is busy (`busy`, the heavy-derivation permit): nothing was used or changed; try again in a minute. */
     BUSY,
 

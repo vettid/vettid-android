@@ -29,6 +29,8 @@ private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObjec
 
 /** Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). */
 @OptIn(ExperimentalCoroutinesApi::class)
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [36])
 class PairingManagerTest {
     private var clock = Instant.parse("2026-10-26T12:00:00Z")
 
@@ -338,6 +340,18 @@ class PairingManagerTest {
         // A second approval of an ended pairing is not sent.
         m.approve(3600)
         assertEquals(listOf("create", "approve:p1:3600"), ops.calls)
+    }
+
+    /** VAULT-MESSAGING 0.83.11 section 11.14.10: `transfer_incomplete` to an approval that carries grants. */
+    @Test
+    fun transferIncompleteIsTheMoveNotFinishedTextAndNotTheUnlocks() = runTest {
+        val ops = Ops().apply { refuse["approve"] = "transfer_incomplete" }
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending())
+        m.approve(3600)
+        assertEquals(PairingStage.Ended, m.state.value.stage)
+        com.vettid.core.data.vault.assertMoveNotFinished(m.state.value.error!!)
     }
 
     @Test

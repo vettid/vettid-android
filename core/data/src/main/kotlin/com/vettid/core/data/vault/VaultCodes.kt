@@ -20,6 +20,16 @@ object VaultCodes {
         "credential.reset", "device.transfer.create", "device.transfer.reject", "vault.delete",
     )
 
+    /**
+     * (VAULT-MESSAGING 0.83.11 §11.14.10) The requests the vault answers `transfer_incomplete` before the new phone's
+     * first unlock from storage: [FailureKind.MOVE_NOT_FINISHED]. Other types keep [FailureKind.TRANSFER_INCOMPLETE].
+     */
+    val MOVE_GATED: Set<String> = setOf(
+        "connection.authenticate.approve", "leash.grant.issue", "device.pair.approve", "share.rule.set",
+    )
+
+    const val TRANSFER_INCOMPLETE = "transfer_incomplete"
+
     private val SHOWN = Regex("[a-z0-9_]{1,40}")
 
     /** [code] as `error_vault_code` shows it: the code itself when it matches `[a-z0-9_]{1,40}`, otherwise `unknown`. */
