@@ -8,6 +8,8 @@ import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.IkFingerprint
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalParser
+import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
@@ -90,6 +92,22 @@ class ServiceIkFingerprintTest {
     fun anInvalidIkShowsNoLineAndNoError() = runTest {
         assertNull(shown(fromList("service", "not base64!")))
         rule.onNodeWithTag("service_request_fingerprint").assertDoesNotExist()
+        rule.onNodeWithText("Vault key fingerprint").assertDoesNotExist()
+    }
+
+    private fun seedListKey() = social.seed(listOf(ConnectionInfo("c1", "Acme", ConnectionState.ACTIVE, keyFingerprint = fp)))
+
+    @Test
+    fun withoutAnIkTheConnectionListsKeyIsShown() = runTest {
+        seedListKey()
+        assertEquals(fp, shown(fromList("service", null)))
+        rule.onNodeWithText(fp).assertExists()
+    }
+
+    @Test
+    fun anInvalidIkShowsNoLineEvenWhenTheConnectionListHasTheKey() = runTest {
+        seedListKey()
+        assertNull(shown(fromList("service", "not base64!")))
         rule.onNodeWithText("Vault key fingerprint").assertDoesNotExist()
     }
 
