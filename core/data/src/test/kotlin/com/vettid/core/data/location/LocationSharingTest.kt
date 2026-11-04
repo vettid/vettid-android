@@ -91,8 +91,8 @@ class LocationSharingTest {
         /** When set, `location.share.list` answers only after it is completed (a read in flight), with the list as it was asked. */
         var listGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
-        /** Completed when a `location.share.list` reaches the vault: a test can wait for a read to be in flight. */
-        val listAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
+        /** Completed when a `location.share.list` reaches the vault: a test sets a fresh one, then waits for its read to be in flight. */
+        @Volatile var listAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
 
         override suspend fun list(): JsonObject {
             synchronized(this) { lists++ }
@@ -635,6 +635,7 @@ class LocationSharingTest {
         r.ops.outgoing = "[]"
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
         val read = backgroundScope.async { r.sharing.refresh() }
         r.ops.listAsked.await()
         val share = r.sharing.start(ShareRequest("c1"))
@@ -1019,8 +1020,10 @@ class LocationSharingTest {
         r.ops.outgoing = "[${listed(s.shareId, "dev-this", expires = s.expiresAt)}]"
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
         val read = backgroundScope.async { r.sharing.refresh() }
-        r.settle()
+        // The read is at the vault before the stop (with settle() alone it could arrive after, and then no longer test the guard).
+        r.ops.listAsked.await()
         r.sharing.stop(s.shareId)
         r.settle()
         // The read answers with the list as it was when asked, which still has the share.
