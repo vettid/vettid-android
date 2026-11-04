@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -115,6 +116,16 @@ class ReceiveLocationTest {
         assertTrue(stopped)
         // no Ask for location while the connection shares
         assertEquals(0, rule.onAllNodesWithTag("detail_ask_location").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun anUnknownAccuracyShowsNoWithinLineAndNeverWithinZero() {
+        val c = FakeSocial.connection("c1", "Sam")
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), null))
+        rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
+        rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("within", substring = true).fetchSemanticsNodes().size)
+        assertEquals(null, com.vettid.core.data.location.PositionText.accuracy(org.robolectric.RuntimeEnvironment.getApplication().resources, 0.0))
     }
 
     @Test

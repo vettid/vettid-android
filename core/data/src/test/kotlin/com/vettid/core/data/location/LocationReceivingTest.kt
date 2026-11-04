@@ -268,6 +268,69 @@ class LocationReceivingTest {
         assertNull(r.incoming.value.single().last)
     }
 
+    private fun getBody(last: String? = position(), extra: String = "", id: String? = "s1", mode: String? = "continuous", precision: String? = "approximate", expires: String? = "${t0.plusSeconds(3600)}") =
+        "{" + listOfNotNull(
+            id?.let { """"share_id":"$it"""" }, mode?.let { """"mode":"$it"""" }, precision?.let { """"precision":"$it"""" },
+            expires?.let { """"expires_at":"$it"""" }, last?.let { """"last":$it""" },
+        ).joinToString(",") + extra + "}"
+
+    private fun openWith(body: String): Pair<LocationReceiving, Result<Unit>> = runBlocking {
+        val ops = Ops()
+        val r = rig(TestScope(), ops)
+        r.take(entry("s1", "c1"))
+        ops.answerGet = { _, _ -> obj(body) }
+        r to runCatching { r.open("c1") }
+    }
+
+    @Test
+    fun anAccuracyOfZeroIsUnknownNeverWithinZeroMetres() {
+        val (r, res) = openWith(getBody(last = """{"lat":52.5,"lon":13.4,"accuracy_m":0,"at":"$t0"}"""))
+        assertTrue(res.isSuccess)
+        assertNull(r.incoming.value.single().last!!.accuracyM)
+        // a live update with 0 too
+        r.onEvent(message("location.update", """{"connection_id":"c1","share_id":"s1","lat":10.0,"lon":13.4,"accuracy_m":0,"at":"$clock"}"""))
+        assertNull(r.incoming.value.single().last!!.accuracyM)
+        assertEquals(10.0, r.incoming.value.single().last!!.lat, 0.0)
+    }
+
+    @Test
+    fun aSampleOfLocationGetWithoutAccuracyIsMalformed() {
+        val noAccuracy = """{"lat":52.5,"lon":13.4,"at":"$t0"}"""
+        for (body in listOf(
+            getBody(last = noAccuracy),
+            getBody(extra = ""","history":[${position()},$noAccuracy]"""),
+            getBody(extra = ""","snapshot":[$noAccuracy]"""),
+        )) {
+            val (r, res) = openWith(body)
+            assertTrue((res.exceptionOrNull() as VaultFailure).code == "unreadable_result")
+            assertNull(r.incoming.value.single().last)
+        }
+    }
+
+    @Test
+    fun theTopLevelMembersOfLocationGetAreRequired() {
+        listOf(getBody(id = null), getBody(mode = null), getBody(precision = null), getBody(expires = null), getBody(precision = "street"), getBody(mode = "sometimes"))
+            .forEach { assertTrue(it, openWith(it).second.isFailure) }
+        // last, history and snapshot are optional
+        assertTrue(openWith(getBody(last = null)).second.isSuccess)
+    }
+
+    @Test
+    fun aGetForAnotherShareIsNotWrittenOverTheOneHeld() {
+        val (r, res) = openWith(getBody(id = "s2"))
+        assertTrue(res.isSuccess)
+        val s = r.incoming.value.single()
+        assertEquals("s1", s.shareId)
+        assertNull(s.last)
+        assertEquals(1, relists.size) // the list is read again to learn the connection's current share
+    }
+
+    @Test
+    fun theTrailKeepsTheVaultsOrderOldestFirst() {
+        val (r, _) = openWith(getBody(extra = ""","history":[${position(lat = 1.0)},${position(lat = 2.0)},${position(lat = 3.0)}]"""))
+        assertEquals(listOf(1.0, 2.0, 3.0), r.incoming.value.single().trailPoints.map { it.lat })
+    }
+
     @Test
     fun getNotFoundEndsTheShareHere() = runBlocking {
         val r = rig(TestScope())

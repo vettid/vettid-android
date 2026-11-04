@@ -186,22 +186,30 @@ internal class LocationReceiving(
         synchronized(lock) {
             if (token.epoch != lockEpoch || !unlocked()) return
             if ((changedAt[got.shareId] ?: 0L) > token.seq) return // ended after the read began
-            val held = shares[got.shareId]
-            // A new share for the connection replaces the old (§10.16); the same share keeps what the list told.
-            val merged = if (held == null) {
-                replaceFor(got)
-                got
-            } else {
-                held.copy(
-                    expiresAt = got.expiresAt,
-                    last = newer(held.last, got.last),
-                    trailPoints = if (got.trailPoints.isNotEmpty()) got.trailPoints else held.trailPoints,
-                    snapshot = if (got.snapshot.isNotEmpty()) got.snapshot else held.snapshot,
-                )
+            // The answer must be for the share held: another share_id means the connection's share changed meanwhile.
+            val mine = shares.values.firstOrNull { it.connectionId == connectionId }
+            if (mine != null && mine.shareId != got.shareId) {
+                relist()
+                return
             }
-            put(merged)
+            put(mergedWith(got))
             publish()
         }
+    }
+
+    /** Under [lock]: [got] (`location.get`) joined to the share held (a new share for the connection replaces the old, §10.16). */
+    private fun mergedWith(got: IncomingShare): IncomingShare {
+        val held = shares[got.shareId]
+        if (held == null) {
+            replaceFor(got)
+            return got
+        }
+        return held.copy(
+            expiresAt = got.expiresAt,
+            last = newer(held.last, got.last),
+            trailPoints = got.trailPoints.ifEmpty { held.trailPoints },
+            snapshot = got.snapshot.ifEmpty { held.snapshot },
+        )
     }
 
     /** **Stop receiving**: allowed while the daily check is due or held (§3.6.3), as a lock is; not while locked. */
@@ -232,7 +240,7 @@ internal class LocationReceiving(
         try {
             vaultGuard { ops().request(connectionId, text) }
         } catch (e: VaultFailure) {
-            val limited = e.kind == FailureKind.LIMIT && (e.limit == null || e.limit?.name == "location_requests")
+            val limited = e.kind == FailureKind.LIMIT && (e.limit == null || e.limit.name == "location_requests")
             if (limited) return AskResult.Limited(minutesLeft(connectionId))
             throw e
         }

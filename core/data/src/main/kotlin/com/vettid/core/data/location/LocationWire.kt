@@ -162,7 +162,7 @@ internal object ShareWire {
      * the wrong type makes the whole position null (it is dropped, never clamped into a different place). [receivedKey]: `received_at`
      * is read as the vault's time of receipt.
      */
-    fun position(o: JsonObject, receivedKey: Boolean = false): ReceivedPosition? {
+    fun position(o: JsonObject, receivedKey: Boolean = false, requireAccuracy: Boolean = false): ReceivedPosition? {
         val lat = number(o, "lat", -LAT_MAX, LAT_MAX)
         val lon = number(o, "lon", -LON_MAX, LON_MAX)
         val at = instant(VaultJson.str(o, "at"))
@@ -173,8 +173,9 @@ internal object ShareWire {
         val received = if (receivedKey && o["received_at"] != null) instant(VaultJson.str(o, "received_at")) ?: return null else null
         val bad = listOf(accuracy, altitude, speed, heading).any { it != null && it.isNaN() }
         val turned = heading != null && heading >= LocationLimits.FULL_TURN_DEG
-        if (lat == null || lon == null || at == null || bad || turned) return null
-        return ReceivedPosition(lat, lon, accuracy, altitude, speed, heading, at, received)
+        if (lat == null || lon == null || at == null || bad || turned || (requireAccuracy && accuracy == null)) return null
+        // The vault writes 0 when the sender left the accuracy out: 0 is unknown, never "perfectly accurate".
+        return ReceivedPosition(lat, lon, accuracy?.takeIf { it > 0.0 }, altitude, speed, heading, at, received)
     }
 
     private fun number(o: JsonObject, k: String, lo: Double, hi: Double): Double? =
@@ -196,11 +197,11 @@ internal object ShareWire {
         val expires = instant(VaultJson.str(body, "expires_at"))
         val last = when (val l = body["last"]) {
             null -> null
-            is JsonObject -> position(l, receivedKey = true) ?: return null
+            is JsonObject -> position(l, receivedKey = true, requireAccuracy = true) ?: return null
             else -> return null
         }
-        val trail = points(body["history"], MAX_TRAIL) ?: return null
-        val snapshot = points(body["snapshot"], MAX_SNAPSHOT) ?: return null
+        val trail = points(body["history"], MAX_TRAIL, requireAccuracy = true) ?: return null
+        val snapshot = points(body["snapshot"], MAX_SNAPSHOT, requireAccuracy = true) ?: return null
         val known = mode == Words.MODE_ONCE || mode == Words.MODE_CONTINUOUS
         val ahead = expires?.isAfter(now.plusSeconds(LocationLimits.MAX_DURATION_SECONDS + CLOCK_SLACK_SECONDS)) != false
         return if (id == null || precision == null || !known || ahead) {
@@ -223,9 +224,10 @@ internal object ShareWire {
     }
 
     /** An array of positions; absent is empty; null when it is not an array, holds too many, or one point does not read. */
-    fun points(e: kotlinx.serialization.json.JsonElement?, max: Int): List<ReceivedPosition>? = when (e) {
+    fun points(e: kotlinx.serialization.json.JsonElement?, max: Int, requireAccuracy: Boolean = false): List<ReceivedPosition>? = when (e) {
         null -> emptyList()
-        is JsonArray -> e.takeIf { it.size <= max }?.map { (it as? JsonObject)?.let { p -> position(p) } }
+        is JsonArray -> e.takeIf { it.size <= max }
+            ?.map { (it as? JsonObject)?.let { p -> position(p, requireAccuracy = requireAccuracy) } }
             ?.takeIf { r -> r.none { it == null } }?.filterNotNull()
         else -> null
     }

@@ -33,7 +33,7 @@ object PositionText {
     }
 
     /** "50 m" (to the nearest 10) under a kilometre, else "1 km", "2.5 km", "12 km". Null without an accuracy. */
-    fun accuracy(r: Resources, meters: Double?): String? = meters?.let { distance(r, it, coarse = true) }
+    fun accuracy(r: Resources, meters: Double?): String? = meters?.takeIf { it > 0.0 }?.let { distance(r, it, coarse = true) }
 
     /** The same figure for a distance from this phone. */
     fun distance(r: Resources, meters: Double, coarse: Boolean = false): String {
