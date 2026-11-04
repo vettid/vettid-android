@@ -102,6 +102,8 @@ class SocialManager internal constructor(
     private val readConnections: suspend () -> ConnectionRead = { readConnectionsFrom(api()) },
     /** `connection.request.list` (a seam for tests; the vault client in the app). */
     private val readRequests: suspend () -> JsonObject = { api().requestList() },
+    /** `critical-secret-use.get` (a seam for tests; the vault client in the app). */
+    private val readCriticalUse: suspend (requestId: String) -> JsonObject = { id -> api().criticalUseGet(id) },
     /** `message.send` (a seam for tests; the vault client in the app). */
     private val sendMessage: suspend (connectionId: String, text: String) -> com.vettid.core.vault.SentMessage =
         { id, text -> api().messageSend(id, text) },
@@ -449,15 +451,31 @@ class SocialManager internal constructor(
         }
     }
 
-    private suspend fun store(type: String, body: JsonObject, admit: (() -> Boolean)? = null, ts: Instant? = null) {
+    /** The lock and hold epochs a write is checked against: the caller's, else the event's (or the current ones). */
+    private suspend fun epochsAt(readEpoch: Int?, readHold: Int?): Pair<Int, Int> =
+        (readEpoch ?: currentEpoch()) to (readHold ?: holdEpoch.get())
+
+    /**
+     * Keeps an event's approval. [readEpoch] and [readHold] are the epochs a caller took before the vault read the body came
+     * from (`loadCriticalUse`); an event takes them where it came in. A lock or a hold since then keeps nothing of it.
+     */
+    private suspend fun store(
+        type: String,
+        body: JsonObject,
+        admit: (() -> Boolean)? = null,
+        ts: Instant? = null,
+        readEpoch: Int? = null,
+        readHold: Int? = null,
+    ) {
         val parsed = ApprovalParser.parse(type, body, now()) ?: return
-        val epoch = currentEpoch()
+        val (epoch, hold) = epochsAt(readEpoch, readHold)
         val at = now().toEpochMilli()
         val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
         // Noted before the suspending write, so a read that reaches its prune step in the gap keeps the batch.
         if (parsed is Approval.ShareDecision) noteBatch(parsed)
+        var kept = false
         edit { l ->
-            if (epoch != lockEpoch.get()) return@edit l // taken in before a lock: nothing of it stays
+            if (stale(epoch, hold)) return@edit l // taken in before a lock or a hold: nothing of it stays
             // A newer session request of the same device replaces an older (§6.8, by the event's ts): an older one that
             // arrives late is not shown, and the older ones already held go.
             val older = sessionsOfSameDevice(l.events, parsed)
@@ -465,9 +483,11 @@ class SocialManager internal constructor(
             if (admit != null && !admit()) return@edit l
             val others = l.events.filterNot { e -> keyOf(e) == parsed.key || older.any { (_, o) -> o === e } }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
+            kept = true
             l.copy(events = others + StoredEvent(type, merged, at))
         }
-        if (parsed is Approval.ShareDecision) addBatch(parsed)
+        // A batch the edit dropped as stale is not added to the listed question either.
+        if (kept && parsed is Approval.ShareDecision) addBatch(parsed)
     }
 
     /**
@@ -1790,8 +1810,11 @@ class SocialManager internal constructor(
 
     override suspend fun loadCriticalUse(requestId: String) {
         val key = "critical:$requestId"
+        // Taken before the read: an answer that lands after a lock or a hold keeps nothing (store checks them).
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
         val body = try {
-            vaultGuard { api().criticalUseGet(requestId) }
+            vaultGuard { readCriticalUse(requestId) }
         } catch (e: VaultFailure) {
             if (e.kind == FailureKind.NOT_FOUND) {
                 dropApproval(key)
@@ -1800,7 +1823,7 @@ class SocialManager internal constructor(
             throw e
         }
         // Kept as the event would have been; the screen shows the payload only if it matches the listed hash.
-        store("critical-secret-use.pending", body)
+        store("critical-secret-use.pending", body, readEpoch = epoch, readHold = hold)
     }
 
     override suspend fun denyCriticalUse(requestId: String) = decide("critical:$requestId") { it.criticalUseDeny(requestId) }
