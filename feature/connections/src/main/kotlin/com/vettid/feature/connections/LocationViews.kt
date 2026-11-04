@@ -611,7 +611,8 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
                     modifier = Modifier.testTag("position_waiting"),
                 )
                 p != null -> DetailCard(Modifier.testTag("position_card")) {
-                    val coordinates = String.format(Locale.getDefault(), "%.5f, %.5f", p.lat, p.lon)
+                    val locale = androidx.compose.ui.platform.LocalLocale.current.platformLocale
+                    val coordinates = String.format(locale, "%.5f, %.5f", p.lat, p.lon)
                     Text(coordinates, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("position_coordinates"))
                     PositionText.accuracy(context.resources, p.accuracyM)?.let {
                         Text(
