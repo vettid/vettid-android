@@ -1,8 +1,11 @@
 package com.vettid.core.testing
 
+import com.vettid.core.data.location.AskResult
+import com.vettid.core.data.location.IncomingShare
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.OutgoingShare
+import com.vettid.core.data.location.PositionOffset
 import com.vettid.core.data.location.ServiceState
 import com.vettid.core.data.location.ShareRequest
 import com.vettid.core.data.vault.VaultFailure
@@ -28,6 +31,39 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
 
     /** Connections whose once share ended without a position; a test sets it. */
     override val missedOnce = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The shares connections have with the member (L1b). A test sets it; positions are in the shares. */
+    override val incoming = MutableStateFlow<List<IncomingShare>>(emptyList())
+
+    /** What the receiving side was asked: the connections [open]ed, the shares [stopReceiving]ed, the asks made. */
+    val opened = mutableListOf<String>()
+    val stoppedReceiving = mutableListOf<String>()
+    val asks = mutableListOf<Pair<String, String?>>()
+
+    /** The answer to [ask]; a test sets [AskResult.Limited]. */
+    var askResult: AskResult = AskResult.Sent
+
+    /** The offset [offsetFromHere] answers; null: the member has not allowed location. */
+    var offset: PositionOffset? = null
+
+    override suspend fun open(connectionId: String) {
+        opened += connectionId
+        fail?.let { fail = null; throw it }
+    }
+
+    override suspend fun stopReceiving(shareId: String) {
+        fail?.let { fail = null; throw it }
+        stoppedReceiving += shareId
+        incoming.value = incoming.value.filter { it.shareId != shareId }
+    }
+
+    override suspend fun ask(connectionId: String, note: String?): AskResult {
+        fail?.let { fail = null; throw it }
+        asks += connectionId to note
+        return askResult
+    }
+
+    override suspend fun offsetFromHere(connectionId: String): PositionOffset? = offset
 
     /** How many times `location.share.list` was read. */
     var refreshes = 0

@@ -150,7 +150,8 @@ class PendingListTest {
             )
         }
         runCurrent()
-        assertEquals(listOf("auth:r1"), m.keys())
+        // `action` is not shown by this app; `location` is (L1b); unknown kinds and entries that do not read are skipped.
+        assertEquals(listOf("auth:r1", "location:l1"), m.keys())
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -191,8 +192,21 @@ class SocialManager(
             merge(stored, listed + requests, cs, now)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
+    private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    override suspend fun dismissLocationRequest(requestId: String) {
+        dismissedLocationFlow.update { it + "location:$requestId" }
+        closeFeedKey("location:$requestId")
+        dropApproval("location:$requestId")
+        decided("location:$requestId")
+    }
+
     override val approvals: StateFlow<List<Approval>> =
-        combine(listedApprovals, feedFlow, listReadFlow, feedClosedFlow) { base, feed, listRead, closed ->
+        combine(
+            combine(listedApprovals, dismissedLocationFlow) { l, d -> l.filterNot { it.key in d } },
+            feedFlow, listReadFlow, feedClosedFlow,
+        ) { base, feed, listRead, closed ->
             // A merged pending.list is authoritative for the asks it lists; the vault does not list pairings yet
             // (0.83.0), so a pairing's entry is kept either way.
             val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
@@ -285,6 +299,7 @@ class SocialManager(
         // The pending.list state first, inside the lock that clears the events (see [dropLocal]); the file last, and its
         // failure is thrown to the lock's steps (retry, then end the process), after everything else is dropped.
         pendingFailureFlow.value = null
+        dismissedLocationFlow.value = emptySet()
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
@@ -302,6 +317,7 @@ class SocialManager(
      */
     fun forgetPending() {
         pendingFailureFlow.value = null
+        dismissedLocationFlow.value = emptySet()
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
@@ -324,6 +340,7 @@ class SocialManager(
     /** Forgets everything (sign-out with a new vault, or a deleted vault). */
     fun clear() {
         pendingFailureFlow.value = null
+        dismissedLocationFlow.value = emptySet()
         withdrawnFlow.value = emptySet()
         synchronized(notFoundKeys) { notFoundKeys.clear() }
         connectionsFlow.value = emptyList()
@@ -661,6 +678,11 @@ class SocialManager(
             }
             "share.decided" -> s("rule_id")?.let { onShareDecided(it, b) }
             "approval.decided" -> s("approval_id")?.let { closeAsk("device:approval.pending:$it", ts) }
+            // §10.16: answered (a share named it) or expired; its feed item is read (the vault does not change it).
+            "location.request.closed" -> s("request_id")?.let { id ->
+                closeAsk("location:$id", ts)
+                decided("location:$id")
+            }
         }
     }
 
@@ -1488,7 +1510,11 @@ class SocialManager(
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
         // One question per item and subject (0.23.0 §10.12).
-        return ShareQuestions.dedupe(all.map { a -> withName(a, names, services) }).sortedByDescending { it.receivedAt }
+        val firsts = cs.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
+        fun named(a: Approval): Approval = withName(a, names, services).let { n ->
+            if (n is Approval.LocationRequest) n.copy(firstName = firsts[n.connectionId]) else n
+        }
+        return ShareQuestions.dedupe(all.map(::named)).sortedByDescending { it.receivedAt }
     }
 
     private fun withName(a: Approval, names: Map<String, String>, services: Set<String>): Approval = when (a) {
@@ -1501,6 +1527,7 @@ class SocialManager(
             connectionName = a.subjectConnectionId?.let { names[it] },
             connectionService = a.subjectConnectionId in services,
         )
+        is Approval.LocationRequest -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
         is Approval.DeviceRequest -> a
     }
 

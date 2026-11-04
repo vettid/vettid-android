@@ -12,8 +12,8 @@ import java.time.Instant
  *
  * Reads may overlap (a quiet read and the screen's, the double read after a passed check): a read takes a ticket when
  * it starts and a list is merged only if no read that started later has merged already ([merge] answers null), and
- * only a merged list moves the cut: a failed read changes nothing. Kinds this app does not show (`action`,
- * `location`) are skipped. [lock] ends all of it: the next unlock starts again.
+ * only a merged list moves the cut: a failed read changes nothing. Kinds this app does not show (`action`) are skipped.
+ * [lock] ends all of it: the next unlock starts again.
  */
 @Suppress("TooManyFunctions")
 internal class PendingAsks {
@@ -142,11 +142,12 @@ internal class PendingAsks {
     companion object {
         const val SESSION = "device.session.pending"
 
-        /** The kinds of `pending.list` the app shows, by the event each repeats; `action` and `location` are skipped. */
+        /** The kinds of `pending.list` the app shows, by the event each repeats; `action` is skipped. */
         val TYPES = mapOf(
             "authenticate" to "connection.authenticate.pending",
             "session" to SESSION,
             "approval" to "approval.pending",
+            "location" to "location.request.pending",
         )
 
         /** The event types whose entries the list replaces. */
