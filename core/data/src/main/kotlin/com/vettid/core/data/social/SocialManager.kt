@@ -447,7 +447,7 @@ class SocialManager(
                 old is Approval.OutgoingRequest && a is Approval.OutgoingRequest ->
                     a.copy(
                         state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name,
-                        service = old.service || a.service,
+                        service = old.service || a.service, peerFingerprint = a.peerFingerprint ?: old.peerFingerprint,
                     )
                 else -> a
             }
@@ -1679,7 +1679,7 @@ internal class VaultDeviceDecisions(private val api: VaultApi) : DeviceDecisionO
     override suspend fun approvalDecide(approvalId: String, approve: Boolean): String? = api.approvalDecide(approvalId, approve)
 }
 
-/** What the request list keeps of `peer_kind` whichever answer or event arrives first (VAULT-MESSAGING 0.69.0 §6.4). */
+/** What the request list keeps of `peer_kind` and `ik` whichever answer or event arrives first (VAULT-MESSAGING 0.69.0 §6.4). */
 internal object RequestKinds {
     /** The accept's [waiting] request joins [list]; one the outgoing event already put there is kept and learns the kind. */
     fun withAccepted(list: List<Approval>, waiting: Approval.OutgoingRequest): List<Approval> =
@@ -1694,7 +1694,14 @@ internal object RequestKinds {
 
     /** A request list read replaces [old] with [read]; a request known as a service stays one when its entry lacks the marker. */
     fun keepServices(old: List<Approval>, read: List<Approval>): List<Approval> {
-        val known = old.filterIsInstance<Approval.OutgoingRequest>().filter { it.service }.map { it.connectionId }.toSet()
-        return read.map { if (it is Approval.OutgoingRequest && it.connectionId in known) it.copy(service = true) else it }
+        val known = old.filterIsInstance<Approval.OutgoingRequest>().filter { it.service }.associateBy { it.connectionId }
+        return read.map {
+            val before = (it as? Approval.OutgoingRequest)?.let { o -> known[o.connectionId] }
+            if (it is Approval.OutgoingRequest && before != null) {
+                it.copy(service = true, peerFingerprint = it.peerFingerprint ?: before.peerFingerprint)
+            } else {
+                it
+            }
+        }
     }
 }

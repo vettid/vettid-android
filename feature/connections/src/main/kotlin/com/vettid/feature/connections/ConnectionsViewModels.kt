@@ -468,7 +468,7 @@ class AcceptViewModel @Inject constructor(
                         req == null -> it
                         else -> it.copy(
                             service = it.service || req.service,
-                            keyFingerprint = cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
+                            keyFingerprint = req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
                             sas = req.sas ?: it.sas,
                             name = it.name ?: req.name,
                             remote = req.remote,

@@ -489,7 +489,7 @@ class ApprovalDetailViewModel @Inject constructor(
                     AccountNames.isolateOrNull(shown?.connectionName) != null,
                 connectionIsService = peer?.service == true,
                 peerFingerprint = (shown as? Approval.OutgoingRequest)?.takeIf { it.service }
-                    ?.let { o -> x.connections.firstOrNull { it.id == o.connectionId }?.keyFingerprint },
+                    ?.let { o -> o.peerFingerprint ?: x.connections.firstOrNull { it.id == o.connectionId }?.keyFingerprint },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 

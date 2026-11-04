@@ -355,6 +355,8 @@ sealed interface Approval {
         override val connectionName: String? = null,
         /** (VAULT-MESSAGING 0.69.0 §6.4) `peer_kind` is `"service"`: the request says "a service, not a person". */
         val service: Boolean = false,
+        /** (VAULT-MESSAGING 0.83.7 §10.4) The fingerprint of a service's `ik`, formatted; null for a person, or without a valid `ik`. */
+        val peerFingerprint: String? = null,
     ) : Approval {
         override val key: String get() = "outgoing:$connectionId"
         override val connectionService: Boolean get() = service

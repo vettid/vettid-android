@@ -153,6 +153,8 @@ object ApprovalParser {
             receivedAt = instant(body.s("created_at")) ?: at,
             exp = instant(body.s("exp")),
             service = isService(body.s("peer_kind")),
+            // Only a service's `ik` is shown (0.83.7); a malformed one is dropped without an error.
+            peerFingerprint = body.s("ik")?.takeIf { isService(body.s("peer_kind")) }?.let(IkFingerprint::formatB64),
         )
     }
 

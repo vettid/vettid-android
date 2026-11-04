@@ -94,6 +94,27 @@ class ApprovalParserTest {
         assertFalse(ApprovalParser.connection(com.vettid.core.vault.Connection("c4", state = "active", peerKind = "robot")).service)
     }
 
+    /** VAULT-MESSAGING 0.83.7 §10.4: a service's outgoing request carries `ik`, in the event and in the list entry alike. */
+    @Test
+    fun aServicesIkBecomesItsFingerprintInTheEventAndInTheListEntry() {
+        val ik = ByteArray(32) { it.toByte() }
+        val b64 = Base64s.encodeStd(ik)
+        val want = com.vettid.core.crypto.IkFingerprint.format(ik)
+        fun body(id: String, kind: String?, ikJson: String?) = o(
+            """{"connection_id":"$id","sas":"315904","state":"pending"${kind?.let { ""","peer_kind":"$it"""" } ?: ""}${ikJson?.let { ""","ik":"$it"""" } ?: ""}}""",
+        )
+        val event = ApprovalParser.parse("connection.request.outgoing", body("C1", "service", b64), at) as Approval.OutgoingRequest
+        assertEquals(want, event.peerFingerprint)
+        assertEquals(want, ApprovalParser.outgoing(body("C2", "service", b64), at)!!.peerFingerprint)
+        assertNull(ApprovalParser.outgoing(body("C3", "service", null), at)!!.peerFingerprint)
+        assertNull(ApprovalParser.outgoing(body("C4", "service", "not base64!"), at)!!.peerFingerprint)
+        assertNull(ApprovalParser.outgoing(body("C5", "service", Base64s.encodeStd(ByteArray(31))), at)!!.peerFingerprint)
+        // A person's request shows nothing new even with an `ik`.
+        assertNull(ApprovalParser.outgoing(body("C6", null, b64), at)!!.peerFingerprint)
+        assertNull(ApprovalParser.outgoing(body("C7", "robot", b64), at)!!.peerFingerprint)
+        assertTrue(ApprovalParser.outgoing(body("C4", "service", "not base64!"), at)!!.service)
+    }
+
     @Test
     fun criticalPayloadIsVerifiedAgainstItsHash() {
         val p = "SGVsbG8sIFZldHRJRCE="
