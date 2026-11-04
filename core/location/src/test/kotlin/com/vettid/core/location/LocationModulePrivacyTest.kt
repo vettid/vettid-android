@@ -1,3 +1,6 @@
+// Test code: long literal lines are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.location
 
 import org.junit.Assert.assertFalse

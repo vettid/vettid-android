@@ -77,7 +77,8 @@ class LocationSample(
         put("lat", JsonPrimitive(lat))
         put("lon", JsonPrimitive(lon))
         accuracyM?.takeIf { it in 0.0..LocationLimits.MAX_ACCURACY_M }?.let { put("accuracy_m", JsonPrimitive(it)) }
-        altitudeM?.takeIf { it in -LocationLimits.MAX_ALTITUDE_M..LocationLimits.MAX_ALTITUDE_M }?.let { put("altitude_m", JsonPrimitive(it)) }
+        altitudeM?.takeIf { it in -LocationLimits.MAX_ALTITUDE_M..LocationLimits.MAX_ALTITUDE_M }
+            ?.let { put("altitude_m", JsonPrimitive(it)) }
         speedMps?.takeIf { it in 0.0..LocationLimits.MAX_SPEED_MPS }?.let { put("speed_mps", JsonPrimitive(it)) }
         headingDeg?.takeIf { it >= 0.0 && it < LocationLimits.FULL_TURN_DEG }?.let { put("heading_deg", JsonPrimitive(it)) }
         put("at", Timestamps.formatMillis(at))

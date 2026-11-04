@@ -39,18 +39,19 @@ internal object ShareWire {
     class Started(val shareId: String, val expiresAt: Instant)
 
     fun started(body: JsonObject): Started? {
-        val id = VaultJson.str(body, "share_id")?.takeIf { it.isNotEmpty() } ?: return null
-        val expires = instant(VaultJson.str(body, "expires_at")) ?: return null
-        return Started(id, expires)
+        val id = VaultJson.str(body, "share_id")?.takeIf { it.isNotEmpty() }
+        val expires = instant(VaultJson.str(body, "expires_at"))
+        return if (id == null || expires == null) null else Started(id, expires)
     }
 
     /**
      * The `outgoing` shares of `location.share.list`; [self] is this phone's device id (the source of a share when it matches),
-     * [mine] the share ids this phone kept (a source whatever the device id).
+     * [mine] the share ids this phone kept (a source whatever the device id). Null when any entry does not read.
      */
     fun outgoing(body: JsonObject, self: String?, mine: Set<String> = emptySet()): List<OutgoingShare>? {
-        val list = body["outgoing"] as? JsonArray ?: return null
-        return list.map { entry -> share(entry as? JsonObject ?: return null, self, mine) ?: return null }
+        val entries = (body["outgoing"] as? JsonArray)?.map { it as? JsonObject }
+        val read = entries?.map { o -> o?.let { share(it, self, mine) } }
+        return read?.takeIf { r -> r.none { it == null } }?.filterNotNull()
     }
 
     private fun share(o: JsonObject, self: String?, mine: Set<String>): OutgoingShare? {
@@ -60,17 +61,19 @@ internal object ShareWire {
         val precision = SharePrecision.entries.firstOrNull { it.wire == VaultJson.str(o, "precision") }
         val expires = instant(VaultJson.str(o, "expires_at"))
         val once = mode == Words.MODE_ONCE
-        return if (id == null || connection == null || precision == null || expires == null || (!once && mode != Words.MODE_CONTINUOUS)) {
+        val known = once || mode == Words.MODE_CONTINUOUS
+        val whole = id != null && connection != null && precision != null && expires != null
+        return if (!whole || !known) {
             null
         } else {
             OutgoingShare(
-                shareId = id,
-                connectionId = connection,
+                shareId = id!!,
+                connectionId = connection!!,
                 once = once,
-                precision = precision,
+                precision = precision!!,
                 intervalSeconds = VaultJson.long(o, "interval_seconds"),
                 trail = (o["history"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true",
-                expiresAt = expires,
+                expiresAt = expires!!,
                 lastSentAt = instant(VaultJson.str(o, "last_sent_at")),
                 fromThisPhone = id in mine || (self != null && VaultJson.str(o, "device_id") == self),
             )

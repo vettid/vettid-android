@@ -53,7 +53,8 @@ class LocationService : Service() {
         val state = current?.state?.value
         // The service must show itself at once (it was started as a foreground service), even when it is about to go.
         val shown = foreground(state ?: ServiceState(), current?.names?.value.orEmpty())
-        if (current == null || state == null || !state.active || !shown) {
+        val active = state?.active == true
+        if (current == null || !active || !shown) {
             stop()
             return START_NOT_STICKY
         }

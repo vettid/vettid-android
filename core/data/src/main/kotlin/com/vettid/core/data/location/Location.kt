@@ -25,6 +25,7 @@ enum class SharePrecision(val wire: String) {
 }
 
 /** How long a continuous share lasts: the sheet's five choices (5 minutes to 7 days are the vault's bounds). */
+@Suppress("MagicNumber") // seconds of the sheet's choices, in the plan's words
 enum class ShareLength(val seconds: Long) {
     MINUTES_15(15 * 60L),
     HOUR_1(60 * 60L),
@@ -40,6 +41,7 @@ enum class ShareLength(val seconds: Long) {
 }
 
 /** How often a continuous share is sent: the sheet's four choices (10 s to 1 hour are the vault's bounds). */
+@Suppress("MagicNumber") // seconds of the sheet's choices, in the plan's words
 enum class ShareInterval(val seconds: Long) {
     SECONDS_30(30L),
     MINUTE_1(60L),

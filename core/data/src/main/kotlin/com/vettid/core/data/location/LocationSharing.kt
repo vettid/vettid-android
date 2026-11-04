@@ -344,15 +344,19 @@ class LocationSharing(
             if (e.kind == FailureKind.NOT_SUPPORTED) synchronized(lock) { if (gen == generation) unsupported = true }
             throw e
         }
-        // The share ids kept on disk also name this phone as a source (when its device id is not known yet, say).
-        val mine = withContext(io) { store.load() }.map { it.shareId }.toSet()
-        val listed = ShareWire.outgoing(body, deviceId(), mine) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
+        val listed = readable(body)
         synchronized(lock) {
             if (gen != generation) return
             apply(listed, resume)
             recompute()
         }
         persist()
+    }
+
+    /** The vault's outgoing shares; the share ids kept on disk also name this phone as a source (when its device id is not known yet). */
+    private suspend fun readable(body: kotlinx.serialization.json.JsonObject): List<OutgoingShare> {
+        val mine = withContext(io) { store.load() }.map { it.shareId }.toSet()
+        return ShareWire.outgoing(body, deviceId(), mine) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
     }
 
     /** Under [lock]: the vault's list is the truth for what is active; this phone's own state for a share is kept. */
@@ -435,17 +439,21 @@ class LocationSharing(
                 serviceWanted = true
                 serviceStarted = platform?.startService() == true
             }
-            val want = if (paused) null else requestFor(active)
-            val provider = platform?.positions
-            if (want != requested || (want != null && provider != null && positions == null)) {
-                positions?.cancel()
-                requested = want
-                positions = if (want != null && provider != null) scope.launch { collect(provider, want) } else null
-            }
+            applyRequest(if (paused) null else requestFor(active))
             if (paused) held = null
             ensureWatcher()
         }
         publish()
+    }
+
+    /** Under [lock]: the platform is asked for [want] (null: nothing), again when the request changed or its job is not there. */
+    private fun applyRequest(want: PositionRequest?) {
+        val provider = platform?.positions
+        val missing = want != null && provider != null && positions == null
+        if (want == requested && !missing) return
+        positions?.cancel()
+        requested = want
+        positions = if (want != null && provider != null) scope.launch { collect(provider, want) } else null
     }
 
     private fun requestFor(active: List<Tracked>): PositionRequest {
@@ -478,7 +486,8 @@ class LocationSharing(
     private fun decide(fix: Fix): Plan? {
         val active = sources()
         val t = now()
-        val open = active.isNotEmpty() && !paused && unlocked() && !due()
+        val sending = active.isNotEmpty() && !paused
+        val open = sending && unlocked() && !due()
         if (!open || Duration.between(fix.at, t) > LocationLimits.MAX_FIX_AGE) return null
         val waiting = active.filter { it.share.once }
         val send = if (waiting.isEmpty()) {
@@ -491,9 +500,9 @@ class LocationSharing(
 
     /** Under [lock]: one position per 0.9 x the shortest interval (the vault drops those in between). */
     private fun dueForCadence(active: List<Tracked>, t: Instant): Boolean {
-        val last = lastSent ?: return true
-        val interval = active.mapNotNull { it.share.intervalSeconds }.minOrNull() ?: return true
-        return Duration.between(last, t).toMillis() >= interval * MILLIS * CADENCE_NUM / CADENCE_DEN
+        val last = lastSent
+        val interval = active.mapNotNull { it.share.intervalSeconds }.minOrNull()
+        return last == null || interval == null || Duration.between(last, t).toMillis() >= interval * MILLIS * CADENCE_NUM / CADENCE_DEN
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.vettid.core.location
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationListener
@@ -24,9 +25,10 @@ import java.time.Instant
 class PlatformPositionProvider(context: Context) : PositionProvider {
     private val app = context.applicationContext
 
+    // A missing permission is a SecurityException, which ends the flow (the collector stops): checked there, not here.
+    @SuppressLint("MissingPermission")
     override fun fixes(request: PositionRequest): Flow<Fix> = callbackFlow {
-        val manager = app.getSystemService(LocationManager::class.java)
-            ?: throw IllegalStateException("no location service")
+        val manager = checkNotNull(app.getSystemService(LocationManager::class.java)) { "no location service" }
         val executor = ContextCompat.getMainExecutor(app)
         val listener = LocationListener { location -> trySend(fixOf(location, Instant.now())) }
         val quality = if (request.highAccuracy) LocationRequest.QUALITY_HIGH_ACCURACY else LocationRequest.QUALITY_BALANCED_POWER_ACCURACY
