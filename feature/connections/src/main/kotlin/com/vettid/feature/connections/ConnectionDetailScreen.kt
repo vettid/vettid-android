@@ -93,6 +93,10 @@ data class DetailActions(
     val onResumeAsks: () -> Unit = {},
     /** The votes from this service connection (ANDROID-PLAN 0.1.102 "Votes"). */
     val onOpenVotes: () -> Unit = {},
+    /** The refresh icon beside the presence line (ANDROID-PLAN §4 "Presence"). */
+    val onRefreshPresence: () -> Unit = {},
+    /** The switch "Share my status with <First>". */
+    val onSetPresenceShared: (Boolean) -> Unit = {},
 )
 
 /**
@@ -191,6 +195,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                     modifier = Modifier.testTag("detail_display_name"),
                 )
             }
+            state.presence?.let { PresenceLine(it.reading, sharingName(c), it.canRefresh, actions.onRefreshPresence) }
             Text(
                 stateLabel(c.state) ?: stringResource(R.string.connections_state_active),
                 style = MaterialTheme.typography.labelLarge,
@@ -232,6 +237,11 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             )
         }
         ProfileCard(c)
+        state.presence?.let { p ->
+            val first = sharingName(c)?.let { AccountNames.isolate(it) }
+            // Without the first name the switch and its note would have to say "this connection": not offered until it arrives.
+            if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
+        }
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.
             c.keyFingerprint?.let { FingerprintCard(it) }

@@ -5,6 +5,8 @@ import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.MemberApiClient
 import com.vettid.core.altchan.MemberAuth
 import com.vettid.core.altchan.Slot
+import com.vettid.core.crypto.altchan.Capabilities
+import com.vettid.core.crypto.altchan.ReleaseTraits
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.relay.MailboxCollector
 import com.vettid.core.vault.DeviceConfig
@@ -22,6 +24,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import java.security.SecureRandom
 import java.time.Duration
 
 /**
@@ -74,16 +77,25 @@ class ExitScenario(
         }
         val member = MemberApiClient(stack.apiBase, stack.manifestUrl, stack.http, auth)
         val flow = AltChannelFlow(member, trust)
+        // (Release R, VAULT-MESSAGING 0.33.0 §11.14.1) A vault with `recovery_r` requires the phone's unlock secret in the
+        // enroll and every unlock, the same 32 bytes each time; an earlier release takes neither (as the app's ReleasePath).
+        val unlockSecret = ByteArray(UNLOCK_SECRET_BYTES).also { SecureRandom().nextBytes(it) }
+        var releaseR = false
+        val unlockSecretFor: suspend (ReleaseTraits) -> ByteArray? = { traits ->
+            releaseR = Capabilities.RECOVERY_R in traits.capabilities
+            if (releaseR) unlockSecret.copyOf() else null
+        }
         try {
             // --- enroll (§11.3): PIN, then the first handshake and the credential password ---
             // An older stand-in assigns the vault id itself ("").
-            val enrolled = flow.enroll(device, vaultId, guid, PIN, attester)
+            val enrolled = flow.enroll(device, vaultId, guid, PIN, attester, unlockSecretFor)
             check(enrolled.ok) { "enroll refused: ${enrolled.code}" }
             log("enrolled vault ${enrolled.vaultId} on ${enrolled.instanceId}")
             device.awaitEnrolled()
             device.completeEnrollment()
             log("paired as device ${device.deviceId}")
-            vault.credentialCreate(PASSWORD)
+            // (Release R) `credential.create` carries the PIN too, as the app's createOrFetch sends it.
+            vault.credentialCreate(PASSWORD, PIN.takeIf { releaseR })
             vault.enrollConfirm()
             val st = vault.status()
             check(st.vaultId == enrolled.vaultId && !st.provisional) { "status $st" }
@@ -92,7 +104,7 @@ class ExitScenario(
             // --- lock, then unlock with the PIN (§11.4) ---
             check(flow.lock(enrolled.vaultId).status == Slot.DONE)
             waitFor("vault locked") { member.vaultStatus()?.state == "locked" }
-            val u = flow.unlock(device, guid, PIN, attester)
+            val u = flow.unlock(device, guid, PIN, attester, unlockSecretFor = unlockSecretFor)
             check(u.ok) { "unlock refused: ${u.result.code}" }
             log("unlocked: state_seq ${u.result.stateSeq}, release ${u.result.releaseNumber}")
             check(vault.status().vaultId == enrolled.vaultId)
@@ -168,5 +180,6 @@ class ExitScenario(
         const val PASSWORD = "correct horse battery staple (test)"
         private const val WAIT_ROUNDS = 120
         private const val WAIT_MS = 500L
+        private const val UNLOCK_SECRET_BYTES = 32
     }
 }

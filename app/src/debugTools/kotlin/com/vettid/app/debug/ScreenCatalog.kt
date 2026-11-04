@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.ui.AccountSheet
+import com.vettid.app.ui.SheetPresence
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
@@ -66,6 +67,10 @@ import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.ThemePreference
+import com.vettid.core.data.presence.PresencePolicy
+import com.vettid.core.data.presence.PresenceReading
+import com.vettid.core.data.presence.PresenceShare
+import com.vettid.core.data.presence.PresenceState
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.CredentialAlarm
@@ -115,6 +120,7 @@ import com.vettid.feature.connections.ConnectionsActions
 import com.vettid.feature.connections.ConnectionsScreen
 import com.vettid.feature.connections.ConnectionsUiState
 import com.vettid.feature.connections.DetailActions
+import com.vettid.feature.connections.DetailPresence
 import com.vettid.feature.connections.DetailConfirm
 import com.vettid.feature.connections.DetailSharing
 import com.vettid.feature.connections.InviteActions
@@ -178,6 +184,9 @@ import com.vettid.feature.settings.ChangeNameContent
 import com.vettid.feature.settings.ChangeNameMessage
 import com.vettid.feature.settings.ChangeNameStep
 import com.vettid.feature.settings.ChangeNameUiState
+import com.vettid.feature.settings.PresencePerson
+import com.vettid.feature.settings.PresenceSettingsContent
+import com.vettid.feature.settings.PresenceSettingsUiState
 import com.vettid.feature.settings.SharedProfileActions
 import com.vettid.feature.settings.SharedProfileContent
 import com.vettid.feature.settings.SharedProfileUiState
@@ -1231,6 +1240,78 @@ object ScreenCatalog {
             )
         },
         "connections.detail_remove" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.REMOVE), DetailActions()) },
+        // Presence (ANDROID-PLAN §4 "Presence", P1): a person's page, one entry per state; a service has none (see connections.service_detail).
+        "connections.detail_presence" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(
+                    "c1", sam, null, loading = false,
+                    presence = DetailPresence(PresenceReading.Known(PresenceState.AVAILABLE, Instant.now().minusSeconds(600)), shared = true),
+                ),
+                DetailActions(),
+            )
+        },
+        "connections.detail_presence_busy" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, null, loading = false, presence = DetailPresence(PresenceReading.Known(PresenceState.BUSY, null), shared = true)),
+                DetailActions(),
+            )
+        },
+        "connections.detail_presence_away" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(
+                    "c1", sam, null, loading = false,
+                    presence = DetailPresence(PresenceReading.Known(PresenceState.AWAY, Instant.now().minusSeconds(60)), shared = true),
+                ),
+                DetailActions(),
+            )
+        },
+        "connections.detail_presence_checking" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, null, loading = false, presence = DetailPresence(PresenceReading.Checking, shared = true)),
+                DetailActions(),
+            )
+        },
+        "connections.detail_presence_unknown" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, null, loading = false, presence = DetailPresence(PresenceReading.Unknown, shared = true)),
+                DetailActions(),
+            )
+        },
+        "connections.detail_presence_not_shared" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, null, loading = false, presence = DetailPresence(PresenceReading.Unknown, shared = false)),
+                DetailActions(),
+            )
+        },
+        // The one-time card on Connections (question 23).
+        "connections.presence_card" to {
+            ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections, presenceCard = true), chrome, ConnectionsActions())
+        },
+        // Settings → Privacy → Presence: all with an exception ("Except…"), no one with "Only…" and Invisible.
+        "settings.presence" to {
+            PresenceSettingsContent(
+                PresenceSettingsUiState(
+                    available = true, loading = false, policy = PresencePolicy(3, PresenceState.BUSY, PresenceShare.ALL, listOf("c2")),
+                    people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe"), PresencePerson("c3", "Riley Chen")),
+                ),
+                {}, {}, { _, _ -> }, {}, {},
+            )
+        },
+        "settings.presence_invisible" to {
+            PresenceSettingsContent(
+                PresenceSettingsUiState(
+                    available = true, loading = false, policy = PresencePolicy(4, PresenceState.INVISIBLE, PresenceShare.NONE, listOf("c1")),
+                    people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe")),
+                ),
+                {}, {}, { _, _ -> }, {}, {},
+            )
+        },
+        "settings.presence_error" to {
+            PresenceSettingsContent(
+                PresenceSettingsUiState(available = true, loading = false, policy = PresencePolicy(3), error = FailureKind.CONFLICT),
+                {}, {}, { _, _ -> }, {}, {},
+            )
+        },
         "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
         "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },
         "invite.show" to { InviteScreen(InviteUiState(step = InviteStep.SHOWING, invite = invite), InviteActions()) },
@@ -1385,6 +1466,13 @@ object ScreenCatalog {
         },
         "gallery" to { GalleryScreen(themeMode = LocalThemeController.current.mode, onThemeModeChange = {}, onBack = {}) },
         "account_sheet" to { AccountSheet(sampleAccount, "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
+        // The avatar sheet's status row (ANDROID-PLAN §4 "Presence"): "Status: Available", opening the picker of four.
+        "account_sheet.status" to {
+            AccountSheet(
+                sampleAccount, "https://account.vettid.org", onDismiss = {}, onLockVault = {},
+                presence = SheetPresence(PresenceState.AVAILABLE) {},
+            )
+        },
         "account_sheet.trial_expired" to {
             AccountSheet(
                 sampleAccount.copy(

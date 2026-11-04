@@ -57,6 +57,7 @@ import com.vettid.core.data.vault.RelaySafetyNet
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.devices.PairingRepository
+import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryRepository
@@ -231,6 +232,9 @@ object AppModule {
 
     @Provides
     fun votesRepository(m: VaultManager): VotesRepository = m.votes
+
+    @Provides
+    fun presenceRepository(m: VaultManager): PresenceRepository = m.presence
 
     @Provides
     fun itemsRepository(m: VaultManager): ItemsRepository = m.items
