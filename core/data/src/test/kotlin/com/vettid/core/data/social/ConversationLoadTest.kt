@@ -215,12 +215,13 @@ class ConversationLoadTest {
         m.forgetOpenVault()
         m.seedConnections(listOf(FakeSocial.connection("c1", "Sam")))
         m.load("c1") // the new session's own page (not held: the old read took the gate)
-        val before = m.conversations.first { s -> s.single().loaded }.single().last
+        // `conversations` is a combined flow: right after the reseed it can still emit the old three rows, so wait for the one.
+        val before = m.conversations.first { s -> s.singleOrNull()?.loaded == true }.single().last
         assertEquals("m-c1", before?.messageId)
         old.complete(Unit)
         job.join()
         runCurrent()
-        val row = m.conversations.value.single()
+        val row = m.conversations.first { it.size == 1 }.single()
         assertTrue("still loaded", row.loaded)
         assertEquals("m-c1", row.last?.messageId)
         assertEquals("the old page is absent", listOf("m-c1"), m.messages("c1").first().map { it.messageId })
