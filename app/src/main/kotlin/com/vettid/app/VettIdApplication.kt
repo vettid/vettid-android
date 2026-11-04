@@ -85,6 +85,13 @@ class VettIdApplication : DistributionApplication() {
     lateinit var calls: CallAccess
 
     /**
+     * Injected so that it exists from the start of the process: location sharing (ANDROID-PLAN §4 "Location") has its platform
+     * attached when it is built, and the shares of an earlier run are taken up again at the first unlock.
+     */
+    @Inject
+    lateinit var location: com.vettid.core.data.location.LocationRepository
+
+    /**
      * The first app code of every process of the app (before any content provider and before [onCreate]): a crash
      * from here on reaches Android's handler with class names and stack frames only, never a message (the owner's
      * rule, 2026-10-23; [CrashScrubber]).
@@ -121,7 +128,15 @@ class VettIdApplication : DistributionApplication() {
                 if (!open) SecureClipboard.vaultClosed(this@VettIdApplication)
             }
         }
-        registerActivityLifecycleCallbacks(Foreground({ onForeground() }, ownerCheck::setForeground))
+        registerActivityLifecycleCallbacks(
+            Foreground(
+                { onForeground() },
+                {
+                    ownerCheck.setForeground(it)
+                    location.setInFront(it)
+                },
+            ),
+        )
         // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
         releaseNotifier.start()
         // The notification modes (ANDROID-PLAN 0.1.23 D7): the channels, feed items as notifications, and the
@@ -189,6 +204,7 @@ class VettIdApplication : DistributionApplication() {
         screenshots.check() // an allowance whose hour ended while the phone slept
         account.onForeground()
         modes.retry() // a service start Android refused in the background
+        location.onForeground() // the same for the location service
         if (account.phase.value is AppPhase.Unreachable) scope.launch { account.refresh() }
     }
 
