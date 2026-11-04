@@ -94,7 +94,19 @@ class ServiceIkFingerprintTest {
     }
 
     @Test
+    fun aWaitingServiceRequestWithAnIkShowsNoLine() = runTest {
+        val waiting = ApprovalParser.outgoing(
+            VaultJson.json.parseToJsonElement("""{"connection_id":"c1","state":"waiting","peer_kind":"service","ik":"$b64"}""").jsonObject,
+            now,
+        )!!
+        assertNull(shown(waiting))
+        rule.onNodeWithText("Vault key fingerprint").assertDoesNotExist()
+    }
+
+    @Test
     fun aPersonsRequestWithAnIkShowsNothingNew() = runTest {
+        // The `ik` is parsed whatever the kind, and not shown for a person.
+        assertEquals(fp, fromEvent(null, b64).peerFingerprint)
         assertNull(shown(fromEvent(null, b64)))
         rule.onNodeWithTag("service_request").assertDoesNotExist()
         rule.onNodeWithText("Vault key fingerprint").assertDoesNotExist()

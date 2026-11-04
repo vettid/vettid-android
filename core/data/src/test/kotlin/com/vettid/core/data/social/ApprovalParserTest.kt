@@ -109,10 +109,17 @@ class ApprovalParserTest {
         assertNull(ApprovalParser.outgoing(body("C3", "service", null), at)!!.peerFingerprint)
         assertNull(ApprovalParser.outgoing(body("C4", "service", "not base64!"), at)!!.peerFingerprint)
         assertNull(ApprovalParser.outgoing(body("C5", "service", Base64s.encodeStd(ByteArray(31))), at)!!.peerFingerprint)
-        // A person's request shows nothing new even with an `ik`.
-        assertNull(ApprovalParser.outgoing(body("C6", null, b64), at)!!.peerFingerprint)
-        assertNull(ApprovalParser.outgoing(body("C7", "robot", b64), at)!!.peerFingerprint)
-        assertTrue(ApprovalParser.outgoing(body("C4", "service", "not base64!"), at)!!.service)
+        assertTrue(ApprovalParser.outgoing(body("C4", "service", "not base64!"), at)!!.peerIkInvalid)
+        assertFalse(ApprovalParser.outgoing(body("C3", "service", null), at)!!.peerIkInvalid)
+        // The `ik` is parsed whatever the message's `peer_kind`; the screens show it for a service only.
+        assertEquals(want, ApprovalParser.outgoing(body("C6", null, b64), at)!!.peerFingerprint)
+        assertFalse(ApprovalParser.outgoing(body("C6", null, b64), at)!!.service)
+        // `ik` counts only with a valid `sas`.
+        val waiting = o("""{"connection_id":"C8","state":"waiting","peer_kind":"service","ik":"$b64"}""")
+        assertNull(ApprovalParser.outgoing(waiting, at)!!.peerFingerprint)
+        assertFalse(ApprovalParser.outgoing(waiting, at)!!.peerIkInvalid)
+        val badSas = o("""{"connection_id":"C9","sas":"12","peer_kind":"service","ik":"$b64"}""")
+        assertNull(ApprovalParser.outgoing(badSas, at)!!.peerFingerprint)
     }
 
     @Test

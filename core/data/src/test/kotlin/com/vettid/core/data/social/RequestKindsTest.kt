@@ -38,6 +38,18 @@ class RequestKindsTest {
     }
 
     @Test
+    fun aDifferentFingerprintReplacesTheOldOneAndAnInvalidIkClearsIt() {
+        assertEquals("bb", fp(RequestKinds.keepServices(listOf(withFp("aa")), listOf(withFp("bb")))))
+        val invalid = withFp(null).copy(peerIkInvalid = true)
+        assertNull(fp(RequestKinds.keepServices(listOf(withFp("aa")), listOf(invalid))))
+        // Only an absent `ik` keeps the earlier one, even for a request not yet known as a service.
+        assertEquals("aa", fp(RequestKinds.keepServices(listOf(withFp("aa")), listOf(req(false, RequestState.PENDING)))))
+        assertEquals("bb", RequestKinds.fingerprint("aa", withFp("bb")))
+        assertNull(RequestKinds.fingerprint("aa", invalid))
+        assertEquals("aa", RequestKinds.fingerprint("aa", withFp(null)))
+    }
+
+    @Test
     fun theAcceptAnswerFirstThenTheEventKeepsTheKind() {
         val l = RequestKinds.withAccepted(emptyList(), req(true))
         assertTrue(service(l))

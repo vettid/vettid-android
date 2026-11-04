@@ -142,6 +142,8 @@ object ApprovalParser {
         val id = body.s("connection_id") ?: return null
         val sas = body.s("sas")?.takeIf { SAS.matches(it) }
         val state = if (sas == null) RequestState.WAITING else RequestState.of(body.s("state")).takeIf { it != RequestState.WAITING }
+        // 0.83.7: `ik` comes with `sas` only; whether it is shown is decided by the screens (a service's), not here.
+        val ik = body.s("ik")?.takeIf { sas != null }
         return Approval.OutgoingRequest(
             connectionId = id,
             sas = sas,
@@ -153,8 +155,8 @@ object ApprovalParser {
             receivedAt = instant(body.s("created_at")) ?: at,
             exp = instant(body.s("exp")),
             service = isService(body.s("peer_kind")),
-            // Only a service's `ik` is shown (0.83.7); a malformed one is dropped without an error.
-            peerFingerprint = body.s("ik")?.takeIf { isService(body.s("peer_kind")) }?.let(IkFingerprint::formatB64),
+            peerFingerprint = ik?.let(IkFingerprint::formatB64),
+            peerIkInvalid = ik != null && IkFingerprint.formatB64(ik) == null,
         )
     }
 

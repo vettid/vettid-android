@@ -447,7 +447,7 @@ class SocialManager(
                 old is Approval.OutgoingRequest && a is Approval.OutgoingRequest ->
                     a.copy(
                         state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name,
-                        service = old.service || a.service, peerFingerprint = a.peerFingerprint ?: old.peerFingerprint,
+                        service = old.service || a.service, peerFingerprint = RequestKinds.fingerprint(old.peerFingerprint, a),
                     )
                 else -> a
             }
@@ -1694,14 +1694,18 @@ internal object RequestKinds {
 
     /** A request list read replaces [old] with [read]; a request known as a service stays one when its entry lacks the marker. */
     fun keepServices(old: List<Approval>, read: List<Approval>): List<Approval> {
-        val known = old.filterIsInstance<Approval.OutgoingRequest>().filter { it.service }.associateBy { it.connectionId }
+        val known = old.filterIsInstance<Approval.OutgoingRequest>().associateBy { it.connectionId }
         return read.map {
             val before = (it as? Approval.OutgoingRequest)?.let { o -> known[o.connectionId] }
             if (it is Approval.OutgoingRequest && before != null) {
-                it.copy(service = true, peerFingerprint = it.peerFingerprint ?: before.peerFingerprint)
+                it.copy(service = it.service || before.service, peerFingerprint = fingerprint(before.peerFingerprint, it))
             } else {
                 it
             }
         }
     }
+
+    /** The fingerprint a request [now] shows: its own `ik`'s; none when that `ik` is invalid; the [earlier] one when it sent no `ik`. */
+    fun fingerprint(earlier: String?, now: Approval.OutgoingRequest): String? =
+        if (now.peerIkInvalid) null else now.peerFingerprint ?: earlier
 }

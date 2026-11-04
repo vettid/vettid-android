@@ -76,7 +76,6 @@ class ServiceIkFingerprintTest {
     }
 
     private fun assertNoLine() {
-        assertNull(shownFingerprint)
         rule.onNodeWithTag("service_request_fingerprint").assertDoesNotExist()
         rule.onNodeWithText("Vault key fingerprint").assertDoesNotExist()
     }
@@ -96,6 +95,7 @@ class ServiceIkFingerprintTest {
     @Test
     fun aServiceRequestWithoutAnIkShowsNoLine() = runTest {
         compare(fromEvent("service", null))
+        assertNull(shownFingerprint)
         rule.onNodeWithTag("service_request").assertExists()
         assertNoLine()
     }
@@ -103,6 +103,7 @@ class ServiceIkFingerprintTest {
     @Test
     fun anInvalidIkShowsNoLine() = runTest {
         compare(fromList("service", "not base64!"))
+        assertNull(shownFingerprint)
         rule.onNodeWithTag("service_request").assertExists()
         assertNoLine()
     }
@@ -110,6 +111,7 @@ class ServiceIkFingerprintTest {
     @Test
     fun aPersonsRequestWithAnIkShowsNothingNew() = runTest {
         compare(fromEvent(null, b64))
+        // The state holds it (the `ik` is parsed whatever the kind); the screen shows it for a service only.
         rule.onNodeWithTag("service_request").assertDoesNotExist()
         assertNoLine()
     }
