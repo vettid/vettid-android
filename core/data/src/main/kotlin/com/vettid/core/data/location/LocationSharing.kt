@@ -49,6 +49,8 @@ class LocationSharing(
     /** The daily owner check is due or held (§3.6.3). */
     private val due: () -> Boolean,
     private val deviceId: () -> String?,
+    /** The connection declared itself a service (`peer_kind`, ANDROID-PLAN 0.1.90): it can't be sent a location (§10.16). */
+    private val isService: (connectionId: String) -> Boolean = { false },
     private val now: () -> Instant = Instant::now,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val watchEvery: Duration = WATCH,
@@ -153,6 +155,8 @@ class LocationSharing(
 
     override suspend fun start(request: ShareRequest): OutgoingShare {
         if (!request.withinBounds()) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        // A service can't receive a location (the vault refuses `location.share.start` toward one): nothing is sent.
+        if (isService(request.connectionId)) throw VaultFailure(FailureKind.SERVICE_FORBIDDEN)
         requireOpen()
         // One start per connection at a time: a second tap or call cannot start twice.
         val first = synchronized(lock) { starting.add(request.connectionId) }

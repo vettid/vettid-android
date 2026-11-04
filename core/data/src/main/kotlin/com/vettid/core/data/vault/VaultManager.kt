@@ -1046,6 +1046,7 @@ class VaultManager(
         unlocked = { phaseFlow.value == AppPhase.Unlocked },
         due = { ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
         deviceId = { session?.device?.deviceId },
+        isService = { id -> social.connections.value.any { it.id == id && it.service } },
     )
 
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */

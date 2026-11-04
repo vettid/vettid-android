@@ -165,6 +165,7 @@ class LocationSharingTest {
         val store: MemStore = MemStore(),
         attach: Boolean = true,
         retry: List<Duration> = listOf(Duration.ofSeconds(5)),
+        services: Set<String> = emptySet(),
     ) {
         val provider = Provider()
         val platform = Platform(provider)
@@ -175,6 +176,7 @@ class LocationSharingTest {
             unlocked = { unlocked },
             due = { due },
             deviceId = { device },
+            isService = { it in services },
             now = { clock },
             io = StandardTestDispatcher(scope.testScheduler),
             watchEvery = Duration.ofSeconds(5),
@@ -234,7 +236,8 @@ class LocationSharingTest {
         store: MemStore = MemStore(),
         attach: Boolean = true,
         retry: List<Duration> = listOf(Duration.ofSeconds(5)),
-    ) = Rig(this, ops, store, attach, retry)
+        services: Set<String> = emptySet(),
+    ) = Rig(this, ops, store, attach, retry, services)
 
     private fun message(type: String, body: String) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = clock, body = body.toByteArray()))
 
@@ -906,6 +909,22 @@ class LocationSharingTest {
         r.elapse(Duration.ofSeconds(60))
         r.emit(r.fix())
         assertEquals(2, r.ops.updates.size)
+    }
+
+    @Test
+    fun aServiceConnectionIsNeverSentALocation() = runTest {
+        // VAULT-MESSAGING §6.4: a service can't receive data; the vault refuses `location.share.start` toward one.
+        val r = rig(services = setOf("svc"))
+        try {
+            r.sharing.start(ShareRequest("svc"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.SERVICE_FORBIDDEN, e.kind)
+        }
+        assertTrue(r.ops.starts.isEmpty())
+        // A person is unaffected.
+        r.sharing.start(ShareRequest("c1"))
+        assertEquals(listOf("c1"), r.ops.starts.map { it.connectionId })
     }
 
     @Test
