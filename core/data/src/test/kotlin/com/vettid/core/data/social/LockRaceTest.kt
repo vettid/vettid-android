@@ -80,6 +80,7 @@ class LockRaceTest {
             if (before == null) MessagePage(listOf(msg("m-new")), "b1") else MessagePage(listOf(msg("m-old")), null)
         },
         readConnections = { SocialManager.ConnectionRead(listOf(FakeSocial.connection("c1", "Sam")), null) },
+        sendMessage = { _, _ -> com.vettid.core.vault.SentMessage("m-sent", "2026-10-04T12:00:00Z") },
         readRequests = {
             o("""{"incoming":[{"pending_id":"p1","invite_id":"i1","sas":"042817","profile":{"first_name":"Alex","last_name":"Kim"}}],"outgoing":[]}""")
         },
@@ -171,6 +172,49 @@ class LockRaceTest {
         runCurrent()
         assertNull("the stale list is not taken in", m.shareItems("r1"))
         assertTrue("the new grant request stays", m.approvals.value.any { it is Approval.GrantRequest && it.requestId == "g1" })
+    }
+
+    @Test
+    fun aStalePruneAfterALockAndUnlockDropsNoNewGrant() = runTest {
+        val m = manager()
+        val stale = listRead(shareEntry("r1", "A"))
+        // The list is taken in; then a lock, an unlock and a new grant request come before the prune runs.
+        m.pruneHook = {
+            m.forgetOpenVault()
+            m.reopen()
+            runBlocking { m.onEvent(event("grant.pending", """{"request_id":"g2","connection_id":"c1","exp":"2026-10-08T13:00:00.000Z"}""")) }
+        }
+        m.refreshApprovalsFrom(now) { stale }
+        m.pruneHook = null
+        runCurrent()
+        assertTrue("the new grant request stays", m.approvals.value.any { it is Approval.GrantRequest && it.requestId == "g2" })
+    }
+
+    @Test
+    fun aSentMessageAcrossALockIsNotWritten() = runTest {
+        val m = manager()
+        m.sendHook = { m.forgetOpenVault() }
+        m.send("c1", "hello")
+        m.sendHook = null
+        runCurrent()
+        assertTrue("no message, no thread entry", m.messages("c1").first().isEmpty())
+    }
+
+    @Test
+    fun aMessageEventHandledAcrossALockIsNotWritten() = runTest {
+        val m = manager()
+        m.eventHook = { m.forgetOpenVault() }
+        m.onEvent(event("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"secret","sent_at":"2026-10-04T12:00:00Z"}"""))
+        m.eventHook = null
+        runCurrent()
+        assertTrue(m.messages("c1").first().isEmpty())
+    }
+
+    @Test
+    fun aMessageEventInTheSameSessionIsWritten() = runTest {
+        val m = manager()
+        m.onEvent(event("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"hi","sent_at":"2026-10-04T12:00:00Z"}"""))
+        assertEquals(listOf("m9"), m.messages("c1").first().map { it.messageId })
     }
 
     @Test
