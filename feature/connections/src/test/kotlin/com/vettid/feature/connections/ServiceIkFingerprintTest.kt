@@ -109,6 +109,22 @@ class ServiceIkFingerprintTest {
     }
 
     @Test
+    fun anInvalidIkAfterAValidOneClearsTheLine() = runTest {
+        val social = FakeSocial()
+        social.acceptResult = AcceptedConnection("c6", "Acme")
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
+        vm.setInput("test-link")
+        vm.accept()
+        advanceUntilIdle()
+        social.approvals.value = listOf(fromEvent("service", b64))
+        advanceUntilIdle()
+        assertEquals(fp, vm.uiState.value.keyFingerprint)
+        social.approvals.value = listOf(fromEvent("service", "not base64!"))
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.keyFingerprint)
+    }
+
+    @Test
     fun aPersonsRequestWithAnIkShowsNothingNew() = runTest {
         compare(fromEvent(null, b64))
         // The state holds it (the `ik` is parsed whatever the kind); the screen shows it for a service only.

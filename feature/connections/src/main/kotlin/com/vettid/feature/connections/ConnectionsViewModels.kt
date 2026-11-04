@@ -471,7 +471,12 @@ class AcceptViewModel @Inject constructor(
                         req == null -> it
                         else -> it.copy(
                             service = it.service || req.service,
-                            keyFingerprint = req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint,
+                            // An invalid `ik` clears it, as in Approvals: no fallback to an earlier or the list's fingerprint.
+                            keyFingerprint = if (req.peerIkInvalid) {
+                                null
+                            } else {
+                                req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint
+                            },
                             sas = req.sas ?: it.sas,
                             name = it.name ?: req.name,
                             remote = req.remote,

@@ -1692,7 +1692,10 @@ internal object RequestKinds {
             list + waiting
         }
 
-    /** A request list read replaces [old] with [read]; a request known as a service stays one when its entry lacks the marker. */
+    /**
+     * A request list read replaces [old] with [read]. For an outgoing request already known: a service stays one when its entry lacks
+     * the marker, and the peer's fingerprint follows [fingerprint] (a valid `ik` replaces it, an invalid one clears it, none keeps it).
+     */
     fun keepServices(old: List<Approval>, read: List<Approval>): List<Approval> {
         val known = old.filterIsInstance<Approval.OutgoingRequest>().associateBy { it.connectionId }
         return read.map {
