@@ -218,6 +218,44 @@ class LockRaceTest {
         assertEquals(listOf("m9"), m.messages("c1").first().map { it.messageId })
     }
 
+    private val criticalBody =
+        """{"request_id":"U1","connection_id":"c1","item_id":"IT","field_id":"F","name":"Key","label":"Seed","operation":"sign","payload":"aGVsbG8=","payload_sha256":"LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=","exp":"2026-10-08T13:00:00.000Z"}"""
+
+    private fun TestScope.criticalManager(onRead: (SocialManager) -> Unit): SocialManager {
+        lateinit var m: SocialManager
+        m = SocialManager(
+            backgroundScope,
+            api = { throw VaultFailure(FailureKind.OTHER) },
+            credential = credential,
+            clock = java.time.Clock.fixed(now, java.time.ZoneOffset.UTC),
+            readCriticalUse = { onRead(m); o(criticalBody) },
+        )
+        return m
+    }
+
+    @Test
+    fun aCriticalUseReadInTheSameSessionIsKept() = runTest {
+        val m = criticalManager { }
+        m.loadCriticalUse("U1")
+        m.approvals.first { a -> a.any { it.key == "critical:U1" } }
+    }
+
+    @Test
+    fun aCriticalUseReadAcrossAHoldKeepsNothing() = runTest {
+        val m = criticalManager { it.forgetPending() }
+        m.loadCriticalUse("U1")
+        runCurrent()
+        assertTrue("nothing of the read is kept", m.approvals.value.none { it.key == "critical:U1" })
+    }
+
+    @Test
+    fun aCriticalUseReadAcrossALockKeepsNothing() = runTest {
+        val m = criticalManager { it.forgetOpenVault() }
+        m.loadCriticalUse("U1")
+        runCurrent()
+        assertTrue("nothing of the read is kept", m.approvals.value.none { it.key == "critical:U1" })
+    }
+
     @Test
     fun overlappingApprovalsReadsDoNotDeadlock() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
