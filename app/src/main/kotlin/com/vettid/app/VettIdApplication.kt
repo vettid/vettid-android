@@ -60,9 +60,6 @@ class VettIdApplication : DistributionApplication() {
     lateinit var feedNotifier: FeedNotifier
 
     @Inject
-    lateinit var notificationTaps: com.vettid.core.notify.NotificationOpenInbox
-
-    @Inject
     lateinit var changeNotifier: com.vettid.app.notify.ChangeDecisionNotifier
 
     @Inject
@@ -122,14 +119,6 @@ class VettIdApplication : DistributionApplication() {
         }
         // "Allow screenshots" ends when the vault is no longer open (A6 audit S1).
         scope.launch { account.phase.collect { if (it != AppPhase.Unlocked) screenshots.vaultClosed() } }
-        // A notification tap not yet taken goes when the vault closes here (a lock, sign-out or wipe), never at a cold start.
-        scope.launch {
-            var previous: AppPhase? = null
-            account.phase.collect { now ->
-                if (vaultClosedNow(previous, now)) notificationTaps.vaultClosed()
-                previous = now
-            }
-        }
         // A copied secret leaves the clipboard when the vault is no longer open: locked, held or due (the feed's rule), wiped,
         // or not open yet in this process (SecureClipboard; what cannot be checked without the focus waits for it).
         scope.launch {
@@ -257,6 +246,3 @@ class VettIdApplication : DistributionApplication() {
         override fun onActivityDestroyed(activity: Activity) = Unit
     }
 }
-
-/** The vault was open on this phone and no longer is (a lock, sign-out or wipe); a first phase, or one closed already, is not. */
-internal fun vaultClosedNow(previous: AppPhase?, now: AppPhase): Boolean = previous == AppPhase.Unlocked && now != AppPhase.Unlocked

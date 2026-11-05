@@ -100,9 +100,9 @@ class NotificationOpenInbox(
     }
 
     /**
-     * The vault closed on this phone (it was open and no longer is: a lock, a sign-out, a wipe): a tap not yet taken is dropped,
-     * so it never opens anything at a later unlock. A tap made while the vault was already closed (a cold start from the
-     * notification, the usual case) is kept until the unlock.
+     * The member locked the vault on this phone, or this phone is wiped: a tap not yet taken is dropped, so it never opens
+     * anything at a later unlock. A lock the phone only learns of (the vault locked itself or elsewhere), a cold start and a
+     * tap made while locked keep it until the unlock: the tap that woke the app may come just before such a lock is seen.
      */
     fun vaultClosed() {
         flow.value = null

@@ -330,14 +330,17 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun notificationOpenInbox(feed: dagger.Lazy<FeedNotifier>): NotificationOpenInbox =
+    fun notificationOpenInbox(feed: dagger.Lazy<FeedNotifier>, manager: VaultManager): NotificationOpenInbox =
         NotificationOpenInbox { feed.get().onDismissed(it) } // the tag of an item notification is its item id
+            // The member's own lock on this phone drops a tap not yet taken. A lock the phone only learns of (the vault locked
+            // itself, or elsewhere) does not: the tap that woke the app may come just before it, and opens after the unlock.
+            .also { taps -> manager.onBeforeLock { taps.vaultClosed() } }
 
-    /** A wipe from a closed vault (a replaced phone) also drops a notification tap not yet taken. */
+    /** A wipe from a closed vault (a replaced phone) also drops a notification tap not yet taken. Lazy: the inbox needs the manager. */
     @Provides
     @dagger.multibindings.IntoSet
-    fun notificationTapsWipe(taps: NotificationOpenInbox): com.vettid.core.data.wipe.WipeHook =
-        com.vettid.core.data.wipe.WipeHook { taps.vaultClosed() }
+    fun notificationTapsWipe(taps: dagger.Lazy<NotificationOpenInbox>): com.vettid.core.data.wipe.WipeHook =
+        com.vettid.core.data.wipe.WipeHook { taps.get().vaultClosed() }
 
     @Provides
     @Singleton
