@@ -9,6 +9,8 @@
     <string name="history_kind_owner_check_passed">Daily check passed</string>
     <string name="history_kind_owner_check_held">Vault held for the daily check</string>
     <string name="history_kind_owner_check_failed">Daily check failed</string>
+    <!-- Owner-approved 2026-11-05 (replaces the daily-check wording) -->
+    <string name="history_kind_owner_check_failed_pin">A PIN check failed: wrong PIN</string>
     <string name="history_kind_owner_check_locked">Vault locked after failed daily checks</string>
     <string name="history_kind_owner_check_hold_changed">Daily check hold changed</string>
     <string name="history_kind_device_paired">Device paired</string>
