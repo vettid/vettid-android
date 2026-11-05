@@ -923,6 +923,36 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * "Pair a desktop" (owner decision 2026-11-05; VAULT-MESSAGING §10.3): `device.pair.create` carries exactly the role, and
+     * `device.pair.approve` carries the pairing and the first session, never `grants`.
+     */
+    @Test
+    fun pairingRequestsCarryTheRoleAndNoGrants() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            suspend fun body(type: String, send: suspend () -> Unit): kotlinx.serialization.json.JsonObject {
+                val job = async(Dispatchers.IO) { send() }
+                val r = v.open(nextDeposit().second)
+                assertEquals(type, r.type)
+                d.handle(v.seal(type, "{}", re = r.id, status = Inner.STATUS_OK))
+                job.await()
+                return kotlinx.serialization.json.Json.parseToJsonElement(String(r.body)) as kotlinx.serialization.json.JsonObject
+            }
+            fun obj(s: String) = kotlinx.serialization.json.Json.parseToJsonElement(s) as kotlinx.serialization.json.JsonObject
+            assertEquals(obj("""{"role":"desktop"}"""), body("device.pair.create") { api.devicePairCreate("desktop") })
+            assertEquals(obj("""{"role":"agent"}"""), body("device.pair.create") { api.devicePairCreate("agent") })
+            assertEquals(
+                obj("""{"pairing_id":"p1","session_seconds":3600}"""),
+                body("device.pair.approve") { api.devicePairApprove("p1", 3600) },
+            )
+            assertEquals(obj("""{"pairing_id":"p1"}"""), body("device.pair.approve") { api.devicePairApprove("p1", null) })
+            // Only an agent or a desktop; an app is a transfer (§6.7.1) and never created here.
+            assertThrows(IllegalArgumentException::class.java) { runBlocking { api.devicePairCreate("app") } }
+        }
+    }
+
     /** Release R: a recovery is finished only on a paired phone (after its credential.get), never before. */
     @Test
     fun aRecoveryIsFinishedOnlyOnAPairedPhone() = runBlocking<Unit> {

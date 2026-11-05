@@ -41,7 +41,7 @@ data class DevicesUiState(
     /** The device just removed on its page: the snackbar "<name> was removed". */
     val removedDevice: DeviceInfo? = null,
 ) {
-    /** Only this phone is listed: "No agents yet". */
+    /** Only this phone is listed: "Nothing paired yet". */
     val onlyThisPhone: Boolean get() = devices.none { !it.thisPhone }
 
     val loading: Boolean get() = devices.isEmpty() && (load == ListLoad.NOT_LOADED || load == ListLoad.LOADING) && error == null

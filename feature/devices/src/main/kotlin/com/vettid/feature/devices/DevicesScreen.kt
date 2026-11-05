@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,6 +30,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -44,6 +49,7 @@ import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.ui.components.DropdownMenu
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.Spacing
@@ -55,7 +61,7 @@ import java.time.Instant
 /**
  * Devices & agents (ANDROID-PLAN 0.1.53 AA1): this phone first, then the member's agents, then desktops, each newest
  * first. A row is the name, the role, the access ("Access until 15:40" / "No access") and the last activity; an agent
- * the vault paused carries a "Paused" chip. The button **Pair an agent** (AA2) is the floating action button.
+ * the vault paused carries a "Paused" chip. The floating action button opens **Pair an agent** (AA2) and **Pair a desktop**.
  */
 @Composable
 fun DevicesScreen(
@@ -67,6 +73,7 @@ fun DevicesScreen(
     onRetry: () -> Unit = {},
     onRemovedShown: () -> Unit = {},
     onPair: () -> Unit = {},
+    onPairDesktop: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     // The name as the list shows it (a name that could pass for the phone or VettID comes with its role).
@@ -82,17 +89,10 @@ fun DevicesScreen(
         modifier = modifier,
         overlay = {
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = Spacing.l))
-            // Pair an agent (AA2), also with only this phone listed; not while the list could not be read at all.
+            // Pair an agent (AA2) or a desktop, also with only this phone listed; not while the list could not be read at all.
             if (!state.loading && !(state.devices.isEmpty() && state.error != null)) {
                 BottomFloatingControls(
-                    end = {
-                        VettIdFab(
-                            icon = Icons.Outlined.Add,
-                            contentDescription = stringResource(R.string.devices_pair),
-                            onClick = onPair,
-                            modifier = Modifier.testTag("pair_agent"),
-                        )
-                    },
+                    end = { PairChooser(onPair, onPairDesktop) },
                 )
             }
         },
@@ -118,18 +118,57 @@ fun DevicesScreen(
     }
 }
 
+/** The floating button offers both pairings: **Pair an agent** and **Pair a desktop** (owner decision 2026-11-05). */
+@Composable
+private fun PairChooser(onPair: () -> Unit, onPairDesktop: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val menuState = stringResource(if (open) R.string.devices_pair_menu_open else R.string.devices_pair_menu_closed)
+    Box {
+        VettIdFab(
+            icon = Icons.Outlined.Add,
+            contentDescription = stringResource(R.string.devices_pair_new),
+            onClick = { open = true },
+            modifier = Modifier
+                .testTag("pair_new")
+                // Says that it opens a menu, and whether it is open.
+                .semantics {
+                    role = Role.DropdownList
+                    stateDescription = menuState
+                },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.devices_pair)) },
+                onClick = {
+                    open = false
+                    onPair()
+                },
+                modifier = Modifier.testTag("pair_agent"),
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.devices_pair_desktop)) },
+                onClick = {
+                    open = false
+                    onPairDesktop()
+                },
+                modifier = Modifier.testTag("pair_desktop"),
+            )
+        }
+    }
+}
+
 @Composable
 private fun DeviceList(state: DevicesUiState, now: Instant, onOpen: (String) -> Unit, onRetry: () -> Unit) {
     val (phone, others) = state.devices.partition { it.thisPhone }
     if (state.onlyThisPhone) {
-        // This phone only: "No agents yet".
+        // This phone only: "Nothing paired yet" (agents and desktops alike).
         Column(Modifier.fillMaxSize().testTag("devices")) {
             phone.forEach { ThisPhoneRow(it) }
             Box(Modifier.weight(1f)) {
                 EmptyState(
                     icon = Icons.Outlined.Devices,
-                    title = stringResource(R.string.devices_empty_title),
-                    body = stringResource(R.string.devices_empty_body),
+                    title = stringResource(R.string.devices_empty_title_any),
+                    body = stringResource(R.string.devices_empty_body_any),
                 )
             }
         }
