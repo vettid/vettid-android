@@ -41,13 +41,14 @@ class WalletDataDirectoryScanTest {
     val main = MainDispatcherRule()
 
     private val app: Application = RuntimeEnvironment.getApplication()
-    private val password = "Vx!7-corr3ct-horse-pw"
+    // Secrets use [A-Za-z0-9 -] only: an XML or JSON file would store `&`, `<` or `"` escaped, and the plain needle would miss it.
+    private val password = "Vx7-corr3ct-horse-pw"
     private val pin = "908172"
     private val newWords = listOf("saffron", "tundra", "velvet", "orchid", "glacier", "bramble", "cobalt", "lantern", "mosaic", "nimbus", "ember", "harbor")
-    private val newPassphrase = "Tr0ub4dor&3-pass"
+    private val newPassphrase = "Tr0ub4dor 3-pass"
     // A public BIP39 test phrase (not a wallet of anyone), as ImportViewModelTest uses.
     private val importPhrase = "legal winner thank year wave sausage worth useful legal winner thank yellow"
-    private val importPassphrase = "Im-p0rt P@ss"
+    private val importPassphrase = "Im-p0rt Pass"
 
     private val testKey = { SecretKeySpec(ByteArray(32) { (it * 7).toByte() }, "AES") }
     private val flagsStore = KeystoreFileStore(File(app.noBackupFilesDir, "wallet-flags.bin"), "wallet-flags", key = testKey)
@@ -83,7 +84,19 @@ class WalletDataDirectoryScanTest {
         secrets += SecretScan.forms("new passphrase", newPassphrase)
         secrets += SecretScan.phrase("import words", importPhrase.split(" "))
         secrets += SecretScan.forms("import passphrase", importPassphrase)
-        fun scan(stage: String) = assertEquals(stage, emptyList<String>(), SecretScan.find(app.dataDir, secrets))
+        val amounts = listOf("40000", "40,000").flatMap { SecretScan.forms("amount $it", it).take(1) }
+        fun scan(stage: String) {
+            SecretScan.flush()
+            val dirs = listOfNotNull(app.dataDir, app.getExternalFilesDir(null), app.externalCacheDir)
+            for (d in dirs) assertEquals("$stage: $d", emptyList<String>(), SecretScan.find(d, secrets))
+            assertEquals("$stage: logs", emptyList<String>(), SecretScan.logLeaks(secrets + amounts))
+        }
+        secrets += SecretScan.forms("payee address", PAYEE)
+        for (acc in vectorAccounts()) {
+            secrets += SecretScan.forms("xpub ${acc.type}", acc.xpub)
+            secrets += SecretScan.forms("descriptor ${acc.type}", acc.receiveDescriptor)
+        }
+        secrets += SecretScan.forms("receive address", derive("p2tr", 0))
 
         // Create: the phrase is shown, then the check of three words (any case).
         val create = BackupViewModel(SavedStateHandle(), m, Random(7))

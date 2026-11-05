@@ -3,6 +3,9 @@
 
 package com.vettid.core.wallet
 
+import android.os.Looper
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowLog
 import java.io.File
 import java.util.Base64
 
@@ -71,5 +74,17 @@ internal object SecretScan {
             return i
         }
         return -1
+    }
+
+    /** Runs what is queued on the main thread and waits for SharedPreferences' queued writes, so that a scan sees what will be written. */
+    fun flush() {
+        shadowOf(Looper.getMainLooper()).idle()
+        runCatching { Class.forName("android.app.QueuedWork").getMethod("waitToFinish").invoke(null) }
+    }
+
+    /** Every log line (tag, message, throwable) that holds any of [needles] (text forms: logs are text). */
+    fun logLeaks(needles: List<Needle>): List<String> = ShadowLog.getLogs().mapNotNull { l ->
+        val line = "${l.tag} ${l.msg} ${l.throwable?.stackTraceToString().orEmpty()}".encodeToByteArray()
+        needles.firstOrNull { indexOf(line, it.bytes) >= 0 }?.let { "log ${l.tag}: ${it.secret} as ${it.form}" }
     }
 }

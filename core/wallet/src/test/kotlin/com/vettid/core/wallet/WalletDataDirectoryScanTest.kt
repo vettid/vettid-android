@@ -44,12 +44,13 @@ class WalletDataDirectoryScanTest {
     private val payee = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
     private val receive = AddressChain("p2tr", false)
 
-    private val password = "Vx!7-corr3ct-horse-pw"
+    // Secrets use [A-Za-z0-9 -] only: an XML or JSON file would store `&`, `<` or `"` escaped, and the plain needle would miss it.
+    private val password = "Vx7-corr3ct-horse-pw"
     private val pin = "908172"
     private val newWords = listOf("saffron", "tundra", "velvet", "orchid", "glacier", "bramble", "cobalt", "lantern", "mosaic", "nimbus", "ember", "harbor")
-    private val newPassphrase = "Tr0ub4dor&3-pass"
+    private val newPassphrase = "Tr0ub4dor 3-pass"
     private val importWords = listOf("juniper", "walnut", "pebble", "falcon", "cricket", "marble", "thistle", "violet", "anchor", "copper", "dahlia", "fennel")
-    private val importPassphrase = "Im-p0rt P@ss"
+    private val importPassphrase = "Im-p0rt Pass"
 
     private val testKey = { SecretKeySpec(ByteArray(32) { (it * 7).toByte() }, "AES") }
     private val flagsStore = KeystoreFileStore(File(app.noBackupFilesDir, "wallet-flags.bin"), "wallet-flags", key = testKey)
@@ -89,6 +90,9 @@ class WalletDataDirectoryScanTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
             // The chain server setting is the other file the wallet may write: a URL, and nothing else.
             val serversStore = KeystoreFileStore(File(app.noBackupFilesDir, "chain-servers.bin"), "chain-servers", key = testKey)
+            // NOTE: this file is written by the test itself (a URL, through the same store): its presence below proves nothing about the
+            // wallet; the check is that nothing of a secret is in it. The real writer (`ChainServers.save`) needs a server that answers
+            // block 0, which `:app` tests (`ChainServersFileTest`) cover.
             serversStore.save("""{"signet":"https://mempool.space/signet/api"}""".encodeToByteArray())
 
             val ops = FakeWalletOps().apply {
@@ -134,8 +138,13 @@ class WalletDataDirectoryScanTest {
             secrets += SecretScan.forms("new passphrase", newPassphrase)
             secrets += SecretScan.phrase("import words", importWords)
             secrets += SecretScan.forms("import passphrase", importPassphrase)
+            // Amounts are looked for in the logs only: a five-digit number is no secret in a binary file.
+            val amounts = listOf("40000", "40,000", "100000", "100,000").flatMap { SecretScan.forms("amount $it", it).take(1) }
             fun scan(stage: String) {
-                assertEquals(stage, emptyList<String>(), SecretScan.find(app.dataDir, secrets))
+                SecretScan.flush()
+                val dirs = listOfNotNull(app.dataDir, app.getExternalFilesDir(null), app.externalCacheDir)
+                for (d in dirs) assertEquals("$stage: $d", emptyList<String>(), SecretScan.find(d, secrets))
+                assertEquals("$stage: logs", emptyList<String>(), SecretScan.logLeaks(secrets + amounts))
             }
 
             // Create: the phrase is shown (the manager hands it to the screen) and checked.
@@ -170,6 +179,17 @@ class WalletDataDirectoryScanTest {
             val psbt = ops.inspected.single()
             assertEquals(psbt, ops.signs.single())
             val signedTx = chain.spend.broadcasts.single()
+            // The payee, the wallet's receive and change addresses, the txid, and the xpubs and descriptors (the plan's list).
+            secrets += SecretScan.forms("payee address", payee)
+            secrets += SecretScan.forms("txid", (sent as SendResult.Sent).txid)
+            for (a in listOf(receive, AddressChain("p2tr", true), AddressChain("p2wpkh", false), AddressChain("p2wpkh", true))) {
+                secrets += SecretScan.forms("address ${a.type}/${a.change}", WalletFixtures.address(a, 0).address)
+            }
+            for (acc in sendWallet.accounts) {
+                secrets += SecretScan.forms("xpub ${acc.type}", acc.xpub)
+                secrets += SecretScan.forms("descriptor ${acc.type}", acc.receiveDescriptor)
+                secrets += SecretScan.forms("change descriptor ${acc.type}", acc.changeDescriptor)
+            }
             secrets += SecretScan.forms("psbt (base64 text)", psbt)
             secrets += SecretScan.forms("psbt (bytes)", PsbtBase64.decode(psbt)!!)
             secrets += SecretScan.forms("signed transaction", signedTx)

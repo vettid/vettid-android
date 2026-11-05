@@ -163,7 +163,7 @@ class FeedNotifierTest {
     fun theWalletsItemsNotifyOnVaultActivityAndNameTheWalletOnlyUncovered() = runTest {
         notifier()
         source.names = FeedNames(emptyMap(), mapOf("w1" to "Savings"))
-        val kinds = listOf("wallet.signed" to "txid-ab12", "wallet.cap_refused" to "w1", "wallet.caps_raised" to "w1")
+        val kinds = listOf("wallet.signed" to "ab12cd34", "wallet.cap_refused" to "w1", "wallet.caps_raised" to "w1")
         settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
         kinds.forEachIndexed { i, (k, ref) -> arrive(item("u$i", kind = k, ref = ref).copy(connectionId = null, priority = "high")) }
         for (i in kinds.indices) assertEquals(Channels.ACTIVITY, poster.shown.getValue("u$i").channel)
@@ -185,7 +185,7 @@ class FeedNotifierTest {
             assertEquals(Channels.ACTIVITY, n.channel)
             assertEquals("New activity in VettID", n.title)
             assertNull(n.text)
-            assertFalse("${n.title} ${n.text}".let { "Savings" in it || "txid" in it })
+            assertFalse("${n.title} ${n.text}".let { "Savings" in it || "ab12cd34" in it })
         }
     }
 

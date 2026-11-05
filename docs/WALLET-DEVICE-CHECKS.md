@@ -31,7 +31,7 @@ adb -s <serial> uninstall com.vettid.app.devstack   # fresh install; never touch
 adb -s <serial> install -r app/build/outputs/apk/devStack/*.apk
 ```
 
-Enrol through the UI as in the A3 exit test: "Type the code instead", any email, code `DEVSTACK` (each email is its own member). Use a phone with a real Keystore attester (the dev device policy names `com.vettid.app.devstack` and the machine's debug signing digest).
+Enroll through the UI as in the A3 exit test: "Type the code instead", any email, code `DEVSTACK` (each email is its own member). Use a phone with a real Keystore attester (the dev device policy names `com.vettid.app.devstack` and the machine's debug signing digest).
 
 ### Accounts and funds
 
@@ -62,11 +62,26 @@ The same steps run on the `devStack` build against regtest (section A); the chai
 | 9 | Spending limits: set a per-payment limit at creation on a new wallet; later lower; raise with wrong PIN, then with right PIN and password | Limit set after creation; lower needs no PIN; raise with wrong PIN refused, right one applied; History shows the limit entries; `wallet.caps_raised` notification "A spending limit was raised or removed on <name>" (Vault activity) opens the limits screen |
 | 10 | Send to the other phone's wallet: amount, fee choice, review, password | Review shows the vault's summary (payee, amount, change, fee); wrong password refused with nothing sent; approve signs and broadcasts; "Sent" with the txid |
 | 11 | Send over the limit | The cap text for per-payment or per-period, nothing signed; `wallet.cap_refused` notification "A payment was refused by your spending limit" |
-| 12 | Transactions: open the list and a row; Copy txid; pull to refresh; set the chain server to a wrong-network server | Rows read "Sent to tb1q…", "Received", "Moved within this wallet"; status and "Status from {host}"; detail shows total sent, fee, confirmations; wrong network refused (genesis check) |
+| 12 | Transactions: open the list and a row; Copy txid; pull to refresh; set the chain server to a wrong-network server (for a testnet4 wallet: a signet, testnet3 or regtest Esplora, never a mainnet one) | Rows read "Sent to tb1q…", "Received", "Moved within this wallet"; status and "Status from {host}"; detail shows total sent, fee, confirmations; wrong network refused (genesis check) |
 | 13 | Notifications: after step 10 on phone A | `wallet.signed` notification "Bitcoin payment signed" on Vault activity; its tap opens the transaction while the Wallet entry is shown. `wallet.created` is History only: no notification is expected; History reads "Wallet created: <name>" |
-| 14 | App lock cover up (lock the app), then trigger a signed payment from the other session or a retry | The notification is the public form "New activity in VettID" (no wallet name, no txid) |
+| 14 | Settings, App lock on with the timeout "Immediately". Start a payment, approve it, and press Home at once (before the Sent screen shows), so that the cover is up when the `wallet.signed` item arrives. Timing-dependent: repeat if the notification came before the cover | The notification is the public form "New activity in VettID" (no wallet name, no txid). If it cannot be reproduced, the evidence is `FeedNotifierTest.theWalletsItemsNotifyOnVaultActivityAndNameTheWalletOnlyUncovered` |
 | 15 | History: wallet entries | "Wallet created: <name>", "Bitcoin payment signed" (entry detail has "Open the transaction"), "Wallet deleted"; no address or amount anywhere |
 | 16 | Delete a wallet (password) | Gone from the list; History "Wallet deleted" |
-| 17 | After all of the above, lock, then `adb shell run-as` is not available on staging: check by the unit scan (`WalletDataDirectoryScanTest`); on `devStack` (debuggable) run `adb exec-out run-as com.vettid.app.devstack tar c .` into a throw-away dir and grep for the test phrase's words, the password and PIN | No match (only `wallet-flags.bin` and `chain-servers.bin` are wallet files) |
+| 17 | After all of the above, lock the vault. On `devStack` (debuggable) only: write the search terms (the test phrase's words and the whole phrase, the password, the PIN, the payee and receive addresses, the txid) one per line into a temporary file `terms.txt`. Pull the data into a fresh scratch directory: `mkdir scratch && adb exec-out run-as com.vettid.app.devstack tar c . \| tar x -C scratch`. Search with `grep -raF -f terms.txt scratch`. Delete `terms.txt` and `scratch` afterwards | No match. Only `wallet-flags.bin` and `chain-servers.bin` are wallet files. `grep` finds plain text only: it misses hex and base64 forms, which `WalletDataDirectoryScanTest` covers. Never put the terms on the command line (shell history, `ps`). Staging is not debuggable: `run-as` is unavailable, so rely on the unit scan |
+
+## To unblock the regtest run (follow-up, not done)
+
+The instrumented regtest run cannot start with what is in the repo. Two pieces are needed:
+
+1. **Dev stack bump.** `devstack/devstack.sh` pins vettid-vault at `26b71409` (VAULT-MESSAGING 0.21.1). It needs a commit whose `cmd/devstack` serves the §10.18 wallets (`wallet.*`, caps, `item.reveal{pin}`) and a `regtest` network. That is vettid-vault work for whoever owns the vault side; the Android side only changes `VAULT_REF` and the README, and `devstack/device-policy.json` stays as it is. The stack also needs a regtest service: `bitcoind -regtest` plus an Esplora API on it, started by `devstack.sh up` and stopped by `down`, forwarded with `adb reverse tcp:18083 tcp:<port>` (18083 is the default of `WALLET_REGTEST_ESPLORA`).
+2. **`WalletExitTest`** (`app/src/androidTest/.../WalletExitTest.kt`, written like `A4ExitTest`, skipping without the stack):
+   1. enroll through the UI as the A3 test does; mine 101 blocks to a funded address;
+   2. create a wallet, read the phrase, answer the check, assert `FLAG_SECURE` on both screens;
+   3. fund the receive address through the node, mine a block, assert the balance;
+   4. import a known phrase with history on both accounts, assert the indices;
+   5. set a limit at creation, send over it (cap text, nothing signed), raise with a wrong PIN (refused) and with the right ones (applied);
+   6. send within the limit through inspect, sign and broadcast, mine a block, assert Confirmed; check each `invalid_psbt` text.
+
+Run it as in section A.
 
 Record the date, the build (version line in the drawer), the serials and any step that differs. Stop and report on a mismatch; do not work around it.
