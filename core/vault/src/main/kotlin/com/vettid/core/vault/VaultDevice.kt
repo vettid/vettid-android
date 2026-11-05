@@ -364,7 +364,8 @@ class VaultDevice private constructor(
 
     /**
      * How many times the collection's in-flight relay request was cut, by [stop] (a restart, a reconnect, a lock) or by
-     * the collection's scope ending with a request out. A cut request may have been handed a message that then stays
+     * the collection's scope ending with a request out, or lost to an I/O error that is not a relay status (a reset, a
+     * lost response). A cut request may have been handed a message that then stays
      * leased for a visibility timeout (RELAY-PROTOCOL §6.3).
      */
     val collectorCuts: Long get() = cuts.get()
@@ -513,6 +514,7 @@ class VaultDevice private constructor(
                         if (!out) roundsEnded.incrementAndGet()
                     },
                     onReached = ::noteReached,
+                    onLost = { cuts.incrementAndGet() }, // a request lost to an I/O error may have been handed a message
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The

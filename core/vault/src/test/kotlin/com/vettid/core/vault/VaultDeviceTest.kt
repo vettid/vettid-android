@@ -109,6 +109,10 @@ class VaultDeviceTest {
     @Volatile
     private var batchSize = 1
 
+    /** When set, a collect (GET) is answered with a dropped connection (a lost response, an I/O error). */
+    @Volatile
+    private var dropCollect = false
+
     /** When set, acks (DELETE) are refused with 403. */
     @Volatile
     private var refuseAck = false
@@ -190,6 +194,8 @@ class VaultDeviceTest {
                         refused.incrementAndGet()
                         MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
                     }
+                    path == "/v1/mailbox" && request.method == "GET" && dropCollect ->
+                        MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
                     path == "/v1/mailbox" && request.method == "GET" && refuseCollect != null ->
                         MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && serveMailbox -> {
@@ -1499,6 +1505,37 @@ class VaultDeviceTest {
             leaseGate!!.countDown()
             scope.cancel()
             leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The collector's request that fails with an I/O error that is not a relay status (a lost response) may have been handed
+     * a message and is counted as a cut; a request answered with a relay status is not.
+     */
+    @Test
+    fun aCollectorRequestLostToAnIoErrorIsACutAStatusIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            // A status (403): terminal for the collector, nothing handed out: no cut.
+            refuseCollect = RelayException.TOKEN_REVOKED
+            d.start(scope)
+            while (d.collecting) kotlinx.coroutines.delay(10)
+            assertEquals("a relay status is not a cut", 0L, d.collectorCuts)
+            refuseCollect = null
+            // A lost response: a cut.
+            dropCollect = true
+            d.start(scope)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
+            assertTrue(d.collectorCuts >= 1L)
+            dropCollect = false
+            d.stop()
+            scope.cancel()
             serveMailbox = false
         }
     }

@@ -49,6 +49,12 @@ class MailboxCollector(
      * closed normally. Proof that the mailbox was read after that time (A6 audit N3).
      */
     private val onReached: (Long) -> Unit = {},
+    /**
+     * Called when a collect request failed with an I/O error that is not a relay status (a reset, a lost response while the
+     * body was read, a dropped stream): the relay may have handed it messages that stay leased to the dead request for a
+     * visibility timeout. A [RelayException] (a status came back) is not this.
+     */
+    private val onLost: () -> Unit = {},
 ) {
     enum class Mode { LONG_POLL, WEBSOCKET }
 
@@ -87,6 +93,11 @@ class MailboxCollector(
                 pollOnce(handle)
                 onReached(started)
             }
+        } catch (e: RelayException) {
+            throw e // a status came back: nothing was handed out
+        } catch (e: IOException) {
+            onLost()
+            throw e
         } finally {
             onRequest(false)
         }
