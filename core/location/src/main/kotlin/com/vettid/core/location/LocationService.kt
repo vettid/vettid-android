@@ -20,6 +20,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** What the location service shows and can do: the sharing logic is it (`LocationSharing`), with the names that may be said. */
@@ -77,7 +79,8 @@ class LocationService : Service() {
         }
         following?.cancel()
         following = scope.launch {
-            combine(current.state, current.names) { s, n -> s to n }.collect { (s, n) ->
+            // The stall's minutes are not on the ongoing notification: it is not posted again every minute for them.
+            combine(current.state.map { it.copy(stalled = emptyMap()) }.distinctUntilChanged(), current.names) { s, n -> s to n }.collect { (s, n) ->
                 val ok = s.active && foreground(s, n)
                 if (!ok) {
                     if (s.active) current.serviceEnded()

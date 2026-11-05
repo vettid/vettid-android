@@ -1,6 +1,7 @@
 package com.vettid.core.location
 
 import android.Manifest
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.os.Build
@@ -15,7 +16,11 @@ import com.vettid.core.data.location.LocationPlatform
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.PositionProvider
 import com.vettid.core.data.location.SendIssue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * The Android side of [LocationPlatform]: the platform's positions and the foreground service. [names] are the first names that
@@ -26,10 +31,23 @@ class AndroidLocationPlatform(
     repository: LocationRepository,
     private val names: StateFlow<Map<String, String>>,
     override val positions: PositionProvider = PlatformPositionProvider(context),
+    scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
 ) : LocationPlatform {
     private val app = context.applicationContext
 
+    /** The stall notices posted in this process (connection id to the minutes said); what a dead process posted is cancelled below. */
+    private val stalled = LinkedHashMap<String, Int>()
+
     init {
+        // A notice a process that died left behind is stale (memory of what is stalled is gone with it): taken away at the start.
+        cancelLeftovers()
+        // The cover came up (or went): a notice that is still showing is posted again with the names that may be said now.
+        scope.launch {
+            names.collect {
+                val ids = synchronized(stalled) { stalled.entries.map { e -> e.key to e.value } }
+                ids.forEach { (id, minutes) -> if (isShowing(id)) post(id, minutes) }
+            }
+        }
         LocationService.source = object : LocationServiceSource {
             override val state = repository.serviceState
             override val names = this@AndroidLocationPlatform.names
@@ -73,12 +91,39 @@ class AndroidLocationPlatform(
     }
 
     /**
-     * "Your location hasn't reached {First} for {n} minutes." on the Location sharing channel (A6 N21), one per connection, its
-     * minutes kept current silently. The name is said only while [names] has it (empty under the app lock's cover or when the
-     * member's notifications hide names); else "Your location isn't getting through." The lock screen version never names anybody.
-     * It opens the app's main screen, as the ongoing notification does.
+     * "Your location hasn't reached {First} for {n} minutes." on the Location sharing channel (A6 N21), posted once for each stall.
+     * The name is said only while [names] has it (empty under the app lock's cover or when the member's notifications hide
+     * names); else "Your location isn't getting through." The lock screen version never names anybody. It opens the app's main
+     * screen, as the ongoing notification does.
      */
     override fun showStalled(connectionId: String, minutes: Int) {
+        synchronized(stalled) { stalled[connectionId] = minutes }
+        post(connectionId, minutes)
+    }
+
+    /** The minutes change in a notice that is still showing; one the member dismissed stays dismissed until the next stall. */
+    override fun updateStalled(connectionId: String, minutes: Int) {
+        synchronized(stalled) { stalled[connectionId] = minutes }
+        if (isShowing(connectionId)) post(connectionId, minutes)
+    }
+
+    override fun clearStalled(connectionId: String) {
+        synchronized(stalled) { stalled.remove(connectionId) }
+        runCatching { NotificationManagerCompat.from(app).cancel(connectionId, STALLED_ID) }
+    }
+
+    private fun isShowing(connectionId: String): Boolean = runCatching {
+        app.getSystemService(NotificationManager::class.java).activeNotifications.any { it.id == STALLED_ID && it.tag == connectionId }
+    }.getOrDefault(false)
+
+    private fun cancelLeftovers() {
+        runCatching {
+            val manager = app.getSystemService(NotificationManager::class.java)
+            manager.activeNotifications.filter { it.id == STALLED_ID || it.id == NOT_RUNNING_ID }.forEach { manager.cancel(it.tag, it.id) }
+        }
+    }
+
+    private fun post(connectionId: String, minutes: Int) {
         val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (!granted) return
@@ -86,9 +131,9 @@ class AndroidLocationPlatform(
         val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         val open = app.packageManager.getLaunchIntentForPackage(app.packageName)?.let { PendingIntent.getActivity(app, 0, it, flags) }
         val name = names.value[connectionId]?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
-        val unnamed = app.getString(R.string.core_location_stalled_unnamed)
+        val unnamed = app.getString(com.vettid.core.data.R.string.data_location_stalled_unnamed)
         val text = if (name != null) {
-            app.resources.getQuantityString(R.plurals.core_location_stalled_named, minutes, name, minutes)
+            app.resources.getQuantityString(com.vettid.core.data.R.plurals.data_location_stalled, minutes, name, minutes)
         } else {
             unnamed
         }
@@ -109,10 +154,6 @@ class AndroidLocationPlatform(
             .setContentIntent(open)
             .build()
         runCatching { NotificationManagerCompat.from(app).notify(connectionId, STALLED_ID, n) }
-    }
-
-    override fun clearStalled(connectionId: String) {
-        runCatching { NotificationManagerCompat.from(app).cancel(connectionId, STALLED_ID) }
     }
 
     private companion object {

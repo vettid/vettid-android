@@ -589,6 +589,15 @@ internal fun LocationCard(
         } else {
             val until = remember(location.until) { ShareTime.format(context, location.until, Instant.now()) }
             val issueText = location.issue.textRes()
+            // Nothing reaches the other person (A6 N21): read first; the cause, when known, is the issue line under it, with its settings action.
+            location.stalledMinutes?.let { minutes ->
+                Text(
+                    pluralStringResource(com.vettid.core.data.R.plurals.data_location_stalled, minutes, name, minutes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = Spacing.s).testTag("detail_location_stalled"),
+                )
+            }
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {
@@ -605,15 +614,6 @@ internal fun LocationCard(
                     enabled = !busy,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("detail_location_stop"),
                 ) { Text(stringResource(R.string.connections_location_stop)) }
-            }
-            // Nothing reaches the other person (A6 N21): the cause, when known, is the issue line above and its settings action below.
-            location.stalledMinutes?.let { minutes ->
-                Text(
-                    pluralStringResource(R.plurals.connections_location_stalled, minutes, name, minutes),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(bottom = Spacing.s).testTag("detail_location_stalled"),
-                )
             }
             val settings = location.issue.settingsIntent(context)
             if (settings != null) {

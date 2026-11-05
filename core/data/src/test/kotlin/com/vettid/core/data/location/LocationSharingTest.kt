@@ -156,9 +156,20 @@ class LocationSharingTest {
         val stalledNow = linkedMapOf<String, Int>()
         var stallEpisodes = 0
 
+        /** Every post of a stall notice (an update of a showing one is not a post). */
         override fun showStalled(connectionId: String, minutes: Int) {
-            if (connectionId !in stalledNow) stallEpisodes++
+            stallEpisodes++
             stalledNow[connectionId] = minutes
+        }
+
+        /** Like the real platform: only a notice that is still showing is changed. */
+        override fun updateStalled(connectionId: String, minutes: Int) {
+            if (connectionId in stalledNow) stalledNow[connectionId] = minutes
+        }
+
+        /** The member swipes the notice away. */
+        fun dismiss(connectionId: String) {
+            stalledNow.remove(connectionId)
         }
 
         override fun clearStalled(connectionId: String) {
@@ -1532,6 +1543,88 @@ class LocationSharingTest {
         assertEquals(1, r.platform.stalledNow.size)
         r.elapse(Duration.between(clock, again.expiresAt).plusSeconds(1))
         assertTrue(r.platform.stalledNow.isEmpty())
+    }
+
+    @Test
+    fun aDismissedNoticeIsNotPostedAgainByTheNextMinutes() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stallEpisodes)
+        r.platform.dismiss("c1")
+        r.elapse(Duration.ofMinutes(5))
+        assertTrue(r.platform.stalledNow.isEmpty())
+        assertEquals("still stalled, on the card", mapOf("c1" to 21), r.sharing.serviceState.value.stalled)
+        assertEquals(1, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun theFirstLookAfterAPauseStartsTheClocksOverEvenIfNothingLookedMeanwhile() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
+        r.elapse(Duration.ofMinutes(1))
+        due = true
+        r.sharing.onGateChanged()
+        // Nothing wakes the phone for two hours: no tick, only the clocks move.
+        clock = clock.plus(Duration.ofHours(2))
+        elapsed += Duration.ofHours(2).toNanos()
+        due = false
+        r.sharing.onGateChanged()
+        r.settle()
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+        r.elapse(stallAfter.minusSeconds(5))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+    }
+
+    @Test
+    fun aJumpOfTheWallClockMakesNoStall() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
+        clock = clock.plus(Duration.ofHours(2)) // the date was set forward; the uptime clock did not move
+        r.elapse(Duration.ofSeconds(10))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun theNoticeGoesWithStopAllAWipeAnEndEventAndAListWithoutTheShare() = runTest {
+        // stopAll (the notification's button)
+        val long = ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1)
+        val a = rig()
+        a.begin(long)
+        a.elapse(stallAfter)
+        assertEquals(1, a.platform.stalledNow.size)
+        a.sharing.stopAll()
+        a.settle()
+        assertTrue(a.platform.stalledNow.isEmpty())
+        // forget() (wipe, sign-out)
+        val b = rig()
+        b.begin(long)
+        b.elapse(stallAfter)
+        assertEquals(1, b.platform.stalledNow.size)
+        b.sharing.forget()
+        b.settle()
+        assertTrue(b.platform.stalledNow.isEmpty())
+        // location.event{stopped, out}
+        val c = rig()
+        c.begin(long)
+        c.elapse(stallAfter)
+        assertEquals(1, c.platform.stalledNow.size)
+        c.sharing.onEvent(message("location.event", """{"share_id":"s1","direction":"out","event":"stopped"}"""))
+        c.settle()
+        assertTrue(c.platform.stalledNow.isEmpty())
+        // a list that no longer holds the share
+        val d = rig()
+        d.begin(long)
+        d.elapse(stallAfter)
+        assertEquals(1, d.platform.stalledNow.size)
+        d.ops.outgoing = "[]"
+        d.sharing.refresh()
+        d.settle()
+        assertTrue(d.platform.stalledNow.isEmpty())
     }
 
     @Test

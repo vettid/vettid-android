@@ -225,10 +225,13 @@ interface LocationPlatform {
     fun showNotRunning(show: Boolean) = Unit
 
     /**
-     * Posts (or silently updates the minutes of) the notice that [connectionId]'s share is not getting through
+     * Posts, once for each stall, the notice that [connectionId]'s share is not getting through
      * ([ServiceState.stalled]) on the Location sharing channel; it names nobody when the app lock's cover is up. Opens the app.
      */
     fun showStalled(connectionId: String, minutes: Int) = Unit
+
+    /** The minutes of a notice that is still showing change; a notice the member dismissed is not posted again. */
+    fun updateStalled(connectionId: String, minutes: Int) = Unit
 
     /** Takes that notice away: a position got through, or the share ended or paused. */
     fun clearStalled(connectionId: String) = Unit
