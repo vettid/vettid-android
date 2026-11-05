@@ -143,7 +143,13 @@ internal fun DeviceRequestScreen(
     val who = deviceSentenceStart(a)
     val held = state.heldShow
     val body: String? = when {
-        a.isPairing -> stringResource(if (state.pairingHeld) R.string.approvals_pair_compare_body else R.string.approvals_pair_body)
+        a.isPairing -> stringResource(
+            when {
+                !state.pairingHeld -> R.string.approvals_pair_body
+                state.pairingDesktop -> R.string.approvals_pair_compare_body_desktop
+                else -> R.string.approvals_pair_compare_body
+            },
+        )
         a.isSession -> null
         else -> when (held) {
             is HeldShow.Use -> stringResource(R.string.approvals_held_use_body, AccountNames.isolate(held.field))

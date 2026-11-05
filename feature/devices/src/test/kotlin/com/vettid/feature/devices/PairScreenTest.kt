@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.semantics.SemanticsProperties
 import com.vettid.core.crypto.invite.InviteKind
 import com.vettid.core.crypto.invite.InviteQr
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingCode
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PairingState
@@ -57,8 +58,8 @@ class PairScreenTest {
 
     private fun show(state: PairUiState) = rule.setContent { PairScreen(state, actions(), now = { now }) }
 
-    private fun at(stage: PairingStage, held: Boolean = false, copied: Boolean = false, sheet: Boolean = false, busy: Boolean = false, error: FailureKind? = null) =
-        PairUiState(PairingState(stage, busy = busy, error = error), held = held, copied = copied, sheet = sheet)
+    private fun at(stage: PairingStage, held: Boolean = false, copied: Boolean = false, sheet: Boolean = false, busy: Boolean = false, error: FailureKind? = null, role: PairRole = PairRole.AGENT) =
+        PairUiState(PairingState(stage, busy = busy, error = error, role = role), held = held, copied = copied, sheet = sheet)
 
     @Test
     fun theCodeScreenShowsTheQrTheCodeTheCountdownAndTheButtons() {
@@ -228,5 +229,108 @@ class PairScreenTest {
         rule.onNodeWithText("A device asks to pair").assertIsDisplayed()
         rule.onNodeWithText("This pairing can't be checked on this phone any more.", substring = true).assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("The codes match").fetchSemanticsNodes().size)
+    }
+
+    private val desktopLink = InviteQr(InviteKind.DESKTOP, "https://relay.vettid.test", "abcdefghijklmnopqrstuvwxyz", ByteArray(32) { 1 }, ByteArray(32) { 2 }, exp.epochSecond).link()
+    private val desk = PairRole.DESKTOP
+
+    @Test
+    fun theDesktopCodeScreenSaysDesktopAndKeepsTheAgentsControls() {
+        show(at(PairingStage.Code(PairingCode("p1", desktopLink, exp)), role = desk))
+        rule.onNodeWithText("Pair a desktop").assertIsDisplayed()
+        rule.onNodeWithText("Copy this code into VettID on your computer. It works once and expires in 10 minutes.").assertIsDisplayed()
+        rule.onNodeWithTag("pair_qr").assertExists()
+        rule.onNodeWithTag("pair_countdown").assertTextContains("Expires in 9:41")
+        rule.onNodeWithTag("pair_copy").assertExists()
+        rule.onNodeWithTag("pair_share").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("Pair an agent").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theDesktopComparisonNamesTheDesktopAndHasBothAnswers() {
+        show(at(PairingStage.Compare(pending), role = desk))
+        rule.onNodeWithTag("pair_sas").assertTextContains("Does the desktop show 123 456? Approve only if the codes match.")
+        rule.onNodeWithText("The code proves this phone talks to the desktop you just gave the code to. The name is only what the desktop says about itself.")
+            .assertIsDisplayed()
+        rule.onNodeWithText("The codes match").performClick()
+        rule.onNodeWithText("They don't match").performClick()
+        assertEquals(listOf("match", "reject"), calls)
+    }
+
+    @Test
+    fun aDesktopComparisonWithNoCodeOffersOnlyReject() {
+        show(at(PairingStage.Compare(PendingPairing("p1", "Work laptop", null, now.plusSeconds(600))), role = desk))
+        rule.onNodeWithTag("pair_cannot_compare").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("The codes match").fetchSemanticsNodes().size)
+        rule.onNodeWithText("Reject").performClick()
+        assertEquals(listOf("reject"), calls)
+    }
+
+    @Test
+    fun theDesktopSheetKeepsTheAccessChoicesWithItsOwnSentence() {
+        show(at(PairingStage.Compare(pending), sheet = true, role = desk))
+        rule.onNodeWithText("A desktop acts only while you allow access.").assertIsDisplayed()
+        rule.onNodeWithTag("pair_session_HOUR_1").assertIsSelected()
+        rule.onNodeWithTag("pair_session_NONE").assertExists()
+        rule.onNodeWithTag("pair_confirm").performScrollTo().performClick()
+        assertEquals(listOf("pair"), calls)
+    }
+
+    @Test
+    fun pairedDesktopOffersNoChoiceOfWhatItMayUse() {
+        show(at(PairingStage.Paired("Work laptop", "d1"), role = desk))
+        rule.onNodeWithText("is paired", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("When it asks for access, the request comes to Approvals.").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("Choose what it may use").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("Later").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("It can't use any of your items yet.", substring = true).fetchSemanticsNodes().size)
+        rule.onNodeWithText("Done").performClick()
+        assertEquals(listOf("done"), calls)
+    }
+
+    /** Nothing says "the agent" or "an agent" (the screen's "Devices & agents" is the place's own name). */
+    private fun noAgentWord() {
+        for (phrase in listOf("the agent", "an agent", "your agent")) {
+            assertEquals(phrase, 0, rule.onAllNodesWithText(phrase, substring = true, ignoreCase = true).fetchSemanticsNodes().size)
+        }
+    }
+
+    @Test
+    fun theDesktopRejectionEndAndUnconfirmedTextsNameTheDesktopAndNeverTheAgent() {
+        show(at(PairingStage.Rejected(told = true), role = desk))
+        rule.onNodeWithText("The desktop is told it was rejected.", substring = true).assertIsDisplayed()
+        noAgentWord()
+    }
+
+    @Test
+    fun theDesktopEndedPairingKeepsThePlainWords() {
+        show(PairUiState(PairingState(PairingStage.Ended, role = desk)))
+        rule.onNodeWithText("Not paired").assertIsDisplayed()
+        rule.onNodeWithText("This pairing has ended. Start again from Devices & agents.").assertIsDisplayed()
+        rule.onNodeWithText("Done").performClick()
+        assertEquals(listOf("done"), calls)
+    }
+
+    @Test
+    fun anUnconfirmedDesktopApprovalNamesThatDesktopAndNeverTheAgent() {
+        show(PairUiState(PairingState(PairingStage.Ended, unknownOutcome = true, agentName = "Work laptop", role = desk)))
+        rule.onNodeWithText("Pairing not confirmed").assertIsDisplayed()
+        rule.onNodeWithText("Work laptop", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Your vault did not answer. If", substring = true).assertIsDisplayed()
+        noAgentWord()
+    }
+
+    @Test
+    fun aPairedTitleWithNoNameStartsWithACapital() {
+        show(at(PairingStage.Paired("", "d1"), role = desk))
+        rule.onNodeWithText("A desktop", substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("a desktop is paired", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun anAgentsPairedTitleWithNoNameStartsWithACapitalToo() {
+        show(at(PairingStage.Paired("", "a1")))
+        rule.onNodeWithText("An agent", substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("an agent is paired", substring = true).fetchSemanticsNodes().size)
     }
 }

@@ -49,8 +49,11 @@ class DeviceAsksScreenTest {
     private fun held(h: HeldRequest?, fromFeed: Boolean = false, role: String = "agent") =
         Approval.DeviceRequest("approval.pending", "h1", "Build bot", role, "agent.request", now, now.plusSeconds(4 * 60 + 30), deviceId = "A", held = h, fromFeed = fromFeed)
 
-    private fun state(a: Approval.DeviceRequest, listed: Boolean = true, seconds: Int? = null, outcome: DeviceOutcome? = null, pairingHeld: Boolean = false) =
-        ApprovalDetailUiState(a.key, a, items = items, deviceListed = listed, sessionSeconds = seconds, outcome = outcome, pairingHeld = pairingHeld)
+    private fun state(a: Approval.DeviceRequest, listed: Boolean = true, seconds: Int? = null, outcome: DeviceOutcome? = null, pairingHeld: Boolean = false, pairingDesktop: Boolean = false) =
+        ApprovalDetailUiState(
+            a.key, a, items = items, deviceListed = listed, sessionSeconds = seconds, outcome = outcome, pairingHeld = pairingHeld,
+            pairingDesktop = pairingDesktop,
+        )
 
     private fun show(s: ApprovalDetailUiState, actions: DecisionActions = DecisionActions()) = rule.setContent { ApprovalDetailScreen(s, actions) }
 
@@ -337,6 +340,19 @@ class DeviceAsksScreenTest {
         rule.onNodeWithText("Compare the code").performClick()
         assertEquals(true, opened)
         assertEquals(false, has("Reject"))
+    }
+
+    @Test
+    fun aHeldDesktopPairingSaysDesktopAndAHeldAgentPairingStillSaysAgent() {
+        show(state(pairing(), pairingHeld = true, pairingDesktop = true).copy(pairingName = "Work laptop"), DecisionActions())
+        rule.onNodeWithText("Compare the code on the desktop with the one in VettID before you allow it.").assertExists()
+        assertEquals(false, has("Compare the code on the agent with the one in VettID before you allow it."))
+    }
+
+    @Test
+    fun aHeldAgentPairingKeepsItsApprovedWords() {
+        show(state(pairing(), pairingHeld = true).copy(pairingName = "New bot"), DecisionActions())
+        rule.onNodeWithText("Compare the code on the agent with the one in VettID before you allow it.").assertExists()
     }
 
     // --- the list's rows ---

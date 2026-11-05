@@ -25,11 +25,15 @@ data class DeviceRoute(val deviceId: String) {
     }
 }
 
-/** Pairing an agent (AA2); [held]: opened from the feed item "A device asks to pair", so it shows what is held, never a new code. */
+/**
+ * Pairing an agent (AA2) or, with [desktop] (owner decision 2026-11-05), a desktop; [held]: opened from the feed item "A device
+ * asks to pair", so it shows what is held, never a new code (what is held says its own role).
+ */
 @Serializable
-data class PairRoute(val held: Boolean = false) {
+data class PairRoute(val held: Boolean = false, val desktop: Boolean = false) {
     companion object {
         const val HELD = "held"
+        const val DESKTOP = "desktop"
     }
 }
 
@@ -58,6 +62,7 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
             onRetry = vm::refresh,
             onRemovedShown = vm::removedShown,
             onPair = { host.navigate(PairRoute()) },
+            onPairDesktop = { host.navigate(PairRoute(desktop = true)) },
         )
     }
     composable<PairRoute> {

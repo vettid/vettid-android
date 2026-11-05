@@ -252,6 +252,27 @@ The A2 exit test:
   confirmed" unless the feed item or the list shows the new agent; the pairing is cleared with the list (`DevicesManager.onClear`). The new agent's id comes
   from the `device.paired` feed item, else the one new agent of that name in `device.list`, else the list opens.
   Permissions (AA3) is below; Approvals for devices (AA5) is below; screens are in the catalog (`devices*`).
+  **Pair a desktop** (owner decision 2026-11-05, reversing ANDROID-PLAN decision 9; VAULT-MESSAGING §6.7, §6.7.1, §6.8, §10.3):
+  the list's floating button (`pair_new`, "Pair a device") opens a menu with **Pair an agent** and **Pair a desktop**
+  (`PairChooser`); the same flow, parameterised by `PairRole` (`AGENT`/`DESKTOP`: the `role` sent by `device.pair.create`
+  via `devicePairCreate(role)`, the `device.pair.pending` role the SAS is read for, the link kind `t` = `a`/`d`, the
+  `device_id` search by role). `PairRoute(desktop)`, `PairViewModel` starts that role (a pairing still held for the other
+  role is cancelled first) and every `PairingState` carries `role`, so the screens say what is held, never what the button
+  was. A link of the other kind (an agent link for a desktop, or the reverse) is "unreadable" and never shown. The spec
+  treats the two alike: the six-digit SAS compare applies to a desktop (§6.7 flow, the `sas_commit` is for purposes `app`,
+  `desktop`, `agent`, `connection`), `session_seconds` (60-86,400) applies to a desktop (§10.3), so the first-access sheet
+  keeps the same choices; `grants` is for an agent only, and this app never sends any. A desktop's paired screen says it is
+  paired and that its access requests come to Approvals; it offers only **Done** (no "Choose what it may use", no rules or
+  permissions). Desktops are listed, ended and removed as before and their session requests are approved as before. The
+  desktop's texts are `*_desktop` strings marked `NEW: not in the plan`; the agent's are unchanged. Catalog: `devices.pair_desktop_*`.
+  **The role switch is atomic** in `PairingManager.start(role)` (under its lock): a pairing held for the other role (a live or
+  expired code, a comparison not being approved) is replaced and its id rejected in the background; a create of the other role
+  still in flight is superseded (`generation`), its answer is dropped and rejected when it arrives (any dropped create is
+  rejected, a lock's too); an approval in flight is not switched. `PairViewModel` owns its role and never takes it from a
+  cleared state (a lock or hold clears the repository to AGENT): the route's role, or for a held screen the role of the last
+  non-idle pairing it saw (`seenRole`), also for "New code" and for the words of "This pairing has ended". The chooser button
+  announces a menu (`Role.DropdownList`, "Menu open/closed"). Approvals: a held desktop pairing's entry says "desktop"
+  (`ApprovalDetailUiState.pairingDesktop`, `approvals_pair_compare_body_desktop`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via
