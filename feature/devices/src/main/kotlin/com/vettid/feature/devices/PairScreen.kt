@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingCode
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PendingPairing
@@ -93,8 +94,8 @@ data class PairActions(
 )
 
 /**
- * Pairing an agent (ANDROID-PLAN 0.1.53 AA2): the code (QR and text, Copy, Share, its countdown), the comparison of the
- * six digits with the agent's, the choice of first access, and the end of it. The window is kept out of screenshots and
+ * Pairing an agent (ANDROID-PLAN 0.1.53 AA2) or a desktop: the code (QR and text, Copy, Share, its countdown), the
+ * comparison of the six digits with the device's, the choice of first access, and the end of it. The window is kept out of screenshots and
  * the recent-apps preview for the whole flow (the code is a bearer secret for 10 minutes, decision 1).
  */
 @Composable
@@ -103,6 +104,9 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
     SecureWindow()
     val context = LocalContext.current
     val stage = state.stage
+    // What the pairing is for decides the words: a desktop is never "an agent" (owner decision 2026-11-05).
+    val desktop = state.pairing.role == PairRole.DESKTOP
+    val title = if (desktop) R.string.pair_title_desktop else R.string.pair_title
     // The code is worthless once a pairing is over, however it ended: the clipboard is cleared as soon as it can be.
     // Leaving the screen ends the code's use, however it is left.
     DisposableEffect(Unit) { onDispose { PairingClipboard.ended(context) } }
@@ -110,16 +114,16 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
         if (stage !is PairingStage.Code && stage !is PairingStage.Creating) PairingClipboard.ended(context)
     }
     when {
-        stage is PairingStage.Code -> CodeStep(stage.code, state, actions, now, modifier)
+        stage is PairingStage.Code -> CodeStep(stage.code, state, actions, now, modifier, desktop)
         stage is PairingStage.CodeExpired -> Plain(
-            R.string.pair_title,
+            title,
             actions,
             modifier,
             primary = R.string.pair_new_code to actions.onNewCode,
             secondary = R.string.pair_cancel to actions.onCancel,
             tag = "pair_expired",
         ) { Text(stringResource(R.string.pair_expired), style = MaterialTheme.typography.bodyLarge) }
-        stage is PairingStage.Compare -> CompareStep(stage.pending, state, actions, modifier)
+        stage is PairingStage.Compare -> CompareStep(stage.pending, state, actions, modifier, desktop)
         stage is PairingStage.Rejected -> Plain(
             R.string.pair_rejected_title,
             actions,
@@ -128,12 +132,18 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
             tag = "pair_rejected",
         ) {
             Text(
-                stringResource(if (stage.told) R.string.pair_rejected_body else R.string.pair_rejected_unsent),
+                stringResource(
+                    when {
+                        !stage.told -> R.string.pair_rejected_unsent
+                        desktop -> R.string.pair_rejected_body_desktop
+                        else -> R.string.pair_rejected_body
+                    },
+                ),
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
-        stage is PairingStage.Paired -> PairedStep(stage, actions, modifier)
-        stage is PairingStage.Ended -> EndedStep(state, actions, modifier)
+        stage is PairingStage.Paired -> PairedStep(stage, actions, modifier, desktop)
+        stage is PairingStage.Ended -> EndedStep(state, actions, modifier, desktop)
         // A lock or a hold took the pairing away while this screen was open: it was interrupted, nothing is paired.
         stage is PairingStage.Idle && state.interrupted -> Plain(
             R.string.pair_ended_title,
@@ -143,7 +153,7 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
             secondary = R.string.pair_cancel to actions.onCancel,
             tag = "pair_interrupted",
         ) { Text(stringResource(R.string.pair_ended), style = MaterialTheme.typography.bodyLarge) }
-        stage is PairingStage.Idle && state.pairing.error != null -> CreateFailed(state, actions, modifier)
+        stage is PairingStage.Idle && state.pairing.error != null -> CreateFailed(state, actions, modifier, title)
         stage is PairingStage.Idle && state.held -> Plain(
             R.string.pair_lost_title,
             actions,
@@ -153,7 +163,7 @@ fun PairScreen(state: PairUiState, actions: PairActions, modifier: Modifier = Mo
         ) {
             Text(stringResource(R.string.pair_lost_body), style = MaterialTheme.typography.bodyLarge)
         }
-        else -> Plain(R.string.pair_title, actions, modifier, tag = "pair_creating") {
+        else -> Plain(title, actions, modifier, tag = "pair_creating") {
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 val cd = stringResource(R.string.pair_creating)
                 CircularProgressIndicator(Modifier.semantics { contentDescription = cd }, color = MaterialTheme.colorScheme.primary)
@@ -185,7 +195,14 @@ private fun Plain(
 }
 
 @Composable
-private fun CodeStep(code: PairingCode, state: PairUiState, actions: PairActions, now: () -> Instant, modifier: Modifier) {
+private fun CodeStep(
+    code: PairingCode,
+    state: PairUiState,
+    actions: PairActions,
+    now: () -> Instant,
+    modifier: Modifier,
+    desktop: Boolean,
+) {
     val context = LocalContext.current
     var clock by remember { mutableStateOf(now()) }
     LaunchedEffect(code) {
@@ -200,8 +217,8 @@ private fun CodeStep(code: PairingCode, state: PairUiState, actions: PairActions
     val clipLabel = stringResource(R.string.pair_clip_label)
     val shareTitle = stringResource(R.string.pair_share_title)
     FormScaffold(
-        title = stringResource(R.string.pair_title),
-        body = stringResource(R.string.pair_code_body),
+        title = stringResource(if (desktop) R.string.pair_title_desktop else R.string.pair_title),
+        body = stringResource(if (desktop) R.string.pair_code_body_desktop else R.string.pair_code_body),
         primaryLabel = null,
         onPrimary = {},
         secondaryLabel = stringResource(R.string.pair_cancel),
@@ -273,10 +290,10 @@ private fun CodeStep(code: PairingCode, state: PairUiState, actions: PairActions
 }
 
 @Composable
-private fun CreateFailed(state: PairUiState, actions: PairActions, modifier: Modifier) {
+private fun CreateFailed(state: PairUiState, actions: PairActions, modifier: Modifier, title: Int) {
     val kind = state.pairing.error
     Plain(
-        R.string.pair_title,
+        title,
         actions,
         modifier,
         primary = R.string.pair_try_again to actions.onNewCode,
@@ -284,19 +301,19 @@ private fun CreateFailed(state: PairUiState, actions: PairActions, modifier: Mod
         tag = "pair_create_failed",
     ) {
         if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
-            OwnerCheckNotice(kind, state.pairing.errorCode, actions)
+            OwnerCheckNotice(kind, state.pairing.errorCode, actions, title)
         } else {
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.pair_title), stringResource(R.string.pair_create_failed))
+            NoticeCard(NoticeKind.WARNING, stringResource(title), stringResource(R.string.pair_create_failed))
         }
     }
 }
 
 /** The daily check is due: the vault's own words, and the way to the check. */
 @Composable
-private fun OwnerCheckNotice(kind: FailureKind, code: String?, actions: PairActions) {
+private fun OwnerCheckNotice(kind: FailureKind, code: String?, actions: PairActions, title: Int) {
     NoticeCard(
         kind = NoticeKind.WARNING,
-        title = stringResource(R.string.pair_title),
+        title = stringResource(title),
         body = failureText(kind.messageRes(), kind.vaultCode(code)),
         modifier = Modifier.testTag("pair_owner_check"),
         actions = { TextButton(onClick = actions.onOwnerCheck) { Text(stringResource(R.string.pair_check_now)) } },
@@ -305,7 +322,7 @@ private fun OwnerCheckNotice(kind: FailureKind, code: String?, actions: PairActi
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActions, modifier: Modifier) {
+private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActions, modifier: Modifier, desktop: Boolean) {
     val sas = p.sas
     FormScaffold(
         title = stringResource(R.string.pair_compare_title),
@@ -326,30 +343,33 @@ private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActi
                 modifier = Modifier.testTag("pair_cannot_compare"),
             )
         } else {
-            SasSentence(sas)
+            SasSentence(sas, desktop)
         }
         Spacer(Modifier.height(Spacing.l))
         Text(
-            stringResource(R.string.pair_calls_itself, DeviceText.sentenceAgent(p.name)),
+            stringResource(
+                R.string.pair_calls_itself,
+                if (desktop) DeviceText.sentenceDesktop(p.name) else DeviceText.sentenceAgent(p.name),
+            ),
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier.testTag("pair_name"),
         )
         Spacer(Modifier.height(Spacing.xs))
         Text(
-            stringResource(R.string.pair_calls_itself_note),
+            stringResource(if (desktop) R.string.pair_calls_itself_note_desktop else R.string.pair_calls_itself_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    if (state.sheet && sas != null) AllowSheet(state, actions)
+    if (state.sheet && sas != null) AllowSheet(state, actions, desktop)
 }
 
-/** "Does the agent show **123 456**?": the digits in two groups of three, large; read digit by digit by a screen reader. */
+/** "Does the agent (or desktop) show **123 456**?": the digits in two groups of three, large; read digit by digit by a screen reader. */
 @Composable
-private fun SasSentence(sas: String) {
+private fun SasSentence(sas: String, desktop: Boolean) {
     val grouped = "${sas.substring(0, GROUP)} ${sas.substring(GROUP)}"
     val spoken = sas.toList().joinToString(" ")
-    val text = stringResource(R.string.pair_compare_body, grouped)
+    val text = stringResource(if (desktop) R.string.pair_compare_body_desktop else R.string.pair_compare_body, grouped)
     val start = text.indexOf(grouped)
     val annotated = buildAnnotatedString {
         if (start < 0) {
@@ -379,7 +399,7 @@ private fun SasSentence(sas: String) {
 /** Step 3: "Allow access now?" (decision 5); **Pair** sends the approval with no grants. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AllowSheet(state: PairUiState, actions: PairActions) {
+private fun AllowSheet(state: PairUiState, actions: PairActions, desktop: Boolean) {
     ModalBottomSheet(
         onDismissRequest = actions.onCloseSheet,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -391,7 +411,7 @@ private fun AllowSheet(state: PairUiState, actions: PairActions) {
         ) {
             Text(stringResource(R.string.pair_allow_title), style = MaterialTheme.typography.titleLarge)
             Text(
-                stringResource(R.string.pair_allow_body),
+                stringResource(if (desktop) R.string.pair_allow_body_desktop else R.string.pair_allow_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -415,7 +435,9 @@ private fun AllowSheet(state: PairUiState, actions: PairActions) {
                 }
             }
             val kind = state.pairing.error
-            if (kind == FailureKind.OWNER_CHECK_REQUIRED) OwnerCheckNotice(kind, state.pairing.errorCode, actions)
+            if (kind == FailureKind.OWNER_CHECK_REQUIRED) {
+                OwnerCheckNotice(kind, state.pairing.errorCode, actions, if (desktop) R.string.pair_title_desktop else R.string.pair_title)
+            }
             PrimaryButton(
                 stringResource(R.string.pair_confirm),
                 actions.onPair,
@@ -438,10 +460,21 @@ private fun sessionLabel(c: SessionChoice): Int = when (c) {
 }
 
 @Composable
-private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifier: Modifier) {
-    val name = DeviceText.sentenceAgent(stage.name)
+private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifier: Modifier, desktop: Boolean) {
+    if (desktop) {
+        // A desktop gets no rules or permissions (it asks for access sessions, which come to Approvals): nothing to choose.
+        FormScaffold(
+            title = stringResource(R.string.pair_paired_title, DeviceText.titleDesktop(stage.name)),
+            body = stringResource(R.string.pair_paired_body_desktop),
+            primaryLabel = stringResource(R.string.pair_done),
+            onPrimary = actions.onDone,
+            onBack = actions.onDone,
+            modifier = modifier.testTag("pair_paired"),
+        ) {}
+        return
+    }
     FormScaffold(
-        title = stringResource(R.string.pair_paired_title, name),
+        title = stringResource(R.string.pair_paired_title, DeviceText.titleAgent(stage.name)),
         body = stringResource(R.string.pair_paired_body),
         primaryLabel = stringResource(R.string.pair_choose),
         onPrimary = { actions.onChooseItems(stage.deviceId) },
@@ -453,13 +486,14 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
 }
 
 @Composable
-private fun EndedStep(state: PairUiState, actions: PairActions, modifier: Modifier) {
+private fun EndedStep(state: PairUiState, actions: PairActions, modifier: Modifier, desktop: Boolean) {
     val unknown = state.pairing.unknownOutcome
     // No answer from the vault asserts nothing: not "Not paired", but that it was not confirmed.
     val title = if (unknown) R.string.pair_unconfirmed_title else R.string.pair_ended_title
     Plain(title, actions, modifier, primary = R.string.pair_done to actions.onDone, tag = "pair_ended") {
         if (unknown) {
-            val name = DeviceText.sentenceAgent(state.pairing.agentName.orEmpty())
+            val given = state.pairing.agentName.orEmpty()
+            val name = if (desktop) DeviceText.sentenceDesktop(given) else DeviceText.sentenceAgent(given)
             Text(stringResource(R.string.pair_unconfirmed_body, name), style = MaterialTheme.typography.bodyLarge)
         } else {
             Text(stringResource(R.string.pair_ended), style = MaterialTheme.typography.bodyLarge)

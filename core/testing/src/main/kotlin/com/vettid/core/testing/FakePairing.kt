@@ -1,5 +1,6 @@
 package com.vettid.core.testing
 
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PairingState
@@ -14,8 +15,9 @@ class FakePairing : PairingRepository {
 
     override val state = MutableStateFlow(PairingState())
 
-    override suspend fun start() {
-        calls += "start"
+    override suspend fun start(role: PairRole) {
+        calls += if (role == PairRole.AGENT) "start" else "start:${role.wire}"
+        state.value = state.value.copy(role = role)
     }
 
     override suspend fun approve(sessionSeconds: Int?) {
