@@ -344,9 +344,9 @@ class ShareLocationTest {
         rule.onNodeWithText("Once").assertIsDisplayed()
         rule.onNodeWithText("Sends one position now; ends after 15 minutes").assertIsDisplayed()
         rule.onNodeWithText("For a while").assertIsDisplayed()
-        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few metres", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
+        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few meters", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
             .forEach { rule.requireText(it) }
-        rule.onNodeWithText("Approximate and City show the centre of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
+        rule.onNodeWithText("Approximate and City show the center of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
         rule.onNodeWithText("Let $sam keep the trail").assertIsDisplayed()
         rule.onNodeWithText("Without this, $sam sees only your latest position.").assertIsDisplayed()
         rule.onNodeWithTag("share_location_trail").assertIsDisplayed()

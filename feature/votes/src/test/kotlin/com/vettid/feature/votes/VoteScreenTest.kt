@@ -227,7 +227,7 @@ class VoteScreenTest {
         // The owner-approved text, word for word, with the service's name; the asterisks are never shown.
         rule.onNodeWithTag("vote_note_IN_RESULTS_CONFLICT").assertIsDisplayed()
         shown(
-            "Your vote is in the published results. $SERVICE also once showed a different vote under your code. Save the proof and show it to the organisation.",
+            "Your vote is in the published results. $SERVICE also once showed a different vote under your code. Save the proof and show it to the organization.",
         ).assertIsDisplayed()
         assertEquals(0, texts("**"))
         shown("Save the proof").assertIsDisplayed()
@@ -257,7 +257,7 @@ class VoteScreenTest {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.FAILED), canCast = false)
         show(state(s, detail(s, choiceId = "yes")))
         shown("The published results don't match your vote").assertIsDisplayed()
-        shown("You can save the proof and show it to the organisation.").assertIsDisplayed()
+        shown("You can save the proof and show it to the organization.").assertIsDisplayed()
         shown("Save the proof").assertIsDisplayed()
     }
 
@@ -273,7 +273,7 @@ class VoteScreenTest {
     fun theSaveProofWarningIsAConfirmationBeforeTheVaultIsAsked() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.CONFLICT), canCast = false)
         rule.setContent { VoteScreen(state(s, detail(s, choiceId = "yes")).copy(proofWarning = true), VoteActions(), now = now) }
-        shown("The file shows how you voted. Keep it private, and share it only with the organisation.").assertIsDisplayed()
+        shown("The file shows how you voted. Keep it private, and share it only with the organization.").assertIsDisplayed()
     }
 
     @Test

@@ -36,7 +36,7 @@ class UnlockCancellingTest {
         rule.mainClock.autoAdvance = false // the indicator's animation never ends
         rule.setContent { UnlockContent(pending.copy(busy = true), actions) }
         rule.onNodeWithTag("unlock_recovery_cancelling").assertExists()
-        rule.onNodeWithText("Cancelling the recovery…").assertExists()
+        rule.onNodeWithText("Canceling the recovery…").assertExists()
         rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
     }
 
