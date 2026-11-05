@@ -488,9 +488,9 @@ crawler will see only onboarding.** The owner's options (question Q3):
 - Q4 (a): no Google push in the Play build.
 - Q6 (a): record the videos on the VettID-signed build.
 - Q7 (a): an internal track with named testers is acceptable before the pin.
-- Q8 (a): the next production vault release pins the Play key.
+- Q8 (a): the next production vault release pins the Play key. **The lead tracks it.** It can only be written once the Console shows the Play app-signing digest (after Q5 and the first upload): then `{digest, class: "google_play"}` in `enclave/releasecfg/prod.json`, the release reaching `active`, and the digest in account.vettid.org's and the relay's `assetlinks.json` (VAULT-RELEASES, ANDROID-PLAN §7).
 - Q9: yes, Adults (18+).
-- Q10 (b): reword the location permission text with the iPhone app (NEW, for the owner) before the listing goes live.
+- Q10 (b): reword the location permission text with the iPhone app (NEW, for the owner) before the listing goes live. Proposed, agreed with iOS: "To share your location, VettID needs to know where this phone is. It asks only while you share, and your position goes only to the people you choose, through your vault, which doesn't keep it."
 
 **Q5 is still open.** Nothing is uploaded until the owner has checked the Console for an existing `com.vettid.app`
 listing.
