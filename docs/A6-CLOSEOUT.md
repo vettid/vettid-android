@@ -512,4 +512,352 @@ and the request expiry use 12-hour with AM/PM while the share times use 24-hour 
 |---|---|
 | **al-cal** | Everything in "What to fix now"; then the remaining A, N and E items marked al-cal above, the M items first (A10, A31, N9, N12, N21 code, E2) |
 | **lead** | The phone checklist above, and the audit's checklist items for N1, N3, N8 and N20 |
-| **owner** | The `outline` colour (A18, A36); the transfer windows (A11); new texts for A2, A7, A13, A20, A24, A43, A44, N8, N14, N21, N24, N27, E3, E12, E22, E23, E28, E31, E33, E35, E37, E38; the spec question N11; E14's wording |
+| **owner** | The `outline` colour (A18, A36); the transfer windows (A11); new texts for A2, A7, A13, A20, A24, A35, A42, A43, A44, N8, N14, N21, N24, N27, E3, E12, E22, E23, E27, E28, E31, E33, E35, E37, E38; the spec question N11; E14's wording. Each is set out under "Owner items in full" below |
+
+## Owner items in full
+
+This section covers every item in this document that needs the owner: a decision, a spec question
+or a new text.
+
+- **How to read a block.** Each item says what the member sees, the options, and a recommendation. Proposed
+  texts are American English, shown with the key they would get and where they appear.
+- **Strings.** "New" means a new string key. "Changed" means the key exists and its value would change.
+- **Fixed values.** Brackets show the format argument (`%1$s`, `%1$d`).
+- **Source.** Current wording is quoted from master as of this list.
+- **Order.** Decisions first, then texts in the doc's order.
+
+### Decisions
+
+**N21. Location sends that never get through.** Asked separately.
+
+**A18. The `outline` color (control borders, the off switch).**
+
+- **Problem.** Empty text fields have almost invisible borders, and the thumb of a switch that is off cannot be
+  seen.
+  - Today `outline` is Navy600 `#3E3E6C` in dark and Mist300 `#D9D9DF` (`--border-light`) in light.
+  - That gives 1.81:1 and 1.41:1 on the screen, and 1.00:1 for the off switch's thumb on its track.
+  - WCAG 1.4.11 asks for 3:1.
+- **Options.** Ratios are on background / Low / Container / High, then the off switch's thumb on its track (the
+  Highest token).
+  - **(a)** Two new mid tokens:
+    - dark `#8585AA`: 5.10 / 4.69 / 4.07 / 3.50, track 2.81;
+    - light `#767682`: 4.48 / 4.19 / 4.08 / 3.61, track 3.19;
+    - plus a switch override, unchecked thumb = `onSurfaceVariant` (InkBody 4.33 on the dark track,
+      InkMuteLight 6.02 on the light one).
+  - **(b)** Reuse existing tokens: dark InkBody `#A9A9C2` (7.86 / 7.23 / 6.27 / 5.39, track 4.33) and light
+    InkMuteLight `#4C4C58` (`--ink-on-light-mute`; 8.46 / 7.91 / 7.70 / 6.82, track 6.02). These are on the
+    website's palette already, but borders become as strong as secondary text.
+  - **(c)** Keep `outline` and override only the switch thumb and the text-field border, using the colors of (b).
+    Every other `outline` use stays at 1.4–1.8:1, including the agent data box (A36).
+  - The website has no mid border token:
+    - `--border-dark` `#26263e` would be 1.1:1;
+    - `--border-indigo` `#454399` gives 2.16 on the dark background.
+- **Recommendation.** (a). It passes 3:1 on every surface that borders sit on and keeps borders lighter than
+  text. The two values could be added to `site.css` as `--border-strong-dark` / `--border-strong-light`, so the
+  palette stays shared. `outlineVariant` keeps today's faint values, and `ContrastTest` gains the outline pairs.
+  A36 (the data box's border) follows this choice.
+
+**A11. The transfer-out window (10 minutes, on the old phone).**
+
+- **Problem.** Within 10 minutes the member must compare the code, read the signer notice and type the PIN and
+  password. A slow reader, or one in a PIN backoff, can run out. Then the new phone has to scan again.
+- **The 10 minutes are the vault's.** VAULT-MESSAGING §6.7.1 says "no approval within 10 minutes after the new
+  app's `hs.init`" aborts the transfer. The app alone cannot extend it.
+- **Options.**
+  - **(a)** Keep 10 minutes. Announce the time left at 2 minutes and at 30 seconds, using the existing
+    `settings_transfer_window` text ("%1$s left to approve").
+  - **(b)** (a), plus a spec change: a longer approval window once the code has been compared.
+  - **(c)** A longer window overall (spec change).
+- **Recommendation.** (a) now. (b) only if testers run out on a phone.
+
+**N11. A client id on creating writes (spec question).**
+
+- **Problem.** If an answer is lost for more than 90 seconds and the member tries again, the peer gets the
+  message twice, or a second item is created.
+- **Question for VAULT-MESSAGING.** Should `message.send`, a new `item.put` and `connection.invite.create` carry
+  an optional `client_id`, with the vault answering a repeat within a set time (for example 24 h) with the first
+  result instead of acting again?
+- **Options.**
+  - (a) Add `client_id` to those three ops.
+  - (b) Let the app reuse the failed request's inner id on a retry, with the vault answering from its reply
+    cache for that long.
+  - (c) Leave it as is.
+- **Recommendation.** (a). It is explicit, and it does not depend on how long the reply cache keeps an answer.
+
+**E14. "What you entered is kept" (`data_failure_owner_check_required`).**
+
+- **Current text.** "Your daily check is due. What you entered is kept: the check opens when you leave this
+  screen."
+- **Problem.** On a PIN or password form the member then finds the field empty.
+- **What changed since decision (a).** #268 blanks every typed PIN, password and recovery word when the check
+  covers the screen (`WipesOnCover`). The secret forms also clear the field on this failure. Drafts that are not
+  secrets (messages, item and rule editors, forms) are still kept. So the sentence is true for drafts and false
+  for secrets, more clearly than before.
+- **Options.**
+  - **(a)** Keep the text as is.
+  - **(b)** One text for both cases.
+    - Changed: `data_failure_owner_check_required` "Your daily check is due. Drafts are kept, but any PIN or
+      password must be typed again after the check."
+  - **(c)** A second text, used by the PIN and password forms:
+    - New: `data_failure_owner_check_required_secret` "Your daily check is due. Type your PIN or password again
+      after the check."
+    - It shows on change PIN, delete vault, new credential, transfer-out and approvals.
+- **Recommendation.** (c). The draft forms keep the text that was approved.
+
+**A47. Miles or kilometers.** Resolved by #292 (Settings → Units, a region default). Nothing to decide.
+
+### New texts
+
+**A2. Transfer-in, "Compare the code": the wait is re-announced every second.**
+
+- **Problem.** For ten minutes TalkBack may repeat "Waiting for your old phone (9:41 left)" while the member is
+  trying to hear six digits.
+- **Options.**
+  - (a) A static waiting line that is announced, with the time on its own line.
+  - (b) Keep the one line and stop announcing it.
+- **Recommendation.** (a). The current `transfer_in_waiting` stays for any other caller.
+- **Texts.**
+  - New: `transfer_in_waiting_plain` "Waiting for your old phone". Transfer in, Compare the code.
+  - New: `transfer_in_time_left` "%1$s left". Same screen, a line below the waiting line, not announced.
+
+**A7. The one-time code is read as two numbers with "12 s".**
+
+- **Problem.** A TalkBack user hears "four hundred twelve, eight hundred one" and then "12 s".
+- **Recommendation.** Add spoken forms. The visible text stays.
+- **Texts.**
+  - New: `items_otp_code_cd` "One-time code %1$s". Item detail, the code. The argument is the digits with a space
+    between each.
+  - New plural: `items_otp_left_cd`. Item detail, the time left.
+    - one: "%1$d second left"
+    - other: "%1$d seconds left"
+
+**A13. Masked values are read as "bullet" eight times.**
+
+- **Text.** New: `items_masked_value_cd` "Hidden".
+- **Where.** Item detail and Shared with you, the masked value.
+
+**A20. Repeated buttons that do not say what they act on.**
+
+- **Problem.** TalkBack says "Revoke, button" five times in a row.
+- **Recommendation.** Spoken labels only. In each, `%1$s` is the row's own name (the tag, item or connection),
+  and the visible labels stay.
+- **Texts.**
+  - New: `items_sharing_revoke_cd` "Revoke %1$s". Connection sharing, by tag.
+  - New: `items_shared_fetch_cd` "Show %1$s". Shared with you.
+  - New: `items_shared_give_up_cd` "Remove %1$s". Shared with you.
+  - New: `connections_share_rule_delete_cd` "Delete the rule for %1$s". Connection page, sharing card.
+  - New: `connections_cancel_invite_cd_named` "Cancel the invitation for %1$s". Connections, pending invitations.
+  - New: `settings_profile_remove_cd` "Remove %1$s". Shared profile, an item row.
+
+**A24. State shown by color or weight only.**
+
+- **Problem.** An urgent release update is told only by a red icon. An approval that needs a decision is told
+  only by bold text. A notice's kind is told only by its icon.
+- **Texts.**
+  - New: `settings_release_update_urgent` "Urgent". Settings → Vault, the update row, as its state.
+  - New: `approvals_needs_decision` "Needs your decision". Approvals list, the row's state.
+  - New: `core_ui_notice_info` "Information". Every notice card, read before the notice.
+  - New: `core_ui_notice_success` "Done". Every notice card.
+  - New: `core_ui_notice_warning` "Warning". Every notice card.
+  - New: `core_ui_notice_urgent` "Urgent". Every notice card.
+
+**A42. Unlabeled spinners in the wallet.**
+
+- **Text.** New: `core_ui_loading` "Loading…".
+- **Where.** The spinner's description and Send's blank first step; reusable app-wide.
+
+**A43. Abbreviations read badly; ages without "ago".**
+
+- **Problem.**
+  - TalkBack reads "5 min" and "3 h" as letters.
+  - "50 m" could be meters or minutes.
+  - The incoming card's "· 5 min ·" reads like a length of time, not an age.
+- **Options.**
+  - (a) Spoken forms only.
+  - (b) Change the visible text to full words.
+- **Recommendation.** (a), plus one visible change on the card. The `*_cd` texts are plurals, one / other.
+- **Ages.** Location list glance, Location screen and the incoming card:
+  - New: `data_location_age_min_cd` "%1$d minute ago" / "%1$d minutes ago".
+  - New: `data_location_age_hours_cd` "%1$d hour ago" / "%1$d hours ago".
+  - New: `data_location_age_days_cd` "%1$d day ago" / "%1$d days ago".
+- **Distances.** Wherever "within …" or an offset is shown. The `%1$s` is the formatted number.
+  - New: `data_location_meters_cd` "%1$s meter" / "%1$s meters".
+  - New: `data_location_kilometers_cd` "%1$s kilometer" / "%1$s kilometers".
+  - New: `data_location_feet_cd` "%1$s foot" / "%1$s feet".
+  - New: `data_location_miles_cd` "%1$s mile" / "%1$s miles".
+- **Card.**
+  - Changed: `connections_location_incoming` "%1$s's location · updated %2$s ago · within %3$s".
+  - Changed: `connections_location_incoming_no_accuracy` "%1$s's location · updated %2$s ago".
+- **Fingerprints.** The `ik` fingerprints need no text. They are read character by character, as the safety code
+  is.
+
+**A44. Copy in the wallet gives no confirmation.**
+
+- **Text.** New: `wallet_copied` "Copied". Receive, after Copy, and the transaction detail, after copying the txid.
+- **Note.** The same wording as the existing `connections_copied`, `pair_copied` and `settings_transfer_copied`.
+
+**N8. The unlock spinner can run for minutes with no word, on a cold vault.**
+
+- **Problem.** The member watches a bare spinner for 80 s or more and cannot cancel.
+- **Recommendation.** After 10 s, show the starting line with Cancel (existing `core_ui_cancel`). After 3 minutes,
+  fail with the existing `NO_RESPONSE` text ("Your vault did not answer in time. Try again.").
+- **Text.** New: `unlock_starting` "Starting your vault… This can take a minute or two." Unlock, under the spinner,
+  announced once.
+
+**N14. No offline indication.**
+
+- **Problem.** Actions take about 29 s to fail even when the phone knows it is offline.
+- **Options.**
+  - (a) A shell banner while Android reports no validated network.
+  - (b) Nothing visible; only fail fast.
+- **Recommendation.** (a).
+- **Text.** New: `core_ui_offline_banner` "You're offline. VettID will try again when you're back online."
+  Shown as the shell banner on every unlocked screen and announced once.
+
+**N24. Wallet: long silent waits while Back does nothing.**
+
+- **Problem.** During approve, Back is swallowed for up to about a minute, and only a small spinner shows.
+- **Recommendation.** Show a progress line under the button and announce it. The existing "Checking whether the
+  server has it…" covers the check after a broadcast.
+- **Texts.** Both on wallet Send, the review step:
+  - New: `wallet_send_signing` "Signing with your vault…"
+  - New: `wallet_send_broadcasting` "Sending to %1$s…" (the server's host)
+
+**N27. The map offline blames the map server.**
+
+- **Problem.** With no network the member reads "Check the map server in Settings" and changes a setting that was
+  fine.
+- **Texts.**
+  - Changed: `core_map_load_failed` "The map couldn't be loaded. Check your connection, or the map server in
+    Settings." Position screen, in place of the map.
+  - New: `core_map_retry` "Try again". Same place.
+
+**E3. Lists that say "nothing" when they could not be read.**
+
+- **Problem.** Offline, the connection page says "Alex can fetch nothing from your vault." That is a false
+  statement about what the member shares.
+- **Recommendation.** A failed state with the module's existing "Try again". The wording follows the existing
+  `connections_share_unavailable` ("Sharing could not be read just now.").
+- **Texts.**
+  - New: `items_sharing_unreadable` "What you share with %1$s could not be read just now." Connection sharing by
+    tag.
+  - New: `items_sharing_fetch_unreadable` "What %1$s can fetch could not be read just now." The same screen.
+  - New: `items_shared_unreadable` "What %1$s shares with you could not be read just now." Shared with you.
+  - New: `items_tags_unreadable` "Your tags could not be read just now." Tags.
+  - New: `messages_new_unreadable` "Your connections could not be read just now." The new-message picker.
+  - New: `messages_conversation_unreadable` "This conversation could not be read just now." A conversation, in
+    place of "Say hello".
+
+**E12. Wire codes and raw states shown to members.**
+
+- **Recommendation.** Remove the codes from the sentences. The codes can stay in a "Details" line, as Approvals
+  does.
+- **Update refused.** Both are on unlock and the release update.
+  - Changed: `unlock_update_refused` "The update was refused. Your vault stayed on its current release."
+  - Changed: `release_update_refused_other` "Your vault did not move."
+- **Recovery state.** Settings → Recovery, the active-recovery card.
+  - Changed: `settings_recovery_active_body` "A recovery is under way. Available from %1$s. If you did not start
+    it, cancel it now on the account site."
+  - The raw "State: %1$s." is dropped and the arguments shift.
+- **Verified boot.** Settings → Vault → Attestation, Verified boot. Today it is the literal "Verified",
+  "SelfSigned" and so on.
+  - New: `settings_boot_verified` "Verified".
+  - New: `settings_boot_self_signed` "Verified, with the OS maker's own key" (GrapheneOS).
+  - New: `settings_boot_unverified` "Not verified".
+  - New: `settings_boot_failed` "Failed".
+
+**E22. "Accept the current membership terms" with no way there.**
+
+- **Recommendation.** No new text. Add a button to the notice with the existing `account_portal` ("Open account
+  portal") wherever `data_failure_terms` is shown.
+- **BLOCKED** ("You blocked this vault earlier, so this invitation can't be used to connect.") is accurate under
+  the owner's no-blocking decision of 2026-11-03. Keep it.
+
+**E23. Two generic texts.**
+
+- **Problem.** "Nothing was found." does not say what. "Rejected on your phone." could follow "Setup stopped:".
+- **Texts.**
+  - Changed: `data_failure_not_found` "VettID couldn't find that. It may have been removed."
+  - Changed: `data_failure_rejected` "This was declined on this phone."
+  - Both are used wherever a failure text is shown.
+
+**E28. Action failures titled "Could not load connections".**
+
+- **Problem.** A failed Stop sharing, presence switch or share start says connections could not be loaded.
+- **Options.**
+  - (a) One neutral title.
+  - (b) A title per action.
+- **Recommendation.** (a).
+- **Text.** New: `connections_action_failed_title` "That didn't work". Share sheet, Location screen, position
+  screen, connection page, the presence card on Connections. It sits above the existing failure text.
+
+**E31. "An item you no longer have" when the items simply could not be read.**
+
+- **Text.** New: `approvals_held_items_unreadable_body` "Your items couldn't be read just now, so this request
+  can't be checked yet. Try again, or deny it."
+- **Where.** Approvals, a held agent request, with "Try again" and Deny.
+
+**E33. A failed Stop says "try again" with nothing to retry.**
+
+- **Text.** New: `data_location_stop_retrying` "Stopping. VettID keeps trying until your vault confirms."
+- **Where.** Location screen and connection page, in place of the generic failure under "Stopping…".
+
+**E35. "No location sharing" while the list cannot be read.**
+
+- **Text.** New: `connections_location_unreadable` "Location sharing could not be read just now."
+- **Where.** Location screen, with the existing `connections_retry`.
+
+**E37. Wallet: the vault's reason shown raw, or "(other)".**
+
+- **Recommendation.** When there is no clean reason, use these. A reason that reads cleanly moves to "Details".
+- **Texts.** Both on wallet Send, the result.
+  - New: `wallet_psbt_other_plain` "Your vault would not sign this payment."
+  - New: `wallet_cap_other_plain` "Your vault would not sign this payment right now. Nothing was signed."
+
+**E38. Wallet: every chain-server failure reads "That server didn't answer."**
+
+- **Recommendation.** One text per `ChainError` kind. They show on Chain server, wallet detail and Transactions.
+- **Kept.** `wallet_server_failed` "That server didn't answer." for unreachable and timeout.
+- **New texts.**
+  - `wallet_server_redirected` "That server sent VettID to another address. Enter its final address."
+  - `wallet_server_not_found` "That server doesn't have what VettID asked for. Check the address."
+  - `wallet_server_bad_status` "That server answered with an error (%1$d)." (the HTTP status)
+  - `wallet_server_malformed` "That server's answer couldn't be read."
+  - `wallet_server_too_large` "That server's answer was too large."
+  - `wallet_server_too_many` "This wallet has more transactions than that server will list."
+
+**A35. "Edit this rule" said with the rule's name twice.**
+
+- **Problem.** The rule row's click label reuses `devices_rule_row_cd`, so TalkBack says "double tap to <name>:
+  edit this rule" after already reading the name.
+- **Text.** New: `devices_rule_edit_label` "Edit this rule". Agent rules page, each rule's click label.
+
+**E27. Share sheet: a bare spinner while availability is read.**
+
+- **Text.** New: `connections_share_checking` "Checking who can see your location…" Share sheet, the progress row
+  while availability is read, announced once.
+
+### Count
+
+Six decision items:
+
+- N21 (asked separately);
+- A18, which A36 follows;
+- A11;
+- N11;
+- E14;
+- A47 (resolved by #292).
+
+Twenty-four text items:
+
+- A2, A7, A13, A20, A24, A35, A42, A43, A44;
+- N8, N14, N24, N27;
+- E3, E12, E22, E23, E27, E28, E31, E33, E35, E37, E38.
+
+That is 30 items in all. A35 and E27 were added after the fixes: each is partly done in code and needs its text to
+finish.
+
+Not owner items:
+
+- **A46** ("north-east" → "northeast") falls under the owner's American English rule of 2026-11-05.
+- **A30** needs no text: Send's steps can use the existing `wallet_send_review_title`.
