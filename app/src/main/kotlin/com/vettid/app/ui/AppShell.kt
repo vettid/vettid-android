@@ -320,7 +320,7 @@ fun AppShell(
                         failure = deletionFailure,
                     )
                 }
-// The relay refused the vault's new key (0.84.0 §3.4): lasts while `vault.status` has `relay: "refused"`.
+                // The relay refused the vault's new key (0.84.0 §3.4): lasts while `vault.status` has `relay: "refused"`.
                 if (relayShown) {
                     RelayRefusedNotice(
                         first = !alarmShown && !deletionShown,

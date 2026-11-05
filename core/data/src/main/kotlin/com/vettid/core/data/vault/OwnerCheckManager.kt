@@ -236,6 +236,7 @@ class OwnerCheckManager(
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
         causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true
+        // Also bumps the epoch, so a status read that began before this lock is dropped (a probe's own check ran before this).
         clearRelay() // a lock found by a probe or by ten failed checks
     }
 
@@ -694,7 +695,7 @@ class OwnerCheckManager(
         keepCount = false
         view.value = null
         clearRelay()
-        rotationFailedSeen.clear()
+        synchronized(rotationFailedSeen) { rotationFailedSeen.clear() }
         markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()

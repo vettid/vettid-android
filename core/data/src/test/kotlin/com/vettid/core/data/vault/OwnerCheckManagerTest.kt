@@ -142,7 +142,15 @@ class OwnerCheckManagerTest {
         }
     }
 
+    /** Waits (bounded) until [ops] has started [n] `statusRead`s: the async read is then held at its gate. */
+    private fun awaitReads(ops: Ops, n: Int) {
+        val end = System.nanoTime() + AWAIT_NS
+        while (ops.reads < n && System.nanoTime() < end) Thread.sleep(SETTLE_MS)
+        assertTrue("the read did not start", ops.reads >= n)
+    }
+
     private companion object {
+        const val AWAIT_NS = 30_000_000_000L
         const val SETTLE_TRIES = 500
         const val SETTLE_MS = 10L
     }
@@ -988,7 +996,7 @@ class OwnerCheckManagerTest {
             }
             val m = manager(ops)
             val late = this.async(Dispatchers.Default) { runCatching { m.refreshOwnerCheck() } }
-            Thread.sleep(200)
+            awaitReads(ops, 1)
             lock(m)
             ops.statusGate!!.complete(Unit)
             late.await()
@@ -1007,7 +1015,7 @@ class OwnerCheckManagerTest {
         val m = manager(ops)
         val firstGate = ops.statusGate!!
         val old = this.async(Dispatchers.Default) { runCatching { m.refreshOwnerCheck() } }
-        Thread.sleep(200)
+        awaitReads(ops, 1)
         ops.statusGate = null
         ops.relayRefused = false
         m.refreshOwnerCheck()
