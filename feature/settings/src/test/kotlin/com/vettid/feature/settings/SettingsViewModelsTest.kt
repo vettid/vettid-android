@@ -56,6 +56,21 @@ class SettingsViewModelsTest {
         SettingsViewModel(vault, vault, prefs, lock, vault, com.vettid.core.testing.FakeReleaseUpdates(), allowance)
 
     @Test
+    fun theMapServerRowIsOfferedOnlyWhereTheVaultHasLocation() = runTest {
+        val location = com.vettid.core.testing.FakeLocation()
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNSUPPORTED
+        val vm = SettingsViewModel(
+            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates(), screenshots(),
+            location = location,
+        )
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.mapServerShown)
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.AVAILABLE
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.mapServerShown)
+    }
+
+    @Test
     fun allowScreenshotsIsOffUntilTurnedOnAndNeverStoredOrSentToTheVault() = runTest {
         val allowance = screenshots()
         val vm = viewModel(allowance)

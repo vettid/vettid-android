@@ -3,7 +3,9 @@ package com.vettid.feature.connections
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,10 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -47,6 +51,9 @@ import com.vettid.core.data.location.PositionText
 import com.vettid.core.data.location.ReceivedPosition
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareTime
+import com.vettid.core.data.map.MapServer
+import com.vettid.core.data.map.MapSetting
+import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -55,6 +62,11 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.map.MapCircle
+import com.vettid.core.map.MapContent
+import com.vettid.core.map.MapLibreSurface
+import com.vettid.core.map.MapPoint
+import com.vettid.core.map.MapSurface
 import com.vettid.core.ui.components.AlertDialog
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
@@ -529,7 +541,7 @@ private fun precisionLabel(p: SharePrecision): Int = when (p) {
     SharePrecision.CITY -> R.string.connections_location_city
 }
 
-// --- the position (no map in L1) ---
+// --- the position (the map is L2) ---
 
 /** What the position screen shows. The coordinates are text here, in memory, and in no saved state. */
 data class PositionUiState(
@@ -542,6 +554,10 @@ data class PositionUiState(
     val errorCode: String? = null,
     /** The daily owner check is due or held, or overdue locally while the state is still OK: nothing of the share is shown or said. */
     val held: Boolean = false,
+    /** The map server in force and whether its privacy note was answered; null until the settings are read. Settings, not location data. */
+    val mapSetting: MapSetting? = null,
+    /** "Not now" was tapped on the note: no map for this visit (memory only; the note comes again next time). */
+    val mapDeclined: Boolean = false,
 ) {
     /** The "hands the position to another app" question is open: the daily check waits for the decision. */
     val holdsInput: Boolean get() = confirmMaps
@@ -555,6 +571,7 @@ class PositionViewModel @Inject constructor(
     private val location: LocationRepository = NoLocation,
     private val connections: ConnectionsRepository,
     private val ownerCheck: com.vettid.core.data.vault.OwnerCheckRepository,
+    private val prefs: PreferencesRepository,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[PositionRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(PositionUiState())
@@ -577,7 +594,9 @@ class PositionViewModel @Inject constructor(
         },
         connections.connections,
         offset,
-    ) { s, (share, h), cs, o ->
+        prefs.preferences.map { MapServer.of(it) }
+            .distinctUntilChanged { a, b -> a.styleUrl == b.styleUrl && a.noteAnswered == b.noteAnswered },
+    ) { s, (share, h), cs, o, m ->
         PositionUiState(
             loaded = true,
             name = cs.firstOrNull { it.id == id }?.let { sharingName(it) },
@@ -587,6 +606,8 @@ class PositionViewModel @Inject constructor(
             error = s.error,
             errorCode = s.errorCode,
             held = h,
+            mapSetting = m,
+            mapDeclined = s.mapDeclined,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, PositionUiState())
 
@@ -630,6 +651,14 @@ class PositionViewModel @Inject constructor(
     }
 
     fun askMaps() = local.update { it.copy(confirmMaps = true) }
+
+    /** "Show map": the note is answered for [host] (the one it named), and only then is anything fetched. */
+    fun showMap(host: String) {
+        viewModelScope.launch { prefs.setMapNoteHost(host) }
+    }
+
+    /** "Not now": no map on this visit, nothing fetched. */
+    fun mapNotNow() = local.update { it.copy(mapDeclined = true) }
 
     fun dismissMaps() = local.update { it.copy(confirmMaps = false) }
 }
@@ -682,7 +711,16 @@ private fun PositionCard(
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> Unit, onAskMaps: () -> Unit, onDismissMaps: () -> Unit) {
+fun PositionScreen(
+    state: PositionUiState,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onAskMaps: () -> Unit,
+    onDismissMaps: () -> Unit,
+    onShowMap: (String) -> Unit = {},
+    onMapNotNow: () -> Unit = {},
+    map: MapSurface = MapLibreSurface,
+) {
     HoldsInput(state.holdsInput)
     val context = LocalContext.current
     val now = rememberNow()
@@ -709,6 +747,7 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
             }
             val share = state.share
             val p = share?.last
+            if (share != null && p != null) PositionMap(state, share, p, name, onShowMap, onMapNotNow, map)
             when {
                 share == null && state.loaded && state.error == null && !state.held -> Text(
                     stringResource(R.string.connections_location_position_none, name),
@@ -751,5 +790,83 @@ fun PositionScreen(state: PositionUiState, onBack: () -> Unit, onRefresh: () -> 
             },
             onDismiss = onDismissMaps,
         )
+    }
+}
+
+// --- the map (Location L2) ---
+
+/** What the map is asked to draw for [share]'s latest position [p]: the circle, and the trail when the share allows it and it is held. */
+internal fun mapContentOf(share: IncomingShare, p: ReceivedPosition, styleUrl: String): MapContent {
+    val trail = if (share.trail) {
+        (share.snapshot + share.trailPoints + p).distinctBy { it.at }.sortedBy { it.at }.map { MapPoint(it.lat, it.lon) }
+    } else {
+        emptyList()
+    }
+    return MapContent(
+        styleUrl = styleUrl,
+        position = MapPoint(p.lat, p.lon),
+        radiusM = MapCircle.radiusM(p.accuracyM, PositionText.nominalRadius(share.precision)),
+        trail = MapCircle.trailOf(trail),
+        shareKey = share.shareId,
+        showPoint = share.precision == SharePrecision.EXACT,
+    )
+}
+
+private val MAP_HEIGHT = 280.dp
+
+/**
+ * Above the text of the position: the privacy note with **Show map** and **Not now** until the note is answered for the map
+ * server's host, then the map. Nothing is fetched before Show map (the map is not composed). Only called with a position, so
+ * it is never composed while the share is hidden (held, ended, locked).
+ */
+@Composable
+private fun PositionMap(
+    state: PositionUiState,
+    share: IncomingShare,
+    p: ReceivedPosition,
+    name: String,
+    onShowMap: (String) -> Unit,
+    onNotNow: () -> Unit,
+    map: MapSurface,
+) {
+    val setting = state.mapSetting
+    when {
+        setting == null || state.mapDeclined -> Unit
+        !setting.noteAnswered -> MapNote(setting.host, { onShowMap(setting.host) }, onNotNow)
+        else -> {
+            val description = stringResource(R.string.connections_location_map_cd, name)
+            Box(
+                Modifier.fillMaxWidth().height(MAP_HEIGHT).clip(MaterialTheme.shapes.medium)
+                    .semantics { contentDescription = description }.testTag("position_map_box"),
+            ) {
+                map.Show(mapContentOf(share, p, setting.styleUrl), Modifier.fillMaxSize())
+            }
+        }
+    }
+}
+
+/** The owner-approved note about the tile server (2026-11-05), the server's host, and the two answers. */
+@Composable
+private fun MapNote(host: String, onShow: () -> Unit, onNotNow: () -> Unit) {
+    DetailCard(Modifier.testTag("position_map_note")) {
+        Text(stringResource(R.string.connections_location_map_note), modifier = Modifier.testTag("position_map_note_text"))
+        Text(
+            stringResource(R.string.connections_location_map_server, host),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("position_map_host"),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            PrimaryButton(
+                stringResource(R.string.connections_location_map_show),
+                onShow,
+                modifier = Modifier.weight(1f).testTag("position_map_show"),
+            )
+            SecondaryButton(
+                stringResource(R.string.connections_location_map_not_now),
+                onNotNow,
+                modifier = Modifier.weight(1f).testTag("position_map_not_now"),
+            )
+        }
     }
 }

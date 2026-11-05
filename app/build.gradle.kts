@@ -121,6 +121,9 @@ android {
             ) {
                 applicationIdSuffix = ".callscheck"
             }
+            // ARM only (owner decision 2026-11-05), both distributions and the check build with calls: x86 is for emulators.
+            // Debug, devStack and staging keep every ABI (`check<Variant>Calls` pins staging's libraries for all four).
+            ndk { abiFilters += AbiRules.RELEASE }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -138,6 +141,8 @@ android {
         // production apps install side by side. Never published to a store.
         create("staging") {
             initWith(getByName("release"))
+            // initWith copies the release's ARM-only filter: staging keeps every ABI.
+            ndk.abiFilters.clear()
             applicationIdSuffix = ".staging"
             versionNameSuffix = "-staging"
             matchingFallbacks += listOf("release")
@@ -199,6 +204,8 @@ android {
         jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
         // The same for the wallet's secp256k1 library (:core:chain; `check<Variant>Wallet` compares it with the pinned bytes).
         jniLibs.keepDebugSymbols += "**/libsecp256k1-jni.so"
+        // The same for the map's MapLibre library (:core:map, Location L2): the bytes of the pinned artifact, whatever the machine.
+        jniLibs.keepDebugSymbols += "**/libmaplibre.so"
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 
@@ -587,6 +594,33 @@ abstract class NoGoogleCheck : DefaultTask() {
     }
 }
 
+/** Which native-library ABIs a build carries: a release is ARM only (owner decision 2026-11-05); debug, devStack and staging have all. */
+object AbiRules {
+    val RELEASE = listOf("arm64-v8a", "armeabi-v7a")
+    val ALL = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+}
+
+/** Fails a release APK that carries a native library for an ABI other than [AbiRules.RELEASE] (`lib/x86/`, `lib/x86_64/`). */
+abstract class ReleaseAbiCheck : DefaultTask() {
+    @get:InputFiles
+    abstract val apkDir: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
+        require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
+        for (apk in apks) {
+            ZipFile(apk).use { z ->
+                val abis = z.entries().asSequence().map { it.name }.filter { it.startsWith("lib/") }
+                    .map { it.removePrefix("lib/").substringBefore('/') }.toSortedSet()
+                val extra = abis - AbiRules.RELEASE.toSet()
+                check(extra.isEmpty()) { "${apk.name}: native libraries for ABIs a release does not carry: $extra" }
+                logger.lifecycle("${apk.name}: native libraries for $abis only")
+            }
+        }
+    }
+}
+
 /**
  * The wallet (:core:chain, bitcoin-kmp; ANDROID-PLAN §4 "Wallet", W1) is in the builds that are meant to have it and in no other.
  * With [expected] off (a production release): no `libsecp256k1-jni.so` and no class of ACINQ's libraries or of :core:chain in the dex.
@@ -596,6 +630,9 @@ abstract class NoGoogleCheck : DefaultTask() {
 abstract class WalletApkCheck : DefaultTask() {
     @get:InputFiles
     abstract val apkDir: DirectoryProperty
+
+    @get:Input
+    abstract val abis: ListProperty<String>
 
     @get:Input
     abstract val expected: Property<Boolean>
@@ -623,7 +660,8 @@ abstract class WalletApkCheck : DefaultTask() {
                     .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
                 val classes = DEX.filter { dex.contains(it) }
                 if (expected.get()) {
-                    check(libs == NATIVE_SHA256) { "${apk.name}: the wallet's native libraries are $libs, expected $NATIVE_SHA256 (universal, unchanged)" }
+                    val pinned = NATIVE_SHA256.filterKeys { it in abis.get() }
+                    check(libs == pinned) { "${apk.name}: the wallet's native libraries are $libs, expected $pinned" }
                     logger.lifecycle("${apk.name}: wallet: libsecp256k1-jni.so for ${libs.keys.sorted()}, each as pinned")
                 } else {
                     check(libs.isEmpty() && classes.isEmpty()) {
@@ -669,6 +707,9 @@ abstract class CallsApkCheck : DefaultTask() {
     abstract val manifest: RegularFileProperty
 
     @get:Input
+    abstract val abis: ListProperty<String>
+
+    @get:Input
     abstract val expected: Property<Boolean>
 
     @TaskAction
@@ -702,7 +743,8 @@ abstract class CallsApkCheck : DefaultTask() {
                     .joinToString("\u0000") { e -> z.getInputStream(e).use { String(it.readBytes(), Charsets.ISO_8859_1) } }
                 val classes = DEX.filter { dex.contains(it) }
                 if (expected.get()) {
-                    check(libs == NATIVE_SHA256) { "${apk.name}: the media stack's native libraries are $libs, expected $NATIVE_SHA256 (universal, unchanged)" }
+                    val pinned = NATIVE_SHA256.filterKeys { it in abis.get() }
+                    check(libs == pinned) { "${apk.name}: the media stack's native libraries are $libs, expected $pinned" }
                     check(DEX[0] in classes) { "${apk.name}: calls are expected in this build, but the media stack's classes are missing" }
                     logger.lifecycle("${apk.name}: calls: the media stack for ${libs.keys.sorted()}, each library as pinned")
                 } else {
@@ -987,12 +1029,14 @@ androidComponents {
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
                 expected.set(staging || callsInRelease)
+                abis.set(if (staging) AbiRules.ALL else AbiRules.RELEASE)
             }
         }
         if (staging || v.buildType == "release") {
             tasks.register<WalletApkCheck>("check${name}Wallet") {
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 expected.set(staging || walletInRelease)
+                abis.set(if (staging) AbiRules.ALL else AbiRules.RELEASE)
             }
         }
         if (staging) {
@@ -1004,8 +1048,9 @@ androidComponents {
         }
         when (v.buildType) {
             "release" -> {
+                tasks.register<ReleaseAbiCheck>("check${name}Abi") { apkDir.set(v.artifacts.get(SingleArtifact.APK)) }
                 val contents = tasks.register<ApkContentCheck>(if (foss) "checkFossReleaseApkContents" else "checkReleaseApk") {
-                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}Wallet")
+                    dependsOn("check${name}PushManifest", "check${name}ApplicationId", "check${name}Calls", "check${name}Wallet", "check${name}Abi")
                     apkDir.set(v.artifacts.get(SingleArtifact.APK))
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(
@@ -1064,6 +1109,8 @@ dependencies {
     implementation(projects.core.notify)
     // Sharing the member's location (ANDROID-PLAN §4 "Location", L1a): in both distributions, no Google code, no background location.
     implementation(projects.core.location)
+    // The map is given the shared HTTP client (AppModule.locationRepository); the libraries are :core:map's.
+    implementation(projects.core.map)
     // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.calls)
