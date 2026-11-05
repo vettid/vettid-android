@@ -211,6 +211,7 @@ class PositionMapTest {
         assertEquals(1_000.0, c.radiusM, 0.0)
         assertEquals(2, c.trail.size)
         assertEquals(52.5, c.position.lat, 0.0)
+        assertEquals("the camera re-frames for another share", "in1", c.shareKey)
         assertEquals("MapContent", c.toString())
     }
 

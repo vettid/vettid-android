@@ -54,8 +54,13 @@ class MapRequestPolicyTest {
 
     private class Captured(var request: Request? = null)
 
+    /** The app's shared client as far as this test needs it: an interceptor that sets the VettID User-Agent, like `fixedUserAgent`. */
+    private val shared = okhttp3.OkHttpClient.Builder()
+        .addInterceptor(Interceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", "VettID-Android").build()) })
+        .build()
+
     private fun call(url: String, only: String?, c: Captured, headers: Map<String, String> = emptyMap()): Response {
-        val client = MapNetwork.client { only }.newBuilder()
+        val client = MapNetwork.derive(shared) { only }.newBuilder()
             .addInterceptor(
                 Interceptor { chain ->
                     c.request = chain.request()
@@ -72,6 +77,7 @@ class MapRequestPolicyTest {
         val c = Captured()
         call("https://tiles.openfreemap.org/a", ofm, c, mapOf("User-Agent" to "com.vettid.app/1.0 MapLibre Android/13.7.1"))
         assertEquals("Mozilla/5.0", c.request!!.header("User-Agent"))
+        assertFalse(c.request!!.header("User-Agent")!!.contains("VettID"))
         assertFalse(c.request!!.headers.toString().contains("vettid", ignoreCase = true))
     }
 
@@ -90,9 +96,40 @@ class MapRequestPolicyTest {
 
     @Test
     fun noRedirectIsFollowedAndThereIsNoCache() {
-        val client = MapNetwork.client { ofm }
+        val client = MapNetwork.derive(shared) { ofm }
         assertFalse(client.followRedirects)
         assertFalse(client.followSslRedirects)
         assertNull(client.cache)
+    }
+
+    @Test
+    fun theDerivedClientKeepsTheSharedOnesInterceptorsButOursRunLastAndWin() {
+        val client = MapNetwork.derive(shared) { ofm }
+        assertEquals(shared.interceptors.size + 1, client.interceptors.size)
+        val c = Captured()
+        call("https://tiles.openfreemap.org/a", ofm, c, mapOf("User-Agent" to "x"))
+        assertEquals("Mozilla/5.0", c.request!!.header("User-Agent"))
+    }
+
+    @Test
+    fun queriesWithAwkwardCharactersDoNotChangeTheServer() {
+        assertTrue(MapRequestPolicy.allows("https://tiles.openfreemap.org/s?key=a|b&x={z}", ofm))
+        assertTrue(MapRequestPolicy.allows("https://tiles.openfreemap.org/planet/{z}/{x}/{y}.pbf?a=|", ofm))
+        assertFalse(MapRequestPolicy.allows("https://evil.example/s?host=tiles.openfreemap.org|{x}", ofm))
+        assertFalse(MapRequestPolicy.allows("https://evil.example/@tiles.openfreemap.org/s", ofm))
+        assertFalse(MapRequestPolicy.allows("https://tiles.openfreemap.org@evil.example/s", ofm))
+        val c = Captured()
+        call("https://tiles.openfreemap.org/s?key=a|b&x={z}", ofm, c)
+        assertEquals("tiles.openfreemap.org", c.request!!.url.host)
+    }
+
+    @Test
+    fun withNoSharedClientInstalledThereIsNoClient() {
+        try {
+            MapNetwork.client()
+            fail("a client was made without the shared one")
+        } catch (_: IllegalStateException) {
+            // the set-up turns this into FAILED
+        }
     }
 }

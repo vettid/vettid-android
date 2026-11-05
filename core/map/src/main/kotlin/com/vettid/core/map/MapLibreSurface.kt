@@ -65,8 +65,8 @@ private const val POINT_STROKE = 2f
 @Composable
 private fun MapHost(content: MapContent, modifier: Modifier) {
     val context = LocalContext.current
-    // The only server the map may reach: set before any map or request exists.
-    MapSdk.allowOnly(content.styleUrl)
+    // The only server the map may reach: set before the style is loaded (this effect is recorded before the map's own).
+    SideEffect { MapSdk.allowOnly(content.styleUrl) }
     LaunchedEffect(Unit) { MapSdk.prepare(context) }
     val sdk by MapSdk.state.collectAsState()
     when (sdk) {

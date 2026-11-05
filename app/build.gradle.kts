@@ -1109,6 +1109,8 @@ dependencies {
     implementation(projects.core.notify)
     // Sharing the member's location (ANDROID-PLAN §4 "Location", L1a): in both distributions, no Google code, no background location.
     implementation(projects.core.location)
+    // The map is given the shared HTTP client (AppModule.locationRepository); the libraries are :core:map's.
+    implementation(projects.core.map)
     // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.calls)

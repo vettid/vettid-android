@@ -807,6 +807,7 @@ internal fun mapContentOf(share: IncomingShare, p: ReceivedPosition, styleUrl: S
         position = MapPoint(p.lat, p.lon),
         radiusM = MapCircle.radiusM(p.accuracyM, PositionText.nominalRadius(share.precision)),
         trail = MapCircle.trailOf(trail),
+        shareKey = share.shareId,
     )
 }
 

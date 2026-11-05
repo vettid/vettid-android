@@ -21,7 +21,7 @@ class MapSdkTest {
         // The SDK is told the configuration before a map is made, and the cache is cleared.
         assertTrue(sdk.contains("setMaximumAmbientCacheSize("))
         assertTrue(sdk.contains("MapSdkState.READY") && sdk.contains("MapSdkState.FAILED"))
-        assertTrue(sdk.contains("setOkHttpClient(MapNetwork.client())"))
+        assertTrue(sdk.contains("HttpRequestUtil::setOkHttpClient") && sdk.contains("useClient(MapNetwork.client())"))
         assertTrue(sdk.contains("setResourceTransform"))
         assertTrue(sdk.contains("clearAmbientCache("))
         assertTrue(sdk.contains("Logger.setVerbosity(Logger.NONE)"))

@@ -1,18 +1,20 @@
 package com.vettid.core.map
 
 import okhttp3.Dispatcher
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import java.io.IOException
-import java.net.URI
-import java.net.URISyntaxException
 
 /**
  * Where the map may reach. The note told the member one server, so the map reaches that server and nothing else: **https only**,
- * and only the noted server's host and port ([allowed], the authority of the style address). A style or a TileJSON that names
- * another host (a sprite, glyphs, tiles), `mapbox:` or `maptiler:` (which the SDK turns into api.mapbox.com or api.maptiler.com),
- * `file:` or `asset:` gets nothing; a redirect is not followed. Pure, so it is unit-tested without the SDK.
+ * and only the noted server's host and port ([allowed], the authority of the style address). Every network request the SDK makes
+ * goes through [MapNetwork]'s client, which refuses any other host (a sprite, glyphs, tiles or a TileJSON the style names,
+ * `mapbox:` or `maptiler:` after the SDK turns them into api.mapbox.com or api.maptiler.com) and follows no redirect. The SDK's
+ * resource transform sees only the online source, so `file:` and `asset:` addresses in a style are NOT stopped by it: MapLibre
+ * could read a local or packaged file to draw it, with nothing sent anywhere. Pure, so it is unit-tested without the SDK.
  */
 object MapRequestPolicy {
     /** A generic header: nothing that tells the tile server a VettID member is looking at a location. */
@@ -28,19 +30,15 @@ object MapRequestPolicy {
     var allowed: String? = null
 
     /** `host`, or `host:port` for a port other than 443; null when [url] is not an https address with a host. */
-    fun authorityOf(url: String): String? {
-        val uri = try {
-            URI(url.trim())
-        } catch (_: URISyntaxException) {
-            return null
-        }
-        val host = uri.host?.lowercase()
-        return when {
-            !"https".equals(uri.scheme, ignoreCase = true) || host.isNullOrEmpty() -> null
-            uri.port == -1 || uri.port == HTTPS_PORT -> host
-            else -> "$host:${uri.port}"
-        }
+    fun authorityOf(url: String): String? = url.trim().toHttpUrlOrNull()?.let { authorityOf(it) }
+
+    fun authorityOf(url: HttpUrl): String? {
+        if (!url.isHttps) return null
+        val host = if (':' in url.host) "[${url.host}]" else url.host
+        return if (url.port == HTTPS_PORT) host else "$host:${url.port}"
     }
+
+    fun allows(url: HttpUrl, only: String? = allowed): Boolean = only != null && authorityOf(url) == only
 
     fun allows(url: String, only: String? = allowed): Boolean = only != null && authorityOf(url) == only
 
@@ -48,11 +46,29 @@ object MapRequestPolicy {
     fun transform(url: String, only: String? = allowed): String = if (allows(url, only)) url else REFUSED
 }
 
-/** The client the SDK loads with: the rule above on every request, no redirects, no cache, a generic User-Agent. */
+/**
+ * The client the SDK loads with. It derives from the app's shared client ([install], from AppModule: its pool, network gate and
+ * retry stay), clears the cache, follows no redirect, and adds the rule above and a generic User-Agent **after** the shared
+ * client's own interceptors, so "Mozilla/5.0" is what goes out and not the app's. Without an installed client there is none:
+ * the set-up fails, and a fresh client is never made.
+ */
 object MapNetwork {
     private const val PER_HOST = 20
 
-    fun client(only: () -> String? = { MapRequestPolicy.allowed }): OkHttpClient = OkHttpClient.Builder()
+    @Volatile
+    private var base: OkHttpClient? = null
+
+    /** Gives the map the app's shared client. */
+    fun install(shared: OkHttpClient) {
+        base = shared
+    }
+
+    /** The map's client, or an [IllegalStateException] when [install] has not been called. */
+    fun client(only: () -> String? = { MapRequestPolicy.allowed }): OkHttpClient =
+        derive(checkNotNull(base) { "no shared client installed" }, only)
+
+    fun derive(shared: OkHttpClient, only: () -> String? = { MapRequestPolicy.allowed }): OkHttpClient = shared.newBuilder()
+        .cache(null)
         .followRedirects(false)
         .followSslRedirects(false)
         .dispatcher(Dispatcher().apply { maxRequestsPerHost = PER_HOST })
@@ -61,7 +77,7 @@ object MapNetwork {
 
     private fun proceed(chain: Interceptor.Chain, only: String?): Response {
         val request = chain.request()
-        if (!MapRequestPolicy.allows(request.url.toString(), only)) throw IOException("refused")
+        if (!MapRequestPolicy.allows(request.url, only)) throw IOException("refused")
         return chain.proceed(request.newBuilder().header("User-Agent", MapRequestPolicy.USER_AGENT).build())
     }
 }

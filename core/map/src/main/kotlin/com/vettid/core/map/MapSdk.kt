@@ -1,9 +1,14 @@
 package com.vettid.core.map
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import org.maplibre.android.MapLibre
 import org.maplibre.android.log.Logger
 import org.maplibre.android.module.http.HttpRequestUtil
@@ -26,8 +31,15 @@ interface SdkEngine {
     fun installNetwork(context: Context)
 }
 
+/** How long the cache setting may take before the set-up counts as failed. */
+private const val TIMEOUT_MS = 10_000L
+
 /** Sets the SDK up once, in order, and says when a map may be made. */
-class MapSdkSetup(private val engine: SdkEngine) {
+class MapSdkSetup(
+    private val engine: SdkEngine,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val timeoutMs: Long = TIMEOUT_MS,
+) {
     private val flow = MutableStateFlow(MapSdkState.IDLE)
     val state: StateFlow<MapSdkState> = flow.asStateFlow()
 
@@ -40,8 +52,14 @@ class MapSdkSetup(private val engine: SdkEngine) {
             engine.silenceLogging()
             engine.initialise(context.applicationContext)
             engine.installNetwork(context.applicationContext)
+            // A cache setting that never answers is a failure, not a wait for ever.
+            val timeout = scope.launch {
+                delay(timeoutMs)
+                flow.compareAndSet(MapSdkState.PREPARING, MapSdkState.FAILED)
+            }
             engine.holdCache(context.applicationContext, MapSdk.AMBIENT_CACHE_BYTES) { ok ->
-                flow.value = if (ok) MapSdkState.READY else MapSdkState.FAILED
+                timeout.cancel()
+                flow.compareAndSet(MapSdkState.PREPARING, if (ok) MapSdkState.READY else MapSdkState.FAILED)
             }
         } catch (_: RuntimeException) {
             flow.value = MapSdkState.FAILED
@@ -59,7 +77,8 @@ class MapSdkSetup(private val engine: SdkEngine) {
  * - **no log**: [Logger] is set to NONE (it could log coordinates);
  * - **only the noted server**: [MapRequestPolicy] and [MapNetwork] (https, that host and port, no redirect, generic User-Agent);
  * - **no location**: no location component, engine or permission use; the received position is drawn by this module.
- * Nothing runs before the member has answered the note: [prepare] is called by "Show map" and by the map itself.
+ * Nothing runs before the member has answered the note: [prepare] is called by "Show map" and by the map itself. The set-up fails
+ * (never makes a client of its own) when the app has not given [MapNetwork] its shared client.
  */
 object MapSdk {
     /** The ambient (tile) cache's size. Zero: nothing a map loads is kept. */
@@ -92,7 +111,9 @@ private object MapLibreEngine : SdkEngine {
     }
 
     override fun installNetwork(context: Context) {
-        HttpRequestUtil.setOkHttpClient(MapNetwork.client())
+        // The SDK's one hook for a client; given by reference, the client itself is derived from the app's shared one.
+        val useClient: (okhttp3.Call.Factory) -> Unit = HttpRequestUtil::setOkHttpClient
+        useClient(MapNetwork.client())
         FileSource.getInstance(context).setResourceTransform { _, url -> MapRequestPolicy.transform(url) }
     }
 

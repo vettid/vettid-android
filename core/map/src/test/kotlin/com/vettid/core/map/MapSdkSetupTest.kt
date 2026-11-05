@@ -1,6 +1,10 @@
 package com.vettid.core.map
 
 import android.content.Context
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -9,6 +13,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /** The SDK is set up in order, and a map is made only when the cache has been held to zero. */
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class MapSdkSetupTest {
@@ -75,5 +80,32 @@ class MapSdkSetupTest {
         val crash = MapSdkSetup(Engine(crash = true))
         crash.prepare(context)
         assertEquals(MapSdkState.FAILED, crash.state.value)
+    }
+
+    @Test
+    fun aCacheSettingThatNeverAnswersFailsAfterTheTimeout() = runTest {
+        val e = Engine(deferCache = true)
+        val setup = MapSdkSetup(e, backgroundScope, 10_000)
+        setup.prepare(context)
+        runCurrent()
+        assertEquals(MapSdkState.PREPARING, setup.state.value)
+        advanceTimeBy(9_999)
+        assertEquals(MapSdkState.PREPARING, setup.state.value)
+        advanceTimeBy(2)
+        assertEquals(MapSdkState.FAILED, setup.state.value)
+        // A late answer does not undo it.
+        e.finish!!(true)
+        assertEquals(MapSdkState.FAILED, setup.state.value)
+    }
+
+    @Test
+    fun anAnswerInTimeCancelsTheTimeout() = runTest {
+        val e = Engine(deferCache = true)
+        val setup = MapSdkSetup(e, backgroundScope, 10_000)
+        setup.prepare(context)
+        runCurrent()
+        e.finish!!(true)
+        advanceTimeBy(20_000)
+        assertEquals(MapSdkState.READY, setup.state.value)
     }
 }
