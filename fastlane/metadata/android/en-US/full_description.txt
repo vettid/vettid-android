@@ -15,7 +15,7 @@ Privacy:
 * The app checks your vault's enclave attestation against VettID's published releases.
 * VettID's relay cannot read what it carries; it sees timing and sizes. VettID's account service knows your account and when your vault is unlocked.
 * No position is stored on the phone.
-* Screenshots of VettID are blocked.
+* Screenshots of VettID are blocked unless you allow them, for at most an hour.
 
 This build contains no Google software. Notifications come through VettID's on-phone service, which keeps its own connection to your vault. Calls and the Bitcoin wallet are not included.
 
