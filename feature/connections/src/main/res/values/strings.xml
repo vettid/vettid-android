@@ -414,7 +414,7 @@
     <!-- NEW: not in the plan (the map\'s content description, for screen readers) -->
     <string name="connections_location_map_cd">Map showing %1$s\'s position</string>
     <!-- NEW: not in the plan (a share that is not Exact: the point stands for an area, not the place itself) -->
-    <string name="connections_location_position_area">Centre of an area, not an exact spot.</string>
+    <string name="connections_location_position_area">Center of an area, not an exact spot.</string>
     <!-- NEW: not in the plan (Share for a while from a request while a share to that connection is active) -->
     <string name="connections_location_already_sharing">You\'re already sharing your location with %1$s.</string>
 </resources>
