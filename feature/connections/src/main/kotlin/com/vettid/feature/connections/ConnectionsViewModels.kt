@@ -707,6 +707,11 @@ data class DetailLocation(
     val issue: SendIssue = SendIssue.NONE,
     /** The member stopped it and the vault has not taken the stop yet: "Stopping…" (Stop stays, it is tried again). */
     val stopping: Boolean = false,
+    /**
+     * No position has been accepted by the vault for the share's interval plus 15 minutes (A6 N21): the whole minutes since the
+     * last one, or null. "Your location hasn't reached {First} for {n} minutes." Never while paused.
+     */
+    val stalledMinutes: Int? = null,
 )
 
 /**
@@ -853,7 +858,14 @@ class ConnectionDetailViewModel @Inject constructor(
         LocationView(
             share?.let {
                 val issue = if (sending) service.issue else SendIssue.NONE
-                DetailLocation(it.shareId, it.expiresAt, paused = sending && service.paused, issue = issue, stopping = stopping)
+                DetailLocation(
+                    it.shareId,
+                    it.expiresAt,
+                    paused = sending && service.paused,
+                    issue = issue,
+                    stopping = stopping,
+                    stalledMinutes = if (sending && !stopping && !service.paused) service.stalled[id] else null,
+                )
             },
             id in missed,
         )

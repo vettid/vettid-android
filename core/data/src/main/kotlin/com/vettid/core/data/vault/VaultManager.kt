@@ -1164,10 +1164,15 @@ class VaultManager(
         scope.launch {
             var held = false
             var wasGated = false
+            var previous: OwnerCheckView? = null
             ownerCheck.ownerCheck.collectSurviving("owner check") { v ->
                 val now = OwnProfileStep.held(v)
+                val at = java.time.Instant.now()
+                // The previous value looked at again now: a deadline that passed with no new value was a pause (location's clocks).
+                val lifted = pauseLifted(previous, v, at)
+                previous = v
                 // Presence is sent only while the check is neither due nor held: the probe is asked again when that ends.
-                val gated = v?.gated(java.time.Instant.now()) == true
+                val gated = v?.gated(at) == true
                 val gatedEnded = wasGated && !gated
                 wasGated = gated
                 // Kept first: nothing that throws below leaves it wrong for the next value.
@@ -1205,7 +1210,7 @@ class VaultManager(
                     }
                 }
                 // A check that came due pauses the location sharing, one that passed lets it go on (and a refused stop is tried again).
-                steps.step { location.onGateChanged() }
+                steps.step { location.onGateChanged(lifted) }
                 steps.finish()
             }
         }

@@ -28,7 +28,7 @@ class AndroidLocationPlatformTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private val manager = app.getSystemService(NotificationManager::class.java)
 
-    private fun platform(): AndroidLocationPlatform {
+    private fun platform(names: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap())): AndroidLocationPlatform {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(app.packageName)
         val info = ResolveInfo().apply {
             activityInfo = ActivityInfo().apply {
@@ -38,7 +38,7 @@ class AndroidLocationPlatformTest {
             }
         }
         shadowOf(app.packageManager).addResolveInfoForIntent(intent, info)
-        return AndroidLocationPlatform(app, NoLocation, MutableStateFlow(emptyMap()))
+        return AndroidLocationPlatform(app, NoLocation, names)
     }
 
     @Test
@@ -59,5 +59,111 @@ class AndroidLocationPlatformTest {
     fun withoutTheNotificationPermissionNothingIsPosted() {
         platform().showNotRunning(true)
         assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    private fun title(n: android.app.Notification) = n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString()
+
+    @Test
+    fun aStalledShareIsSaidWithTheNameWhenNamesMayBeShownAndTakenAwayAgain() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val p = platform(MutableStateFlow(mapOf("c1" to "Samira")))
+        p.showStalled("c1", 25)
+        val n = shadowOf(manager).allNotifications.single()
+        assertEquals(Channels.LOCATION, n.channelId)
+        assertEquals("Your location hasn't reached ${com.vettid.core.data.account.AccountNames.isolate("Samira")} for 25 minutes.", title(n))
+        val tap = shadowOf(n.contentIntent).savedIntent
+        assertEquals(com.vettid.core.notify.NotifyIntents.ACTION_OPEN_CONNECTION, tap.action)
+        assertEquals("c1", tap.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_CONNECTION_ID))
+        assertEquals("explicit, to the app's own activity", app.packageName, tap.component?.packageName)
+        assertTrue(shadowOf(n.contentIntent).isActivity)
+        assertTrue("immutable", (shadowOf(n.contentIntent).flags and android.app.PendingIntent.FLAG_IMMUTABLE) != 0)
+        assertEquals("the lock-screen version has no tap and no id", null, n.publicVersion.contentIntent)
+        assertEquals("the lock screen never names anybody", "Your location isn't getting through.", title(n.publicVersion))
+        // The same notice is updated, not doubled.
+        p.updateStalled("c1", 26)
+        assertEquals("Your location hasn't reached ${com.vettid.core.data.account.AccountNames.isolate("Samira")} for 26 minutes.", title(shadowOf(manager).allNotifications.single()))
+        p.clearStalled("c1")
+        assertTrue(shadowOf(manager).allNotifications.isEmpty())
+    }
+
+    @Test
+    fun aStalledShareNamesNobodyUnderTheCover() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        // Under the app lock's cover (or with names hidden) the names map is empty.
+        platform().showStalled("c1", 25)
+        val n = shadowOf(manager).allNotifications.single()
+        assertEquals("Your location isn't getting through.", title(n))
+        assertTrue(!title(n).contains("Samira"))
+    }
+
+    private fun active() = manager.activeNotifications.toList()
+
+    @Test
+    fun aDismissedStallNoticeIsNotPostedAgainByLaterMinutes() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val p = platform()
+        p.showStalled("c1", 16)
+        val a = active().single()
+        manager.cancel(a.tag, a.id) // the member swipes it away
+        p.updateStalled("c1", 17)
+        p.updateStalled("c1", 18)
+        assertTrue(active().isEmpty())
+        // A new stall is a new notice.
+        p.clearStalled("c1")
+        p.showStalled("c1", 16)
+        assertEquals(1, active().size)
+    }
+
+    @Test
+    fun aNamedNoticeLosesTheNameWhenTheCoverComesUp() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val names = MutableStateFlow(mapOf("c1" to "Samira"))
+        val p = platform(names)
+        p.showStalled("c1", 20)
+        assertTrue(title(active().single().notification).contains("Samira"))
+        names.value = emptyMap() // the app lock's cover
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals("Your location isn't getting through.", title(active().single().notification))
+        // Back to names: said again, still the one notice.
+        names.value = mapOf("c1" to "Samira")
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(title(active().single().notification).contains("Samira"))
+    }
+
+    @Test
+    fun aCoverDoesNotBringBackANoticeTheMemberDismissed() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val names = MutableStateFlow(mapOf("c1" to "Samira"))
+        val p = platform(names)
+        p.showStalled("c1", 20)
+        val a = active().single()
+        manager.cancel(a.tag, a.id)
+        names.value = emptyMap()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(active().isEmpty())
+    }
+
+    @Test
+    fun noticesLeftByAProcessThatDiedAreTakenAwayAtTheStart() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val before = platform()
+        before.showStalled("c1", 20)
+        before.showNotRunning(true)
+        assertEquals(2, active().size)
+        platform() // a new process
+        assertTrue(active().isEmpty())
+    }
+
+    @Test
+    fun aClearedNoticeIsNotBroughtBackByTheCoverComingUp() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val names = MutableStateFlow(mapOf("c1" to "Samira"))
+        val p = platform(names)
+        p.showStalled("c1", 20)
+        // A lock: the cover comes up and the share's notice is cleared in the same moment.
+        p.clearStalled("c1")
+        names.value = emptyMap()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(active().isEmpty())
     }
 }
