@@ -48,7 +48,8 @@ class PendingDeletionViewModel @Inject constructor(private val vault: VaultRepos
         failureFlow.value = null
         viewModelScope.launch {
             try {
-                vault.cancelDeletion()
+                // The vault answered "not cancelled" (already gone, or too late): that is not a success either.
+                if (!vault.cancelDeletion()) failureFlow.value = DeletionCancelFailure(FailureKind.OTHER, null)
             } catch (e: VaultFailure) {
                 // The banner stays, and says that it did not go through; the account site can cancel too.
                 failureFlow.value = DeletionCancelFailure(e.kind, e.shownCode)

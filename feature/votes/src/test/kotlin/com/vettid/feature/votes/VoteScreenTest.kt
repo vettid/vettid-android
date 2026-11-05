@@ -513,6 +513,18 @@ class VoteScreenTest {
     }
 
     @Test
+    fun backWhileTheCastIsOnItsWayLeavesTheSheetShown() {
+        val s = summary()
+        var dismissed = 0
+        show(state(s, selected = "yes", cast = CastStep.SENDING), VoteActions(onDismissCast = { dismissed++ }))
+        rule.onNodeWithTag("vote_confirm_sheet").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitForIdle()
+        rule.onNodeWithTag("vote_confirm_sheet").assertIsDisplayed()
+        assertEquals(0, dismissed)
+    }
+
+    @Test
     fun theRestoreQuestionCanBeLeftWithBack() {
         val s = summary().copy(confirmPending = true, canCast = false, cannotCast = "checking")
         val d = detail(s).copy(serviceBallotChoiceId = "yes")

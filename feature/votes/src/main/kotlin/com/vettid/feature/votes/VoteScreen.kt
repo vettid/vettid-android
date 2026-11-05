@@ -3,6 +3,7 @@ package com.vettid.feature.votes
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Arrangement
@@ -574,6 +575,8 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_confirm_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing: Material's own back handler hides the sheet without asking.
+            BackHandler(enabled = sending) {}
             // The app's own sentence, never the proposal's, in its own element and read first.
             Text(
                 stringResource(R.string.vote_disclosure, service),
@@ -630,6 +633,8 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_password_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing: Material's own back handler hides the sheet without asking.
+            BackHandler(enabled = sending) {}
             Text(
                 stringResource(R.string.vote_password_title),
                 style = MaterialTheme.typography.titleMedium,

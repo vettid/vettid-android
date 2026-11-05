@@ -57,6 +57,16 @@ class PendingDeletionTest {
     }
 
     @Test
+    fun aCancelTheVaultAnswersWithNotCancelledIsAFailure() = runTest {
+        val vault = FakeVault(AppPhase.Unlocked)
+        // Not cancellable (no deletion id): the fake answers false, as the vault does for cancelled: false.
+        vault.pendingDeletion.value = DeletionView(Instant.now().plusSeconds(3_600), false, null)
+        val vm = PendingDeletionViewModel(vault)
+        vm.cancel()
+        assertEquals(FailureKind.OTHER, vm.failure.value?.kind)
+    }
+
+    @Test
     fun aFailureGoesWhenTheDeletionChangesOrIsGone() = runTest {
         val vault = FakeVault(AppPhase.Unlocked)
         vault.pendingDeletion.value = DeletionView(Instant.now().plusSeconds(3_600), false, "d1")
