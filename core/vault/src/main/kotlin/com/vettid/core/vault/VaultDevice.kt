@@ -1137,20 +1137,32 @@ class VaultDevice private constructor(
     /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` by
      * default (the settlement passes a long poll) and `max` at its cap, each message handled (a transfer's
-     * `device.paired` applied) and acked. Transport failures are thrown; the
-     * caller bounds the time.
+     * `device.paired` applied) and acked. A failed collect is thrown; a failed ack is not: the message is handled
+     * already, it comes again after its lease and is dropped by the `seenInner` check, and the rest of the batch
+     * (a `device.paired` behind it) must still be handled. The caller bounds the time.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
         val msgs = own.collect(wait, Int.MAX_VALUE)
         for (m in msgs) {
             try {
                 handle(m)
-                own.ack(m.msgId)
+                ackBestEffort(m.msgId)
             } catch (_: LeaveUnacked) {
                 // redelivered after its lease
             }
         }
         return msgs.size
+    }
+
+    @Suppress("TooGenericExceptionCaught") // whatever the ack hits, the batch goes on
+    private suspend fun ackBestEffort(msgId: String) {
+        try {
+            own.ack(msgId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // handled already; redelivered after its lease and dropped as seen
+        }
     }
 
     /** (N1) The app has taken the transferred vault's credential over: the transfer to this phone is finished. */
