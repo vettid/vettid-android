@@ -700,8 +700,9 @@ class PairingManagerTest {
         val s = m.state.value
         assertEquals(PairRole.DESKTOP, s.role)
         assertEquals("pd", (s.stage as PairingStage.Code).code.pairingId)
-        // (Idle runs the reject, and the virtual time the code's own end.)
+        // (Idle runs the virtual time; the reject goes out in the manager's own scope, on a real thread: wait for it.)
         advanceUntilIdle()
+        pump { ops.calls.contains("reject:pa") }
         assertEquals(listOf("create", "create", "reject:pa"), ops.calls)
     }
 
@@ -714,6 +715,7 @@ class PairingManagerTest {
         m.start(PairRole.DESKTOP)
         assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
         advanceUntilIdle()
+        pump { ops.calls.contains("reject:pa") }
         assertTrue(ops.calls.contains("reject:pa"))
     }
 
