@@ -1088,8 +1088,10 @@ class VaultDevice private constructor(
      * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
      * everything.
      */
-    suspend fun abandonTransfer() = lock.withLock {
+    suspend fun abandonTransfer(onlyStartedAt: Instant? = null) = lock.withLock {
         if (st.deviceId != null) return@withLock
+        // The settlement drops only the transfer it settles: not one the member started again meanwhile.
+        if (onlyStartedAt != null && st.transferIn?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock
         dropPairing()
         st.vault = null
         st.transferIn = null
@@ -1120,22 +1122,23 @@ class VaultDevice private constructor(
     /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
      * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
-     * and the round in flight after it. The caller bounds the whole (30 s) and then decides; [abandonTransfer] keeps
-     * everything once `device.paired` was applied.
+     * and the round in flight after it. The caller bounds each (30 s), repeats them for the settle window and then
+     * decides; [abandonTransfer] keeps everything once `device.paired` was applied.
      */
-    suspend fun deadlineCollect() {
+    suspend fun deadlineCollect(wait: Duration = Duration.ZERO) {
         awaitCollectorRound()
-        collectOnce()
+        collectOnce(wait)
         awaitCollectorRound()
     }
 
     /**
-     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` and `max` at
-     * its cap, each message handled (a transfer's `device.paired` applied) and acked. Transport failures are thrown; the
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` by
+     * default (the settlement passes a long poll) and `max` at its cap, each message handled (a transfer's
+     * `device.paired` applied) and acked. Transport failures are thrown; the
      * caller bounds the time.
      */
-    suspend fun collectOnce(): Int {
-        val msgs = own.collect(Duration.ZERO, Int.MAX_VALUE)
+    suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
+        val msgs = own.collect(wait, Int.MAX_VALUE)
         for (m in msgs) {
             try {
                 handle(m)

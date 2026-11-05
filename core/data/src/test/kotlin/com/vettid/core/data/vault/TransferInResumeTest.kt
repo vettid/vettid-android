@@ -68,7 +68,7 @@ class TransferInResumeTest {
         var collects = 0
         var dropped = false
         assertFalse(TransferInResume.atDeadline({ false }, { collects++ }, { dropped = true }))
-        assertEquals("one collect, no more", 1, collects)
+        assertTrue("collected through the window, not once", collects > 1)
         assertTrue(dropped)
     }
 
@@ -79,14 +79,126 @@ class TransferInResumeTest {
         assertTrue(dropped)
     }
 
-    /** A collect that hangs is bounded (30 s in all); then dropped. */
+    /** A collect that hangs is bounded (30 s each); the window (65 s) still ends the step; then dropped. */
     @Test
     fun aCollectThatHangsIsBoundedThenDropped() = runTest {
         var dropped = false
+        var collects = 0
         val start = testScheduler.currentTime
-        assertFalse(TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { dropped = true }))
+        assertFalse(
+            TransferInResume.atDeadline({ false }, { collects++; CompletableDeferred<Unit>().await() }, { dropped = true }),
+        )
         assertTrue(dropped)
-        assertEquals(TransferInResume.DEADLINE_COLLECT_MS, testScheduler.currentTime - start)
+        assertTrue("each hung collect timed out and was retried", collects >= 2)
+        assertEquals(TransferInResume.SETTLE_WINDOW_MS, testScheduler.currentTime - start)
+    }
+
+    @Test
+    fun pairedAtTheFirstCollectReturnsAtOnce() = runTest {
+        var isPaired = false
+        var collects = 0
+        val start = testScheduler.currentTime
+        assertTrue(TransferInResume.atDeadline({ isPaired }, { collects++; isPaired = true }, { error("dropped") }))
+        assertEquals(1, collects)
+        assertEquals(0, testScheduler.currentTime - start)
+    }
+
+    /**
+     * The restart after a kill: the vault's device.paired is leased for 60 s to the dead app's parked request. Collects
+     * before the lease ends find nothing; the first one after it gets the message and pairs. The old single collect
+     * dropped here.
+     */
+    @Test
+    fun aMessageLeasedByADeadRequestIsCollectedWhenTheLeaseEnds() = runTest {
+        var isPaired = false
+        var drops = 0
+        val start = testScheduler.currentTime
+        val collect: suspend () -> Unit = {
+            if (testScheduler.currentTime - start >= 60_000) isPaired = true
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }))
+        assertEquals(0, drops)
+        val took = testScheduler.currentTime - start
+        assertTrue("paired after the lease, within the window: $took", took in 60_000..TransferInResume.SETTLE_WINDOW_MS)
+    }
+
+    @Test
+    fun neverPairedIsDroppedOnlyOnceTheWindowHasPassed() = runTest {
+        val start = testScheduler.currentTime
+        var droppedAt = -1L
+        assertFalse(
+            TransferInResume.atDeadline({ false }, {}, { droppedAt = testScheduler.currentTime - start }),
+        )
+        assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    }
+
+    @Test
+    fun failingCollectsDoNotEndTheWindowEarly() = runTest {
+        val start = testScheduler.currentTime
+        var droppedAt = -1L
+        var collects = 0
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false },
+                { collects++; throw IOException("relay unreachable") },
+                { droppedAt = testScheduler.currentTime - start },
+            ),
+        )
+        assertTrue(collects > 1)
+        assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    }
+
+    @Test
+    fun aCollectFailingThenSucceedingPairs() = runTest {
+        var isPaired = false
+        var collects = 0
+        val r = TransferInResume.atDeadline(
+            { isPaired },
+            { if (++collects < 3) throw IOException("down") else isPaired = true },
+            { error("dropped") },
+        )
+        assertTrue(r)
+        assertEquals(3, collects)
+    }
+
+    /** A rejection or the member's abandon (the transfer no longer alive) ends the window at once, with no drop here. */
+    @Test
+    fun aRejectionOrAbandonEndsTheWindowAtOnce() = runTest {
+        var alive = true
+        var drops = 0
+        var collects = 0
+        val start = testScheduler.currentTime
+        val r = TransferInResume.atDeadline(
+            { false }, { collects++; if (collects == 3) alive = false }, { drops++ }, alive = { alive },
+        )
+        assertFalse(r)
+        assertEquals(0, drops)
+        assertEquals(3, collects)
+        assertTrue(testScheduler.currentTime - start < TransferInResume.SETTLE_WINDOW_MS)
+    }
+
+    @Test
+    fun failedCollectsBackOff() = runTest {
+        val at = mutableListOf<Long>()
+        TransferInResume.atDeadline({ false }, { at += testScheduler.currentTime; throw IOException("down") }, {})
+        val gaps = at.zipWithNext { a, b -> b - a }
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), gaps.take(4))
+        assertTrue(gaps.all { it <= 8_000L })
+    }
+
+    @Test
+    fun cancellationDuringTheWindowPropagatesWithoutADrop() = runTest {
+        var drops = 0
+        val job = async { TransferInResume.atDeadline({ false }, {}, { drops++ }) }
+        testScheduler.advanceTimeBy(20_000)
+        job.cancel()
+        try {
+            job.await()
+            org.junit.Assert.fail("cancelled")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            // expected
+        }
+        assertEquals(0, drops)
     }
 
     @Test
@@ -178,7 +290,7 @@ class TransferInResumeTest {
             drop = { drops++ },
         )
         assertFalse(r)
-        assertEquals("collected", 1, collects)
+        assertTrue("collected", collects >= 1)
         assertEquals("then decided: dropped", 1, drops)
     }
 }

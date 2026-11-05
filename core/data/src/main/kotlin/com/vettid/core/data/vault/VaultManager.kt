@@ -1859,12 +1859,10 @@ class VaultManager(
                 completeTransferIn(s, record.recordGeneration, pendingIn?.userGuid)
                 return@guard AppPhase.Setup(SetupStage.FINISHING)
             }
-            // Not running at the deadline (stopped, killed, the phone off): the collect and the drop now, first.
-            TransferInResume.Action.DEADLINE -> atTransferDeadline(s)?.let { t ->
-                completeTransferIn(s, record.recordGeneration, t.userGuid)
-                return@guard AppPhase.Setup(SetupStage.FINISHING)
-            }
-            TransferInResume.Action.WAIT -> return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)
+            // Not running at the deadline (stopped, killed, the phone off): the same screen as while waiting. Its wait
+            // ([awaitTransferIn]) is already at the deadline and runs the settlement there, in the background (about 65 s,
+            // never inside this evaluation); the transfer stays pinned meanwhile and is applied or dropped at its end.
+            TransferInResume.Action.WAIT, TransferInResume.Action.DEADLINE -> return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)
             TransferInResume.Action.DROP -> d.abandonTransfer()
             TransferInResume.Action.NONE -> Unit
         }
@@ -4240,7 +4238,7 @@ class VaultManager(
         val rec = record.recordGeneration
         val s = session()
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
-        // (kept across restarts; nothing the member does moves it); then one collect, and applied or dropped.
+        // (kept across restarts; nothing the member does moves it); then collects for one visibility timeout, and applied or dropped.
         val guid = TransferInResume.awaitApproval(
             pending = { s.device.transferInPending },
             now = Instant::now,
@@ -4252,21 +4250,28 @@ class VaultManager(
 
     /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.76) The transfer to this phone at its
-     * 11-minute deadline, or at the first start after it: one collect of the mailbox (`wait=0`, `max` at its cap, at most
-     * [TransferInResume.DEADLINE_COLLECT_MS] in all), and the `device.paired{transfer}` it brings is applied by the
-     * handler. Paired: the transfer (to be completed by the take-over). Otherwise, also when the collect fails or times
-     * out: the handshake is dropped and null.
+     * 11-minute deadline, or at the first start after it: collects of the mailbox (`wait=0`, `max` at its cap, each at most
+     * [TransferInResume.DEADLINE_COLLECT_MS], [TransferInResume.SETTLE_PAUSE_MS] apart) for up to
+     * [TransferInResume.SETTLE_WINDOW_MS], stopping as soon as paired; the `device.paired{transfer}` one brings is applied
+     * by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
+     * (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired` leased
+     * for 60 s. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects
+     * included: the handshake is dropped, once the window has passed, and null.
      */
     private suspend fun atTransferDeadline(s: Session): TransferInState? {
         val d = s.device
+        val started = d.transferInPending?.startedAt
+        // This transfer only: a rejection, the member's abandon or a new code ends the window at once.
+        val same = { d.transferInPending?.let { it.startedAt == started } == true }
         return try {
             // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
             // inside: a second one never drops what the first one's collect is about to apply.
             val paired = transferDeadline.run(
                 due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },
                 paired = { d.transferInPending?.paired == true && d.deviceId != null },
-                collect = { d.deadlineCollect() },
-                drop = { d.abandonTransfer() },
+                collect = { d.deadlineCollect(Duration.ofSeconds(TransferInResume.SETTLE_POLL_S)) },
+                drop = { d.abandonTransfer(onlyStartedAt = started) },
+                alive = same,
             )
             if (paired) d.transferInPending else null
         } finally {

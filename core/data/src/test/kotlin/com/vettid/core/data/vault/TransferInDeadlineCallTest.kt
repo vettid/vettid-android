@@ -35,10 +35,11 @@ class TransferInDeadlineCallTest {
     }
 
     @Test
-    fun aStartPastTheDeadlineCollectsBeforeAnythingElse() {
+    fun aStartPastTheDeadlineShowsTheWaitAndSettlesInTheBackground() {
         val b = body("private suspend fun evaluate()")
         assertTrue(b.any { it.contains("TransferInResume.decide(pendingIn, d.deviceId, Instant.now())") })
-        assertTrue(b.any { it.contains("TransferInResume.Action.DEADLINE -> atTransferDeadline(s)") })
+        assertTrue(b.any { it.contains("TransferInResume.Action.WAIT, TransferInResume.Action.DEADLINE -> return@guard") })
+        assertFalse("never blocks the start for the window", b.any { it.contains("atTransferDeadline(") })
     }
 
     /**
@@ -52,7 +53,8 @@ class TransferInDeadlineCallTest {
         assertTrue("the collection is deferred at a start past the deadline", start >= 0)
         assertEquals("device.start(scope)", code[start + 1])
         val dl = body("private suspend fun atTransferDeadline(")
-        assertTrue(dl.any { it == "collect = { d.deadlineCollect() }," })
+        assertTrue(dl.any { it.startsWith("collect = { d.deadlineCollect(") })
+        assertTrue("only this transfer is dropped", dl.any { it.contains("abandonTransfer(onlyStartedAt = started)") })
         val due = "due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },"
         assertTrue("due while waiting too", dl.any { it == due })
         assertTrue(dl.any { it.startsWith("d.start(scope)") })
