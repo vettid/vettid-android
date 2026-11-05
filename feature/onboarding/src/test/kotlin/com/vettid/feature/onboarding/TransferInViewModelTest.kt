@@ -130,7 +130,7 @@ class TransferInViewModelTest {
         assertTrue(vm.uiState.value.settling)
         vm.cancel()
         vm.confirmCancel()
-        assertFalse("Back leaves the screen (the settlement goes on in the manager) and abandons nothing", vm.back())
+        assertTrue("Back is consumed: the screen stays and nothing is abandoned", vm.back())
         vm.again()
         vm.submitInput()
         advanceTimeBy(1_000)
@@ -138,6 +138,70 @@ class TransferInViewModelTest {
         assertFalse(vm.uiState.value.confirmCancel)
         assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
         assertFalse("no new code was sent", "transferIn" in vault.calls)
+    }
+
+    /** (follow-up to #302) Back while settling is consumed, abandons nothing and keeps the step. */
+    @Test
+    fun backIsConsumedWhileSettling() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.settling)
+        assertTrue(vm.back())
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.settling)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+    }
+
+    /** (follow-up to #302) Once the settlement ends as TIMED_OUT or SESSION_ENDED, Back leaves the screen again. */
+    @Test
+    fun backLeavesAgainAfterATimedOutSettlement() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.back())
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.TIMED_OUT, vm.uiState.value.step)
+        assertFalse(vm.back())
+    }
+
+    @Test
+    fun backLeavesAgainAfterAnEndedSession() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.back())
+        vault.transferApproval.completeExceptionally(
+            FakeVault.failure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED),
+        )
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertFalse(vm.back())
+    }
+
+    /** (follow-up to #302) An open cancel dialog is closed when the countdown reaches zero: its confirm would do nothing. */
+    @Test
+    fun theCancelDialogClosesWhenTheWindowStarts() = runTest {
+        val start = Instant.now()
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        val vm = TransferInViewModel(vault, vault)
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        vm.paste()
+        vm.setInput(qr())
+        vm.submitInput()
+        advanceTimeBy(100)
+        vm.cancel()
+        assertTrue(vm.uiState.value.confirmCancel)
+        advanceTimeBy(62_000)
+        assertTrue(vm.uiState.value.settling)
+        assertFalse("the dialog was closed", vm.uiState.value.confirmCancel)
+        vm.confirmCancel()
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
     }
 
     /**
