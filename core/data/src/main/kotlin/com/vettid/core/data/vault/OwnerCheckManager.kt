@@ -46,8 +46,16 @@ interface OwnerCheckOps {
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
 }
 
-/** One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent). */
-data class StatusRead(val ownerCheck: OwnerCheckStatus?, val recovery: RecoveryStatus?, val timeScale: Long? = null)
+/**
+ * One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent);
+ * [relayRefused] (0.84.0): `relay` is `"refused"`.
+ */
+data class StatusRead(
+    val ownerCheck: OwnerCheckStatus?,
+    val recovery: RecoveryStatus?,
+    val timeScale: Long? = null,
+    val relayRefused: Boolean = false,
+)
 
 /**
  * The app's side of the daily owner check (VAULT-MESSAGING 0.13.0 §3.6): follows the vault's deadline and hold,
@@ -94,6 +102,9 @@ class OwnerCheckManager(
     private val presenceFlow = MutableStateFlow(saved?.presenceUnrecorded == true)
     private val checkAfterCancelFlow = MutableStateFlow(false)
 
+    /** (0.84.0) The latest `vault.status` had `relay: "refused"`; memory only, so that a restart shows nothing until a read. */
+    private val relayFlow = MutableStateFlow(false)
+
     /** (Release L) The vault locked itself; kept on the phone until it opens again. */
     private val idleFlow = MutableStateFlow(saved?.takeIf { it.idleLocked }?.let { IdleLocked(it.idleAfter) })
 
@@ -130,6 +141,7 @@ class OwnerCheckManager(
     override val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?> = unlockOutcome.asStateFlow()
     override val notices: StateFlow<List<OwnerCheckNotice>> = noticeFlow.asStateFlow()
     override val presenceUnrecorded: StateFlow<Boolean> = presenceFlow.asStateFlow()
+    override val relayRefused: StateFlow<Boolean> = relayFlow.asStateFlow()
     override val checkAfterCancel: StateFlow<Boolean> = checkAfterCancelFlow.asStateFlow()
     override val idleLocked: StateFlow<IdleLocked?> = idleFlow.asStateFlow()
     override val idleLockSetting: StateFlow<IdleLockSetting?> = idleSettingFlow.asStateFlow()
@@ -145,6 +157,7 @@ class OwnerCheckManager(
         if (m.type == "vault.locking") {
             unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
             epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
+            relayFlow.value = false // a locked app shows no vault notice (0.84.0); the next `vault.status` after an unlock says again
             if (VaultJson.str(m.body, "reason") != REASON_OWNER_CHECK) lockedOther = true
         }
         when (m.type) {
@@ -397,7 +410,12 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
+        val epochAtStart = epoch.get()
+        val read = vaultGuard(resend = true) { ops().statusRead() }
+        val (st0, recovery, timeScale) = read
+        // The latest answer decides (0.84.0): `relay` absent takes the notice away. A read that is not the newest
+        // (the vault locked or was wiped meanwhile) is dropped by the epoch below.
+        if (epoch.get() == epochAtStart) relayFlow.value = read.relayRefused
         runCatching { onTimeScale(timeScale, since) }
         lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
         presenceFromStatus(recovery)
@@ -518,6 +536,7 @@ class OwnerCheckManager(
     override fun onLockedHere() {
         unlockPin = null
         epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
+        relayFlow.value = false
         lockedHere = true
         lockedOther = true
         view.value?.let { set(it) }
@@ -624,6 +643,7 @@ class OwnerCheckManager(
         estimate = 0
         keepCount = false
         view.value = null
+        relayFlow.value = false
         markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()

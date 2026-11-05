@@ -80,7 +80,10 @@ class OwnerCheckManagerTest {
         /** (0.43.0) The status's `time_scale`; null: absent. */
         var timeScale: Long? = null
 
-        override suspend fun statusRead() = statusAndRecovery().let { (o, r) -> StatusRead(o, r, timeScale) }
+        /** (0.84.0) The status's `relay` is `"refused"`. */
+        var relayRefused = false
+
+        override suspend fun statusRead() = statusAndRecovery().let { (o, r) -> StatusRead(o, r, timeScale, relayRefused) }
 
         /** What `settings.get` lists (a vault before L lists no `idle_lock.after_seconds`). */
         var settings: Map<String, JsonElement> = emptyMap()
@@ -898,6 +901,76 @@ class OwnerCheckManagerTest {
         assertEquals(24L, read("""{"vault_id":"x","time_scale":24}""").timeScale)
         val without = read("""{"vault_id":"x"}""")
         assertNull(without.timeScale)
+    }
+
+    /** `vault.status`'s `relay` (0.84.0 §10.2): only `"refused"` counts; absent, another value or another type is absent. */
+    @Test
+    fun theStatusCarriesItsRelayState() {
+        fun read(body: String) =
+            VaultJson.decode(com.vettid.core.vault.VaultStatusInfo.serializer(), VaultJson.parseObject(body.toByteArray()))
+        assertTrue(read("""{"vault_id":"x","relay":"refused"}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x"}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":null}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":"degraded"}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":"REFUSED"}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":""}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":7}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":true}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":{"state":"refused"}}""").relayRefused)
+        assertFalse(read("""{"vault_id":"x","relay":["refused"]}""").relayRefused)
+    }
+
+    /** (0.84.0 §3.4) The lasting notice follows the latest `vault.status`: shown with `relay: "refused"`, gone without it. */
+    @Test
+    fun theRelayNoticeFollowsTheLatestStatus() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        assertFalse(m.relayRefused.value)
+        ops.relayRefused = true
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.refreshOwnerCheck()
+        assertTrue("it lasts while the field is present", m.relayRefused.value)
+        ops.relayRefused = false
+        m.refreshOwnerCheck()
+        assertFalse(m.relayRefused.value)
+    }
+
+    /** A status without an owner check (an older vault) still carries `relay`; it is not kept across a restart. */
+    @Test
+    fun theRelayNoticeIsNotKeptOnThePhone() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        assertFalse(manager(Ops()).relayRefused.value)
+    }
+
+    /** A locked app shows no relay notice: any lock (the member's, the vault's own, ten failures) and a wipe clear it. */
+    @Test
+    fun theRelayNoticeIsClearedAtLockAndWipe() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.onLockedHere()
+        assertFalse("the member's lock", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertFalse("the vault locked itself", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        m.onEvent(event("vault.locking", """{"reason":"owner_check"}"""))
+        assertFalse("ten failed checks", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.clear()
+        assertFalse("a wipe or sign-out", m.relayRefused.value)
     }
 
     // --- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock ---

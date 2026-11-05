@@ -35,7 +35,24 @@ data class VaultStatusInfo(
      * a release before L. Read through `UnlockIds.of`: anything not of the form counts as absent.
      */
     @SerialName("unlock_id") val unlockId: String? = null,
-)
+    /**
+     * (VAULT-MESSAGING 0.84.0 §3.4, §10.2) The relay key's state: `"refused"` while the key the vault rotated to is
+     * refused by the relay (the new relay address could not be taken up); absent otherwise. Kept raw so that any other
+     * value, or a member of another type, decodes and counts as absent. Read through [relayRefused].
+     */
+    val relay: JsonElement? = null,
+) {
+    /** Whether `relay` is `"refused"` (the lasting notice, §3.4 "What the member sees"); an unknown value counts as absent. */
+    val relayRefused: Boolean get() = RelayState.refused(relay)
+}
+
+/** `vault.status`'s `relay` (VAULT-MESSAGING 0.84.0 §10.2). */
+object RelayState {
+    const val REFUSED = "refused"
+
+    /** True only for the string `"refused"`; absent, null, another string or another type is false. */
+    fun refused(relay: JsonElement?): Boolean = (relay as? JsonPrimitive)?.takeIf { it.isString }?.content == REFUSED
+}
 
 /**
  * `vault.status`'s `owner_check` (§3.6, §3.6.7): `state` is `ok`, `due` (past the deadline with the hold off: the
