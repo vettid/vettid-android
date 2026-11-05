@@ -6,7 +6,6 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
-import java.io.IOException
 
 /**
  * Where the map may reach. The note told the member one server, so the map reaches that server and nothing else: **https only**,
@@ -77,7 +76,8 @@ object MapNetwork {
 
     private fun proceed(chain: Interceptor.Chain, only: String?): Response {
         val request = chain.request()
-        if (!MapRequestPolicy.allows(request.url, only)) throw IOException("refused")
+        // UnknownServiceException: the shared client's TransportRetry never retries it, so a refused address is not tried again.
+        if (!MapRequestPolicy.allows(request.url, only)) throw java.net.UnknownServiceException("refused")
         return chain.proceed(request.newBuilder().header("User-Agent", MapRequestPolicy.USER_AGENT).build())
     }
 }

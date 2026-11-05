@@ -88,8 +88,10 @@ class MapRequestPolicyTest {
             try {
                 call(u, ofm, c)
                 fail("$u went out")
-            } catch (_: IOException) {
+            } catch (e: IOException) {
                 assertNull(c.request)
+                // Never retried by the shared client's TransportRetry, which leaves UnknownServiceException alone.
+                assertTrue("$u: ${e::class.java.name}", e is java.net.UnknownServiceException)
             }
         }
     }
