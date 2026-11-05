@@ -4256,8 +4256,11 @@ class VaultManager(
         val s = session()
         // Nothing to wait for (a wipe, a forget or a dead mailbox took the transfer, and it was not completed): the move
         // stopped on this phone; never a wait of 11 minutes counted from now.
-        if (s.device.transferInPending == null && s.device.credentialVersion == null) {
-            throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
+        if (s.device.transferInPending == null) {
+            if (s.device.credentialVersion == null) throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
+            // Completed in the background (the settlement started at the start applied it and took the credential over):
+            // the same result as a normal completion, not a timeout.
+            return@guard completeTransferIn(s, rec, local.userGuid.takeIf { it.isNotEmpty() }).also { publishFinishing(gen) }
         }
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
         // (kept across restarts; nothing the member does moves it); then collects for the settlement window (the relay's
@@ -4315,14 +4318,17 @@ class VaultManager(
      */
     private fun startSettlement(s: Session) {
         scope.launch {
-            val paired = try {
+            try {
                 atTransferDeadline(s)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                null
+                // the waiter, if any, gets the failure; here only the phase is read again
             }
-            if (paired != null) refresh()
+            // Every outcome: the phase is read again (applied: FINISHING; dropped, ended or rejected: no longer
+            // TRANSFER_WAITING). A screen that waits keeps its own result (TIMED_OUT, REJECTED, SESSION_ENDED are the
+            // transfer screen's state, and the onboarding flow ignores phase changes while its step is TRANSFER_IN).
+            refresh()
         }
     }
 

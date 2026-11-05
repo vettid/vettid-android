@@ -69,7 +69,11 @@ class TransferInDeadlineCallTest {
         val at = ev.indexOfFirst { it == "TransferInResume.Action.DEADLINE -> {" }
         assertTrue("the start settles at once", at >= 0 && ev[at + 1] == "startSettlement(s)")
         val start = body("private fun startSettlement(")
-        assertTrue("applied with nobody waiting: the phase is read again", start.any { it == "if (paired != null) refresh()" })
+        assertTrue("every outcome: the phase is read again", start.any { it == "refresh()" })
+        assertFalse("not only when paired", start.any { it.contains("paired != null") })
+        val wait = body("override suspend fun awaitTransferIn()")
+        val done = "return@guard completeTransferIn(s, rec, local.userGuid"
+        assertTrue("completed in the background: the completed result", wait.any { it.startsWith(done) })
         assertTrue("a transfer with nothing to wait for is not waited for", body("override suspend fun awaitTransferIn()")
             .any { it.contains("MoveRepository.CODE_TRANSFER_SESSION_ENDED") })
     }
