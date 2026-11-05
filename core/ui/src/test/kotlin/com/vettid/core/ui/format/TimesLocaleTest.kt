@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -39,6 +40,18 @@ class TimesLocaleTest {
         assertEquals("Nov 5, 2026", Times.dayLabel(LocalDate.of(2026, 11, 5)))
         c = config("de-DE")
         assertEquals("15:30", Times.time(at, ZoneOffset.UTC))
+    }
+
+    @Test
+    fun installReadsTheApplicationsConfigurationAtEachCall() {
+        Locale.setDefault(Locale.US)
+        RuntimeEnvironment.setQualifiers("en-rGB")
+        Times.install(RuntimeEnvironment.getApplication())
+        Locale.setDefault(Locale.US)
+        assertEquals("5 Nov 2026", Times.dayLabel(LocalDate.of(2026, 11, 5)))
+        RuntimeEnvironment.setQualifiers("de-rDE")
+        Locale.setDefault(Locale.US)
+        assertEquals("15:30", Times.time(Instant.parse("2026-11-05T15:30:00Z"), ZoneOffset.UTC))
     }
 
     @Test

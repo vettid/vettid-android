@@ -103,12 +103,12 @@ class VettIdApplication : DistributionApplication() {
     }
 
     override fun onCreate() {
+        // First, as it needs nothing: lists, conversations and details format dates in the configuration's locale (Times).
+        Times.install(this)
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
         // not live to finish is finished now (owner decision, 2026-10-05; LocalWipe).
         LocalWipe(AndroidWipeTargets(this)).resumeIfPending()
         super.onCreate()
-        // Lists, conversations and details format dates in the configuration's locale (Times).
-        Times.install(this)
         // Once per process: the app lock starts locked when it is on (D6); the vault's phase is read.
         // The phase is read whatever became of the app lock's start: a failure there (an I/O error) used to end this
         // coroutine before the phase was read, and the app stayed on "Opening VettID" (A6 audit P4). Still one after
