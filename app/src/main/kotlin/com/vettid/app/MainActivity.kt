@@ -187,9 +187,9 @@ class MainActivity : ComponentActivity() {
                 }
             // The stalled-location notice (A6 N21): the connection's page (the app lock and the owner check still come first).
             com.vettid.core.notify.NotifyIntents.ACTION_OPEN_CONNECTION ->
-                intent.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_CONNECTION_ID)?.takeIf { it.isNotEmpty() }?.let {
-                    notificationTaps.offer(com.vettid.core.notify.NotificationOpenInbox.Open.Connection(it))
-                }
+                intent.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_CONNECTION_ID)
+                    ?.takeIf { com.vettid.core.notify.NotificationOpenInbox.plausibleId(it) }
+                    ?.let { notificationTaps.offer(com.vettid.core.notify.NotificationOpenInbox.Open.Connection(it)) }
             // The on-phone service's own notification: Settings → Notifications.
             com.vettid.core.notify.NotifyIntents.ACTION_OPEN_SETTINGS ->
                 notificationTaps.offer(com.vettid.core.notify.NotificationOpenInbox.Open.Settings)

@@ -98,4 +98,23 @@ class NotificationOpenInbox(
     fun consume() {
         flow.value = null
     }
+
+    /**
+     * The vault closed on this phone (it was open and no longer is: a lock, a sign-out, a wipe): a tap not yet taken is dropped,
+     * so it never opens anything at a later unlock. A tap made while the vault was already closed (a cold start from the
+     * notification, the usual case) is kept until the unlock.
+     */
+    fun vaultClosed() {
+        flow.value = null
+    }
+
+    companion object {
+        private val ID_SHAPE = Regex("[A-Za-z0-9._:-]{1,128}")
+
+        /**
+         * Whether [id] has the shape of a vault id. Another app can send the launcher activity any extra; one that does not have
+         * this shape is not offered.
+         */
+        fun plausibleId(id: String?): Boolean = id != null && ID_SHAPE.matches(id)
+    }
 }

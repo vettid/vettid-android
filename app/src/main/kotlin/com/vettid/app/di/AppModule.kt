@@ -333,6 +333,12 @@ object AppModule {
     fun notificationOpenInbox(feed: dagger.Lazy<FeedNotifier>): NotificationOpenInbox =
         NotificationOpenInbox { feed.get().onDismissed(it) } // the tag of an item notification is its item id
 
+    /** A wipe from a closed vault (a replaced phone) also drops a notification tap not yet taken. */
+    @Provides
+    @dagger.multibindings.IntoSet
+    fun notificationTapsWipe(taps: NotificationOpenInbox): com.vettid.core.data.wipe.WipeHook =
+        com.vettid.core.data.wipe.WipeHook { taps.vaultClosed() }
+
     @Provides
     @Singleton
     fun modeController(
