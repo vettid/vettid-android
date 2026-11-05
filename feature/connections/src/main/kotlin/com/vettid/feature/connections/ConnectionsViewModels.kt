@@ -642,6 +642,8 @@ data class ConnectionDetailUiState(
     val locationMissed: Boolean = false,
     /** This connection shares its location with the member (the incoming card), if it does. */
     val incoming: DetailIncoming? = null,
+    /** Miles or kilometers for the incoming card's accuracy (Settings → Units). */
+    val units: com.vettid.core.data.location.LengthSystem = com.vettid.core.data.location.LengthSystem.METRIC,
     /** **Ask for location**: the dialog and its outcome. */
     val locationAsk: LocationAsk = LocationAsk(),
     /** **Stop receiving** is out. */
@@ -783,9 +785,13 @@ class ConnectionDetailViewModel @Inject constructor(
     private val votes: VotesRepository = NoVotes,
     private val presence: PresenceRepository = NoPresence,
     private val location: LocationRepository = NoLocation,
+    prefs: PreferencesRepository = InMemoryPreferencesRepository(),
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
+    private val units = prefs.preferences
+        .map { com.vettid.core.data.location.LengthSystems.resolve(it.distanceUnits) }
+        .distinctUntilChanged()
 
     val uiState: StateFlow<ConnectionDetailUiState> =
         combine(
@@ -793,7 +799,7 @@ class ConnectionDetailViewModel @Inject constructor(
             repo.connections,
             repo.authentication,
             combine(calls.availability, ownVotes()) { c, v -> c to v },
-            combine(ownPresence(), ownLocation(), location.availability, location.incoming, ::Extras),
+            combine(ownPresence(), ownLocation(), location.availability, location.incoming, units, ::Extras),
         ) { s, cs, auth, (call, v), extras ->
             val p = extras.presence
             val shared = extras.location
@@ -812,6 +818,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 location = shared.location,
                 locationMissed = shared.missed,
                 locationOffered = offered != LocationAvailability.UNSUPPORTED,
+                units = extras.units,
                 incoming = incoming?.let { DetailIncoming(it.shareId, it.expiresAt, it.last?.at, it.last?.accuracyM, it.precision) },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
@@ -822,6 +829,7 @@ class ConnectionDetailViewModel @Inject constructor(
         val location: LocationView,
         val availability: LocationAvailability,
         val incoming: List<IncomingShare>,
+        val units: com.vettid.core.data.location.LengthSystem,
     )
 
     /** What presence knows of this connection, while the vault has presence; null otherwise. */

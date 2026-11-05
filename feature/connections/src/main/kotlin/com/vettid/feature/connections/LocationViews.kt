@@ -44,6 +44,8 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.IncomingShare
 import com.vettid.core.data.location.LocationAvailability
+import com.vettid.core.data.location.LengthSystem
+import com.vettid.core.data.location.LengthSystems
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.PositionOffset
@@ -53,6 +55,7 @@ import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareTime
 import com.vettid.core.data.map.MapServer
 import com.vettid.core.data.map.MapSetting
+import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
@@ -129,6 +132,7 @@ private const val TICK_MS = 30_000L
 internal fun IncomingLocationCard(
     incoming: DetailIncoming,
     name: String,
+    units: LengthSystem,
     busy: Boolean,
     onOpen: () -> Unit,
     onStop: () -> Unit,
@@ -139,7 +143,7 @@ internal fun IncomingLocationCard(
     DetailCard(Modifier.testTag("detail_incoming_location")) {
         val at = incoming.at
         if (at != null) {
-            val accuracy = PositionText.accuracy(context.resources, incoming.accuracyM)
+            val accuracy = PositionText.accuracy(context.resources, incoming.accuracyM, units)
             val age = PositionText.age(context.resources, at, now)
             Text(
                 if (accuracy != null) {
@@ -558,6 +562,8 @@ data class PositionUiState(
     val mapSetting: MapSetting? = null,
     /** "Not now" was tapped on the note: no map for this visit (memory only; the note comes again next time). */
     val mapDeclined: Boolean = false,
+    /** Miles or kilometers (Settings → Units). */
+    val units: LengthSystem = LengthSystem.METRIC,
 ) {
     /** The "hands the position to another app" question is open: the daily check waits for the decision. */
     val holdsInput: Boolean get() = confirmMaps
@@ -594,9 +600,12 @@ class PositionViewModel @Inject constructor(
         },
         connections.connections,
         offset,
-        prefs.preferences.map { MapServer.of(it) }
-            .distinctUntilChanged { a, b -> a.styleUrl == b.styleUrl && a.noteAnswered == b.noteAnswered },
-    ) { s, (share, h), cs, o, m ->
+        combine(
+            prefs.preferences.map { MapServer.of(it) }
+                .distinctUntilChanged { a, b -> a.styleUrl == b.styleUrl && a.noteAnswered == b.noteAnswered },
+            prefs.preferences.map { LengthSystems.resolve(it.distanceUnits) }.distinctUntilChanged(),
+        ) { m, u -> m to u },
+    ) { s, (share, h), cs, o, (m, u) ->
         PositionUiState(
             loaded = true,
             name = cs.firstOrNull { it.id == id }?.let { sharingName(it) },
@@ -608,6 +617,7 @@ class PositionViewModel @Inject constructor(
             held = h,
             mapSetting = m,
             mapDeclined = s.mapDeclined,
+            units = u,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, PositionUiState())
 
@@ -676,6 +686,7 @@ private fun PositionCard(
     offset: PositionOffset?,
     now: Instant,
     precision: SharePrecision,
+    units: LengthSystem,
 ) {
     val context = LocalContext.current
     DetailCard(Modifier.testTag("position_card")) {
@@ -691,7 +702,7 @@ private fun PositionCard(
                 modifier = Modifier.testTag("position_area"),
             )
         }
-        PositionText.accuracy(context.resources, p.accuracyM)?.let {
+        PositionText.accuracy(context.resources, p.accuracyM, units)?.let {
             Text(stringResource(R.string.connections_location_position_within, it), modifier = Modifier.testTag("position_accuracy"))
         }
         val justNow = java.time.Duration.between(p.at, now).seconds < MINUTE
@@ -704,7 +715,7 @@ private fun PositionCard(
             modifier = Modifier.testTag("position_age"),
         )
         offset?.let {
-            Text(PositionText.offset(context.resources, it, p.accuracyM, precision), modifier = Modifier.testTag("position_offset"))
+            Text(PositionText.offset(context.resources, it, p.accuracyM, precision, units), modifier = Modifier.testTag("position_offset"))
         }
     }
 }
@@ -758,7 +769,7 @@ fun PositionScreen(
                     modifier = Modifier.testTag("position_waiting"),
                 )
                 p != null -> {
-                    PositionCard(p, state.offset, now, share?.precision ?: SharePrecision.APPROXIMATE)
+                    PositionCard(p, state.offset, now, share?.precision ?: SharePrecision.APPROXIMATE, state.units)
                 }
             }
             if (noMaps) {

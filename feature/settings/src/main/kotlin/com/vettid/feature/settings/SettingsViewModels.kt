@@ -122,6 +122,11 @@ class SettingsViewModel @Inject constructor(
         s.copy(account = a, preferences = p, appLockOn = l == AppLockState.UNLOCKED || l == AppLockState.LOCKED, appLockInvalidated = inv)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsUiState())
 
+    /** Settings → App → Units: applied at once, nothing to confirm. */
+    fun setDistanceUnits(u: com.vettid.core.data.prefs.DistanceUnits) {
+        viewModelScope.launch { prefs.setDistanceUnits(u) }
+    }
+
     fun setTheme(t: ThemePreference) {
         viewModelScope.launch { prefs.setTheme(t) }
     }

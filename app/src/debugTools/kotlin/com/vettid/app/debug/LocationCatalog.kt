@@ -5,6 +5,7 @@ package com.vettid.app.debug
 
 import androidx.compose.runtime.Composable
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LengthSystem
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.OutgoingShare
 import com.vettid.core.data.location.SendIssue
@@ -76,7 +77,7 @@ internal object LocationCatalog {
     }
 
     @Composable
-    private fun Position(offset: PositionOffset?, mapSetting: MapSetting? = null) {
+    private fun Position(offset: PositionOffset?, mapSetting: MapSetting? = null, units: LengthSystem = LengthSystem.METRIC) {
         val p = ReceivedPosition(52.5200, 13.4050, 1_000.0, null, null, null, Instant.now().minusSeconds(300), null)
         val share = IncomingShare("in1", "c1", false, SharePrecision.APPROXIMATE, 60, true, null, Instant.now().plusSeconds(3_600), last = p,
             trailPoints = listOf(
@@ -84,7 +85,7 @@ internal object LocationCatalog {
                 ReceivedPosition(52.5150, 13.3970, 1_000.0, null, null, null, Instant.now().minusSeconds(600), null),
             ),
         )
-        PositionScreen(PositionUiState(loaded = true, name = "Samira", share = share, offset = offset, mapSetting = mapSetting), {}, {}, {}, {})
+        PositionScreen(PositionUiState(loaded = true, name = "Samira", share = share, offset = offset, mapSetting = mapSetting, units = units), {}, {}, {}, {})
     }
 
     private val defaultServer = MapServer.of(AppPreferences())
@@ -143,6 +144,8 @@ internal object LocationCatalog {
         },
         "location.screen_empty" to { LocationScreen(LocationUiState(availability = LocationAvailability.AVAILABLE), chrome, LocationActions()) },
         "location.position" to { Position(PositionOffset(3_200.0, 45.0)) },
+        // Distances in miles and feet (Settings → Units, owner decision 2026-11-05).
+        "location.position_miles" to { Position(PositionOffset(3_200.0, 45.0), units = LengthSystem.IMPERIAL) },
         "location.position_no_offset" to { Position(null) },
         // The map (L2): the privacy note before it is answered (nothing is loaded), then the map itself on the default server.
         "location.map_note" to { Position(PositionOffset(3_200.0, 45.0), defaultServer) },

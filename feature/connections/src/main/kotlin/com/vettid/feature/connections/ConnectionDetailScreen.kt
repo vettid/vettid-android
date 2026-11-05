@@ -261,7 +261,9 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             LocationCard(state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
             // This connection shares with the member: the card with the latest position; Ask for location while it does not.
             state.incoming?.let {
-                IncomingLocationCard(it, firstOf(c, name), state.stoppingIncoming, actions.onOpenPosition, actions.onStopReceiving)
+                IncomingLocationCard(
+                    it, firstOf(c, name), state.units, state.stoppingIncoming, actions.onOpenPosition, actions.onStopReceiving,
+                )
             } ?: AskLocationCard(actions.onAskLocation, enabled = !state.busy)
         }
         if (c.service) {

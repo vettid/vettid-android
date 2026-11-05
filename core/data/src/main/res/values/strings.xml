@@ -307,6 +307,10 @@
     <string name="data_location_metres">%1$d m</string>
     <!-- NEW: not in the plan -->
     <string name="data_location_kilometres">%1$s km</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05): feet, under about 0.1 mile -->
+    <string name="data_location_feet">%1$s ft</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05) -->
+    <string name="data_location_miles">%1$s mi</string>
     <!-- NEW: not in the plan (distance and direction from this phone) -->
     <string name="data_location_from_here">About %1$s %2$s of this phone</string>
     <!-- NEW: not in the plan (the position is within its own accuracy of this phone) -->

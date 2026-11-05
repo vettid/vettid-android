@@ -115,6 +115,15 @@ class SettingsViewModelsTest {
         assertEquals(AppPhase.Locked, vault.phase.value)
     }
 
+    @Test
+    fun theDistanceUnitsArePersistedAtOnce() = runTest {
+        val vm = viewModel(screenshots())
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC, prefs.current.value.distanceUnits)
+        vm.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.MILES, prefs.current.value.distanceUnits)
+    }
+
     /** The app lock's method while the lock is off (owner request 2026-10-09): saved, shown, used when turned on. */
     @Test
     fun theAppLockMethodIsChosenWhileOff() = runTest {

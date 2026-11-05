@@ -35,6 +35,14 @@
     <string name="settings_privacy_sharing_body">Set by tag in your Vault. Nothing is shared without a rule.</string>
     <string name="settings_section_app">App</string>
     <string name="settings_app_theme">Theme</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05) -->
+    <string name="settings_app_units">Units</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05): follows the phone's region -->
+    <string name="settings_units_automatic">Automatic</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05) -->
+    <string name="settings_units_miles">Miles</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05) -->
+    <string name="settings_units_kilometers">Kilometers</string>
     <string name="settings_app_notifications">Notifications</string>
     <string name="settings_app_screenshots">Allow screenshots</string>
     <string name="settings_app_screenshots_off">Off. Screenshots, screen recording and the app preview in Recents are blocked.</string>
