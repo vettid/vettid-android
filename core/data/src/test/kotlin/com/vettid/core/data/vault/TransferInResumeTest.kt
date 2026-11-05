@@ -399,6 +399,42 @@ class TransferInResumeTest {
         assertTrue("gathered after the first end: ${clock.now()}", clock.now() >= 110_000)
     }
 
+    /**
+     * A freeze of about 30 s in the middle of a long round wait (25 s of waiting, 30 s frozen: the phase took 55 s by the
+     * clock, inside its own 55 s bound plus the old rule's 10 s margin, so the phase-overrun rule never saw it). The
+     * heartbeat sees a gap of 30 s between ticks. The message the collector was handed is leased until 130 s, past the
+     * window's first end (90 s); the extended window gathers it, where without the detection the transfer is dropped at 90 s.
+     */
+    @Test
+    fun aThirtySecondFreezeDuringALongRoundWaitIsSeenByTheHeartbeat() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        var froze = false
+        val round: suspend () -> Unit = {
+            if (!froze) {
+                froze = true
+                delay(10_000)
+                clock.jumpedMs += 30_000 // the freeze
+                delay(15_000)
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (froze && clock.now() >= 130_000) isPaired = true else delay(w.coerceAtMost(5_000))
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), awaitRound = round))
+        assertEquals(0, drops)
+    }
+
+    /** The heartbeat lives only as long as the window: nothing is left scheduled once it ended. */
+    @Test
+    fun theHeartbeatEndsWithTheWindow() = runTest {
+        val clock = FrozenClock(this)
+        TransferInResume.atDeadline({ false }, {}, {}, settle = timingWith(clock))
+        testScheduler.advanceUntilIdle() // would never return with a ticker left
+        assertEquals("no ticker left running on", TransferInResume.SETTLE_WINDOW_MS, testScheduler.currentTime)
+    }
+
     /** Repeated cuts and freezes never extend the window past its first end plus the cap (in awake time). */
     @Test
     fun repeatedCutsAndFreezesStayWithinTheCap() = runTest {
