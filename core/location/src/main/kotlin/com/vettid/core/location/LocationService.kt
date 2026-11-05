@@ -80,7 +80,8 @@ class LocationService : Service() {
         following?.cancel()
         following = scope.launch {
             // The stall's minutes are not on the ongoing notification: it is not posted again every minute for them.
-            combine(current.state.map { it.copy(stalled = emptyMap()) }.distinctUntilChanged(), current.names) { s, n -> s to n }.collect { (s, n) ->
+            val shown = current.state.map { it.copy(stalled = emptyMap()) }.distinctUntilChanged()
+            combine(shown, current.names) { s, n -> s to n }.collect { (s, n) ->
                 val ok = s.active && foreground(s, n)
                 if (!ok) {
                     if (s.active) current.serviceEnded()

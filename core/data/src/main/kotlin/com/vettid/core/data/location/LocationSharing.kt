@@ -461,14 +461,10 @@ class LocationSharing(
     private fun stallsOf(active: List<Tracked>): Map<String, Int> {
         val e = elapsedNanos()
         val continuous = active.filter { !it.share.once }
-        if (!unlocked() || due()) {
-            wasGated = true
-            continuous.forEach { it.accepted = e }
-            return emptyMap()
-        }
-        if (wasGated) {
-            // The first look after a pause: nothing woke the phone meanwhile, so the clocks may be hours old. They start over.
-            wasGated = false
+        val paused = !unlocked() || due()
+        // The first look after a pause too: nothing woke the phone meanwhile, so the clocks may be hours old. They start over.
+        if (paused || wasGated) {
+            wasGated = paused
             continuous.forEach { it.accepted = e }
             return emptyMap()
         }

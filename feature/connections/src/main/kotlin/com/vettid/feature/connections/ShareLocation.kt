@@ -589,7 +589,7 @@ internal fun LocationCard(
         } else {
             val until = remember(location.until) { ShareTime.format(context, location.until, Instant.now()) }
             val issueText = location.issue.textRes()
-            // Nothing reaches the other person (A6 N21): read first; the cause, when known, is the issue line under it, with its settings action.
+            // Nothing reaches the other person (A6 N21): read first. A known cause is the issue line under it, with its action.
             location.stalledMinutes?.let { minutes ->
                 Text(
                     pluralStringResource(com.vettid.core.data.R.plurals.data_location_stalled, minutes, name, minutes),
