@@ -230,6 +230,7 @@ class HistoryExportViewModel @Inject constructor(
                 wallet = AuditKinds.itemOf(r.kind, r.ref) in c.walletItems,
             ),
             isolate = false,
+            direction = r.direction,
         ),
         category = r.category.id,
         connectionName = r.connectionId?.let { cleanName(c.connectionNames[it]) ?: context.getString(R.string.history_connection_removed) },

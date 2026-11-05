@@ -167,3 +167,44 @@ suspend fun VaultApi.locationShareStop(shareId: String): JsonObject =
  * started_at, expires_at, last_sent_at?}], incoming: [...]}` (active shares).
  */
 suspend fun VaultApi.locationShareList(): JsonObject = device.op("location.share.list")
+
+/*
+ * Receiving (ANDROID-PLAN §4 "Location", L1b). A received position is read from the vault's JSON by the caller and held in
+ * memory only; nothing here keeps one.
+ */
+
+/** `location.request{note?}` bounds (§10.16): the note is at most this many UTF-8 bytes (ANDROID-PLAN: "up to 256 bytes"). */
+object LocationRequestLimits {
+    const val NOTE_MAX_BYTES = 256
+
+    /** The vault accepts one request per connection per 10 minutes. */
+    const val ALLOWANCE_SECONDS = 600L
+}
+
+/**
+ * `location.get{connection_id, history?}`: `{share_id, mode, precision, expires_at, last?, history?, snapshot?}`; `not_found`
+ * without an active incoming share from that connection. `history` asks for the trail (kept only when the sharer allowed it).
+ */
+suspend fun VaultApi.locationGet(connectionId: String, history: Boolean): JsonObject = device.op(
+    "location.get",
+    buildJsonObject {
+        put("connection_id", connectionId)
+        if (history) put("history", true)
+    },
+)
+
+/** The body of [locationRequest]; a note over [LocationRequestLimits.NOTE_MAX_BYTES] bytes is refused ([LocationMessageException]). */
+internal fun locationRequestBody(connectionId: String, note: String?): JsonObject {
+    val text = note?.takeIf { it.isNotBlank() }
+    if (text != null && text.toByteArray(Charsets.UTF_8).size > LocationRequestLimits.NOTE_MAX_BYTES) {
+        throw LocationMessageException("note size")
+    }
+    return buildJsonObject {
+        put("connection_id", connectionId)
+        text?.let { put("note", it) }
+    }
+}
+
+/** `location.request{connection_id, note?}`: `{request_id}`; `limit` (one per connection per 10 minutes). */
+suspend fun VaultApi.locationRequest(connectionId: String, note: String?): JsonObject =
+    device.op("location.request", locationRequestBody(connectionId, note))

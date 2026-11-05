@@ -55,6 +55,16 @@ class LocationPrivacyTest {
     }
 
     @Test
+    fun receivedPositionsPrintTheirTypeNamesOnly() {
+        val p = ReceivedPosition(52.5200, 13.4050, 12.5, 34.0, 1.5, 90.0, Instant.EPOCH, Instant.EPOCH)
+        val share = IncomingShare("s1", "c1", false, SharePrecision.EXACT, 60, true, null, Instant.EPOCH, last = p, trailPoints = listOf(p), snapshot = listOf(p))
+        assertEquals("ReceivedPosition", "$p")
+        assertEquals("IncomingShare", "$share")
+        assertEquals("[ReceivedPosition]", "${share.trailPoints}")
+        listOf("$p", "$share", "${share.trailPoints}").forEach { t -> listOf("52.52", "13.405", "12.5", "34.0").forEach { assertFalse(t, t.contains(it)) } }
+    }
+
+    @Test
     fun theSharingLogicHasNoLoggingCall() {
         val sources = File("src/main/kotlin/com/vettid/core/data/location").walkTopDown().filter { it.extension == "kt" }.toList()
         for (f in sources) {

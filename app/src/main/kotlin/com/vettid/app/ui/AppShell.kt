@@ -374,6 +374,7 @@ fun AppShell(
                                         navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true }
                                     },
                                     onOpenVotes = { id -> navController.navigate(ConnectionVotesRoute(id)) { launchSingleTop = true } },
+                                    onOpenApproval = { key -> navController.navigate(ApprovalDetailRoute(key)) { launchSingleTop = true } },
                                 ),
                             )
                             approvalsDestination(
@@ -382,6 +383,9 @@ fun AppShell(
                                 onBack = back,
                                 onLeaveDetail = navController::leaveApprovalDetail,
                                 onOpenPairing = { navigate(PairRoute(held = true)) },
+                                onShareLocation = { id, request ->
+                                    navController.navigate(ConnectionDetailRoute(id, request)) { launchSingleTop = true }
+                                },
                             )
                             walletDestinations(chrome, navigate = navigate, leave = navController::leaveEntry)
                             votesDestination(
@@ -587,6 +591,8 @@ private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
                 .filterNot { item -> item.key == TopLevelDestination.Votes.key && !badges.votesShown }
                 // The Wallet entry only when the vault has wallets (never in a build without the wallet).
                 .filterNot { item -> item.key == TopLevelDestination.Wallet.key && !badges.walletShown }
+                // The Location entry only when the vault has location (learnt at unlock).
+                .filterNot { item -> item.key == TopLevelDestination.Location.key && !badges.locationShown }
         }
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {

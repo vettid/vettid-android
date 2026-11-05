@@ -101,6 +101,15 @@ data class DetailActions(
     val onShareLocation: () -> Unit = {},
     /** **Stop** on "Sharing your location until …". */
     val onStopSharingLocation: () -> Unit = {},
+    /** The incoming card (ANDROID-PLAN §4 "Location", L1b): the position as text. */
+    val onOpenPosition: () -> Unit = {},
+    /** **Stop receiving**. */
+    val onStopReceiving: () -> Unit = {},
+    /** **Ask for location** and its dialog. */
+    val onAskLocation: () -> Unit = {},
+    val onAskNote: (String) -> Unit = {},
+    val onSendAsk: () -> Unit = {},
+    val onCloseAsk: () -> Unit = {},
 )
 
 /**
@@ -163,6 +172,7 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
         }
     }
     DetailDialogs(state, name, actions)
+    AskLocationDialog(state.locationAsk, c?.let { firstOf(it, name) } ?: name, actions.onAskNote, actions.onSendAsk, actions.onCloseAsk)
 }
 
 @Composable
@@ -249,6 +259,10 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
         if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
             LocationCard(state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
+            // This connection shares with the member: the card with the latest position; Ask for location while it does not.
+            state.incoming?.let {
+                IncomingLocationCard(it, firstOf(c, name), state.stoppingIncoming, actions.onOpenPosition, actions.onStopReceiving)
+            } ?: AskLocationCard(actions.onAskLocation, enabled = !state.busy)
         }
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.
@@ -457,3 +471,6 @@ private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions:
 }
 
 private val PILL_SPACE = 104.dp
+
+/** The connection's first name for a sentence of the location texts (the card, the ask dialog), else [fallback] (isolated). */
+internal fun firstOf(c: ConnectionInfo, fallback: String): String = sharingName(c)?.let { AccountNames.isolate(it) } ?: fallback

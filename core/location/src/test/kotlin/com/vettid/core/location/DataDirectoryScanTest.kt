@@ -7,7 +7,10 @@ import android.app.Application
 import android.os.Looper
 import org.robolectric.RuntimeEnvironment
 import com.vettid.core.data.KeystoreFileStore
+import com.vettid.core.crypto.envelope.Inner
+import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.data.location.Fix
+import com.vettid.core.data.location.LocationOps
 import com.vettid.core.data.location.KeystoreShareStore
 import com.vettid.core.data.location.LocationSharing
 import com.vettid.core.data.location.ServiceState
@@ -25,12 +28,15 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import com.vettid.core.vault.VaultMessage
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 import java.time.Duration
 import java.time.Instant
@@ -153,5 +159,62 @@ class DataDirectoryScanTest {
         assertTrue(String(plain).contains("share_id"))
         assertTrue(!RouteScan.contains(plain, Route.points))
         LocationService.source = null
+    }
+
+    /** A vault that has a connection sharing with the member: the list names the share, `location.get` gives the route three ways. */
+    private class IncomingOps(inner: SinkOps, private val t0: Instant) : LocationOps by inner {
+        private fun point(p: Pair<Double, Double>) = """{"lat":${p.first},"lon":${p.second},"accuracy_m":20,"at":"$t0"}"""
+        private val route = Route.points.joinToString(",") { point(it) }
+
+        override suspend fun list(): JsonObject = Json.parseToJsonElement(
+            """{"outgoing":[],"incoming":[{"share_id":"in1","connection_id":"c-in","mode":"continuous","precision":"exact","interval_seconds":60,"history":true,"started_at":"$t0","expires_at":"${t0.plusSeconds(3600)}","last":${point(Route.points[0])}}]}""",
+        ) as JsonObject
+
+        override suspend fun get(connectionId: String, history: Boolean): JsonObject = Json.parseToJsonElement(
+            """{"share_id":"in1","mode":"continuous","precision":"exact","expires_at":"${t0.plusSeconds(3600)}","last":${point(Route.points[1])},"history":[$route],"snapshot":[$route]}""",
+        ) as JsonObject
+    }
+
+    private fun message(type: String, body: String, at: Instant) =
+        VaultMessage(Inner(id = Ulid.new(), type = type, ts = at, body = body.toByteArray()))
+
+    /**
+     * Received positions (L1b): the list's `last`, `location.get`'s latest, trail and snapshot, and live `location.update`s all
+     * stay in memory. While they are held, after a hold, and after a lock, the data directory has no coordinate of the route.
+     */
+    @Test
+    fun noReceivedPositionIsLeftOnDisk() = runTest {
+        val sink = SinkOps(t0)
+        val sealed = KeystoreFileStore(File(app.noBackupFilesDir, "location-shares.bin"), "location-shares", key = { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") })
+        val sharing = LocationSharing(
+            backgroundScope,
+            ops = { IncomingOps(sink, t0) },
+            store = KeystoreShareStore(sealed),
+            unlocked = { true },
+            due = { false },
+            deviceId = { "dev-this" },
+            now = { t0 },
+            io = StandardTestDispatcher(testScheduler),
+        )
+        sharing.refresh()
+        sharing.open("c-in")
+        Route.points.forEach { (lat, lon) ->
+            sharing.onEvent(message("location.update", """{"connection_id":"c-in","share_id":"in1","lat":$lat,"lon":$lon,"accuracy_m":5,"at":"$t0"}""", t0))
+        }
+        val held = sharing.incoming.value.single()
+        assertTrue("the positions are held in memory", held.last != null && held.trailPoints.size >= Route.points.size && held.snapshot.isNotEmpty())
+        // While held: not on disk.
+        assertEquals(emptyList<String>(), RouteScan.find(app.dataDir, Route.points))
+        // A hold drops them; so does a lock; neither leaves a trace.
+        sharing.clearReceived()
+        assertTrue(sharing.incoming.value.isEmpty())
+        assertEquals(emptyList<String>(), RouteScan.find(app.dataDir, Route.points))
+        sharing.refresh()
+        assertTrue(sharing.incoming.value.isNotEmpty())
+        sharing.clear()
+        assertTrue(sharing.incoming.value.isEmpty())
+        assertEquals(emptyList<String>(), RouteScan.find(app.dataDir, Route.points))
+        // Nothing of receiving is stored at all: the share store was never written by it.
+        assertTrue(!File(app.noBackupFilesDir, "location-shares.bin").exists() || !RouteScan.contains(File(app.noBackupFilesDir, "location-shares.bin").readBytes(), Route.points))
     }
 }

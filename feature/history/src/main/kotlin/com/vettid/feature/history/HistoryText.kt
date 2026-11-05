@@ -29,21 +29,25 @@ object HistoryText {
         ref: String? = null,
         names: EntryNames = EntryNames(),
         isolate: Boolean = true,
+        direction: String? = null,
     ): String =
         if (shownPhrase(kind, names)) {
             phraseShown(context, names, isolate)
-        } else when (val t = AuditKinds.title(kind, ref)) {
+        } else when (val t = AuditKinds.title(kind, ref, direction)) {
             is AuditKinds.Title.Known -> context.getString(t.res)
             is AuditKinds.Title.Summary -> context.getString(R.string.history_kind_summary, context.getString(t.res))
             is AuditKinds.Title.Dropped -> context.getString(R.string.history_kind_dropped, t.reason)
             is AuditKinds.Title.Unknown -> context.getString(R.string.history_kind_unknown, t.kind)
             is AuditKinds.Title.Counted -> context.getString(t.res, t.n, t.of)
+            is AuditKinds.Title.Plural -> context.resources.getQuantityString(t.res, t.n, t.n)
             is AuditKinds.Title.Named -> named(context, t, names, isolate)
             is AuditKinds.Title.Vote -> vote(t, names, isolate) { res, args -> context.getString(res, *args) }
         }
 
     @Composable
-    fun title(kind: String, ref: String? = null, names: EntryNames = EntryNames()): String = when (val t = AuditKinds.title(kind, ref)) {
+    @Suppress("CyclomaticComplexMethod")
+    fun title(kind: String, ref: String? = null, names: EntryNames = EntryNames(), direction: String? = null): String =
+        when (val t = AuditKinds.title(kind, ref, direction)) {
         is AuditKinds.Title.Known -> if (shownPhrase(kind, names)) {
             AccountNames.isolateOrNull(names.item)?.let { stringResource(R.string.history_kind_wallet_phrase_shown_named, it) }
                 ?: stringResource(R.string.history_kind_wallet_phrase_shown)
@@ -54,6 +58,7 @@ object HistoryText {
         is AuditKinds.Title.Dropped -> stringResource(R.string.history_kind_dropped, t.reason)
         is AuditKinds.Title.Unknown -> stringResource(R.string.history_kind_unknown, t.kind)
         is AuditKinds.Title.Counted -> stringResource(t.res, t.n, t.of)
+        is AuditKinds.Title.Plural -> androidx.compose.ui.res.pluralStringResource(t.res, t.n, t.n)
         is AuditKinds.Title.Named -> {
             val name = nameOf(t.who, names)
             val clean = AccountNames.isolateOrNull(name)

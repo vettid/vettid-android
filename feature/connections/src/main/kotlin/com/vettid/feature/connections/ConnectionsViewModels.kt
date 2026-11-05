@@ -13,6 +13,8 @@ import com.vettid.core.data.items.RuleDraft
 import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.location.AskResult
+import com.vettid.core.data.location.IncomingShare
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
@@ -55,6 +57,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -88,6 +91,8 @@ data class ConnectionsUiState(
      * presence, shares with everyone (its default) and the member has not answered on this phone.
      */
     val presenceCard: Boolean = false,
+    /** The connections that share their location with the member (ANDROID-PLAN §4 "Location", the glance), by connection id. */
+    val glances: Map<String, LocationGlance> = emptyMap(),
 ) {
     val searching: Boolean get() = query.isNotBlank()
 
@@ -114,6 +119,7 @@ class ConnectionsViewModel @Inject constructor(
     private val ownerCheck: OwnerCheckRepository,
     private val presence: PresenceRepository = NoPresence,
     private val prefs: PreferencesRepository = InMemoryPreferencesRepository(),
+    private val location: LocationRepository = NoLocation,
 ) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
@@ -121,7 +127,12 @@ class ConnectionsViewModel @Inject constructor(
         a == PresenceAvailability.AVAILABLE && p?.share == PresenceShare.ALL && !pref.presenceCardAnswered
     }
 
-    val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines, cardOn) { s, cs, declines, card ->
+    val uiState: StateFlow<ConnectionsUiState> = combine(
+        local,
+        repo.connections,
+        approvals.peerDeclines,
+        combine(cardOn, location.incoming) { card, shares -> card to shares },
+    ) { s, cs, declines, (card, shares) ->
         val order = compareByDescending<ConnectionInfo> { it.favorite }
             .thenBy { AccountNames.cleaned(it.displayName).orEmpty().lowercase() }
         val shown = cs.filter { it.matches(s.query) }.sortedWith(order)
@@ -131,6 +142,7 @@ class ConnectionsViewModel @Inject constructor(
             peerDeclines = declines,
             searchable = cs.isNotEmpty(),
             presenceCard = card,
+            glances = shares.filter { it.expiresAt.isAfter(Instant.now()) }.associate { it.connectionId to LocationGlance(it.last?.at) },
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionsUiState())
 
@@ -559,6 +571,9 @@ class AcceptViewModel @Inject constructor(
     }
 }
 
+/** A connection shares its location with the member: the time of its latest position, or null before the first. Never a position. */
+data class LocationGlance(val at: Instant?)
+
 /** Immutable UI state of the scanner. */
 data class ScanUiState(
     /** A code that is not a usable invitation: the scanner keeps looking and says why. */
@@ -625,6 +640,59 @@ data class ConnectionDetailUiState(
     val locationOffered: Boolean = true,
     /** The member's once share to this connection ended without a position being found. */
     val locationMissed: Boolean = false,
+    /** This connection shares its location with the member (the incoming card), if it does. */
+    val incoming: DetailIncoming? = null,
+    /** **Ask for location**: the dialog and its outcome. */
+    val locationAsk: LocationAsk = LocationAsk(),
+    /** **Stop receiving** is out. */
+    val stoppingIncoming: Boolean = false,
+) {
+    /** The daily owner check waits for the typed note (VAULT-MESSAGING §3.6.5, `HoldsInput`). */
+    val holdsInput: Boolean get() = locationAsk.open
+}
+
+/**
+ * The incoming card: "{First}'s location · {age} · within {accuracy}" / "Until {time}". [at] and [accuracyM] are the latest
+ * position's time and accuracy, null before one arrives; the coordinates are not here.
+ */
+data class DetailIncoming(
+    val shareId: String,
+    val until: Instant,
+    val at: Instant?,
+    val accuracyM: Double?,
+    /** How exactly the sharer shows their position (the plan's card says it beside the age). */
+    val precision: com.vettid.core.data.location.SharePrecision,
+)
+
+/** Fits a note in the vault's byte bound at a character boundary. */
+internal object NoteBytes {
+    fun fit(text: String, maxBytes: Int): String {
+        var bytes = 0
+        var end = 0
+        while (end < text.length) {
+            val cp = text.codePointAt(end)
+            val n = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+            if (bytes + n > maxBytes) break
+            bytes += n
+            end += Character.charCount(cp)
+        }
+        return text.substring(0, end)
+    }
+}
+
+/** The **Ask for location** dialog: the optional note (at most 256 bytes) and the outcome. */
+data class LocationAsk(
+    val open: Boolean = false,
+    val note: String = "",
+    val busy: Boolean = false,
+    /** The request went out. */
+    val sent: Boolean = false,
+    /** One request per connection per 10 minutes: the minutes until the next. */
+    val limitedMinutes: Int? = null,
+    /** A pasted note was cut to the 256 bytes the vault takes. */
+    val trimmed: Boolean = false,
+    val error: FailureKind? = null,
+    val errorCode: String? = null,
 )
 
 /** An active outgoing location share with the connection: "Sharing your location until {time}" with **Stop**. */
@@ -725,8 +793,12 @@ class ConnectionDetailViewModel @Inject constructor(
             repo.connections,
             repo.authentication,
             combine(calls.availability, ownVotes()) { c, v -> c to v },
-            combine(ownPresence(), ownLocation(), location.availability) { p, l, a -> Triple(p, l, a) },
-        ) { s, cs, auth, (call, v), (p, shared, offered) ->
+            combine(ownPresence(), ownLocation(), location.availability, location.incoming, ::Extras),
+        ) { s, cs, auth, (call, v), extras ->
+            val p = extras.presence
+            val shared = extras.location
+            val offered = extras.availability
+            val incoming = extras.incoming.firstOrNull { it.connectionId == id && it.expiresAt.isAfter(Instant.now()) }
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
                 connection = c,
@@ -740,8 +812,17 @@ class ConnectionDetailViewModel @Inject constructor(
                 location = shared.location,
                 locationMissed = shared.missed,
                 locationOffered = offered != LocationAvailability.UNSUPPORTED,
+                incoming = incoming?.let { DetailIncoming(it.shareId, it.expiresAt, it.last?.at, it.last?.accuracyM, it.precision) },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionDetailUiState(id))
+
+    /** The presence and location parts of the page, read together. */
+    private class Extras(
+        val presence: PresenceView?,
+        val location: LocationView,
+        val availability: LocationAvailability,
+        val incoming: List<IncomingShare>,
+    )
 
     /** What presence knows of this connection, while the vault has presence; null otherwise. */
     private class PresenceView(val reading: PresenceReading?, val shared: Boolean?, val invisible: Boolean, val canRefresh: Boolean)
@@ -770,6 +851,63 @@ class ConnectionDetailViewModel @Inject constructor(
             },
             id in missed,
         )
+    }
+
+    /** **Stop receiving**: `location.share.stop` of the incoming share; the share and its position go from this phone. */
+    fun stopReceiving() {
+        val share = uiState.value.incoming ?: return
+        if (uiState.value.stoppingIncoming) return
+        local.update { it.copy(stoppingIncoming = true, error = null) }
+        viewModelScope.launch {
+            try {
+                location.stopReceiving(share.shareId)
+                local.update { it.copy(stoppingIncoming = false) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(stoppingIncoming = false, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
+    }
+
+    /** Counts the dialog's openings: an answer that comes back to a closed (or reopened) dialog is not applied to it. */
+    private var askGeneration = 0
+
+    /** **Ask for location**: opens the dialog (a service connection is never asked). */
+    fun openAsk() {
+        if (uiState.value.connection?.service == true) return
+        askGeneration++
+        local.update { it.copy(locationAsk = LocationAsk(open = true)) }
+    }
+
+    fun closeAsk() {
+        askGeneration++
+        local.update { it.copy(locationAsk = LocationAsk()) }
+    }
+
+    /** The note is kept to 256 bytes of UTF-8 (the vault's bound); a longer one (pasted) is cut at a character, and the dialog says so. */
+    fun setAskNote(text: String) = local.update {
+        val fitted = NoteBytes.fit(text, NOTE_MAX_BYTES)
+        it.copy(locationAsk = it.locationAsk.copy(note = fitted, trimmed = fitted.length < text.length, error = null))
+    }
+
+    /** Sends `location.request`; a second ask within 10 minutes is answered by "You asked {First} a few minutes ago…". */
+    fun sendAsk() {
+        val ask = local.value.locationAsk
+        if (!ask.open || ask.busy || ask.sent) return
+        val generation = askGeneration
+        local.update { it.copy(locationAsk = ask.copy(busy = true, error = null, errorCode = null, limitedMinutes = null)) }
+        viewModelScope.launch {
+            // Only the dialog this was sent from takes the answer.
+            fun apply(f: (LocationAsk) -> LocationAsk) =
+                local.update { if (generation == askGeneration) it.copy(locationAsk = f(it.locationAsk)) else it }
+            try {
+                when (val r = location.ask(id, ask.note)) {
+                    AskResult.Sent -> apply { it.copy(busy = false, sent = true) }
+                    is AskResult.Limited -> apply { it.copy(busy = false, limitedMinutes = r.minutes) }
+                }
+            } catch (e: VaultFailure) {
+                apply { it.copy(busy = false, error = e.kind, errorCode = e.shownCode) }
+            }
+        }
     }
 
     /** **Stop** on "Sharing your location until …": sending ends at once, the vault is told (a refused stop shows its error). */
@@ -813,6 +951,17 @@ class ConnectionDetailViewModel @Inject constructor(
             }
         }
         loadSharing()
+        // The incoming share's latest position is read when the page opens (and when a new share appears).
+        viewModelScope.launch {
+            location.incoming.map { l -> l.firstOrNull { it.connectionId == id }?.shareId }.distinctUntilChanged().filterNotNull()
+                .collect {
+                    try {
+                        location.open(id)
+                    } catch (_: VaultFailure) {
+                        // What the list brought stays; a held vault reads again when it opens.
+                    }
+                }
+        }
         // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
         viewModelScope.launch {
             val c = uiState.map { it.connection }.filterNotNull().first()
@@ -936,5 +1085,6 @@ class ConnectionDetailViewModel @Inject constructor(
 
     private companion object {
         const val ASK_PENDING = "pending"
+        const val NOTE_MAX_BYTES = 256
     }
 }

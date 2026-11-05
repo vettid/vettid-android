@@ -31,6 +31,8 @@ fun ConnectionRow(
      * line and a service icon replaces the initial tile.
      */
     serviceLabel: String? = null,
+    /** Goes under the supporting line (the location glance). */
+    below: (@androidx.compose.runtime.Composable () -> Unit)? = null,
 ) {
     VettIdListRow(
         title = name,
@@ -42,6 +44,7 @@ fun ConnectionRow(
         onClick = onClick,
         tilePhoto = if (serviceLabel != null) null else photo,
         tileIcon = if (serviceLabel != null) Icons.Outlined.Dns else null,
+        below = below,
         action = RowAction(
             icon = if (favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
             contentDescription = stringResource(

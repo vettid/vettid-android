@@ -199,7 +199,7 @@ object FeedKinds {
 
     private fun named(res: Int, any: Int, name: FeedText?): FeedText = name?.let { FeedText(res, listOf(it)) } ?: FeedText(any)
 
-    private val LATER = setOf("action.request", "intro.request", "location.shared", "location.request")
+    private val LATER = setOf("action.request", "intro.request")
 
     fun known(kind: String): Boolean = kind in KNOWN || kind.startsWith("leash.")
 
@@ -535,6 +535,8 @@ object FeedKinds {
             "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
                 c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
+            // L1b: "{First} is sharing their location with you" opens the connection.
+            "location.shared" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
             "share.rate_limited" -> if (c != null && !ref.isNullOrEmpty()) FeedTarget.ShareRule(c, ref) else FeedTarget.Sheet
             "item.revealed" -> if (!ref.isNullOrEmpty()) FeedTarget.Item(ref) else FeedTarget.Sheet
             "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised" ->

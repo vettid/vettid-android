@@ -116,7 +116,7 @@ class HistoryEventTitlesTest {
             Triple("drop.owner_check", null, "Refused: your daily check is due"),
             Triple("drop.profile_ik_mismatch", null, "Profile refused: it did not match the connection"),
             Triple("drop.profile_malformed", null, "Message refused: it was malformed"),
-            Triple("drop.location_malformed", null, "Message refused: it was malformed"),
+            Triple("drop.location_malformed", null, "Location from a connection dropped"),
             Triple("drop.attachment_malformed", null, "Photo refused: it was malformed"),
             Triple("drop.grant_duplicate", null, "Request refused: already asked"),
             Triple("drop.grant_limit", null, "Request refused: too many waiting"),
@@ -404,5 +404,54 @@ class HistoryEventTitlesTest {
         val n = EntryNames(connection = "Sam\u202E Lee")
         assertEquals("Calls from Sam Lee turned off", HistoryText.title(context, "call.permission_off", null, n, isolate = false))
         assertEquals("Calls from \u2068Sam Lee\u2069 turned off", HistoryText.title(context, "call.permission_off", null, n))
+    }
+
+    // --- Location (ANDROID-PLAN §4 "Location", History, L1b) ---
+
+    private fun located(kind: String, direction: String?, ref: String? = "s1", name: String? = "Sam Lee") =
+        HistoryText.title(context, kind, ref, EntryNames(connection = name), direction = direction)
+
+    @Test
+    fun theLocationTitlesAreThePlansWithTheDirection() {
+        val sam = "\u2068Sam Lee\u2069"
+        assertEquals("Started sharing your location with $sam", located("location.share.started", "out"))
+        assertEquals("Stopped sharing your location with $sam", located("location.share.stopped", "out"))
+        assertEquals("Stopped receiving $sam's location", located("location.share.stopped", "in"))
+        assertEquals("$sam started sharing their location", located("location.share.received", "in"))
+        assertEquals("$sam's location share ended", located("location.share.ended", "in"))
+        assertEquals("$sam stopped receiving your location", located("location.share.ended", "out"))
+        assertEquals("Asked $sam for their location", located("location.requested", "out"))
+        assertEquals("$sam asked for your location", located("location.requested", "in"))
+        assertEquals("Location history sent to $sam", located("location.history.shared", "out"))
+        assertEquals("Location history received from $sam", located("location.history.received", "in"))
+        assertEquals("Location history deleted (12 positions)", located("location.history.deleted", null, ref = "12", name = null))
+        assertEquals("Location history deleted (1 position)", located("location.history.deleted", null, ref = "1", name = null))
+    }
+
+    @Test
+    fun aLocationTitleWithoutTheConnectionOrTheDirectionDegradesWithoutGuessing() {
+        assertEquals("Stopped sharing your location", located("location.share.stopped", "out", name = null))
+        // No direction: the generic title (the entry cannot say which way).
+        assertEquals("Location sharing stopped", located("location.share.stopped", null))
+        assertEquals("Location requested", located("location.requested", null))
+        assertEquals("Location history deleted", located("location.history.deleted", null, ref = "x"))
+    }
+
+    @Test
+    fun droppedLocationsHaveTheirOwnTitleInTheDroppedCategory() {
+        for (k in listOf("drop.location", "drop.location_rate", "drop.location_malformed", "drop.location_limit")) {
+            assertEquals("Location from \u2068Sam Lee\u2069 dropped", located(k, "in"))
+            assertEquals(com.vettid.core.data.vault.AuditCategory.DROPPED, com.vettid.core.data.vault.AuditCategory.of(k))
+        }
+        assertEquals("Location from a connection dropped", located("drop.location", "in", name = null))
+    }
+
+    @Test
+    fun historyNeverShowsAPositionTheRefIsNotRead() {
+        // A ref that looks like a coordinate is not printed by any location title.
+        for (k in listOf("location.share.started", "location.share.stopped", "location.share.received", "location.share.ended", "location.requested")) {
+            assertFalse(located(k, "out", ref = "52.5200,13.4050").contains("52.52"))
+            assertFalse(located(k, "in", ref = "52.5200,13.4050").contains("13.405"))
+        }
     }
 }

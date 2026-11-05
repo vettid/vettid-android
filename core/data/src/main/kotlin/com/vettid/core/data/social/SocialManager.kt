@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -204,8 +205,27 @@ class SocialManager internal constructor(
             merge(stored, listed + requests, cs, now)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
+    private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    override suspend fun dismissLocationRequest(requestId: String) {
+        // A tap just before a lock or a hold must not put the set back after it: the epochs are read at entry, checked at the write.
+        val epoch = lockEpoch.get()
+        val hold = holdEpoch.get()
+        synchronized(localLock) {
+            if (stale(epoch, hold)) return
+            dismissedLocationFlow.update { it + "location:$requestId" }
+        }
+        // Nothing is sent and the vault's feed item is not touched: the plan has no decline, only a local hide.
+        closeFeedKey("location:$requestId")
+        dropApproval("location:$requestId")
+    }
+
     override val approvals: StateFlow<List<Approval>> =
-        combine(listedApprovals, feedFlow, listReadFlow, feedClosedFlow) { base, feed, listRead, closed ->
+        combine(
+            combine(listedApprovals, dismissedLocationFlow) { l, d -> l.filterNot { it.key in d } },
+            feedFlow, listReadFlow, feedClosedFlow,
+        ) { base, feed, listRead, closed ->
             // A merged pending.list is authoritative for the asks it lists; the vault does not list pairings yet
             // (0.83.0), so a pairing's entry is kept either way.
             val extra = FeedOnlyAsks.entries(feed, base.mapTo(HashSet()) { it.key }, closed, now())
@@ -314,6 +334,8 @@ class SocialManager internal constructor(
         pendingFailureFlow.value = null
         synchronized(localLock) {
             holdEpoch.incrementAndGet()
+            // "Not now" answers are memory only and not kept while held (the list is read again after the check).
+            dismissedLocationFlow.value = emptySet()
             listedFlow.value = emptyList()
             requestsFlow.value = emptyList()
         }
@@ -330,6 +352,7 @@ class SocialManager internal constructor(
     private fun dropReads() = synchronized(localLock) {
         lockEpoch.incrementAndGet()
         holdEpoch.incrementAndGet()
+        dismissedLocationFlow.value = emptySet() // "Not now" on a location request: memory only, dropped at lock
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         listedFlow.value = emptyList()
@@ -748,6 +771,13 @@ class SocialManager internal constructor(
             }
             "share.decided" -> s("rule_id")?.let { onShareDecided(it, b) }
             "approval.decided" -> s("approval_id")?.let { closeAsk("device:approval.pending:$it", ts) }
+            // §10.16: answered (a share named it) or expired; its feed item is read (the vault does not change it).
+            "location.request.closed" -> s("request_id")?.let { id ->
+                closeAsk("location:$id", ts)
+                // A request that came from `pending.list` is in the listed asks, not only in the events.
+                synchronized(localLock) { listedFlow.update { l -> l.filterNot { it.key == "location:$id" } } }
+                decided("location:$id")
+            }
         }
     }
 
@@ -1659,7 +1689,11 @@ class SocialManager internal constructor(
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
         // One question per item and subject (0.23.0 §10.12).
-        return ShareQuestions.dedupe(all.map { a -> withName(a, names, services) }).sortedByDescending { it.receivedAt }
+        val firsts = cs.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
+        fun named(a: Approval): Approval = withName(a, names, services).let { n ->
+            if (n is Approval.LocationRequest) n.copy(firstName = firsts[n.connectionId]) else n
+        }
+        return ShareQuestions.dedupe(all.map(::named)).sortedByDescending { it.receivedAt }
     }
 
     private fun withName(a: Approval, names: Map<String, String>, services: Set<String>): Approval = when (a) {
@@ -1672,6 +1706,7 @@ class SocialManager internal constructor(
             connectionName = a.subjectConnectionId?.let { names[it] },
             connectionService = a.subjectConnectionId in services,
         )
+        is Approval.LocationRequest -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
         is Approval.DeviceRequest -> a
     }
 

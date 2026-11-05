@@ -79,6 +79,18 @@ class LocationSharing(
     }
 
     private val lock = Any()
+
+    /** The receiving side (L1b): the incoming shares and their positions, memory only. */
+    private val receiving = LocationReceiving(
+        scope = scope,
+        ops = ops,
+        unlocked = unlocked,
+        gated = due,
+        isService = isService,
+        here = { platform?.currentFix() },
+        now = now,
+        relist = { refreshQuietly() },
+    )
     private val tracked = LinkedHashMap<String, Tracked>()
     private val outgoingFlow = MutableStateFlow<List<OutgoingShare>>(emptyList())
     private val stateFlow = MutableStateFlow(ServiceState())
@@ -125,6 +137,7 @@ class LocationSharing(
     private var positions: Job? = null
     private var watcher: Job? = null
     private var resumer: Job? = null
+    private var reopener: Job? = null
     private var onceTimer: Job? = null
     private var unsupported = false
 
@@ -136,6 +149,47 @@ class LocationSharing(
     override val serviceState: StateFlow<ServiceState> = stateFlow.asStateFlow()
     override val availability: StateFlow<LocationAvailability> = availabilityFlow.asStateFlow()
     override val missedOnce: StateFlow<Set<String>> = missedFlow.asStateFlow()
+    override val incoming: StateFlow<List<IncomingShare>> get() = receiving.incoming
+
+    override suspend fun open(connectionId: String) = receiving.open(connectionId)
+
+    override suspend fun stopReceiving(shareId: String) = receiving.stopReceiving(shareId)
+
+    override suspend fun ask(connectionId: String, note: String?): AskResult = receiving.ask(connectionId, note)
+
+    override suspend fun offsetFromHere(connectionId: String): PositionOffset? = receiving.offsetFromHere(connectionId)
+
+    /** The daily check came due and is held (§3.6.3), or the member's check hold began: what was received is dropped. */
+    fun clearReceived() = receiving.clear()
+
+    /**
+     * The check passed or the hold ended: the incoming shares are read again (events were not taken meanwhile). Tried again with the
+     * backoff of [resume] until it works or the vault closes.
+     */
+    fun reopenReceived() {
+        synchronized(lock) {
+            reopener?.cancel()
+            reopener = scope.launch { reopenLoop() }
+        }
+    }
+
+    private suspend fun reopenLoop() {
+        var n = 0
+        while (unlocked()) {
+            if (due()) {
+                delay(watchEvery.toMillis())
+                continue
+            }
+            try {
+                read(resume = false)
+                return
+            } catch (e: VaultFailure) {
+                if (e.kind == FailureKind.NOT_SUPPORTED) return
+                val wait = if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) watchEvery else retryDelays[minOf(n++, retryDelays.size - 1)]
+                delay(wait.toMillis())
+            }
+        }
+    }
 
     /** Attaches the platform's positions and service. Before the first [start] or [resume]. */
     fun attach(p: LocationPlatform) {
@@ -344,6 +398,7 @@ class LocationSharing(
 
     /** The vault locked, was wiped or signed out: sending ends, the service stops, memory is cleared. The stored ids stay. */
     fun clear() {
+        receiving.clear()
         synchronized(lock) {
             generation++
             tracked.values.forEach { it.timer?.cancel() }
@@ -356,6 +411,8 @@ class LocationSharing(
             watcher = null
             resumer?.cancel()
             resumer = null
+            reopener?.cancel()
+            reopener = null
             onceTimer?.cancel()
             onceTimer = null
             held = null
@@ -445,6 +502,7 @@ class LocationSharing(
 
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
+        receiving.onForeground()
         synchronized(lock) {
             lookAgain()
             if (serviceWanted && !serviceStarted) {
@@ -527,6 +585,7 @@ class LocationSharing(
         if (unsupported) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         requireOpen()
         val (gen, startSeq, startEpoch) = synchronized(lock) { Triple(generation, seq, epoch) }
+        val receiveToken = receiving.begin()
         val body = try {
             vaultGuard(resend = true) { ops().list() }
         } catch (e: VaultFailure) {
@@ -540,6 +599,8 @@ class LocationSharing(
             }
             throw e
         }
+        // The incoming side is judged by its own epoch, under its own monitor: an answer across a lock or a hold writes nothing.
+        receiving.applyList(body, receiveToken)
         val stored = withContext(io) { store.load() }
         val listed = readable(body, stored)
         val toStop = synchronized(lock) {
@@ -605,6 +666,7 @@ class LocationSharing(
 
     /** `location.event` and `sync.event{location.share.changed}` from the vault. */
     fun onEvent(m: VaultMessage) {
+        receiving.onEvent(m)
         when (m.type) {
             "location.event" -> onLocationEvent(m)
             "sync.event" -> if (VaultJson.str(m.body, "kind") == CHANGED) onChanged(m)
@@ -866,6 +928,7 @@ class LocationSharing(
             resumed = resumed && active.isNotEmpty(),
             issue = issueOf(active),
             stopping = stopMarks.values.mapNotNull { m -> m.connectionId.takeIf { it.isNotEmpty() } }.toSet(),
+            stoppingShares = stopMarks.keys.toSet(),
         )
         val notRunning = stateFlow.value.issue == SendIssue.SERVICE
         if (notRunning != notRunningShown) {

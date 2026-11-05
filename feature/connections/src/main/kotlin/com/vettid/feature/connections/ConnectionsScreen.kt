@@ -82,7 +82,22 @@ data object ConnectionsRoute
 
 /** A connection's detail screen. */
 @Serializable
-data class ConnectionDetailRoute(val connectionId: String) {
+data class ConnectionDetailRoute(val connectionId: String, val shareRequestId: String? = null) {
+    companion object {
+        const val ARG = "connectionId"
+
+        /** A location request being answered (Approvals' **Share for a while…**): the share sheet opens with its `request_id`. */
+        const val ARG_REQUEST = "shareRequestId"
+    }
+}
+
+/** The Location screen of the drawer (ANDROID-PLAN §4 "Location", L1b). */
+@Serializable
+data object LocationRoute
+
+/** A connection's position, as text (no map in L1). */
+@Serializable
+data class PositionRoute(val connectionId: String) {
     companion object {
         const val ARG = "connectionId"
     }
@@ -130,6 +145,8 @@ data class ConnectionsHost(
     val onAskFor: (String) -> Unit = {},
     /** The votes from a service connection (votes feature). */
     val onOpenVotes: (String) -> Unit = {},
+    /** An Approvals entry by key (a location request, from the Location screen). */
+    val onOpenApproval: (String) -> Unit = {},
 )
 
 /** Registers the Connections destinations. */
@@ -231,8 +248,41 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onSetPresenceShared = vm::setPresenceShared,
                 onShareLocation = share::open,
                 onStopSharingLocation = vm::stopSharingLocation,
+                onOpenPosition = { host.navigate(PositionRoute(state.connectionId)) },
+                onStopReceiving = vm::stopReceiving,
+                onAskLocation = vm::openAsk,
+                onAskNote = vm::setAskNote,
+                onSendAsk = vm::sendAsk,
+                onCloseAsk = vm::closeAsk,
             ),
         )
+    }
+    composable<LocationRoute> {
+        val vm: LocationViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        LocationScreen(
+            state = state,
+            chrome = chrome,
+            actions = LocationActions(
+                onStopSharing = vm::stopSharing,
+                onStopReceiving = vm::stopReceiving,
+                onOpenConnection = { host.navigate(ConnectionDetailRoute(it)) },
+                onOpenPosition = { host.navigate(PositionRoute(it)) },
+                onOpenRequest = host.onOpenApproval,
+                onDismissError = vm::dismissError,
+            ),
+        )
+    }
+    composable<PositionRoute> {
+        val vm: PositionViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        // The phone's own place is asked for only while the screen is shown.
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
+        // The daily check can come due by time alone: it is looked at again with the screen's own clock.
+        val tick = rememberNow()
+        androidx.compose.runtime.LaunchedEffect(tick) { vm.look() }
+        PositionScreen(state, host.onBack, vm::refresh, vm::askMaps, vm::dismissMaps)
     }
     composable<InviteRoute> {
         val vm: InviteViewModel = hiltViewModel()
@@ -418,7 +468,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
             // No people rows (only services): the section's header would sit directly above "Services".
             if (state.connections.isNotEmpty()) item { SectionHeader(stringResource(R.string.connections_header)) }
         }
-        items(state.connections, key = { it.id }) { c -> ConnectionItem(c, actions) }
+        items(state.connections, key = { it.id }) { c -> ConnectionItem(c, actions, state.glances[c.id]) }
         // ANDROID-PLAN 0.1.90: services below the people, only when there is one; starred ones first.
         if (state.services.isNotEmpty()) {
             item(key = "services-header") { SectionHeader(stringResource(UiR.string.services_section_title)) }
@@ -428,7 +478,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
 }
 
 @Composable
-private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
+private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions, glance: LocationGlance? = null) {
     val name = AccountNames.cleaned(c.displayName) ?: stringResource(R.string.connections_name_not_shared)
     ConnectionRow(
         serviceLabel = if (c.service) stringResource(UiR.string.service_label) else null,
@@ -440,6 +490,7 @@ private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
         onClick = { actions.onOpen(c.id) },
         modifier = Modifier.testTag("connection_${c.id}"),
         photo = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),
+        below = glance?.let { { LocationGlanceLine(it) } },
     )
 }
 

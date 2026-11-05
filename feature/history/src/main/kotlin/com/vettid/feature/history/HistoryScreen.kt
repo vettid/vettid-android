@@ -685,6 +685,7 @@ internal fun EntryRow(e: AuditRecord, names: RowNames, onOpen: (Long) -> Unit) {
                 AuditKinds.voteOf(e.kind, e.ref)?.let { names.votes[VoteTitles.key(e.connectionId, it)] }?.ifEmpty { null },
                 wallet = AuditKinds.itemOf(e.kind, e.ref) in names.walletItems,
             ),
+            direction = e.direction,
         ),
         supporting = HistoryDevice.supporting(listOf(item, connection, device), stringResource(AuditKinds.categoryLabel(e.category))),
         meta = e.at?.let { Times.short(it) },

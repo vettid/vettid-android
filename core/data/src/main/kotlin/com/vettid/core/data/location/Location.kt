@@ -120,11 +120,24 @@ data class ServiceState(
     val issue: SendIssue = SendIssue.NONE,
     /** Connections with a share whose stop the vault has not taken yet (sending for them has ended): "Stopping…". */
     val stopping: Set<String> = emptySet(),
+    /** The ids of the shares whose stop the vault has not taken yet (a stop is addressed by its own share id). */
+    val stoppingShares: Set<String> = emptySet(),
 ) {
     data class Target(val connectionId: String, val expiresAt: Instant)
 
     val active: Boolean get() = targets.isNotEmpty()
 }
+
+/**
+ * The active outgoing share to [connectionId], or null: the share not past its `expires_at`, not a once share already delivered,
+ * and not being stopped (judged per share id: a pending stop never ends a newer share). Of several, the one that lasts longest.
+ * The one rule Approvals and the share sheet both use, so that they cannot disagree.
+ */
+fun activeShareTo(shares: List<OutgoingShare>, service: ServiceState, connectionId: String, now: Instant): OutgoingShare? =
+    shares.filter {
+        it.connectionId == connectionId && it.expiresAt.isAfter(now) && !(it.once && it.lastSentAt != null) &&
+            it.shareId !in service.stoppingShares
+    }.maxByOrNull { it.expiresAt }
 
 /** Why this phone is not sending positions while a share is active. */
 enum class SendIssue {
@@ -206,6 +219,13 @@ interface LocationPlatform {
 
     /** Whether precise (fine) location is allowed: with approximate access only, a once share cannot wait for 100 m. */
     fun precise(): Boolean = true
+
+    /**
+     * Where this phone is now, only when the permission is already granted (never asks for it): the distance and direction of a
+     * received position. Null without the permission, with location off, or when no fix comes in a few seconds. Read once and
+     * dropped by the caller; a position the system merely remembers is never read.
+     */
+    suspend fun currentFix(): Fix? = null
 }
 
 /** The vault calls behind [LocationSharing] (§10.16), so that it can be tested without a vault. */
@@ -218,6 +238,12 @@ interface LocationOps {
     suspend fun stop(shareId: String): JsonObject
 
     suspend fun list(): JsonObject
+
+    /** `location.get{connection_id, history}` (L1b): the latest position, the trail and a snapshot of an incoming share. */
+    suspend fun get(connectionId: String, history: Boolean): JsonObject = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    /** `location.request{connection_id, note?}` (L1b): `{request_id}`; `limit` once per connection per 10 minutes. */
+    suspend fun request(connectionId: String, note: String?): JsonObject = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 }
 
 /**
@@ -225,6 +251,7 @@ interface LocationOps {
  * Nothing is sent unless this phone is the source of an active share, the vault is open and the daily owner check is neither
  * due nor held.
  */
+@Suppress("TooManyFunctions") // sending (L1a) and receiving (L1b) are one repository: one screen default, one fake
 interface LocationRepository {
     /** The member's active outgoing shares, from this phone and from other devices (memory only; read at unlock). */
     val outgoing: StateFlow<List<OutgoingShare>>
@@ -265,12 +292,98 @@ interface LocationRepository {
 
     /** The foreground service ended itself (the system refused it, or it failed): it is started again when the app is in front. */
     fun onServiceEnded() = Unit
+
+    // --- receiving (L1b) ---
+
+    /**
+     * The shares connections have with this member (memory only, read at unlock and kept current by `location.event`), each with
+     * its latest position once one is known. Cleared at lock, hold and wipe.
+     */
+    val incoming: StateFlow<List<IncomingShare>> get() = NO_INCOMING
+
+    /**
+     * A screen of [connectionId] opens: `location.get` reads the latest position (and the trail, when shared). A connection that
+     * shares nothing with this member (`not_found`) ends the share here. Throws the vault's [VaultFailure].
+     */
+    suspend fun open(connectionId: String) = Unit
+
+    /** **Stop receiving**: `location.share.stop` of an incoming share; the share and its positions are dropped here. */
+    suspend fun stopReceiving(shareId: String) = Unit
+
+    /**
+     * **Ask for location**: `location.request` with an optional [note] of at most 256 bytes. A second ask within 10 minutes is
+     * [AskResult.Limited] with the minutes left. Never for a service connection.
+     */
+    suspend fun ask(connectionId: String, note: String?): AskResult = throw VaultFailure(FailureKind.NOT_SUPPORTED)
+
+    /**
+     * How far, and in which direction, the position of [connectionId]'s share is from this phone: only when the member has
+     * already allowed location and the phone knows where it is (never asks for the permission). Null otherwise. The phone's own
+     * position is read and dropped inside; only the offset is returned.
+     */
+    suspend fun offsetFromHere(connectionId: String): PositionOffset? = null
+}
+
+/** The answer to **Ask for location**. */
+sealed interface AskResult {
+    data object Sent : AskResult
+
+    /** One request per connection per 10 minutes (§10.16): [minutes] (1 to 10) until the next. */
+    data class Limited(val minutes: Int) : AskResult
+}
+
+/** Distance in metres and the bearing in degrees (0 = north, clockwise) from this phone to a position. */
+data class PositionOffset(val meters: Double, val bearingDeg: Double) {
+    /** Prints its type name only: an offset from this phone says where it is. */
+    override fun toString(): String = "PositionOffset"
+}
+
+/**
+ * One position of a connection's share, held in memory only (never in Room, a file, DataStore, `SavedStateHandle`, a log or a
+ * crash report). **Prints its type name only.** [at] is the fix's time, [receivedAt] the vault's (null from a live update:
+ * this phone's clock then).
+ */
+class ReceivedPosition(
+    val lat: Double,
+    val lon: Double,
+    val accuracyM: Double?,
+    val altitudeM: Double?,
+    val speedMps: Double?,
+    val headingDeg: Double?,
+    val at: Instant,
+    val receivedAt: Instant?,
+) {
+    override fun toString(): String = "ReceivedPosition"
+}
+
+/**
+ * A share a connection has with this member (`location.share.list` `incoming`, `location.event{started, in}`). [last], [trailPoints]
+ * and [snapshot] are positions (memory only; they print their type names).
+ */
+data class IncomingShare(
+    val shareId: String,
+    val connectionId: String,
+    val once: Boolean,
+    val precision: SharePrecision,
+    val intervalSeconds: Long?,
+    /** The sharer lets this member keep the trail (`history`). */
+    val trail: Boolean,
+    val startedAt: Instant?,
+    val expiresAt: Instant,
+    val last: ReceivedPosition? = null,
+    val trailPoints: List<ReceivedPosition> = emptyList(),
+    /** The positions the sharer sent from their own log (`location.snapshot`). */
+    val snapshot: List<ReceivedPosition> = emptyList(),
+) {
+    override fun toString(): String = "IncomingShare"
 }
 
 /** Whether this vault has location: learnt by asking, since no message lists a release's features. */
 enum class LocationAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
 
 private val NO_MISSED: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+
+private val NO_INCOMING: StateFlow<List<IncomingShare>> = MutableStateFlow(emptyList())
 
 private val NO_AVAILABILITY: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 
