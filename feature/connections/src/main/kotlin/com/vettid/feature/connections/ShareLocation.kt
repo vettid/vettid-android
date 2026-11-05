@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -559,7 +560,15 @@ private fun precisionNote(p: SharePrecision, system: LengthSystem): Int = when (
  * settings can put it right. [missed]: the last once share found no position.
  */
 @Composable
-internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Boolean, onShare: () -> Unit, onStop: () -> Unit) {
+internal fun LocationCard(
+    location: DetailLocation?,
+    missed: Boolean,
+    busy: Boolean,
+    onShare: () -> Unit,
+    onStop: () -> Unit,
+    /** The connection's first name as a sentence says it (isolated), for the stalled line. */
+    name: String = "",
+) {
     val context = LocalContext.current
     DetailCard(Modifier.testTag("detail_location")) {
         if (location == null) {
@@ -596,6 +605,15 @@ internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Bool
                     enabled = !busy,
                     modifier = Modifier.heightIn(min = 48.dp).testTag("detail_location_stop"),
                 ) { Text(stringResource(R.string.connections_location_stop)) }
+            }
+            // Nothing reaches the other person (A6 N21): the cause, when known, is the issue line above and its settings action below.
+            location.stalledMinutes?.let { minutes ->
+                Text(
+                    pluralStringResource(R.plurals.connections_location_stalled, minutes, name, minutes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = Spacing.s).testTag("detail_location_stalled"),
+                )
             }
             val settings = location.issue.settingsIntent(context)
             if (settings != null) {

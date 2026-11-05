@@ -281,6 +281,11 @@
 
     <!-- Sharing the member's location (ANDROID-PLAN §4 "Location", L1a). DRAFT = the plan's words, word for word; NEW = not in the
          plan (labels from its prose, or the app's own). None is approved by the owner. -->
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). The card's line when no position has reached %1$s for %2$d minutes. -->
+    <plurals name="connections_location_stalled">
+        <item quantity="one">Your location hasn\'t reached %1$s for %2$d minute.</item>
+        <item quantity="other">Your location hasn\'t reached %1$s for %2$d minutes.</item>
+    </plurals>
     <!-- NEW: not in the plan (the plan names the sheet "Share my location"); also the label of the connection page's button. -->
     <string name="connections_location_title">Share my location</string>
     <!-- NEW: not in the plan (words from its screen notes). -->

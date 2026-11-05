@@ -14,4 +14,11 @@
     <string name="core_location_check_now">Check now</string>
     <!-- NEW: not in the plan. No name: the name is not known yet, or the app lock's cover is up. -->
     <string name="core_location_notification_unnamed">Sharing your location</string>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). The stall notice: %1$s the connection's first name, %2$d the minutes. -->
+    <plurals name="core_location_stalled_named">
+        <item quantity="one">Your location hasn\'t reached %1$s for %2$d minute.</item>
+        <item quantity="other">Your location hasn\'t reached %1$s for %2$d minutes.</item>
+    </plurals>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). No name: the app lock's cover is up, or names are not shown. -->
+    <string name="core_location_stalled_unnamed">Your location isn\'t getting through.</string>
 </resources>

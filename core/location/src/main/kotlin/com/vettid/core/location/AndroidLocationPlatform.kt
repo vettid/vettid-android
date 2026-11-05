@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 class AndroidLocationPlatform(
     context: Context,
     repository: LocationRepository,
-    names: StateFlow<Map<String, String>>,
+    private val names: StateFlow<Map<String, String>>,
     override val positions: PositionProvider = PlatformPositionProvider(context),
 ) : LocationPlatform {
     private val app = context.applicationContext
@@ -32,7 +32,7 @@ class AndroidLocationPlatform(
     init {
         LocationService.source = object : LocationServiceSource {
             override val state = repository.serviceState
-            override val names = names
+            override val names = this@AndroidLocationPlatform.names
 
             override fun stopAll() = repository.stopAll()
 
@@ -72,8 +72,52 @@ class AndroidLocationPlatform(
         runCatching { manager.notify(NOT_RUNNING_ID, n) }
     }
 
+    /**
+     * "Your location hasn't reached {First} for {n} minutes." on the Location sharing channel (A6 N21), one per connection, its
+     * minutes kept current silently. The name is said only while [names] has it (empty under the app lock's cover or when the
+     * member's notifications hide names); else "Your location isn't getting through." The lock screen version never names anybody.
+     * It opens the app's main screen, as the ongoing notification does.
+     */
+    override fun showStalled(connectionId: String, minutes: Int) {
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        Channels.ensure(app)
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val open = app.packageManager.getLaunchIntentForPackage(app.packageName)?.let { PendingIntent.getActivity(app, 0, it, flags) }
+        val name = names.value[connectionId]?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+        val unnamed = app.getString(R.string.core_location_stalled_unnamed)
+        val text = if (name != null) {
+            app.resources.getQuantityString(R.plurals.core_location_stalled_named, minutes, name, minutes)
+        } else {
+            unnamed
+        }
+        val n = NotificationCompat.Builder(app, Channels.LOCATION)
+            .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
+            .setContentTitle(text)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(app, Channels.LOCATION)
+                    .setSmallIcon(com.vettid.core.notify.R.drawable.ic_stat_vettid)
+                    .setContentTitle(unnamed)
+                    .setSilent(true)
+                    .build(),
+            )
+            .setContentIntent(open)
+            .build()
+        runCatching { NotificationManagerCompat.from(app).notify(connectionId, STALLED_ID, n) }
+    }
+
+    override fun clearStalled(connectionId: String) {
+        runCatching { NotificationManagerCompat.from(app).cancel(connectionId, STALLED_ID) }
+    }
+
     private companion object {
         const val NOT_RUNNING_ID = 0x10CA8
+        const val STALLED_ID = 0x10CA9
     }
 
     override fun issue(): SendIssue {

@@ -122,6 +122,13 @@ data class ServiceState(
     val stopping: Set<String> = emptySet(),
     /** The ids of the shares whose stop the vault has not taken yet (a stop is addressed by its own share id). */
     val stoppingShares: Set<String> = emptySet(),
+    /**
+     * Connections whose continuous share has had no position accepted by the vault for its update interval plus [STALL_GRACE]
+     * (A6 N21), with the whole minutes since the last accepted position (or since the share started or was taken up). Never
+     * while the check is due or held, or the vault is locked: that is a pause, not a stall. A `once` share is not in here
+     * ([LocationRepository.missedOnce] says it). A time only, never a position.
+     */
+    val stalled: Map<String, Int> = emptyMap(),
 ) {
     data class Target(val connectionId: String, val expiresAt: Instant)
 
@@ -138,6 +145,9 @@ fun activeShareTo(shares: List<OutgoingShare>, service: ServiceState, connection
         it.connectionId == connectionId && it.expiresAt.isAfter(now) && !(it.once && it.lastSentAt != null) &&
             it.shareId !in service.stoppingShares
     }.maxByOrNull { it.expiresAt }
+
+/** A share is stalled when this long (on top of its update interval) has passed without a position accepted by the vault. */
+val STALL_GRACE: Duration = Duration.ofMinutes(15)
 
 /** Why this phone is not sending positions while a share is active. */
 enum class SendIssue {
@@ -213,6 +223,15 @@ interface LocationPlatform {
      * front ([SendIssue.SERVICE]): "Not sending: open VettID to carry on.", opening the app.
      */
     fun showNotRunning(show: Boolean) = Unit
+
+    /**
+     * Posts (or silently updates the minutes of) the notice that [connectionId]'s share is not getting through
+     * ([ServiceState.stalled]) on the Location sharing channel; it names nobody when the app lock's cover is up. Opens the app.
+     */
+    fun showStalled(connectionId: String, minutes: Int) = Unit
+
+    /** Takes that notice away: a position got through, or the share ended or paused. */
+    fun clearStalled(connectionId: String) = Unit
 
     /** Why the platform cannot deliver positions now (the permission, the phone's location switch), or [SendIssue.NONE]. */
     fun issue(): SendIssue = SendIssue.NONE

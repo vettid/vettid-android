@@ -523,6 +523,50 @@ class ShareLocationTest {
     }
 
     @Test
+    fun aStalledCardSaysHowLongNothingHasReachedThePersonAndOffersNoFixWithoutAKnownCause() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), stalledMinutes = 25))
+        rule.onNodeWithTag("detail_location_stalled").assertIsDisplayed()
+        rule.onNodeWithText("Your location hasn't reached $sam for 25 minutes.").assertIsDisplayed()
+        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aStalledCardWithAKnownCauseGivesTheIssueLineAndItsFixOnce() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = com.vettid.core.data.location.SendIssue.LOCATION_OFF, stalledMinutes = 16))
+        rule.onNodeWithText("Your location hasn't reached $sam for 16 minutes.").assertIsDisplayed()
+        rule.onNodeWithText("Not sending: location is off on this phone.").assertIsDisplayed()
+        // The issue's own action, shown once: not a second one for the stall.
+        assertEquals(1, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
+        assertEquals(1, rule.onAllNodesWithText("Open settings").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun aStalledCardKeepsTheSingularForOneMinute() {
+        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), stalledMinutes = 1))
+        rule.onNodeWithText("Your location hasn't reached $sam for 1 minute.").assertIsDisplayed()
+    }
+
+    @Test
+    fun theDetailViewModelCarriesTheStallOnlyWhileSending() = runTest {
+        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
+        val share = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        val target = com.vettid.core.data.location.ServiceState.Target("c1", share.expiresAt)
+        advanceUntilIdle()
+        assertNull(read(vm.uiState).location!!.stalledMinutes)
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(listOf(target), stalled = mapOf("c1" to 17))
+        assertEquals(17, read(vm.uiState).location!!.stalledMinutes)
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(listOf(target), stalled = mapOf("c1" to 18))
+        assertEquals(18, read(vm.uiState).location!!.stalledMinutes)
+        // Paused (or stopping): not a stall.
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(listOf(target), paused = true, stalled = mapOf("c1" to 18))
+        assertNull(read(vm.uiState).location!!.stalledMinutes)
+        location.serviceState.value = com.vettid.core.data.location.ServiceState(listOf(target))
+        assertNull(read(vm.uiState).location!!.stalledMinutes)
+    }
+
+    @Test
     fun aStoppingShareIsSaidSoAndKeepsStop() {
         card(DetailLocation("s1", Instant.now().plusSeconds(1_800), stopping = true))
         rule.onNodeWithText("Stopping…").assertIsDisplayed()

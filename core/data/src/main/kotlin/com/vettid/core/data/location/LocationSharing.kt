@@ -68,6 +68,12 @@ class LocationSharing(
         /** A `once` share whose position was sent: it needs nothing more from this phone. */
         var delivered: Boolean = false
 
+        /**
+         * The start of the stall clock: when the share started or was taken up, or the vault last accepted a position; moved
+         * forward at every look while the check is due or held, so paused time never counts. A time only.
+         */
+        var accepted: Instant = Instant.EPOCH
+
         /** When this phone began waiting for a `once` share's position. */
         var waitingSince: Instant? = null
 
@@ -123,6 +129,9 @@ class LocationSharing(
     private val availabilityFlow = MutableStateFlow(LocationAvailability.UNKNOWN)
     private var inFront = false
     private var notRunningShown = false
+
+    /** The stall notices posted, with the minutes they say (memory only). */
+    private val stallShown = HashMap<String, Int>()
 
     @Volatile
     private var platform: LocationPlatform? = null
@@ -366,6 +375,7 @@ class LocationSharing(
         t.source = source && share.shareId !in stopMarks
         t.waitingSince = since.takeIf { source && share.once && share.lastSentAt == null }
         t.delivered = share.once && share.lastSentAt != null
+        t.accepted = now()
         t.timer = scope.launch { expire(share.shareId) }
         tracked[share.shareId] = t
     }
@@ -434,6 +444,30 @@ class LocationSharing(
                 platform?.showNotRunning(false)
             }
         }
+    }
+
+    /**
+     * Under [lock]: the stalled shares, as connection id to whole minutes since the clock began. While the vault is locked or the
+     * check is due or held the clocks are moved to now instead (a pause is not a stall), and nothing is stalled. A `once` share has
+     * no stall: [missedOnce] says it when it ends without a position.
+     */
+    private fun stallsOf(active: List<Tracked>): Map<String, Int> {
+        val t = now()
+        val continuous = active.filter { !it.share.once }
+        if (!unlocked() || due()) {
+            continuous.forEach { it.accepted = t }
+            return emptyMap()
+        }
+        val out = LinkedHashMap<String, Int>()
+        for (s in continuous) {
+            val since = Duration.between(s.accepted, t)
+            val limit = Duration.ofSeconds(s.share.intervalSeconds ?: 0L).plus(STALL_GRACE)
+            if (since >= limit) {
+                val minutes = since.toMinutes().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                out.merge(s.share.connectionId, minutes) { a, b -> maxOf(a, b) }
+            }
+        }
+        return out
     }
 
     /**
@@ -549,7 +583,8 @@ class LocationSharing(
         val active = sources()
         // The permission was given again: the positions are asked for again.
         if (refused && platform?.issue() == SendIssue.NONE) refused = false
-        val changed = (active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue
+        val changed = (active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue ||
+            stallsOf(active) != stateFlow.value.stalled
         if (changed || positionsDown(active)) recompute()
     }
 
@@ -886,6 +921,7 @@ class LocationSharing(
             var done = false
             for (s in sources()) {
                 s.share = s.share.copy(lastSentAt = t)
+                s.accepted = t // the vault took it: the stall clock starts over
                 // The single position of a `once` share is delivered: this phone has nothing more to send for it.
                 if (s.share.once) {
                     s.delivered = true
@@ -929,11 +965,27 @@ class LocationSharing(
             issue = issueOf(active),
             stopping = stopMarks.values.mapNotNull { m -> m.connectionId.takeIf { it.isNotEmpty() } }.toSet(),
             stoppingShares = stopMarks.keys.toSet(),
+            stalled = stallsOf(active),
         )
+        syncStallNotices(stateFlow.value.stalled)
         val notRunning = stateFlow.value.issue == SendIssue.SERVICE
         if (notRunning != notRunningShown) {
             notRunningShown = notRunning
             platform?.showNotRunning(notRunning)
+        }
+    }
+
+    /** Under [lock]: one notice per stalled connection (its minutes kept current), taken away when it is no longer stalled. */
+    private fun syncStallNotices(stalled: Map<String, Int>) {
+        for ((id, minutes) in stalled) {
+            if (stallShown[id] != minutes) {
+                stallShown[id] = minutes
+                platform?.showStalled(id, minutes)
+            }
+        }
+        for (id in stallShown.keys.filter { it !in stalled }) {
+            stallShown.remove(id)
+            platform?.clearStalled(id)
         }
     }
 
