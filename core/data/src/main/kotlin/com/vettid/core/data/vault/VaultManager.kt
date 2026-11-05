@@ -4239,7 +4239,8 @@ class VaultManager(
         val rec = record.recordGeneration
         val s = session()
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
-        // (kept across restarts; nothing the member does moves it); then collects for one visibility timeout, and applied or dropped.
+        // (kept across restarts; nothing the member does moves it); then collects for the settlement window (the relay's
+        // advertised visibility timeout + the 25 s long-poll cap + 5 s), and applied or dropped.
         val guid = TransferInResume.awaitApproval(
             pending = { s.device.transferInPending },
             now = Instant::now,
@@ -4256,7 +4257,7 @@ class VaultManager(
      * brings is applied by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility
      * timeout (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired`
      * leased for that long. The window is the relay's advertised `visibility_timeout_seconds` (60 when none) + the
-     * long-poll cap + 5 s, about 90 s (the lead's call on owner decision a, 2026-11-05: the half-open case); see
+     * long-poll cap + 5 s, about 90 s (clamped to 30-300 s; the lead's call on owner decision a, 2026-11-05: the half-open case); see
      * [TransferInResume.atDeadline] for how each request is sized and why none is cancelled while it can hold a message.
      * While the collection runs, our collects are `wait=0` (it long-polls already); otherwise each is a long poll of what
      * is left. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects included:

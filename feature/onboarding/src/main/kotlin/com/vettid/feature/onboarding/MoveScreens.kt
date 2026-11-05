@@ -658,7 +658,7 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_rejected"),
         ) {}
-        // (A6 audit N1) The 11-minute deadline passed with no approval (after collecting for one visibility timeout):
+        // (A6 audit N1) The 11-minute deadline passed with no approval (after collecting for the settlement window):
         // dropped; a new code.
         TransferInStep.TIMED_OUT -> FormScaffold(
             title = stringResource(R.string.transfer_in_timeout_title),

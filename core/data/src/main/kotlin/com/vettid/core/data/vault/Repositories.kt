@@ -544,8 +544,9 @@ interface MoveRepository {
     /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
-     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for one relay
-     * visibility timeout (about 65 s; A6 audit N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5 erratum, owner decision a,
+     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for the settlement
+     * window (the relay's advertised visibility timeout + the 25 s long-poll cap + 5 s, about 90 s;
+     * A6 audit N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5 erratum, owner decision a,
      * 2026-11-05; RELAY-PROTOCOL §6.3). True when the vault gave this phone the member's
      * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
      * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
@@ -657,7 +658,8 @@ interface MoveRepository {
 
         /**
          * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) [awaitTransferIn] reached the 11-minute deadline, and the
-         * collecting for one visibility timeout after it (rule 5 erratum, owner decision a, 2026-11-05; RELAY-PROTOCOL §6.3)
+         * collecting for the settlement window after it (the relay's visibility timeout + 25 s + 5 s;
+         * rule 5 erratum, owner decision a, 2026-11-05; RELAY-PROTOCOL §6.3)
          * brought no `device.paired`: the handshake was dropped; a new code is needed.
          */
         const val CODE_TRANSFER_DROPPED = "transfer_dropped"

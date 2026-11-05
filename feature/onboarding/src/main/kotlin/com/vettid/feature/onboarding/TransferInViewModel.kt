@@ -42,8 +42,8 @@ enum class TransferInStep {
     REJECTED,
 
     /**
-     * No approval by the 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5): the collects for one
-     * visibility timeout at
+     * No approval by the 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5): the collects for the
+     * settlement window at
      * the deadline brought no `device.paired`, so the handshake was dropped. A new code is offered.
      */
     TIMED_OUT,
@@ -215,7 +215,7 @@ class TransferInViewModel @Inject constructor(
     /**
      * Waits for the old phone's approval; [deadline] is the countdown shown (the vault's 10 minutes). The wait itself runs
      * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository
-     * collects for about 65 s (one relay visibility timeout) and then completes or drops; nothing here extends it.
+     * collects for about 90 s (the relay's visibility timeout + 25 s + 5 s) and then completes or drops; nothing here extends it.
      */
     private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Boolean) {
         startTicker(deadline)

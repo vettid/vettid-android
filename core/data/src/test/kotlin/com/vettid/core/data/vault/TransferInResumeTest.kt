@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.data.vault.TransferInResume.Action
+import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -65,22 +66,36 @@ class TransferInResumeTest {
      */
     private class LeasedMailbox(
         private val scope: TestScope,
-        private val leaseEndsAt: Long,
+        private var leaseEndsAt: Long,
         private val roundWaitMs: Long = 0,
     ) {
         var isPaired = false
         val waits = mutableListOf<Long>()
 
+        /**
+         * A poll that is cut stays parked at the relay until its wait is over: a message that comes free meanwhile is
+         * handed to that dead request and leased for 60 s more (the bug).
+         */
         suspend fun collect(waitMs: Long) {
             waits += waitMs
             if (roundWaitMs > 0) delay(roundWaitMs)
             val end = scope.testScheduler.currentTime + waitMs
-            while (true) {
+            try {
+                while (true) {
+                    val now = scope.testScheduler.currentTime
+                    if (now >= leaseEndsAt) { isPaired = true; return }
+                    if (now >= end) return
+                    delay(minOf(end, leaseEndsAt) - now)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
                 val now = scope.testScheduler.currentTime
-                if (now >= leaseEndsAt) { isPaired = true; return }
-                if (now >= end) return
-                delay(minOf(end, leaseEndsAt) - now)
+                if (leaseEndsAt in (now + 1)..end) leaseEndsAt += LEASE_MS
+                throw e
             }
+        }
+
+        companion object {
+            const val LEASE_MS = 60_000L
         }
     }
 
@@ -172,6 +187,65 @@ class TransferInResumeTest {
     }
 
     /**
+     * (recheck L-d) The same with the message coming free while the first request is parked (round wait 20 s, then its
+     * 25 s poll): a request bounded at 30 s instead of its wait + 30 s is cut at 30 s, the relay hands the message to
+     * that dead request at 40 s and leases it until 100 s, past the window.
+     */
+    @Test
+    fun aRequestIsBoundedByItsWaitPlusTransportNotByTransportAlone() = runTest {
+        val box = LeasedMailbox(this, leaseEndsAt = 40_000, roundWaitMs = 20_000)
+        var drops = 0
+        assertTrue(TransferInResume.atDeadline({ box.isPaired }, box::collect, { drops++ }, settle = timing()))
+        assertEquals(0, drops)
+        assertTrue("paired when it came free, by the first request: $t", t <= 46_000)
+    }
+
+    /**
+     * (recheck L-d) A request that hangs is abandoned at 55 s and may have been handed the message when it comes free at
+     * 100 s (after the first end, 90 s): the extended window (to 145 s) is what still pairs it.
+     */
+    @Test
+    fun aCutRequestExtendsTheWindowSoALateLeaseIsStillGathered() = runTest {
+        var isPaired = false
+        var calls = 0
+        var drops = 0
+        val collect: suspend (Long) -> Unit = { w ->
+            if (calls++ == 0) CompletableDeferred<Unit>().await() else if (t >= 100_000) isPaired = true else delay(w)
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timing()))
+        assertEquals(0, drops)
+        assertTrue("after the first end, within the cap: $t", t in 100_000..150_000)
+    }
+
+    /** (recheck L-b) A failure that is not a relay status may have lost the answer to a leased message: it extends too. */
+    @Test
+    fun aFailureWithoutAStatusExtendsTheWindow() = runTest {
+        var isPaired = false
+        var drops = 0
+        val collect: suspend (Long) -> Unit = { if (t >= 100_000) isPaired = true else throw IOException("body lost") }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timing()))
+        assertEquals(0, drops)
+    }
+
+    /** (recheck L-b) A relay status came back: nothing was leased, no extension; the drop is at the first end. */
+    @Test
+    fun aRelayStatusDoesNotExtendTheWindow() = runTest {
+        var droppedAt = -1L
+        val collect: suspend (Long) -> Unit = { throw RelayException(500, "internal", "no") }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, { droppedAt = t }, settle = timing()))
+        assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    }
+
+    /** (recheck L-a) A relay's advertised visibility timeout is trusted within 30 to 300 s only. */
+    @Test
+    fun theAdvertisedVisibilityTimeoutIsClamped() {
+        assertEquals(300_000L + 30_000L, TransferInResume.windowMs(3_600))
+        assertEquals(30_000L + 30_000L, TransferInResume.windowMs(0))
+        assertEquals(30_000L + 30_000L, TransferInResume.windowMs(-5))
+        assertEquals(90_000L, TransferInResume.windowMs(60))
+    }
+
+    /**
      * (review M1) A delivery at the very edge of the window is handled in full: no cancelling timeout cuts the step; the
      * final wait=0 collect gets it.
      */
@@ -198,7 +272,10 @@ class TransferInResumeTest {
         var collects = 0
         assertFalse(
             TransferInResume.atDeadline(
-                { false }, { collects++; throw IOException("relay unreachable") }, { droppedAt = t }, settle = timing(),
+                { false },
+                { collects++; throw RelayException(503, "unavailable", "relay unreachable") },
+                { droppedAt = t },
+                settle = timing(),
             ),
         )
         assertTrue(collects > 1)

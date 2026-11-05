@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -50,6 +51,10 @@ internal object TransferInResume {
     /** The relay's visibility timeout when it advertises none (RELAY-PROTOCOL §6.3). */
     const val DEFAULT_VISIBILITY_S = 60L
 
+    /** The advertised visibility timeout is trusted only within these bounds (a relay must not pin the keys for an hour). */
+    const val MIN_VISIBILITY_S = 30L
+    const val MAX_VISIBILITY_S = 300L
+
     /** The long poll of each collect of the settlement (the relay's cap, RELAY-PROTOCOL §6.3). */
     const val SETTLE_POLL_S = 25L
 
@@ -57,12 +62,13 @@ internal object TransferInResume {
     const val SETTLE_MARGIN_MS = 5_000L
 
     /**
-     * The settlement window: the relay's advertised visibility timeout ([visibilitySeconds], 60 s when it advertises
-     * none) + the long-poll cap (25 s) + 5 s: 90 s today. The lead's call on owner decision a, 2026-11-05 (the half-open
-     * case).
+     * The settlement window (the lead's rule): the relay's advertised visibility timeout ([visibilitySeconds], 60 s when
+     * it advertises none, kept within [MIN_VISIBILITY_S] to [MAX_VISIBILITY_S]) + the long-poll cap (25 s) + 5 s:
+     * 90 s today. The lead's call on owner decision a, 2026-11-05 (the half-open case).
      */
     fun windowMs(visibilitySeconds: Long? = null): Long =
-        (visibilitySeconds ?: DEFAULT_VISIBILITY_S) * MS + SETTLE_POLL_S * MS + SETTLE_MARGIN_MS
+        (visibilitySeconds ?: DEFAULT_VISIBILITY_S).coerceIn(MIN_VISIBILITY_S, MAX_VISIBILITY_S) * MS +
+            SETTLE_POLL_S * MS + SETTLE_MARGIN_MS
 
     /** The window with the relay's visibility timeout at its default. */
     val SETTLE_WINDOW_MS: Long = windowMs()
@@ -117,8 +123,10 @@ internal object TransferInResume {
      * sized to what is left of the window (its wait is what is left minus [Settle.handlingMs], at most [Settle.pollMs])
      * and bounded by its wait plus [Settle.transportMs]; one that had to be abandoned may hold a message leased for a
      * visibility timeout, so the end of the window moves to at least a whole window from then (at most
-     * [Settle.maxExtraMs] past the first end). The window ends with one final `wait=0` collect, whose delivery is
-     * handled in full, before the decision. Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
+     * [Settle.maxExtraMs] past the first end; so does a request that failed with anything but a [RelayException], since
+     * a status means nothing was leased). The window ends with one final `wait=0` collect, itself bounded by
+     * [Settle.transportMs] like every request, before the decision: a relay that hangs longer than that at that point can
+     * still hold a lease past the drop (an accepted trade-off). Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
      * [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected, abandoned or replaced, or the
      * session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
      * window had passed. Cancellation propagates, with no drop.
@@ -155,20 +163,28 @@ internal object TransferInResume {
         fun pause(): Long =
             minOf(settle.pauseMs * (1L shl minOf(maxOf(failures - 1, 0), MAX_BACKOFF_FACTOR)), maxOf(left(), 0L))
 
+        /** A request that may have been taken up at the relay and its answer lost: the message may be leased for a while. */
+        private fun mayHoldLease() {
+            endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
+        }
+
         @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
         suspend fun send(waitMs: Long) {
             try {
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
                 if (withTimeoutOrNull(waitMs + settle.transportMs) { collect(waitMs) } == null) {
                     failures++
-                    endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
+                    mayHoldLease()
                 } else {
                     failures = 0
                 }
             } catch (e: CancellationException) {
                 throw e
+            } catch (_: RelayException) {
+                failures++ // a status came back: nothing was leased; tried again with backoff
             } catch (_: Exception) {
-                failures++ // a failed collect: tried again, with backoff, until the window ends
+                failures++ // e.g. a body that could not be read: it may have been answered and leased
+                mayHoldLease()
             }
         }
     }
