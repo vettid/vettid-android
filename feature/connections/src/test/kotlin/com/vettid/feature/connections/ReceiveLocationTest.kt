@@ -586,16 +586,14 @@ class ReceiveLocationTest {
 
     @Test
     fun theDistanceUsesTheLocalesOwnDigitsWithoutStringSurgery() {
-        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
-        val old = java.util.Locale.getDefault()
-        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
-        try {
-            val t = com.vettid.core.data.location.PositionText.distance(r, 12_000.0, com.vettid.core.data.location.LengthSystem.METRIC)
-            assertTrue(t, t.any { it in '\u0660'..'\u0669' })
-            assertTrue(t, t.none { it in '0'..'9' })
-        } finally {
-            java.util.Locale.setDefault(old)
-        }
+        // The digits follow the configuration's locale (as the units do), so the resources are built in that locale.
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
+        val r = app.createConfigurationContext(c).resources
+        val t = com.vettid.core.data.location.PositionText.distance(r, 12_000.0, com.vettid.core.data.location.LengthSystem.METRIC)
+        assertTrue(t, t.any { it in '\u0660'..'\u0669' })
+        assertTrue(t, t.none { it in '0'..'9' })
     }
 
     // --- miles or kilometers (Settings → Units, owner decision 2026-11-05) ---

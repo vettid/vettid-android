@@ -116,30 +116,44 @@ class PositionUnitsTest {
 
     @Test
     fun metersUseTheLocalesOwnDigitsToo() {
-        val old = Locale.getDefault()
-        Locale.setDefault(Locale.forLanguageTag("ar-EG-u-nu-arab"))
-        try {
-            val t = PositionText.distance(r, 340.0, km)
-            assertTrue(t, t.any { it in '\u0660'..'\u0669' })
-            assertTrue(t, t.none { it in '0'..'9' })
-        } finally {
-            Locale.setDefault(old)
-        }
+        val t = PositionText.distance(resIn("ar-EG-u-nu-arab"), 340.0, km)
+        assertTrue(t, t.any { it in '\u0660'..'\u0669' })
+        assertTrue(t, t.none { it in '0'..'9' })
     }
 
     @Test
     fun milesUseTheLocalesOwnDigits() {
+        val ar = resIn("ar-EG-u-nu-arab")
+        val t = PositionText.distance(ar, 20_000.0, mi)
+        assertTrue(t, t.any { it in '٠'..'٩' })
+        assertTrue(t, t.none { it in '0'..'9' })
+        val f = PositionText.distance(ar, 50.0, mi)
+        assertTrue(f, f.any { it in '٠'..'٩' })
+    }
+
+    @Test
+    fun theDigitsFollowTheScreensConfigurationNotTheProcessDefault() {
+        // The units come from the configuration's locale (rememberLengthSystem): the digits must too, so a locale change
+        // while a screen is open can't show one locale's units with another's digits.
         val old = Locale.getDefault()
         Locale.setDefault(Locale.forLanguageTag("ar-EG-u-nu-arab"))
         try {
-            val t = PositionText.distance(r, 20_000.0, mi)
-            assertTrue(t, t.any { it in '٠'..'٩' })
-            assertTrue(t, t.none { it in '0'..'9' })
-            val f = PositionText.distance(r, 50.0, mi)
-            assertTrue(f, f.any { it in '٠'..'٩' })
+            val latin = PositionText.distance(resIn("en-US"), 20_000.0, mi)
+            assertTrue(latin, latin.any { it in '0'..'9' })
+            assertTrue(latin, latin.none { it in '\u0660'..'\u0669' })
         } finally {
             Locale.setDefault(old)
         }
+        val arabic = PositionText.distance(resIn("ar-EG-u-nu-arab"), 20_000.0, mi)
+        assertTrue(arabic, arabic.any { it in '\u0660'..'\u0669' })
+    }
+
+    /** The app's resources with [tag] as the configuration's locale, as a screen in that locale would have them. */
+    private fun resIn(tag: String): android.content.res.Resources {
+        val app = RuntimeEnvironment.getApplication()
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(Locale.forLanguageTag(tag))
+        return app.createConfigurationContext(c).resources
     }
 
     @Test

@@ -59,22 +59,25 @@ object PositionText {
     private fun metric(r: Resources, meters: Double): String {
         // Rounded first: 995 m and more is 1 km, not "1000 m".
         val n = ((meters / METRE_STEP).roundToInt() * METRE_STEP).coerceAtLeast(METRE_STEP)
-        if (n < KM) return r.getString(R.string.data_location_metres, decimal(n.toDouble(), 0.0))
-        return r.getString(R.string.data_location_kilometres, decimal(meters / KM, KM_ONE_DECIMAL_BELOW))
+        if (n < KM) return r.getString(R.string.data_location_metres, decimal(r, n.toDouble(), 0.0))
+        return r.getString(R.string.data_location_kilometres, decimal(r, meters / KM, KM_ONE_DECIMAL_BELOW))
     }
 
     private fun imperial(r: Resources, meters: Double): String {
         val miles = meters / MILE
         if (miles < FEET_BELOW_MILES) {
             val n = ((meters / FOOT / FOOT_STEP).roundToInt() * FOOT_STEP).coerceAtLeast(FOOT_STEP)
-            return r.getString(R.string.data_location_feet, decimal(n.toDouble(), 0.0))
+            return r.getString(R.string.data_location_feet, decimal(r, n.toDouble(), 0.0))
         }
-        return r.getString(R.string.data_location_miles, decimal(miles, MILES_ONE_DECIMAL_BELOW))
+        return r.getString(R.string.data_location_miles, decimal(r, miles, MILES_ONE_DECIMAL_BELOW))
     }
 
-    /** [value] in the locale's digits: one decimal below [oneDecimalBelow], else whole; a whole number has no decimals. */
-    private fun decimal(value: Double, oneDecimalBelow: Double): String {
-        val format = java.text.NumberFormat.getNumberInstance(Locale.getDefault())
+    /**
+     * [value] in the digits of [r]'s configuration locale (the one the screen's strings and units come from, so they can't
+     * disagree during a locale change): one decimal below [oneDecimalBelow], else whole; a whole number has no decimals.
+     */
+    private fun decimal(r: Resources, value: Double, oneDecimalBelow: Double): String {
+        val format = java.text.NumberFormat.getNumberInstance(r.configuration.locales[0] ?: Locale.getDefault())
         format.maximumFractionDigits = if (value < oneDecimalBelow) 1 else 0
         format.minimumFractionDigits = 0
         return format.format(value)
