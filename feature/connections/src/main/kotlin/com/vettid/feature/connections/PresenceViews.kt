@@ -30,6 +30,7 @@ import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.theme.Spacing
@@ -61,7 +62,10 @@ internal fun PresenceLine(
                 text,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("detail_presence"),
+                // Weight without fill: a long line (the full failure sentence, or large text) wraps and leaves the button its 48 dp.
+                // The failure is announced; the ordinary line is not (A6 audit A37, A29).
+                modifier = Modifier.weight(1f, fill = false).testTag("detail_presence")
+                    .let { if (reading is PresenceReading.Failed) it.announced() else it },
             )
             IconButton(onClick = onRefresh, enabled = canRefresh, modifier = Modifier.size(48.dp).testTag("detail_presence_refresh")) {
                 Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.connections_presence_refresh))

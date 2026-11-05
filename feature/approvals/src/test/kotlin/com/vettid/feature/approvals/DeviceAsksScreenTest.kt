@@ -3,6 +3,8 @@
 
 package com.vettid.feature.approvals
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -19,6 +21,7 @@ import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.HeldRequest
 import com.vettid.core.ui.components.ShellChrome
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -130,7 +133,8 @@ class DeviceAsksScreenTest {
             "Field: ⁨PIN⁩. Your vault uses the value for the agent and gives it only the result. For a short or guessable value, such as a PIN or a common password, the agent could work the value out from that result.",
         ).assertExists()
         rule.onNodeWithText("Data from the agent").assertExists()
-        rule.onNodeWithTag("use_data_text").assertExists()
+        // The box is one node (A6 audit A36): its parts are in the unmerged tree.
+        rule.onNodeWithTag("use_data_text", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("ping 12:00").assertExists()
         rule.onNodeWithText("Waiting for 4 more minutes").assertExists()
         rule.onNodeWithText("Approve").assertExists()
@@ -138,17 +142,37 @@ class DeviceAsksScreenTest {
     }
 
     @Test
+    fun aFailureOfTheDecisionIsAnnounced() {
+        val failed = state(held(HeldRequest.ItemUse("i1", "f1", "ping".toByteArray())))
+            .copy(error = com.vettid.core.data.vault.FailureKind.NETWORK)
+        show(failed)
+        val live = rule.onNodeWithTag("failure").fetchSemanticsNode().config.getOrNull(SemanticsProperties.LiveRegion)
+        assertEquals(androidx.compose.ui.semantics.LiveRegionMode.Polite, live)
+    }
+
+    @Test
+    fun theAgentsDataBoxIsOneNodeWithTheLengthAndTheText() {
+        show(state(held(HeldRequest.ItemUse("i1", "f1", "ping 12:00".toByteArray()))))
+        val box = rule.onNodeWithTag("use_data_box").fetchSemanticsNode()
+        val texts = box.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+        // The label, the byte count and the agent's text are all in the one node.
+        assertTrue(texts.joinToString("|"), texts.any { it == "Data from the agent" })
+        assertTrue(texts.joinToString("|"), texts.any { it.contains("10") && it.contains("byte") })
+        assertTrue(texts.joinToString("|"), texts.any { it == "ping 12:00" })
+    }
+
+    @Test
     fun dataThatIsNotPrintableIsShownAsHex() {
         show(state(held(HeldRequest.ItemUse("i1", "f1", byteArrayOf(0, 1, 0xFE.toByte())))))
-        rule.onNodeWithTag("use_data_hex").assertExists()
+        rule.onNodeWithTag("use_data_hex", useUnmergedTree = true).assertExists()
         rule.onNodeWithText("00 01 fe").assertExists()
-        assertEquals(0, rule.onAllNodesWithTag("use_data_text").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("use_data_text", useUnmergedTree = true).fetchSemanticsNodes().size)
     }
 
     @Test
     fun aHostileDataTextIsShownAsHexNotAsReorderedText() {
         show(state(held(HeldRequest.ItemUse("i1", "f1", "pay ‮evil".toByteArray()))))
-        rule.onNodeWithTag("use_data_hex").assertExists()
+        rule.onNodeWithTag("use_data_hex", useUnmergedTree = true).assertExists()
     }
 
     @Test

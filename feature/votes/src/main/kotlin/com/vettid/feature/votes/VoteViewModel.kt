@@ -67,6 +67,8 @@ data class VoteUiState(
     /** "Is this your vote?" is open. */
     val restoreDialog: Boolean = false,
     val restoreBusy: Boolean = false,
+    /** The member closed "Is this your vote?" with **Back** (offline, say): it stays closed for this visit. */
+    val restoreDismissed: Boolean = false,
     val restoreProblem: VoteProblem? = null,
     val proofWarning: Boolean = false,
     val proofBusy: Boolean = false,
@@ -97,7 +99,7 @@ data class VoteUiState(
         get() = detail?.serviceBallotChoiceId?.let { id -> detail.choices.firstOrNull { it.id == id }?.label ?: id }
 
     /** The dialog is offered only when the vault named a ballot to ask about (any other unsigned ballot is a problem). */
-    val restoreAsked: Boolean get() = summary?.confirmPending == true && restoreLabel != null
+    val restoreAsked: Boolean get() = summary?.confirmPending == true && restoreLabel != null && !restoreDismissed
 }
 
 /**
@@ -200,7 +202,10 @@ class VoteViewModel @Inject constructor(
         local.update { it.copy(cast = CastStep.CONFIRM, castProblem = null) }
     }
 
-    fun dismissCast() = local.update { it.copy(cast = CastStep.NONE, password = "", passwordError = null) }
+    /** Back or Cancel in a cast sheet. Not while the cast is on its way: it would be sent whatever the screen shows (A6 audit N22). */
+    fun dismissCast() = local.update {
+        if (it.cast == CastStep.SENDING) it else it.copy(cast = CastStep.NONE, password = "", passwordError = null)
+    }
 
     /** **Cast vote** in the sheet: at once when the unlock window is open, else the credential password is asked for first. */
     fun confirmCast() {
@@ -302,6 +307,12 @@ class VoteViewModel @Inject constructor(
     fun dismissCheckProblem() = local.update { it.copy(checkProblem = null) }
 
     // ---- Restore ----
+
+    /** **Back** on "Is this your vote?": the question is left for this visit; it is asked again on the next one (A6 audit E25). */
+    fun dismissRestore() {
+        if (local.value.restoreBusy) return
+        local.update { it.copy(restoreDismissed = true, restoreProblem = null) }
+    }
 
     fun answerRestore(mine: Boolean) {
         if (local.value.restoreBusy) return

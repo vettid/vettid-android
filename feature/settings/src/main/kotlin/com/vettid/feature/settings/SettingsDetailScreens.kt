@@ -486,7 +486,7 @@ fun ChangePinContent(
         SecretField(
             state.confirm, onConfirm, stringResource(R.string.settings_pin_confirm), isPin = true,
             imeAction = if (state.withPassword) ImeAction.Next else ImeAction.Done,
-            onImeAction = if (state.withPassword) ({}) else onSubmit,
+            onImeAction = if (state.withPassword) null else onSubmit,
             error = if (state.mismatch) stringResource(R.string.settings_pin_mismatch) else null,
         )
         if (state.withPassword) {

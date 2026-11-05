@@ -95,4 +95,15 @@ class AppLockGateTest {
         rule.waitForIdle()
         assertEquals(1, prompts)
     }
+
+    @Test
+    fun theKeysThatNavigateAndPressPassTheLockLayerAndTheOthersAreEaten() {
+        listOf(
+            Key.Tab, Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight, Key.DirectionCenter,
+            Key.Enter, Key.NumPadEnter, Key.Spacebar,
+        ).forEach { assertEquals("$it", false, appLockLayerEats(it)) }
+        listOf(Key.A, Key.One, Key.Backspace, Key.Escape, Key.VolumeUp, Key.Back).forEach {
+            assertEquals("$it", true, appLockLayerEats(it))
+        }
+    }
 }
