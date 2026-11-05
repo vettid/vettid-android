@@ -43,6 +43,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LengthSystem
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
@@ -53,6 +54,9 @@ import com.vettid.core.data.location.ShareLength
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareRequest
 import com.vettid.core.data.location.ShareTime
+import com.vettid.core.data.prefs.DistanceUnits
+import com.vettid.core.data.prefs.InMemoryPreferencesRepository
+import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.location.ShareTiming
@@ -74,6 +78,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -136,6 +142,8 @@ data class ShareLocationUiState(
     val startedId: String? = null,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** Miles or kilometers for the precision notes (Settings → Units). */
+    val units: com.vettid.core.data.prefs.DistanceUnits = com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC,
     /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
@@ -170,8 +178,11 @@ data class ShareLocationUiState(
 class ShareLocationViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val location: LocationRepository = NoLocation,
+    prefs: PreferencesRepository = InMemoryPreferencesRepository(),
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
+    private val units = prefs.preferences.map { it.distanceUnits }.distinctUntilChanged()
+
     /** A request being answered (Approvals): the sheet opens at once and the start names it. */
     private val saved = savedState
     private var requestId: String? = savedState.get<String?>(ConnectionDetailRoute.ARG_REQUEST)?.takeIf { it.isNotEmpty() }
@@ -183,8 +194,8 @@ class ShareLocationViewModel @Inject constructor(
     }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
-    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability) { s, shares, a ->
-        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a)
+    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability, units) { s, shares, a, u ->
+        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a, units = u)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
 
     init {
@@ -364,9 +375,11 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
         }
     }
     Heading(R.string.connections_location_precision)
+    val system = rememberLengthSystem(state.units)
     SharePrecision.entries.forEach { p ->
         val enabled = !busy && (p != SharePrecision.EXACT || state.exactAvailable)
-        Choice(p == state.precision, precisionLabel(p), precisionNote(p), enabled, "share_location_${p.name}") { actions.onPrecision(p) }
+        val note = precisionNote(p, system)
+        Choice(p == state.precision, precisionLabel(p), note, enabled, "share_location_${p.name}") { actions.onPrecision(p) }
     }
     if (!state.exactAvailable) {
         Text(
@@ -526,10 +539,17 @@ private fun precisionLabel(p: SharePrecision): Int = when (p) {
     SharePrecision.CITY -> R.string.connections_location_city
 }
 
-private fun precisionNote(p: SharePrecision): Int = when (p) {
-    SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note
-    SharePrecision.EXACT -> R.string.connections_location_exact_note
-    SharePrecision.CITY -> R.string.connections_location_city_note
+private fun precisionNote(p: SharePrecision, system: LengthSystem): Int = when (system) {
+    LengthSystem.METRIC -> when (p) {
+        SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note
+        SharePrecision.EXACT -> R.string.connections_location_exact_note
+        SharePrecision.CITY -> R.string.connections_location_city_note
+    }
+    LengthSystem.IMPERIAL -> when (p) {
+        SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note_mi
+        SharePrecision.EXACT -> R.string.connections_location_exact_note_mi
+        SharePrecision.CITY -> R.string.connections_location_city_note_mi
+    }
 }
 
 /**
