@@ -262,7 +262,7 @@ These cover the screens added since 2026-10-11:
 
 | ID | Sev. | Finding | Evidence | Scenario | Fix | Status | Size | Owner |
 |---|---|---|---|---|---|---|---|---|
-| N21 | Public | A location share whose positions never get through is never reported. | `data/location/LocationSharing.kt:864-874` `deliver()` catches every failure and returns false ("one position missed"). The share sheet's "Finding your location…" has no deadline (`connections/ShareLocation.kt:153,326-344`); the card keeps "Sharing your location until …"; Share once from Approvals closes as done after `start` (`approvals/ApprovalsViewModels.kt:638-639`); a once share that never got through reads "No position was found, so nothing was sent." (`LocationSharing.kt:376-382`) | No network, or the relay down, after a share starts: for up to 7 days the member believes the person sees them | A `SendIssue` (e.g. `NOT_DELIVERED`) after a few failed sends or about 60 s, on the card, the notification and the sheet; a deadline on "Finding…"; a missed-once text that does not blame the position. New texts (**owner**) | V | M | al-cal, owner |
+| N21 | Public | A location share whose positions never get through is never reported. | `data/location/LocationSharing.kt:864-874` `deliver()` catches every failure and returns false ("one position missed"). The share sheet's "Finding your location…" has no deadline (`connections/ShareLocation.kt:153,326-344`); the card keeps "Sharing your location until …"; Share once from Approvals closes as done after `start` (`approvals/ApprovalsViewModels.kt:638-639`); a once share that never got through reads "No position was found, so nothing was sent." (`LocationSharing.kt:376-382`) | No network, or the relay down, after a share starts: for up to 7 days the member believes the person sees them | A `SendIssue` (e.g. `NOT_DELIVERED`) after a few failed sends or about 60 s, on the card, the notification and the sheet; a deadline on "Finding…"; a missed-once text that does not blame the position. New texts (**owner**) | V; built in #297 (owner decision yes, 2026-11-05) | M | al-cal, owner |
 | N22 | Public | Cancel in the vote password prompt works while the cast is being sent. | `votes/VoteScreen.kt:587` (sheet dismiss, no SENDING guard), `:614` (Cancel has no `enabled`); `votes/VoteViewModel.kt:203` | On a slow network the member taps Cancel. The screen returns to choosing with Cast enabled while `vote.cast` is in flight; the vote may be recorded; a second Cast meets `already_voted` | As `ConfirmSheet` (`:545`) and `items/AgentRuleEditor.kt:301`: no dismiss and Cancel disabled while SENDING | V; **Fixed** `37212b31` | S | al-cal |
 | N23 | Polish | The 20 s recent-payments wait can run to about 50 s *(wallet)*. | `withTimeoutOrNull` (`wallet/SendViewModel.kt:237-239`) around blocking `execute()` (`chain/Esplora.kt:364-368`, call timeout 30 s at `:426`) | Review stays off and "Checking your recent payments…" has no progress | A cancellable `call()` (`enqueue` plus `call.cancel()`) | V/S | M | al-cal |
 | N24 | Polish | Long silent waits while Back is swallowed *(wallet)*. | `swallowsBack` (`wallet/SendViewModel.kt:138`); `checkSent` is `NonCancellable` (`core-wallet/WalletsManager.kt:1765-1793`), up to about 2 min; approve is unlock, sign and broadcast at 30 s each | Only a small spinner in the button. Bounded and deliberate for payment safety | A visible, announced progress line ("Signing…", "Sending…"). New texts (**owner**) | V/S | S | al-cal, owner |
@@ -410,7 +410,7 @@ start list, A1/A16's other silent texts, A15's safety code, A8's selectable fing
 - **A2, A7, A13** (texts);
 - **A11** (window length);
 - **N8** (the "Starting your vault…" text);
-- **N21** (location send-failure texts; the most consequential new finding);
+- **N21** (location send-failure texts; the most consequential new finding). Decided by the owner (yes, 2026-11-05) and built in vettid-android #297;
 - **E28** (a neutral title);
 - **N11** (spec).
 
@@ -528,7 +528,7 @@ or a new text.
 
 ### Decisions
 
-**N21. Location sends that never get through.** Asked separately.
+**N21. Location sends that never get through.** Decided by the owner (yes, 2026-11-05). Built in vettid-android #297, with its 3 texts there.
 
 **A18. The `outline` color (control borders, the off switch).**
 
@@ -841,7 +841,7 @@ or a new text.
 
 Six decision items:
 
-- N21 (asked separately);
+- N21 (decided; built in #297);
 - A18, which A36 follows;
 - A11;
 - N11;
