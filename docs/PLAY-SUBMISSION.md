@@ -479,7 +479,22 @@ crawler will see only onboarding.** The owner's options (question Q3):
 
 ---
 
-## 7. Open questions for the owner
+## 7. Questions for the owner
+
+**Owner decisions, 2026-11-05** (signed "rec: all as recommended", GC thread 01M6PRDT4HKX4J8W6HMFC0XQ2V):
+- Q1 (a): declare the end-to-end-encrypted data as collected.
+- Q2 (a): file `specialUse` as drafted.
+- Q3 (a) + (b): accept that the report sees only onboarding, and fill in App access with written instructions and the videos.
+- Q4 (a): no Google push in the Play build.
+- Q6 (a): record the videos on the VettID-signed build.
+- Q7 (a): an internal track with named testers is acceptable before the pin.
+- Q8 (a): the next production vault release pins the Play key.
+- Q9: yes, Adults (18+).
+- Q10 (b): reword the location permission text with the iPhone app (NEW, for the owner) before the listing goes live.
+
+**Q5 is still open.** Nothing is uploaded until the owner has checked the Console for an existing `com.vettid.app`
+listing.
+
 
 **Q1. Data end-to-end encrypted to the member's own vault: declare it as collected?**
 (a) Declare it (as in section 4): over-declaring is allowed, users see a longer list, and the privacy policy explains
