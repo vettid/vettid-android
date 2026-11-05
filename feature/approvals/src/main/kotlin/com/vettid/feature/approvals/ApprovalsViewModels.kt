@@ -698,15 +698,13 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
-    /** When the active outgoing share to [connectionId] ends, or null when there is none (ended, stopping, over or delivered once). */
+    /** When the active outgoing share to [connectionId] ends, or null when there is none (`activeShareTo` in `:core:data`). */
     private fun sharingUntil(
         shares: List<com.vettid.core.data.location.OutgoingShare>,
         service: com.vettid.core.data.location.ServiceState,
         connectionId: String,
         now: Instant,
-    ): Instant? = shares.firstOrNull {
-        it.connectionId == connectionId && it.expiresAt.isAfter(now) && !(it.once && it.lastSentAt != null)
-    }?.takeIf { connectionId !in service.stopping }?.expiresAt
+    ): Instant? = com.vettid.core.data.location.activeShareTo(shares, service, connectionId, now)?.expiresAt
 
     /** The length of access chosen for a session request (AA5, decision 6). */
     fun chooseSeconds(seconds: Int) = local.update { it.copy(sessionSeconds = seconds) }

@@ -107,7 +107,7 @@ class ReceiveLocationTest {
     fun theCardSaysAgeAccuracyAndUntilAndOffersStopReceiving() {
         val c = FakeSocial.connection("c1", "Sam")
         var stopped = false
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
         rule.setContent { ConnectionDetailScreen(state, DetailActions(onStopReceiving = { stopped = true })) }
         rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
         rule.onNodeWithText("5 min", substring = true).assertIsDisplayed()
@@ -122,7 +122,7 @@ class ReceiveLocationTest {
     @Test
     fun anUnknownAccuracyShowsNoWithinLineAndNeverWithinZero() {
         val c = FakeSocial.connection("c1", "Sam")
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), null))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), null, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
         rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
         rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("within", substring = true).fetchSemanticsNodes().size)
@@ -132,7 +132,7 @@ class ReceiveLocationTest {
     @Test
     fun beforeTheFirstPositionTheCardSaysOnlyUntil() {
         val c = FakeSocial.connection("c1", "Sam")
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), null, null))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), null, null, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
         rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
         assertEquals(0, rule.onAllNodesWithTag("detail_incoming_line").fetchSemanticsNodes().size)
         rule.onNodeWithTag("detail_incoming_until").assertIsDisplayed()
@@ -425,7 +425,7 @@ class ReceiveLocationTest {
     fun theIncomingCardAndTheAskDialogUseTheFirstName() = runTest {
         val c = com.vettid.core.data.social.ConnectionInfo("c1", "Dr Lee (work)", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")
         assertEquals(AccountNames.isolate("Sam"), firstOf(c, "x"))
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
         rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
         rule.onNodeWithText("${AccountNames.isolate("Sam")}'s location", substring = true).assertIsDisplayed()
     }

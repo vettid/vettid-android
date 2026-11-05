@@ -120,11 +120,24 @@ data class ServiceState(
     val issue: SendIssue = SendIssue.NONE,
     /** Connections with a share whose stop the vault has not taken yet (sending for them has ended): "Stopping…". */
     val stopping: Set<String> = emptySet(),
+    /** The ids of the shares whose stop the vault has not taken yet (a stop is addressed by its own share id). */
+    val stoppingShares: Set<String> = emptySet(),
 ) {
     data class Target(val connectionId: String, val expiresAt: Instant)
 
     val active: Boolean get() = targets.isNotEmpty()
 }
+
+/**
+ * The active outgoing share to [connectionId], or null: the share not past its `expires_at`, not a once share already delivered,
+ * and not being stopped (judged per share id: a pending stop never ends a newer share). Of several, the one that lasts longest.
+ * The one rule Approvals and the share sheet both use, so that they cannot disagree.
+ */
+fun activeShareTo(shares: List<OutgoingShare>, service: ServiceState, connectionId: String, now: Instant): OutgoingShare? =
+    shares.filter {
+        it.connectionId == connectionId && it.expiresAt.isAfter(now) && !(it.once && it.lastSentAt != null) &&
+            it.shareId !in service.stoppingShares
+    }.maxByOrNull { it.expiresAt }
 
 /** Why this phone is not sending positions while a share is active. */
 enum class SendIssue {

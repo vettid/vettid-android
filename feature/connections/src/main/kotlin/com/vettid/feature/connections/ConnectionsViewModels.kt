@@ -661,7 +661,7 @@ data class DetailIncoming(
     val at: Instant?,
     val accuracyM: Double?,
     /** How exactly the sharer shows their position (the plan's card says it beside the age). */
-    val precision: com.vettid.core.data.location.SharePrecision = com.vettid.core.data.location.SharePrecision.APPROXIMATE,
+    val precision: com.vettid.core.data.location.SharePrecision,
 )
 
 /** Fits a note in the vault's byte bound at a character boundary. */

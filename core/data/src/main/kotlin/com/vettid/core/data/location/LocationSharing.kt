@@ -928,6 +928,7 @@ class LocationSharing(
             resumed = resumed && active.isNotEmpty(),
             issue = issueOf(active),
             stopping = stopMarks.values.mapNotNull { m -> m.connectionId.takeIf { it.isNotEmpty() } }.toSet(),
+            stoppingShares = stopMarks.keys.toSet(),
         )
         val notRunning = stateFlow.value.issue == SendIssue.SERVICE
         if (notRunning != notRunningShown) {

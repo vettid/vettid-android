@@ -77,6 +77,16 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
         return offset
     }
 
+    /**
+     * A stop the vault has not taken yet: the share stays in [outgoing] while its id (and connection) are marked in [serviceState],
+     * as `LocationSharing` does between the member's Stop and the vault's answer.
+     */
+    fun holdStopping(shareId: String) {
+        val conn = outgoing.value.first { it.shareId == shareId }.connectionId
+        val s = serviceState.value
+        serviceState.value = s.copy(stopping = s.stopping + conn, stoppingShares = s.stoppingShares + shareId)
+    }
+
     /** How many times `location.share.list` was read. */
     var refreshes = 0
 

@@ -299,4 +299,24 @@ class LocationRequestTest {
         rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
         rule.onNodeWithText("To share your location, VettID needs to know where this phone is.", substring = true).assertIsDisplayed()
     }
+
+    @Test
+    fun aShareBeingStoppedIsNotSharingButAnActiveOneBesideItIs() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        val old = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        runCurrent()
+        location.holdStopping(old.shareId) // listed until the vault takes the stop
+        runCurrent()
+        assertNull("a stopping share alone is not sharing", m.uiState.value.sharingUntil)
+        assertEquals("r1", m.shareWhileTarget()?.requestId)
+        m.shareOnce()
+        runCurrent()
+        assertEquals(1, location.started.size - 1) // the first start above plus this one
+        // a new active share to the same connection, the old one still stopping: sharing, with the active one's end
+        val fresh = location.start(com.vettid.core.data.location.ShareRequest("c1", com.vettid.core.data.location.ShareTiming.ForAWhile()))
+        runCurrent()
+        assertEquals(fresh.expiresAt, m.uiState.value.sharingUntil)
+        assertNull(m.shareWhileTarget())
+    }
 }

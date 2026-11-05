@@ -113,8 +113,8 @@ internal object LocationCatalog {
             ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, locationMissed = true), DetailActions())
         },
         // Receiving (L1b): the incoming card, Ask for location, the Location screen, the position as text, a request in Approvals.
-        "location.incoming" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(300), 1_000.0)) },
-        "location.incoming_waiting" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), null, null)) },
+        "location.incoming" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(300), 1_000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)) },
+        "location.incoming_waiting" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), null, null, com.vettid.core.data.location.SharePrecision.APPROXIMATE)) },
         "location.ask" to { Ask(LocationAsk(open = true, note = "Are you near the station?")) },
         "location.ask_limit" to { Ask(LocationAsk(open = true, limitedMinutes = 7)) },
         "location.ask_sent" to { Ask(LocationAsk(open = true, sent = true)) },
