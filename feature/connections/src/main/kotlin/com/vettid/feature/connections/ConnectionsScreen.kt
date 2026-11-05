@@ -282,7 +282,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
         // The daily check can come due by time alone: it is looked at again with the screen's own clock.
         val tick = rememberNow()
         androidx.compose.runtime.LaunchedEffect(tick) { vm.look() }
-        PositionScreen(state, host.onBack, vm::refresh, vm::askMaps, vm::dismissMaps)
+        PositionScreen(state, host.onBack, vm::refresh, vm::askMaps, vm::dismissMaps, vm::showMap, vm::mapNotNow)
     }
     composable<InviteRoute> {
         val vm: InviteViewModel = hiltViewModel()

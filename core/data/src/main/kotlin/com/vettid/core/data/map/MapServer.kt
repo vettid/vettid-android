@@ -34,21 +34,37 @@ object MapServer {
 
     fun parse(text: String): Check {
         val t = text.trim()
-        if (t.isEmpty() || t.length > MAX_LENGTH || t.any { it.isWhitespace() || it.isISOControl() }) return Check.Refused(Problem.NOT_A_URL)
-        val scheme = t.substringBefore("://", missingDelimiterValue = "").lowercase()
-        if (scheme.isEmpty()) return Check.Refused(Problem.NOT_A_URL)
-        if (scheme != "https") return Check.Refused(Problem.NOT_HTTPS)
-        // `https://@host` parses with an empty user name: any '@' before the path is credentials.
-        val authority = t.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#')
-        if ('@' in authority) return Check.Refused(Problem.CREDENTIALS)
-        if (authority.isEmpty()) return Check.Refused(Problem.NO_HOST)
-        val uri = try {
-            URI(t)
-        } catch (_: URISyntaxException) {
-            return Check.Refused(Problem.NOT_A_URL)
+        val problem = problemOf(t)
+        val host = if (problem == null) hostOf(t) else null
+        return when {
+            problem != null -> Check.Refused(problem)
+            host.isNullOrEmpty() -> Check.Refused(Problem.NO_HOST)
+            else -> Check.Ok(t, host)
         }
-        val host = uri.host?.lowercase()
-        return if (host.isNullOrEmpty()) Check.Refused(Problem.NO_HOST) else Check.Ok(t, host)
+    }
+
+    private fun schemeOf(t: String) = t.substringBefore("://", missingDelimiterValue = "").lowercase()
+
+    // `https://@host` parses with an empty user name: any '@' before the path is credentials.
+    private fun authorityOf(t: String) = t.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#')
+
+    private fun isText(t: String) = t.isNotEmpty() && t.length <= MAX_LENGTH && t.none { it.isWhitespace() || it.isISOControl() }
+
+    private fun problemOf(t: String): Problem? = when {
+        !isText(t) || schemeOf(t).isEmpty() -> Problem.NOT_A_URL
+        schemeOf(t) != "https" -> Problem.NOT_HTTPS
+        '@' in authorityOf(t) -> Problem.CREDENTIALS
+        authorityOf(t).isEmpty() -> Problem.NO_HOST
+        hostOf(t, parseOnly = true) == null -> Problem.NOT_A_URL
+        else -> null
+    }
+
+    /** The lower-case host, or null when it does not parse; with [parseOnly] an address with no host reads as "".  */
+    private fun hostOf(t: String, parseOnly: Boolean = false): String? = try {
+        val host = URI(t).host?.lowercase()
+        if (parseOnly) host ?: "" else host
+    } catch (_: URISyntaxException) {
+        null
     }
 
     /** The server in force: the stored address when it still passes the rules, else the default. */

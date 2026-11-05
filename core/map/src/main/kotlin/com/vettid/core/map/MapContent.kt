@@ -62,17 +62,20 @@ object MapShapes {
     private fun coordinates(points: List<MapPoint>) =
         points.joinToString(",", "[", "]") { String.format(Locale.ROOT, "[%.7f,%.7f]", it.lon, it.lat) }
 
+    private fun feature(geometry: String) = """{"type":"Feature","properties":{},"geometry":$geometry}"""
+
     fun circleGeoJson(c: MapContent): String =
-        """{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[${coordinates(ring(c.position.lat, c.position.lon, c.radiusM))}]}}"""
+        feature("""{"type":"Polygon","coordinates":[${coordinates(ring(c.position.lat, c.position.lon, c.radiusM))}]}""")
 
     fun pointGeoJson(c: MapContent): String =
-        String.format(Locale.ROOT, """{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[%.7f,%.7f]}}""", c.position.lon, c.position.lat)
+        feature(String.format(Locale.ROOT, """{"type":"Point","coordinates":[%.7f,%.7f]}""", c.position.lon, c.position.lat))
 
     fun trailGeoJson(c: MapContent): String =
-        """{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":${coordinates(MapCircle.trailOf(c.trail))}}}"""
+        feature("""{"type":"LineString","coordinates":${coordinates(MapCircle.trailOf(c.trail))}}""")
 
     /** What the camera should show: the circle and the trail. */
-    fun framed(c: MapContent): List<MapPoint> = ring(c.position.lat, c.position.lon, maxOf(c.radiusM, MIN_FRAME_M)) + MapCircle.trailOf(c.trail)
+    fun framed(c: MapContent): List<MapPoint> =
+        ring(c.position.lat, c.position.lon, maxOf(c.radiusM, MIN_FRAME_M)) + MapCircle.trailOf(c.trail)
 
     /** A position with no accuracy is still shown with some map around it. */
     const val MIN_FRAME_M = 150.0

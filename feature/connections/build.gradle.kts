@@ -5,6 +5,8 @@ plugins {
 
 dependencies {
     implementation(projects.core.data)
+    // The map of the position screen (Location L2): the only module with MapLibre; the screen asks it through MapSurface.
+    implementation(projects.core.map)
     implementation(libs.androidx.hilt.navigation.compose)
     // The permission request of the share sheet (ANDROID-PLAN §4 "Location").
     implementation(libs.androidx.activity.compose)

@@ -68,7 +68,10 @@ class MapServerViewModel @Inject constructor(private val prefs: PreferencesRepos
         viewModelScope.launch {
             val setting = MapServer.of(prefs.preferences.first())
             state.update {
-                it.copy(loaded = true, text = setting.styleUrl, storedText = setting.styleUrl, host = setting.host, isDefault = setting.isDefault)
+                it.copy(
+                    loaded = true, text = setting.styleUrl, storedText = setting.styleUrl,
+                    host = setting.host, isDefault = setting.isDefault,
+                )
             }
         }
     }
@@ -101,7 +104,10 @@ class MapServerViewModel @Inject constructor(private val prefs: PreferencesRepos
             prefs.setMapStyleUrl(null)
             val host = (MapServer.parse(MapServer.DEFAULT_STYLE) as MapServer.Check.Ok).host
             state.update {
-                it.copy(text = MapServer.DEFAULT_STYLE, storedText = MapServer.DEFAULT_STYLE, host = host, isDefault = true, problem = null, saved = true)
+                it.copy(
+                    text = MapServer.DEFAULT_STYLE, storedText = MapServer.DEFAULT_STYLE, host = host, isDefault = true,
+                    problem = null, saved = true,
+                )
             }
         }
     }

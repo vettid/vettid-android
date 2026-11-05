@@ -164,9 +164,12 @@ private fun install(style: Style, accent: Int, outline: Int) {
     style.addSource(GeoJsonSource(CIRCLE))
     style.addSource(GeoJsonSource(TRAIL))
     style.addSource(GeoJsonSource(POINT))
-    style.addLayer(FillLayer("$CIRCLE-fill", CIRCLE).withProperties(PropertyFactory.fillColor(accent), PropertyFactory.fillOpacity(CIRCLE_OPACITY)))
-    style.addLayer(LineLayer("$CIRCLE-line", CIRCLE).withProperties(PropertyFactory.lineColor(accent), PropertyFactory.lineWidth(1f)))
-    style.addLayer(LineLayer("$TRAIL-line", TRAIL).withProperties(PropertyFactory.lineColor(accent), PropertyFactory.lineWidth(TRAIL_WIDTH)))
+    val fill = FillLayer("$CIRCLE-fill", CIRCLE)
+    style.addLayer(fill.withProperties(PropertyFactory.fillColor(accent), PropertyFactory.fillOpacity(CIRCLE_OPACITY)))
+    val edge = LineLayer("$CIRCLE-line", CIRCLE)
+    style.addLayer(edge.withProperties(PropertyFactory.lineColor(accent), PropertyFactory.lineWidth(1f)))
+    val trail = LineLayer("$TRAIL-line", TRAIL)
+    style.addLayer(trail.withProperties(PropertyFactory.lineColor(accent), PropertyFactory.lineWidth(TRAIL_WIDTH)))
     style.addLayer(
         CircleLayer("$POINT-dot", POINT).withProperties(
             PropertyFactory.circleColor(accent),
@@ -178,9 +181,13 @@ private fun install(style: Style, accent: Int, outline: Int) {
 }
 
 private fun draw(d: Drawing) {
-    val map = d.map ?: return
-    val style = d.style ?: return
-    val c = d.content ?: return
+    val map = d.map
+    val style = d.style
+    val c = d.content
+    if (map != null && style != null && c != null) draw(d, map, style, c)
+}
+
+private fun draw(d: Drawing, map: MapLibreMap, style: Style, c: MapContent) {
     (style.getSource(CIRCLE) as? GeoJsonSource)?.setGeoJson(MapShapes.circleGeoJson(c))
     (style.getSource(TRAIL) as? GeoJsonSource)?.setGeoJson(MapShapes.trailGeoJson(c))
     (style.getSource(POINT) as? GeoJsonSource)?.setGeoJson(MapShapes.pointGeoJson(c))

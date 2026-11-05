@@ -403,6 +403,16 @@
     <string name="connections_location_open_maps_confirm">This hands the position to another app.</string>
     <!-- NEW: not in the plan (the confirm button) -->
     <string name="connections_location_open_maps_go">Open</string>
+    <!-- NEW: owner-approved wording 2026-11-05 (L2 tile server decision) -->
+    <string name="connections_location_map_note">To show the map, VettID loads map images from this server. The server sees which area you look at, this phone\'s internet address and when you look. It doesn\'t learn whose location it is. VettID\'s own servers see none of it. Use your own server to keep this to yourself.</string>
+    <!-- NEW: owner-approved wording 2026-11-05 (L2 tile server decision): the second line of the note, the server\'s host -->
+    <string name="connections_location_map_server">This map\'s server is %1$s.</string>
+    <!-- NEW: not in the plan (answers to the map note) -->
+    <string name="connections_location_map_show">Show map</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_map_not_now">Not now</string>
+    <!-- NEW: not in the plan (the map\'s content description, for screen readers) -->
+    <string name="connections_location_map_cd">Map showing %1$s\'s position</string>
     <!-- NEW: not in the plan (a share that is not Exact: the point stands for an area, not the place itself) -->
     <string name="connections_location_position_area">Centre of an area, not an exact spot.</string>
     <!-- NEW: not in the plan (Share for a while from a request while a share to that connection is active) -->
