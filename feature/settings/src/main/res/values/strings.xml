@@ -74,7 +74,7 @@
     <string name="settings_notify_status_locked">Your vault is locked: notifications resume after you unlock it</string>
     <string name="settings_notify_status_check_due">Daily check due</string>
     <string name="settings_notify_status_blocked">Notifications are blocked in Android settings</string>
-    <string name="settings_notify_status_battery">Battery optimisation may delay notifications until Android lets VettID use the network. Nothing is lost: VettID catches up when you open it.</string>
+    <string name="settings_notify_status_battery">Battery optimization may delay notifications until Android lets VettID use the network. Nothing is lost: VettID catches up when you open it.</string>
     <string name="settings_notify_status_push_again">Registering again</string>
     <string name="settings_notify_status_push_unreachable">Push service not reachable, retrying</string>
     <string name="settings_notify_status_push_fallback">Push unavailable, using the on-phone service</string>
@@ -104,7 +104,7 @@
     <string name="settings_account_detail">Membership and subscription</string>
     <string name="settings_account_member">Member</string>
     <string name="settings_account_registered">Registered, not yet a member</string>
-    <string name="settings_account_canceled">Account cancelled</string>
+    <string name="settings_account_canceled">Account canceled</string>
     <string name="settings_delete_vault">Delete vault</string>
     <string name="settings_delete_vault_body">Erase your vault and everything in it</string>
     <!-- PENDING owner approval (iOS's wording, 2026-11-03) -->
