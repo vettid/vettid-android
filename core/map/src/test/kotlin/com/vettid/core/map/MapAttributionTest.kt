@@ -20,6 +20,17 @@ class MapAttributionTest {
     }
 
     @Test
+    fun theFixedCreditIsAlwaysFirstAndAServerCreditOnlyAddsWhatIsNew() {
+        val fixed = "© OpenMapTiles © OpenStreetMap contributors"
+        assertEquals(fixed, MapAttribution.combine(fixed, ""))
+        assertEquals(fixed, MapAttribution.combine(fixed, "© OpenMapTiles Data from OpenStreetMap"))
+        val ofm = MapAttribution.combine(fixed, "OpenFreeMap © OpenMapTiles Data from OpenStreetMap")
+        assertTrue(ofm, ofm.startsWith(fixed))
+        assertEquals("$fixed OpenFreeMap", ofm)
+        assertTrue(MapAttribution.combine(fixed, "x".repeat(1000)).length == MapAttribution.MAX)
+    }
+
+    @Test
     fun isCapped() {
         assertTrue(MapAttribution.clean(listOf("x".repeat(1000))).length == MapAttribution.MAX)
     }

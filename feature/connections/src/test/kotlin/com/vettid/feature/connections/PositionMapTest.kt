@@ -188,6 +188,14 @@ class PositionMapTest {
     }
 
     @Test
+    fun onlyAnExactShareGetsADot() {
+        val p = position()
+        assertTrue(mapContentOf(share(SharePrecision.EXACT), p, "https://x.example/s").showPoint)
+        assertFalse(mapContentOf(share(SharePrecision.APPROXIMATE), p, "https://x.example/s").showPoint)
+        assertFalse(mapContentOf(share(SharePrecision.CITY), p, "https://x.example/s").showPoint)
+    }
+
+    @Test
     fun theTrailIsDrawnOnlyWhenTheShareAllowsItAndItIsHeld() {
         val older = position(lat = 52.4, ago = 600)
         val last = position(lat = 52.5, ago = 60)

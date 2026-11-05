@@ -24,11 +24,13 @@ class MapContent(
     val trail: List<MapPoint> = emptyList(),
     /** Which share this is (its id, never a position): the camera frames again when it changes, and follows until the member moves it. */
     val shareKey: String = "",
+    /** The dot at the position: only for an Exact share. An area (Approximate, City) is drawn as its circle alone, never as a spot. */
+    val showPoint: Boolean = true,
 ) {
     override fun toString(): String = "MapContent"
 
     /** The same picture: nothing to draw again. */
-    fun sameDrawing(o: MapContent?): Boolean = o != null && styleUrl == o.styleUrl && radiusM == o.radiusM &&
+    fun sameDrawing(o: MapContent?): Boolean = o != null && styleUrl == o.styleUrl && radiusM == o.radiusM && showPoint == o.showPoint &&
         position.lat == o.position.lat && position.lon == o.position.lon && trail.size == o.trail.size &&
         trail.indices.all { trail[it].lat == o.trail[it].lat && trail[it].lon == o.trail[it].lon }
 }
@@ -74,7 +76,7 @@ object MapShapes {
     fun circleGeoJson(c: MapContent): String =
         feature("""{"type":"Polygon","coordinates":[${coordinates(ring(c.position.lat, c.position.lon, c.radiusM))}]}""")
 
-    fun pointGeoJson(c: MapContent): String =
+    fun pointGeoJson(c: MapContent): String = if (!c.showPoint) EMPTY else
         feature(String.format(Locale.ROOT, """{"type":"Point","coordinates":[%.7f,%.7f]}""", c.position.lon, c.position.lat))
 
     /** No trail is an empty collection, not a line with no points. */

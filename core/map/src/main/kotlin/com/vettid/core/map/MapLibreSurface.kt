@@ -160,9 +160,7 @@ private fun MapReady(content: MapContent, modifier: Modifier) {
         view.onCreate(null)
         val observer = LifecycleEventObserver { _, event -> forward(view, event) }
         lifecycle.addObserver(observer)
-        // A view made while the screen is already shown must catch up with it.
-        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) view.onStart()
-        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) view.onResume()
+        // addObserver replays ON_START and ON_RESUME for a screen already shown.
         val memory = object : ComponentCallbacks {
             override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
@@ -182,7 +180,8 @@ private fun MapReady(content: MapContent, modifier: Modifier) {
             map.uiSettings.isTiltGesturesEnabled = false
             // The (i) dialog builds "improve this map" links from the camera's position: our own credit text is shown instead.
             map.uiSettings.isAttributionEnabled = false
-            map.uiSettings.isLogoEnabled = true
+            // The logo would sit on our credit line, which carries the attribution.
+            map.uiSettings.isLogoEnabled = false
             map.addOnCameraMoveStartedListener { reason ->
                 if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) controller.onUserMoved()
             }
@@ -211,7 +210,7 @@ private fun MapReady(content: MapContent, modifier: Modifier) {
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 4.dp, bottom = 4.dp).testTag("position_map_attribution"),
         ) {
             Text(
-                attribution.ifBlank { fallback },
+                MapAttribution.combine(fallback, attribution),
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 4.dp),
             )

@@ -45,6 +45,17 @@ class MapShapesTest {
     }
 
     @Test
+    fun theDotIsDrawnOnlyForAnExactShare() {
+        val exact = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 10.0, showPoint = true)
+        val area = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 1000.0, showPoint = false)
+        assertTrue(MapShapes.pointGeoJson(exact).contains("Point"))
+        assertEquals(MapShapes.EMPTY, MapShapes.pointGeoJson(area))
+        assertTrue("the circle stays", MapShapes.circleGeoJson(area).contains("Polygon"))
+        val noDot = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 10.0, showPoint = false)
+        assertTrue("a different dot is a different picture", !exact.sameDrawing(noDot))
+    }
+
+    @Test
     fun noTrailIsAnEmptyCollection() {
         val c = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 10.0, listOf(MapPoint(1.0, 2.0)))
         assertEquals(MapShapes.EMPTY, MapShapes.trailGeoJson(c))

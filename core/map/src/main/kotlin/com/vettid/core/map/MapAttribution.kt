@@ -14,5 +14,17 @@ object MapAttribution {
             .joinToString(" ")
             .take(MAX)
 
+    private val STOP = setOf("data", "from", "contributors", "©", "(c)", "and", "-", "·", "|")
+
+    /**
+     * What the map shows: the [fixed] credit always, first, then whatever the server's own [server] credit adds to it (its words
+     * that [fixed] does not already have), capped at [MAX]. A server credit that repeats the same names adds nothing.
+     */
+    fun combine(fixed: String, server: String): String {
+        val have = fixed.lowercase().split(' ').toSet() + STOP
+        val extra = server.split(' ').filter { it.isNotBlank() && it.lowercase() !in have }.joinToString(" ")
+        return (if (extra.isEmpty()) fixed else "$fixed $extra").take(MAX)
+    }
+
     private val WHITESPACE = Regex("\\s+")
 }
