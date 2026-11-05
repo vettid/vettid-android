@@ -1,5 +1,6 @@
 package com.vettid.feature.devices
 
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -143,5 +144,25 @@ class AgentRulesPageTest {
         rule.waitForIdle()
         rule.onNodeWithText("Rule saved").assertExists()
         assertEquals(1, shown)
+    }
+
+    @Test
+    fun editThisRuleIsTheClickLabelAndTheRowKeepsItsOwnSpokenText() {
+        show(state(ask))
+        val config = rule.onNodeWithTag("rule_r1").performScrollTo().fetchSemanticsNode().config
+        // No replacing description: TalkBack reads the mode, the limits and the warning (A6 audit A35).
+        assertEquals(null, config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription))
+        val label = config[androidx.compose.ui.semantics.SemanticsActions.OnClick].label
+        assertEquals(true, label?.endsWith("edit this rule"))
+    }
+
+    @Test
+    fun aFailedEndOrRemoveIsAnnounced() {
+        show(state(ask).copy(failure = DeviceFailure.END_ACCESS))
+        // The live region is the card's text, a node under the tagged card.
+        fun live(n: androidx.compose.ui.semantics.SemanticsNode): List<androidx.compose.ui.semantics.LiveRegionMode?> =
+            listOf(n.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.LiveRegion)) + n.children.flatMap { live(it) }
+        val found = live(rule.onNodeWithTag("device_failure", useUnmergedTree = true).fetchSemanticsNode())
+        assertEquals(true, androidx.compose.ui.semantics.LiveRegionMode.Polite in found)
     }
 }

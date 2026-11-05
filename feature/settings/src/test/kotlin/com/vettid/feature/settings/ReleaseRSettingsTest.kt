@@ -1,10 +1,12 @@
 package com.vettid.feature.settings
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryStatusView
@@ -126,6 +128,14 @@ class ReleaseRSettingsTest {
         rule.setContent { ChangePinContent(ChangePinUiState(withPassword = true, fromAttempts = true), {}, {}, {}, {}, {}) }
         rule.onNodeWithTag("pin_password_too").assertIsDisplayed()
         rule.onNodeWithText(res.getString(R.string.settings_pin_password_too)).assertExists()
+    }
+
+    @Test
+    fun nextOnTheConfirmFieldMovesFocusToThePassword() {
+        rule.setContent { ChangePinContent(ChangePinUiState(withPassword = true), {}, {}, {}, {}, {}) }
+        val fields = rule.onAllNodes(androidx.compose.ui.test.hasSetTextAction())
+        fields[2].performImeAction()
+        fields[3].assertIsFocused()
     }
 
     @Test

@@ -560,6 +560,8 @@ private fun ConnectionDialog(state: HistoryUiState, onDismiss: () -> Unit, onPic
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.history_cancel)) } },
+        // The list scrolls by itself.
+        scrollBody = false,
     )
 }
 

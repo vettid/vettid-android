@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -62,7 +62,7 @@ fun VettIdTopAppBar(
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(72.dp)
+            .heightIn(min = 72.dp)
             .padding(horizontal = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -117,7 +117,7 @@ fun VettIdBackTopBar(
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(64.dp)
+            .heightIn(min = 64.dp)
             .padding(horizontal = Spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {

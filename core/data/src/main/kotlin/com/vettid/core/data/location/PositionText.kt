@@ -92,7 +92,7 @@ object PositionText {
     fun direction(r: Resources, bearing: Double): String = r.getString(COMPASS[((bearing / SECTOR).roundToInt()) % SECTORS])
 
     /**
-     * "About 3 km north-east of this phone" (or "About 1.9 mi …"); "Near this phone" (no direction) when the distance is within the
+     * "About 3 km northeast of this phone" (or "About 1.9 mi …"); "Near this phone" (no direction) when the distance is within the
      * position's own accuracy,
      * or under 10 m: a direction from a circle one is inside would be made up.
      */

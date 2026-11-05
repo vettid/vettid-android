@@ -25,12 +25,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.DataView
 import com.vettid.core.ui.components.FormScaffold
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
@@ -200,7 +202,8 @@ internal fun DeviceRequestScreen(
             Text(
                 failureText(it, state.retryUntil, state.limit, state.errorCode),
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("failure"),
+                // A wait that counts down is not announced: it would be read out every second (as A28).
+                modifier = Modifier.testTag("failure").let { m -> if (state.retryUntil == null) m.announced() else m },
             )
         }
     }
@@ -250,15 +253,17 @@ private fun HeldFacts(held: HeldShow?) {
     when (held) {
         is HeldShow.Use -> {
             Spacer(Modifier.height(Spacing.m))
-            Label(stringResource(R.string.approvals_held_use_data))
-            // In a box with its length, so that the agent's text cannot pass for one of the app's own lines.
+            // In a box with its label and length, so that the agent's text cannot pass for one of the app's own lines.
             Column(
                 Modifier
                     .fillMaxWidth()
                     .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
                     .padding(Spacing.m)
+                    // One node: the label, the length and the agent's text are read together, as the agent's data (A6 audit A36).
+                    .semantics(mergeDescendants = true) {}
                     .testTag("use_data_box"),
             ) {
+                Label(stringResource(R.string.approvals_held_use_data))
                 Text(
                     pluralStringResource(R.plurals.approvals_held_use_bytes, held.bytes, held.bytes),
                     style = MaterialTheme.typography.labelMedium,

@@ -14,6 +14,7 @@ dependencies {
     testImplementation(projects.core.testing)
     // Screen rendering under Robolectric (as :feature:connections).
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.espresso.core)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.ui.test.manifest)

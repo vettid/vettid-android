@@ -677,7 +677,7 @@ vettid.org repo's `local/android-ui/`).
   shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
   (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets through Back (a voluntary check closes with it on API 31-32) and the phone's own keys (`ownerCheckLayerEats`:
   volume up, down and mute, the headset hook, media play, pause, play/pause, stop, next and previous, call and end call), so a
-  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer still eats every key). While a
+  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer lets Tab, the D-pad keys, Enter and Space through to the lock screen, `appLockLayerEats`, and eats every other key: nothing is composed under the lock). While a
   call screen is shown (`LocalCallScreenShown`, provided by `CallOverlay`) the check's own Back handler is off, so Back is the
   call screen's. A check that said it passed keeps the shell uncovered while `gated` is still true for at most
   `OWNER_CHECK_PASSED_MS` (10 s) and not for a new deadline (saved). The undecided frame also clears semantics and takes every

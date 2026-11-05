@@ -187,6 +187,7 @@ fun AppShell(
     // (below), which stays composed, so what was typed is still there when it passes; once shown it stays until it is passed.
     val deletionVm: PendingDeletionViewModel = hiltViewModel()
     val deletion by deletionVm.deletion.collectAsStateWithLifecycle()
+    val deletionFailure by deletionVm.failure.collectAsStateWithLifecycle()
     val deletionPath = stringResource(R.string.deletion_path)
     val gateVm: OwnerCheckGateViewModel = hiltViewModel()
     val gate by gateVm.gate.collectAsStateWithLifecycle()
@@ -309,6 +310,7 @@ fun AppShell(
                         first = !alarmShown,
                         onCancel = deletionVm::cancel,
                         onOpenSite = { uri.openUri(portal.trimEnd('/') + deletionPath) },
+                        failure = deletionFailure,
                     )
                 }
                 OwnerCheckBanners(

@@ -325,11 +325,11 @@
     <string name="data_location_near_here">Near this phone</string>
     <!-- NEW: not in the plan (eight compass words) -->
     <string name="data_location_dir_n">north</string>
-    <string name="data_location_dir_ne">north-east</string>
+    <string name="data_location_dir_ne">northeast</string>
     <string name="data_location_dir_e">east</string>
-    <string name="data_location_dir_se">south-east</string>
+    <string name="data_location_dir_se">southeast</string>
     <string name="data_location_dir_s">south</string>
-    <string name="data_location_dir_sw">south-west</string>
+    <string name="data_location_dir_sw">southwest</string>
     <string name="data_location_dir_w">west</string>
-    <string name="data_location_dir_nw">north-west</string>
+    <string name="data_location_dir_nw">northwest</string>
 </resources>

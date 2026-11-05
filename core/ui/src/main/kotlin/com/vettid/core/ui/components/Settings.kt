@@ -27,7 +27,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -200,8 +199,6 @@ private fun SettingsRowLayout(
                 Text(
                     text = label,
                     style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
                 if (tag != null) {
@@ -214,8 +211,6 @@ private fun SettingsRowLayout(
                     text = supporting,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
