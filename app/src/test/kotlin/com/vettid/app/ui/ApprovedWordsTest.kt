@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.SCALED_FAILURE_TEXTS
@@ -93,6 +94,22 @@ class ApprovedWordsTest {
         val gate = soonGate().copy(warningSeconds = OwnerCheckView.warningFor(24).seconds)
         show(24) { OwnerCheckBanners(gate, first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {}) }
         rule.onNodeWithText("Your daily check is due within 150 seconds.", substring = true).assertExists()
+    }
+
+    /** (Owner decision 2026-11-05) The failed-check notices, word for word: the PIN one is not "daily"; the password one is unchanged. */
+    @Test
+    fun theFailedCheckNoticesKeepTheApprovedWords() {
+        fun noticeGate(ref: String) = OwnerCheckGateState(notices = listOf(OwnerCheckNotice("n1", "owner_check.failed", ref, null, false)))
+        show(1) { OwnerCheckBanners(noticeGate("pin"), first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {}) }
+        rule.onNodeWithText("A PIN check failed: wrong PIN.").assertExists()
+        rule.onNodeWithText("A daily check failed", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun theFailedPasswordNoticeIsUnchanged() {
+        val gate = OwnerCheckGateState(notices = listOf(OwnerCheckNotice("n1", "owner_check.failed", "password", null, false)))
+        show(1) { OwnerCheckBanners(gate, first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {}) }
+        rule.onNodeWithText("A daily check failed: wrong credential password.").assertExists()
     }
 
     /** The early warning is only raised with a deadline, so its banner always names the time: the soon text is unreachable. */

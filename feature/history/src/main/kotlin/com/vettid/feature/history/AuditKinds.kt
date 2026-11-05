@@ -139,9 +139,9 @@ object AuditKinds {
                 ?.let { Title.Counted(R.string.history_kind_recovery_attempts_used, it) }
                 ?: Title.Known(R.string.history_kind_recovery_attempts_used_any)
             KIND_CLOSED -> return Title.Known(closedTitle(RecoveryRefs.closure(ref)?.reason))
-            // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
             // (Owner decision 2026-11-05) A wrong PIN on any check, such as a wallet limit raise, is not a "daily" check.
             KIND_CHECK_FAILED -> if (ref == REF_PIN) return Title.Known(R.string.history_kind_owner_check_failed_pin)
+            // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
             KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
         }
         voteTitle(kind, ref)?.let { return it }

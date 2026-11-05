@@ -340,7 +340,7 @@ class WalletDetailViewModelTest {
     }
 
     @Test
-    fun tryAgainOnAWalletHeldInThisSessionSendsOneSetAndLiftsTheNote() = runTest {
+    fun setTheLimitNowOnAWalletHeldInThisSessionSendsOneSetAndLiftsTheNote() = runTest {
         val newId = "01NEW000000000000000000000"
         val flags = WalletFlags(flagsFile)
         flags.setPrivacyNoteShown(newId)
@@ -353,9 +353,10 @@ class WalletDetailViewModelTest {
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to newId)), m, settings)
         eventually { vm.state.value.loaded && vm.state.value.capsPending }
         assertTrue(ops.calls.none { it.startsWith("caps.set") })
+        val before = ops.calls.size
         vm.retryCaps()
         eventually { !vm.state.value.capsPending }
-        assertEquals(listOf("caps.set:500000:null"), ops.calls.filter { it.startsWith("caps.") })
+        assertEquals(listOf("caps.set:500000:null"), ops.calls.drop(before))
         assertTrue(vm.state.value.capped)
     }
 }
