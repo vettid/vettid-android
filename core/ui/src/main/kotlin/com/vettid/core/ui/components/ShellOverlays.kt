@@ -1,6 +1,9 @@
 package com.vettid.core.ui.components
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.DatePickerColors
@@ -44,7 +47,8 @@ fun AlertDialog(
         dismissButton = dismissButton,
         icon = icon,
         title = title,
-        text = text,
+        // The body scrolls (A6 audit A14, A41): a long body at 200% font must not push the buttons off the screen.
+        text = text?.let { body -> { Box(Modifier.verticalScroll(rememberScrollState())) { body() } } },
         shape = shape,
         containerColor = containerColor,
         properties = properties,

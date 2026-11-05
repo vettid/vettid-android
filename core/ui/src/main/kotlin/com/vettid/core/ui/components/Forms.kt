@@ -56,11 +56,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -95,6 +98,7 @@ fun SecretField(
     holdsInput: Boolean = true,
 ) {
     var visible by rememberSaveable { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     // A PIN or password prompt on screen is a credential operation in progress, typed or not: the daily owner check waits
     // for it (VAULT-MESSAGING §3.6.5). [holdsInput] false: a field that is not such a prompt (a secret item's value).
     HoldsInput(holdsInput)
@@ -132,7 +136,13 @@ fun SecretField(
             imeAction = imeAction,
             autoCorrectEnabled = false,
         ),
-        keyboardActions = KeyboardActions(onAny = { onImeAction() }),
+        // Next moves on to the next field (A6 audit A5); the caller's action still runs first.
+        keyboardActions = KeyboardActions(
+            onAny = {
+                onImeAction()
+                if (imeAction == ImeAction.Next) focusManager.moveFocus(FocusDirection.Down)
+            },
+        ),
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
                 Icon(
@@ -250,7 +260,11 @@ fun FormScaffold(
     topActions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    // paneTitle: a screen change nobody tapped for (the pairing code, a step's result) is announced by its title (A3, A30).
+    Surface(
+        modifier.fillMaxSize().semantics { paneTitle = title },
+        color = MaterialTheme.colorScheme.background,
+    ) {
         Column(
             Modifier
                 .fillMaxSize()
