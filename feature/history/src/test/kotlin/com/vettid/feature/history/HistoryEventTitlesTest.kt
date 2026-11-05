@@ -87,7 +87,9 @@ class HistoryEventTitlesTest {
             Triple("credential.rotated", null, "Your credential was renewed"),
             Triple("owner_check.passed", null, "Daily check passed"),
             Triple("owner_check.held", null, "Vault held for the daily check"),
-            Triple("owner_check.failed", "pin", "Daily check failed"),
+            Triple("owner_check.failed", "pin", "A PIN check failed: wrong PIN"),
+            Triple("owner_check.failed", "password", "Daily check failed"),
+            Triple("owner_check.failed", null, "Daily check failed"),
             Triple("owner_check.locked", "10", "Vault locked after failed daily checks"),
             Triple("owner_check.hold_changed", "on", "Daily check hold changed"),
             Triple("recovery.attempt", "2/3/not_success/counter", "Recovery attempt 3 of 10"),
@@ -300,6 +302,23 @@ class HistoryEventTitlesTest {
             calls += mapOf("kinds" to kinds, "before_seq" to beforeSeq, "since" to since, "until" to until, "limit" to limit)
             return queue.removeFirstOrNull()?.invoke() ?: error("unexpected request ${calls.last()}")
         }
+    }
+
+    @Test
+    fun aDeletedWalletIsOneEntryAndOtherItemsStayListed() {
+        val entries = listOf(
+            AuditRecord("e5", 5, null, "item.deleted", ref = "01OTHER"),
+            AuditRecord("e4", 4, null, "item.deleted", ref = "01WALLET"),
+            AuditRecord("e3", 3, null, "wallet.deleted", ref = "01WALLET"),
+            AuditRecord("e2", 2, null, "item.deleted", ref = "01WALLET2"),
+            AuditRecord("e1", 1, null, "item.deleted", ref = null),
+        )
+        val s = HistoryUiState(entries = entries)
+        assertEquals(listOf(5L, 3L, 2L, 1L), s.shown.map { it.seq })
+        assertEquals(5, s.entries.size)
+        // A wallet entry alone, or an item entry with no wallet entry loaded, hides nothing.
+        assertEquals(listOf(4L), AuditKinds.listed(entries.filter { it.seq == 4L }).map { it.seq })
+        assertEquals(listOf(3L), AuditKinds.listed(entries.filter { it.seq == 3L }).map { it.seq })
     }
 
     private fun entry(seq: Long, kind: String, ref: String, seconds: Long) =
