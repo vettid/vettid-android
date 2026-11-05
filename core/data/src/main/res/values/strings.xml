@@ -304,7 +304,7 @@
     <!-- NEW: not in the plan -->
     <string name="data_location_age_days">%1$d d</string>
     <!-- NEW: not in the plan (the plan's example is "1 km") -->
-    <string name="data_location_metres">%1$d m</string>
+    <string name="data_location_metres">%1$s m</string>
     <!-- NEW: not in the plan -->
     <string name="data_location_kilometres">%1$s km</string>
     <!-- NEW: not in the plan (units, owner decision 2026-11-05): feet, under about 0.1 mile -->

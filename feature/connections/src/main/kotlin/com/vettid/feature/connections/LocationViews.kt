@@ -27,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +47,7 @@ import com.vettid.core.data.location.IncomingShare
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LengthSystem
 import com.vettid.core.data.location.LengthSystems
+import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.PositionOffset
@@ -132,7 +134,7 @@ private const val TICK_MS = 30_000L
 internal fun IncomingLocationCard(
     incoming: DetailIncoming,
     name: String,
-    units: LengthSystem,
+    units: DistanceUnits,
     busy: Boolean,
     onOpen: () -> Unit,
     onStop: () -> Unit,
@@ -143,7 +145,7 @@ internal fun IncomingLocationCard(
     DetailCard(Modifier.testTag("detail_incoming_location")) {
         val at = incoming.at
         if (at != null) {
-            val accuracy = PositionText.accuracy(context.resources, incoming.accuracyM, units)
+            val accuracy = PositionText.accuracy(context.resources, incoming.accuracyM, rememberLengthSystem(units))
             val age = PositionText.age(context.resources, at, now)
             Text(
                 if (accuracy != null) {
@@ -563,7 +565,7 @@ data class PositionUiState(
     /** "Not now" was tapped on the note: no map for this visit (memory only; the note comes again next time). */
     val mapDeclined: Boolean = false,
     /** Miles or kilometers (Settings → Units). */
-    val units: LengthSystem = LengthSystem.METRIC,
+    val units: DistanceUnits = DistanceUnits.AUTOMATIC,
 ) {
     /** The "hands the position to another app" question is open: the daily check waits for the decision. */
     val holdsInput: Boolean get() = confirmMaps
@@ -603,7 +605,7 @@ class PositionViewModel @Inject constructor(
         combine(
             prefs.preferences.map { MapServer.of(it) }
                 .distinctUntilChanged { a, b -> a.styleUrl == b.styleUrl && a.noteAnswered == b.noteAnswered },
-            prefs.preferences.map { LengthSystems.resolve(it.distanceUnits) }.distinctUntilChanged(),
+            prefs.preferences.map { it.distanceUnits }.distinctUntilChanged(),
         ) { m, u -> m to u },
     ) { s, (share, h), cs, o, (m, u) ->
         PositionUiState(
@@ -686,9 +688,10 @@ private fun PositionCard(
     offset: PositionOffset?,
     now: Instant,
     precision: SharePrecision,
-    units: LengthSystem,
+    distanceUnits: DistanceUnits,
 ) {
     val context = LocalContext.current
+    val units = rememberLengthSystem(distanceUnits)
     DetailCard(Modifier.testTag("position_card")) {
         val coordinates = String.format(Locale.ROOT, "%.5f, %.5f", p.lat, p.lon)
         Text(coordinates, style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("position_coordinates"))
@@ -880,4 +883,14 @@ private fun MapNote(host: String, onShow: () -> Unit, onNotNow: () -> Unit) {
             )
         }
     }
+}
+
+/**
+ * The length system for [units]: Automatic reads the region of the configuration's first locale, so a language or region change
+ * while the screen is open switches miles and kilometers at once (a view model outlives the change).
+ */
+@Composable
+internal fun rememberLengthSystem(units: DistanceUnits): LengthSystem {
+    val region = LocalConfiguration.current.locales[0]?.country
+    return remember(units, region) { LengthSystems.resolve(units) { region } }
 }

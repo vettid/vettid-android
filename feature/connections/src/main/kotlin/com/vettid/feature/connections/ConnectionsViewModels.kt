@@ -643,7 +643,7 @@ data class ConnectionDetailUiState(
     /** This connection shares its location with the member (the incoming card), if it does. */
     val incoming: DetailIncoming? = null,
     /** Miles or kilometers for the incoming card's accuracy (Settings → Units). */
-    val units: com.vettid.core.data.location.LengthSystem = com.vettid.core.data.location.LengthSystem.METRIC,
+    val units: com.vettid.core.data.prefs.DistanceUnits = com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC,
     /** **Ask for location**: the dialog and its outcome. */
     val locationAsk: LocationAsk = LocationAsk(),
     /** **Stop receiving** is out. */
@@ -789,9 +789,7 @@ class ConnectionDetailViewModel @Inject constructor(
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
-    private val units = prefs.preferences
-        .map { com.vettid.core.data.location.LengthSystems.resolve(it.distanceUnits) }
-        .distinctUntilChanged()
+    private val units = prefs.preferences.map { it.distanceUnits }.distinctUntilChanged()
 
     val uiState: StateFlow<ConnectionDetailUiState> =
         combine(
@@ -829,7 +827,7 @@ class ConnectionDetailViewModel @Inject constructor(
         val location: LocationView,
         val availability: LocationAvailability,
         val incoming: List<IncomingShare>,
-        val units: com.vettid.core.data.location.LengthSystem,
+        val units: com.vettid.core.data.prefs.DistanceUnits,
     )
 
     /** What presence knows of this connection, while the vault has presence; null otherwise. */

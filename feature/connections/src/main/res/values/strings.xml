@@ -304,9 +304,9 @@
     <string name="connections_location_exact_note">within a few meters</string>
     <string name="connections_location_city_note">within about 10 km</string>
     <!-- NEW: not in the plan (units, owner decision 2026-11-05): the same three notes when the app shows miles -->
-    <string name="connections_location_approximate_note_mi">within about 1 mile</string>
-    <string name="connections_location_exact_note_mi">within about 30 feet</string>
-    <string name="connections_location_city_note_mi">within about 7 miles</string>
+    <string name="connections_location_approximate_note_mi">within about half a mile</string>
+    <string name="connections_location_exact_note_mi">within a few yards</string>
+    <string name="connections_location_city_note_mi">within about 6 miles</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Share sheet, precision note). %1$s the connection's first name. -->
     <string name="connections_location_precision_note">Approximate and City show the centre of a fixed area. If you move across an area\'s edge, %1$s may see that you were near it.</string>
     <!-- NEW: not in the plan (words from its screen notes). -->

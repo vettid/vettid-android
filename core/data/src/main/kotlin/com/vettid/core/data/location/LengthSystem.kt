@@ -1,7 +1,5 @@
 package com.vettid.core.data.location
 
-import android.icu.util.LocaleData
-import android.icu.util.ULocale
 import com.vettid.core.data.prefs.DistanceUnits
 
 /** How distances are written: meters and kilometers, or feet and miles. */
@@ -12,28 +10,15 @@ enum class LengthSystem { METRIC, IMPERIAL }
  * Only the region is read, never a position.
  */
 object LengthSystems {
-    /** Regions that count in miles whatever the ICU data of this Android version says (owner decision 2026-11-05). */
+    /** The regions that count in miles (the owner's list); every other region, the UK included, is kilometers. */
     private val MILE_REGIONS = setOf("US", "LR", "MM")
 
-    /**
-     * Imperial where ICU says the region measures in the US system, and for the US, Liberia and Myanmar in any case; every other
-     * region is metric, the UK included (its roads are in miles, but the app shows kilometers there by default). A blank or
-     * unknown region is metric.
-     */
-    fun ofRegion(region: String?): LengthSystem {
-        val code = region?.uppercase()?.takeIf { it.isNotBlank() } ?: return LengthSystem.METRIC
-        val miles = code in MILE_REGIONS || runCatching {
-            LocaleData.getMeasurementSystem(ULocale.Builder().setRegion(code).build()) == LocaleData.MeasurementSystem.US
-        }.getOrDefault(false)
-        return if (miles) LengthSystem.IMPERIAL else LengthSystem.METRIC
-    }
+    /** Imperial for the US, Liberia and Myanmar; metric for every other region and for none (a locale such as plain "en"). */
+    fun ofRegion(region: String?): LengthSystem =
+        if (region?.uppercase() in MILE_REGIONS) LengthSystem.IMPERIAL else LengthSystem.METRIC
 
-    /** The region of the phone's default locale; a locale without one (plain "en") gets its likely region, as ICU does. */
-    fun defaultRegion(): String? {
-        val locale = java.util.Locale.getDefault()
-        locale.country.takeIf { it.isNotEmpty() }?.let { return it }
-        return runCatching { ULocale.addLikelySubtags(ULocale.forLocale(locale)).country }.getOrNull()?.takeIf { it.isNotEmpty() }
-    }
+    /** The region of the phone's default locale; null when it has none. No region is guessed. */
+    fun defaultRegion(): String? = java.util.Locale.getDefault().country.takeIf { it.isNotEmpty() }
 
     /** The system for [units]; [region] is read only for Automatic (default: the phone's). */
     fun resolve(units: DistanceUnits, region: () -> String? = ::defaultRegion): LengthSystem = when (units) {

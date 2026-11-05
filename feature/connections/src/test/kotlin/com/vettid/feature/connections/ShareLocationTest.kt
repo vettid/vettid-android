@@ -340,6 +340,7 @@ class ShareLocationTest {
 
     private val open = ShareLocationUiState(
         "c1", open = true, permission = LocationPermission.PRECISE, availability = com.vettid.core.data.location.LocationAvailability.AVAILABLE,
+        units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS,
     )
 
     @Test
@@ -667,12 +668,12 @@ class ShareLocationTest {
         prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
         advanceUntilIdle()
         rule.waitForIdle()
-        listOf("within about 1 mile", "within about 30 feet", "within about 7 miles").forEach { rule.requireText(it) }
+        listOf("within about half a mile", "within a few yards", "within about 6 miles").forEach { rule.requireText(it) }
         assertEquals(0, rule.onAllNodesWithText("within about 1 km").fetchSemanticsNodes().size)
         prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC)
         advanceUntilIdle()
         rule.waitForIdle()
         // Robolectric's default locale is en-US: Automatic reads as miles.
-        rule.requireText("within about 1 mile")
+        rule.requireText("within about half a mile")
     }
 }

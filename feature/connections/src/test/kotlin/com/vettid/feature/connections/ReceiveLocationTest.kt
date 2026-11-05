@@ -112,7 +112,7 @@ class ReceiveLocationTest {
     fun theCardSaysAgeAccuracyAndUntilAndOffersStopReceiving() {
         val c = FakeSocial.connection("c1", "Sam")
         var stopped = false
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE), units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
         rule.setContent { ConnectionDetailScreen(state, DetailActions(onStopReceiving = { stopped = true })) }
         rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
         rule.onNodeWithText("5 min", substring = true).assertIsDisplayed()
@@ -606,7 +606,7 @@ class ReceiveLocationTest {
     fun theIncomingCardsWithinFollowsTheUnits() {
         val c = FakeSocial.connection("c1", "Sam")
         val incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = incoming, units = com.vettid.core.data.location.LengthSystem.IMPERIAL)
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = incoming, units = com.vettid.core.data.prefs.DistanceUnits.MILES)
         rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
         rule.onNodeWithText(dec("within 0.6 mi"), substring = true).assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("within 1 km", substring = true).fetchSemanticsNodes().size)
@@ -617,9 +617,9 @@ class ReceiveLocationTest {
         val p = com.vettid.core.data.prefs.InMemoryPreferencesRepository()
         val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location, prefs = p)
         p.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
-        assertEquals(com.vettid.core.data.location.LengthSystem.METRIC, read(vm.uiState).units)
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS, read(vm.uiState).units)
         p.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
-        assertEquals(com.vettid.core.data.location.LengthSystem.IMPERIAL, read(vm.uiState).units)
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.MILES, read(vm.uiState).units)
     }
 
     @Test
@@ -629,7 +629,7 @@ class ReceiveLocationTest {
         val vm = positionVm()
         prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
         advanceUntilIdle()
-        assertEquals(com.vettid.core.data.location.LengthSystem.METRIC, read(vm.uiState).units)
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS, read(vm.uiState).units)
         rule.setContent { PositionScreen(vm.uiState.collectAsState().value, {}, {}, {}, {}) }
         rule.onNodeWithText("Within ${dec("1")} km").assertIsDisplayed()
         rule.onNodeWithText("About ${dec("3")} km north of this phone").assertIsDisplayed()
@@ -638,5 +638,25 @@ class ReceiveLocationTest {
         rule.waitForIdle()
         rule.onNodeWithText("Within ${dec("0.6")} mi").assertIsDisplayed()
         rule.onNodeWithText("About ${dec("1.9")} mi north of this phone").assertIsDisplayed()
+    }
+
+    private fun automaticCard() {
+        val c = FakeSocial.connection("c1", "Sam")
+        val incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)
+        rule.setContent { ConnectionDetailScreen(ConnectionDetailUiState("c1", c, null, loading = false, incoming = incoming), DetailActions()) }
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(qualifiers = "en-rUS-w411dp-h2400dp")
+    fun automaticReadsTheConfigurationsRegionUs() {
+        automaticCard()
+        rule.onNodeWithText(dec("within 0.6 mi"), substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(qualifiers = "en-rGB-w411dp-h2400dp")
+    fun automaticReadsTheConfigurationsRegionGb() {
+        automaticCard()
+        rule.onNodeWithText("within 1 km", substring = true).assertIsDisplayed()
     }
 }

@@ -44,7 +44,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.LengthSystem
-import com.vettid.core.data.location.LengthSystems
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
@@ -55,6 +54,7 @@ import com.vettid.core.data.location.ShareLength
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareRequest
 import com.vettid.core.data.location.ShareTime
+import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.location.settingsIntent
@@ -143,7 +143,7 @@ data class ShareLocationUiState(
     val error: FailureKind? = null,
     val errorCode: String? = null,
     /** Miles or kilometers for the precision notes (Settings → Units). */
-    val units: LengthSystem = LengthSystem.METRIC,
+    val units: com.vettid.core.data.prefs.DistanceUnits = com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC,
     /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
@@ -181,7 +181,7 @@ class ShareLocationViewModel @Inject constructor(
     prefs: PreferencesRepository = InMemoryPreferencesRepository(),
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
-    private val units = prefs.preferences.map { LengthSystems.resolve(it.distanceUnits) }.distinctUntilChanged()
+    private val units = prefs.preferences.map { it.distanceUnits }.distinctUntilChanged()
 
     /** A request being answered (Approvals): the sheet opens at once and the start names it. */
     private val saved = savedState
@@ -375,9 +375,10 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
         }
     }
     Heading(R.string.connections_location_precision)
+    val system = rememberLengthSystem(state.units)
     SharePrecision.entries.forEach { p ->
         val enabled = !busy && (p != SharePrecision.EXACT || state.exactAvailable)
-        val note = precisionNote(p, state.units)
+        val note = precisionNote(p, system)
         Choice(p == state.precision, precisionLabel(p), note, enabled, "share_location_${p.name}") { actions.onPrecision(p) }
     }
     if (!state.exactAvailable) {

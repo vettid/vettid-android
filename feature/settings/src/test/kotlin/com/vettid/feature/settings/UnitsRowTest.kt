@@ -16,7 +16,6 @@ import org.robolectric.RobolectricTestRunner
 
 /** Settings → App → Units (owner decision 2026-11-05): Automatic, Miles or Kilometers, applied at once with nothing to confirm. */
 @RunWith(RobolectricTestRunner::class)
-@org.robolectric.annotation.Config(sdk = [36])
 class UnitsRowTest {
     @get:Rule
     val rule = createComposeRule()

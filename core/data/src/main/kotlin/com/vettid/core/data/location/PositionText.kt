@@ -57,10 +57,9 @@ object PositionText {
     }
 
     private fun metric(r: Resources, meters: Double): String {
-        if (meters < KM) {
-            val n = ((meters / METRE_STEP).roundToInt() * METRE_STEP).coerceAtLeast(METRE_STEP)
-            return r.getString(R.string.data_location_metres, n)
-        }
+        // Rounded first: 995 m and more is 1 km, not "1000 m".
+        val n = ((meters / METRE_STEP).roundToInt() * METRE_STEP).coerceAtLeast(METRE_STEP)
+        if (n < KM) return r.getString(R.string.data_location_metres, decimal(n.toDouble(), 0.0))
         return r.getString(R.string.data_location_kilometres, decimal(meters / KM, KM_ONE_DECIMAL_BELOW))
     }
 

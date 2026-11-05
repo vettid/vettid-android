@@ -32,6 +32,7 @@ class PositionUnitsTest {
         assertEquals(km, LengthSystems.ofRegion(null))
         assertEquals(km, LengthSystems.ofRegion(""))
         assertEquals(km, LengthSystems.ofRegion("ZZ"))
+        assertEquals(mi, LengthSystems.ofRegion("us"))
     }
 
     @Test
@@ -54,6 +55,10 @@ class PositionUnitsTest {
             Locale.setDefault(Locale.forLanguageTag("en-US"))
             assertEquals(mi, LengthSystems.resolve(DistanceUnits.AUTOMATIC))
             Locale.setDefault(Locale.forLanguageTag("de-DE"))
+            assertEquals(km, LengthSystems.resolve(DistanceUnits.AUTOMATIC))
+            // No region (plain "en", even though en is mostly used in the US): kilometers, no region is guessed.
+            Locale.setDefault(Locale.forLanguageTag("en"))
+            assertEquals(null, LengthSystems.defaultRegion())
             assertEquals(km, LengthSystems.resolve(DistanceUnits.AUTOMATIC))
         } finally {
             Locale.setDefault(old)
@@ -99,6 +104,27 @@ class PositionUnitsTest {
         assertEquals("10 mi", PositionText.distance(r, 10.0 * 1_609.344, mi))
         assertEquals("10 mi", PositionText.distance(r, 9.97 * 1_609.344, mi))
         assertEquals("12 mi", PositionText.distance(r, 12.4 * 1_609.344, mi))
+    }
+
+    @Test
+    fun metersRoundFirstSoNothingReadsAThousandMeters() {
+        assertEquals("990 m", PositionText.distance(r, 994.0, km))
+        assertEquals("1 km", PositionText.distance(r, 995.0, km))
+        assertEquals("1 km", PositionText.distance(r, 999.0, km))
+        assertEquals("1 km", PositionText.distance(r, 1_000.0, km))
+    }
+
+    @Test
+    fun metersUseTheLocalesOwnDigitsToo() {
+        val old = Locale.getDefault()
+        Locale.setDefault(Locale.forLanguageTag("ar-EG-u-nu-arab"))
+        try {
+            val t = PositionText.distance(r, 340.0, km)
+            assertTrue(t, t.any { it in '\u0660'..'\u0669' })
+            assertTrue(t, t.none { it in '0'..'9' })
+        } finally {
+            Locale.setDefault(old)
+        }
     }
 
     @Test
