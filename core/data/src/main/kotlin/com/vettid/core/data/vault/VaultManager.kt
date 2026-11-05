@@ -4302,7 +4302,7 @@ class VaultManager(
                 when (settled) {
                     is Settled.Paired -> settled.transfer
                     Settled.Dropped -> null
-                    // Not "dropped": the session went away (a lock, a wipe, a forget); the screen offers to try again.
+                    // Not "dropped": the session went away (a wipe, a forget, a sign-out, a dead mailbox); the screen offers to try again.
                     Settled.SessionGone -> throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
                 }
             } finally {
@@ -4400,9 +4400,14 @@ class VaultManager(
     }
 
     override suspend fun abandonTransferIn() = guard {
-        // Not during the settlement window: a leased device.paired must not be thrown away (VAULT-MESSAGING 0.84.2).
-        if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
-        session().device.abandonTransfer()
+        // Not during the settlement window: a leased device.paired must not be thrown away (VAULT-MESSAGING 0.84.2). The
+        // window starts at 11 minutes, but past the vault's 10 minutes (from the stored start) the old phone can no longer
+        // approve either: no abandon from then on, whether or not the window has begun.
+        val d = session().device
+        if (settlements.active || TransferInResume.pastVaultWindow(d.transferInPending, Instant.now())) {
+            throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
+        }
+        d.abandonTransfer()
     }
 
     override suspend fun transferCreate(): TransferOfferView = guard {

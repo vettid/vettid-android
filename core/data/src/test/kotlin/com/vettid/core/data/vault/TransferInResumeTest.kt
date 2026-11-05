@@ -290,6 +290,22 @@ class TransferInResumeTest {
         assertTrue("dropped at $droppedAt", droppedAt <= 100_000 + 25_000 + 30_000)
     }
 
+    /**
+     * (recheck of 278b0b0a) The abandon is refused from the vault's 10 minutes (from the stored start) on, not only once
+     * the window has begun at 11: for a transfer with a code, not paired.
+     */
+    @Test
+    fun theAbandonIsRefusedFromTheVaultsTenMinutes() {
+        val ten = at.plus(Duration.ofMinutes(10))
+        assertFalse(TransferInResume.pastVaultWindow(shown, ten.minusMillis(1)))
+        assertTrue(TransferInResume.pastVaultWindow(shown, ten))
+        assertTrue("in the minute before the window too", TransferInResume.pastVaultWindow(shown, at.plus(Duration.ofSeconds(630))))
+        assertTrue(TransferInResume.pastVaultWindow(shown, at.plus(Duration.ofMinutes(12))))
+        assertFalse("no code shown: nothing to protect", TransferInResume.pastVaultWindow(shown.copy(sas = null), ten))
+        assertFalse("paired: completed, not abandoned", TransferInResume.pastVaultWindow(paired, ten))
+        assertFalse(TransferInResume.pastVaultWindow(null, ten))
+    }
+
     /** (recheck L-a) A relay's advertised visibility timeout is trusted within 0 to 300 s only. */
     @Test
     fun theAdvertisedVisibilityTimeoutIsClamped() {

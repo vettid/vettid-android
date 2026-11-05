@@ -130,7 +130,7 @@ class TransferInViewModelTest {
         assertTrue(vm.uiState.value.settling)
         vm.cancel()
         vm.confirmCancel()
-        assertTrue("Back is consumed", vm.back())
+        assertFalse("Back leaves the screen (the settlement goes on in the manager) and abandons nothing", vm.back())
         vm.again()
         vm.submitInput()
         advanceTimeBy(1_000)
@@ -171,6 +171,28 @@ class TransferInViewModelTest {
         vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.RETRY, "enroll_not_made"))
         advanceTimeBy(1500)
         assertEquals(TransferInStep.FINISHING_FAILED, vm.uiState.value.step)
+    }
+
+    /** (recheck of 278b0b0a) The countdown, and so `settling`, is from the stored start the repository judges by. */
+    @Test
+    fun theCountdownIsFromTheStoredStartNotFromBeforeTheClaim() = runTest {
+        val start = Instant.now()
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        val vm = TransferInViewModel(vault, vault)
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        vm.paste()
+        vm.setInput(qr())
+        vm.submitInput()
+        advanceTimeBy(100)
+        assertTrue("one minute left of the vault's ten: ${vm.uiState.value.secondsLeft}", vm.uiState.value.secondsLeft in 55..60)
+        advanceTimeBy(62_000)
+        assertTrue(vm.uiState.value.settling)
     }
 
     @Test

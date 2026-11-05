@@ -48,7 +48,9 @@ class TransferInDeadlineCallTest {
     fun noAbandonAndNoNewCodeDuringTheWindow() {
         val guard = "if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"
         assertTrue(body("override suspend fun transferIn(code: String): String {").any { it == guard })
-        assertTrue(body("override suspend fun abandonTransferIn()").any { it == guard })
+        val abandon = body("override suspend fun abandonTransferIn()")
+        assertTrue(abandon.any { it.contains("settlements.active || TransferInResume.pastVaultWindow(") })
+        assertTrue(abandon.any { it.contains("MoveRepository.CODE_TRANSFER_SETTLING") })
     }
 
     /**

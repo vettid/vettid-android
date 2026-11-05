@@ -48,7 +48,7 @@ internal sealed interface Settled {
     /** Dropped, or no longer pending (abandoned by the member). */
     object Dropped : Settled
 
-    /** The session went away (a lock, a wipe, a forget) before the window ended: nothing was decided. */
+    /** The session went away (a wipe, a forget, a sign-out, a dead mailbox) before the window ended: nothing was decided. */
     object SessionGone : Settled
 }
 

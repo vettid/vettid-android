@@ -174,7 +174,8 @@ class TransferInViewModel @Inject constructor(
 
     override fun back(): Boolean {
         val s = state.value
-        if (settlingNow()) return true // consumed: nothing is abandoned during the window
+        // During the window Back leaves the screen and abandons nothing: the settlement goes on in the manager's scope.
+        if (settlingNow()) return false
         return when (s.step) {
             TransferInStep.SCAN, TransferInStep.PASTE -> {
                 state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
@@ -226,8 +227,15 @@ class TransferInViewModel @Inject constructor(
                 abandon()
                 return@launch
             }
-            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = deadline) }
-            waitForApproval(deadline) { move.awaitTransferIn() }
+            // The countdown from the stored start (what the repository judges by), not from before the claim.
+            val stored = try {
+                move.transferInWaiting()?.startedAt?.plus(WINDOW)
+            } catch (_: VaultFailure) {
+                null
+            }
+            val shown = stored ?: deadline
+            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = shown) }
+            waitForApproval(shown) { move.awaitTransferIn() }
         }
     }
 
@@ -342,7 +350,7 @@ class TransferInViewModel @Inject constructor(
     }
 
     private companion object {
-        val WINDOW: Duration = Duration.ofMinutes(10)
+        val WINDOW: Duration = com.vettid.core.data.vault.TransferInWait.VAULT_WINDOW
         const val TICK_MS = 1000L
     }
 }

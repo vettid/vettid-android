@@ -113,6 +113,14 @@ internal object TransferInResume {
     }
 
     /**
+     * Whether the vault's 10 minutes have passed for a transfer whose code was shown and that is not paired: the old phone
+     * can no longer approve it, and the member's abandon is no longer offered (a `device.paired` may be leased from here
+     * to the end of the settlement window). From the stored start, so the screen and the repository agree.
+     */
+    fun pastVaultWindow(t: TransferInState?, now: Instant): Boolean =
+        t != null && t.sas != null && !t.paired && !now.isBefore(t.startedAt.plus(TransferInWait.VAULT_WINDOW))
+
+    /**
      * (#187 recheck) Whether a deadline step still has to run: the transfer still waits ([Action.WAIT] or
      * [Action.DEADLINE]). WAIT counts too: the screen's wait can end a moment before the stored deadline (a timeout fires
      * up to a millisecond early, a clock set back), and its step must still collect and decide. After a first step the
