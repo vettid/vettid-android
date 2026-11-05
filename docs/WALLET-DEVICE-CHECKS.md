@@ -53,7 +53,7 @@ The same steps run on the `devStack` build against regtest (section A); the chai
 |---|---|---|
 | 1 | Drawer, Wallet (shown only while the vault is open) | Wallet list, test-network banner, empty state |
 | 2 | New wallet: name, network testnet4 (then a second one on signet), limits step left at "No limit", password | Phrase screen with 24 words (or 12); screenshot attempt is blocked (`FLAG_SECURE`); Recents shows blank |
-| 3 | Continue to the check: answer the three words (any case), wrong answer once | A wrong answer ends the check, "Not backed up" stays on the row; Back up later from the row, right answers clear it |
+| 3 | Continue to the check: answer the three words (any case), wrong answer once | A wrong answer is refused and the app offers "Show the words again"; "Not backed up" stays on the row until the check passes; Back up later from the row, right answers clear it |
 | 4 | Lock the vault, open it again | Wallet list reloads; "Not backed up" state is from this phone |
 | 5 | Wallet details, Show recovery phrase (password; PIN too on a capped wallet) | Phrase shown with `FLAG_SECURE`; wrong password refused; wrong PIN refused. History shows "Recovery phrase shown: <name>" |
 | 6 | Import a wallet: type a known test phrase, optional passphrase under Advanced, with an invalid word and a bad checksum first | Each bad word flagged as typed; bad checksum text before anything is sent; then password, then "Looking for this wallet's history…" and the balance and history appear [regtest: a phrase with funds on both accounts] |
