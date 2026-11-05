@@ -80,7 +80,7 @@
     <string name="settings_profile_photo_note">Taken with this app\'s camera, cropped to the circle you chose and made smaller on this phone. It is not saved to your gallery, and no location or camera details are sent.</string>
     <!-- The in-app camera for the profile photo (owner feedback 2026-10-08: taken, never chosen from the gallery). -->
     <string name="settings_photo_capture_title">Take your photo</string>
-    <string name="settings_photo_capture_body">Centre your face in the square. Every connection sees this photo.</string>
+    <string name="settings_photo_capture_body">Center your face in the square. Every connection sees this photo.</string>
     <string name="settings_photo_capture_shutter">Take photo</string>
     <string name="settings_photo_capture_to_back">Use the rear camera</string>
     <string name="settings_photo_capture_to_front">Use the front camera</string>

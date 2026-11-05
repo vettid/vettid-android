@@ -19,6 +19,9 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -71,8 +74,16 @@ class LocationSharingTest {
         var listRefusal: String? = null
         var stopRefusal: String? = null
 
+        /** When set, `location.share.start` answers only after it is completed (a start in flight). */
+        var startGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+        /** Completed when a `location.share.start` reaches the vault. */
+        @Volatile var startAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
+
         override suspend fun start(r: ShareRequest): JsonObject {
             synchronized(this) { starts += r }
+            startAsked.complete(Unit)
+            startGate?.await()
             val seconds = if (r.once) 900L else r.durationSeconds!!
             return obj("""{"share_id":"s${++n}","expires_at":"${t0.plusSeconds(seconds)}"}""")
         }
@@ -1105,13 +1116,20 @@ class LocationSharingTest {
     @Test
     fun aSecondStartForTheSameConnectionIsRefused() = runTest {
         val r = rig()
+        // Hold the first start at the vault, so the second is made while the first is surely in flight (without the gate, a
+        // fast first start could finish before the second began, and a second start after it is a legitimate new share).
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.startGate = gate
+        r.ops.startAsked = kotlinx.coroutines.CompletableDeferred()
         val a = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
-        val b = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
         r.settle()
-        val results = listOf(a.await(), b.await())
-        assertEquals(1, results.count { it.isSuccess })
+        withContext(Dispatchers.Default) { withTimeout(10_000) { r.ops.startAsked.await() } }
+        val b = runCatching { r.sharing.start(ShareRequest("c1")) }
+        assertEquals("busy", (b.exceptionOrNull() as VaultFailure).code)
+        gate.complete(Unit)
+        r.settle()
+        assertTrue(a.await().isSuccess)
         assertEquals(1, r.ops.starts.size)
-        assertEquals("busy", (results.single { it.isFailure }.exceptionOrNull() as VaultFailure).code)
     }
 
     @Test

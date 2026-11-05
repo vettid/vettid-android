@@ -27,11 +27,11 @@ class VoteTextsTest {
     @Test
     fun theConflictFoundAfterAVerifiedCheckIsTheOwnersText() {
         assertEquals(
-            "**Your vote is in the published results.** %1\$s also once showed a different vote under your code. Save the proof and show it to the organisation.",
+            "**Your vote is in the published results.** %1\$s also once showed a different vote under your code. Save the proof and show it to the organization.",
             r.getString(R.string.vote_conflict_after_verified),
         )
         assertEquals(
-            "Your vote is in the published results. Example also once showed a different vote under your code. Save the proof and show it to the organisation.",
+            "Your vote is in the published results. Example also once showed a different vote under your code. Save the proof and show it to the organization.",
             plainText(r.getString(R.string.vote_conflict_after_verified, "Example")),
         )
     }
@@ -56,19 +56,19 @@ class VoteTextsTest {
             R.string.vote_state_in_results to "The published results include your vote.",
             R.string.vote_state_unconfirmed to "Not confirmed. Example sent no receipt for your vote, and the published results don't settle whether it counted.",
             R.string.vote_failed_title to "The published results don't match your vote",
-            R.string.vote_conflict_body to "Example holds a different vote under your code than the one you cast. Save the proof and show it to the organisation.",
+            R.string.vote_conflict_body to "Example holds a different vote under your code than the one you cast. Save the proof and show it to the organization.",
             R.string.vote_state_late_pending to "Example says the vote had closed. VettID is asking whether an earlier send arrived in time.",
             R.string.vote_refused_late to "The vote had closed when your vote arrived, so it was not counted.",
             R.string.vote_refused_not_active to "Example says you are no longer a member for this vote, so your vote was not counted.",
-            R.string.vote_refused_not_eligible to "Example says you were not on the list for this vote. You can save the proof and show it to the organisation.",
-            R.string.vote_refused_bad_ballot to "Example did not accept your vote. You can save the proof and show it to the organisation.",
+            R.string.vote_refused_not_eligible to "Example says you were not on the list for this vote. You can save the proof and show it to the organization.",
+            R.string.vote_refused_bad_ballot to "Example did not accept your vote. You can save the proof and show it to the organization.",
             R.string.vote_refused_ended to "Your connection to Example ended before your vote was recorded.",
             R.string.vote_not_signed_in to "Before you can vote, sign in to Example once with VettID. This lets Example check that your vote is yours.",
             R.string.vote_closing_soon to "This vote closes in less than 2 minutes. It is too late to cast your vote from this phone.",
             R.string.vote_checking_list to "VettID is checking this vote. It needs the list of services from votes.vettid.org. Check that this phone is online.",
             R.string.vote_checking_trust to "VettID can't finish checking this vote yet: its list of trusted logs may be out of date. Update VettID if this lasts.",
             R.string.vote_checking_restore to "VettID is asking Example what it recorded for you before you can vote.",
-            R.string.vote_site_mismatch_after to "The vote you voted on differs from the one published on the public site, so your vote may not count. Save the proof and show it to the organisation.",
+            R.string.vote_site_mismatch_after to "The vote you voted on differs from the one published on the public site, so your vote may not count. Save the proof and show it to the organization.",
             R.string.vote_unpublished to "This vote was never published on the public site. Your vote may not count. Save the proof.",
             R.string.vote_not_listed_late to "This vote is still not on the public site, which is unusual. You can vote, but keep the proof.",
             R.string.vote_remove_warning to "You have a vote with Example that isn't finished. If you remove this connection you can't vote in it.",

@@ -12,6 +12,7 @@ import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.map.MapServer
 import com.vettid.core.data.map.MapSetting
 import com.vettid.core.data.prefs.AppPreferences
+import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.location.IncomingShare
@@ -66,8 +67,8 @@ internal object LocationCatalog {
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
 
     @Composable
-    private fun Incoming(i: DetailIncoming) =
-        ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, incoming = i), DetailActions())
+    private fun Incoming(i: DetailIncoming, units: DistanceUnits = DistanceUnits.AUTOMATIC) =
+        ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, incoming = i, units = units), DetailActions())
 
     @Composable
     private fun Ask(ask: LocationAsk) {
@@ -76,7 +77,7 @@ internal object LocationCatalog {
     }
 
     @Composable
-    private fun Position(offset: PositionOffset?, mapSetting: MapSetting? = null) {
+    private fun Position(offset: PositionOffset?, mapSetting: MapSetting? = null, units: DistanceUnits = DistanceUnits.AUTOMATIC) {
         val p = ReceivedPosition(52.5200, 13.4050, 1_000.0, null, null, null, Instant.now().minusSeconds(300), null)
         val share = IncomingShare("in1", "c1", false, SharePrecision.APPROXIMATE, 60, true, null, Instant.now().plusSeconds(3_600), last = p,
             trailPoints = listOf(
@@ -84,7 +85,7 @@ internal object LocationCatalog {
                 ReceivedPosition(52.5150, 13.3970, 1_000.0, null, null, null, Instant.now().minusSeconds(600), null),
             ),
         )
-        PositionScreen(PositionUiState(loaded = true, name = "Samira", share = share, offset = offset, mapSetting = mapSetting), {}, {}, {}, {})
+        PositionScreen(PositionUiState(loaded = true, name = "Samira", share = share, offset = offset, mapSetting = mapSetting, units = units), {}, {}, {}, {})
     }
 
     private val defaultServer = MapServer.of(AppPreferences())
@@ -126,6 +127,11 @@ internal object LocationCatalog {
         },
         // Receiving (L1b): the incoming card, Ask for location, the Location screen, the position as text, a request in Approvals.
         "location.incoming" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(300), 1_000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)) },
+        // Miles (Settings → Units, owner decision 2026-11-05): the incoming card's "within …" and the share sheet's precision notes.
+        "location.incoming_miles" to {
+            Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(300), 1_000.0, SharePrecision.APPROXIMATE), DistanceUnits.MILES)
+        },
+        "location.share_miles" to { Sheet(open.copy(units = DistanceUnits.MILES)) },
         "location.incoming_waiting" to { Incoming(DetailIncoming("in1", Instant.now().plusSeconds(3_600), null, null, com.vettid.core.data.location.SharePrecision.APPROXIMATE)) },
         "location.ask" to { Ask(LocationAsk(open = true, note = "Are you near the station?")) },
         "location.ask_limit" to { Ask(LocationAsk(open = true, limitedMinutes = 7)) },
@@ -143,6 +149,8 @@ internal object LocationCatalog {
         },
         "location.screen_empty" to { LocationScreen(LocationUiState(availability = LocationAvailability.AVAILABLE), chrome, LocationActions()) },
         "location.position" to { Position(PositionOffset(3_200.0, 45.0)) },
+        // Distances in miles and feet (Settings → Units, owner decision 2026-11-05).
+        "location.position_miles" to { Position(PositionOffset(3_200.0, 45.0), units = DistanceUnits.MILES) },
         "location.position_no_offset" to { Position(null) },
         // The map (L2): the privacy note before it is answered (nothing is loaded), then the map itself on the default server.
         "location.map_note" to { Position(PositionOffset(3_200.0, 45.0), defaultServer) },

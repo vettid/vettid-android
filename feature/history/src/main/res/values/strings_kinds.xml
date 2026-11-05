@@ -73,7 +73,7 @@
     <string name="history_kind_recovery_registered">Recovery phone registered</string>
     <string name="history_kind_recovery_device_paired">Recovery phone paired</string>
     <string name="history_kind_recovery_completed">Recovery completed</string>
-    <string name="history_kind_recovery_cancelled">Recovery cancelled</string>
+    <string name="history_kind_recovery_cancelled">Recovery canceled</string>
     <string name="history_kind_recovery_expired">Recovery expired</string>
     <string name="history_kind_recovery_voided">Recovery voided</string>
     <string name="history_kind_item_added">Item added</string>

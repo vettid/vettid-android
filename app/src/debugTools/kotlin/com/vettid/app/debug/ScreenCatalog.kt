@@ -929,6 +929,10 @@ object ScreenCatalog {
         "settings.screenshots_on_development" to {
             SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true, screenshotsStayOn = true), SettingsActions())
         },
+        // Settings → App → Units: the row and its three choices (owner decision 2026-11-05).
+        "settings.units" to {
+            SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askUnits = true)
+        },
         "settings.screenshots_confirm" to {
             SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askScreenshots = true)
         },
