@@ -402,6 +402,33 @@ a recovery, not an update (owner decision 2026-10-11). For that:
   GitHub release asset, `vettid-<versionName>-foss.apk`). It is signed outside
   this repository, like every release, with a certificate the production vault
   release pins.
+- **Sign it so that only a signature is added.** F-Droid checks the APK by
+  copying the signature from VettID's APK onto its own unsigned build
+  (`apksigcopier`) and verifying the result. That works only if signing added
+  nothing but the signature. By default `apksigner` re-pads the entries' local
+  headers to its own alignment, which moves every offset, so F-Droid's copy no
+  longer verifies. The unsigned APK is already aligned (4 bytes, and 16 KB for
+  the uncompressed native libraries: `zipalign -c -P 16 4` passes), so sign with
+  the alignment kept, and without the v1 scheme (minSdk 31 doesn't need it):
+
+  ```bash
+  apksigner sign --alignment-preserved --v1-signing-enabled false \
+    --ks <the release keystore> --out vettid-<versionName>-foss.apk \
+    app/build/outputs/apk/foss/release/app-foss-release-unsigned.apk
+  ```
+- **Check before publishing,** as F-Droid will. Build the tag again in a fresh
+  clone (`rm -rf core/push-fcm` first, as the recipe does), then compare the
+  signed APK with that unsigned build:
+  `apksigcopier compare vettid-<versionName>-foss.apk --unsigned <fresh>/app-foss-release-unsigned.apk`.
+  Run it where Python links classic zlib (for example a `debian:trixie`
+  container with the `apksigcopier` and `apksigner` packages). A Python built
+  with zlib-ng (Fedora) cannot tell the deflate level of the signature's files
+  and fails with "Unsupported compresslevel" whatever the APK.
+- **Checked on 2026-11-05 at `fae8270a`:** two clean builds in different paths,
+  one with its own Gradle home and without `core/push-fcm`, gave the same
+  unsigned APK (sha256 `7e2cc3f313e3ce32f66dbc86d5d39d7bfd6eff0f94dd0a7fd8095caae505d52b`). A copy signed with a throwaway key
+  using the command above passed `apksigcopier compare` against the other build;
+  signed with `apksigner`'s defaults it did not.
 - The draft F-Droid metadata is [docs/fdroid/com.vettid.app.yml](docs/fdroid/com.vettid.app.yml)
   (`Binaries`, `AllowedAPKSigningKeys`); it has not been submitted.
 
