@@ -105,6 +105,14 @@ class VaultDeviceTest {
     private var refuseCollect: String? = null
     private val queued = LinkedBlockingQueue<RelayMessage>()
 
+    /** How many queued messages one collect hands out (a batch). */
+    @Volatile
+    private var batchSize = 1
+
+    /** When set, acks (DELETE) are refused with 403. */
+    @Volatile
+    private var refuseAck = false
+
     /** When set, a collect that took a message from [queued] holds it until this opens (a lease in flight). */
     @Volatile
     private var leaseGate: java.util.concurrent.CountDownLatch? = null
@@ -188,10 +196,14 @@ class VaultDeviceTest {
                         val m = queued.poll(200, TimeUnit.MILLISECONDS)
                         // A collect that leased a message and has not delivered it yet ([leaseGate]).
                         if (m != null) leaseGate?.await(10, TimeUnit.SECONDS)
-                        val msgs = if (m == null) "" else JsonBuilder().string("msg_id", m.msgId).string("sender", m.sender)
-                            .base64("payload", m.payload()).build()
+                        val taken = listOfNotNull(m) + (1 until batchSize).mapNotNull { queued.poll() }
+                        val msgs = taken.joinToString(",") {
+                            JsonBuilder().string("msg_id", it.msgId).string("sender", it.sender).base64("payload", it.payload()).build()
+                        }
                         MockResponse.Builder().code(200).body("""{"messages":[$msgs]}""").build()
                     }
+                    path.startsWith("/v1/mailbox/") && request.method == "DELETE" && refuseAck ->
+                        MockResponse.Builder().code(403).body("""{"code":"token_revoked","message":""}""").build()
                     path.startsWith("/v1/mailbox/") && request.method == "DELETE" -> {
                         acked.add(path.removePrefix("/v1/mailbox/"))
                         MockResponse.Builder().code(204).build()
@@ -1253,7 +1265,7 @@ class VaultDeviceTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             d.start(scope)
             while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // leased by the collection's round
-            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.deadlineCollect() } }
+            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.awaitCollectorRound(); d.collectOnce(); d.awaitCollectorRound() } }
             kotlinx.coroutines.delay(500)
             assertFalse("waits for the round that holds it", deadline.isCompleted)
             assertFalse(d.transferInPending!!.paired)
@@ -1397,6 +1409,69 @@ class VaultDeviceTest {
         assertNull(guid("""{"transfer":true,"user_guid":"a\nb"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":"é"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":7}"""))
+    }
+
+    /**
+     * (review L-series) The settlement drops only the transfer it settles: `abandonTransfer(onlyStartedAt)` does nothing
+     * for another transfer (one the member started again meanwhile) and drops the matching one.
+     */
+    @Test
+    fun abandonTransferOnlyDropsTheTransferItWasAskedFor() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            val started = d.transferInPending!!.startedAt
+            d.abandonTransfer(onlyStartedAt = started.minusMillis(1))
+            assertNotNull("another transfer's start: kept", d.transferInPending)
+            d.abandonTransfer(onlyStartedAt = started)
+            assertNull("the matching one: dropped", d.transferInPending)
+        }
+    }
+
+    /**
+     * (review M2) A rejection that arrived while the settlement collected is still in the device's inbox after the
+     * handler dropped the handshake: the wait that follows (`awaitTransfer`) ends with [PairingRejectedException].
+     */
+    @Test
+    fun aRejectionHandledBeforeTheWaitStillEndsItAsRejected() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertNull(d.transferInPending)
+            assertTrue(
+                runCatching { d.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is PairingRejectedException,
+            )
+        }
+    }
+
+    /**
+     * (recheck) A collect returns [m1, device.paired] and m1's ack is refused: the batch is still handled, so the
+     * device.paired is applied (the unacked m1 comes again after its lease and is dropped as seen).
+     */
+    @Test
+    fun aFailedAckDoesNotStopTheRestOfTheBatch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            batchSize = 2
+            refuseAck = true
+            queued.add(v.seal("test.noop", "{}"))
+            queued.add(v.transferPaired(d))
+            assertEquals(2, d.collectOnce())
+            assertTrue("the device.paired behind the unacked message was applied", d.transferInPending!!.paired)
+            assertEquals("dev-2", d.deviceId)
+            refuseAck = false
+            batchSize = 1
+            serveMailbox = false
+        }
     }
 
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
