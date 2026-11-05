@@ -106,7 +106,10 @@ class MapServerSettingsTest {
     fun theFormShowsTheHostTheProblemAndTheNote() {
         rule.setContent {
             MapServerContent(
-                MapServerUiState(loaded = true, text = "http://x.example", storedText = MapServer.DEFAULT_STYLE, host = "tiles.openfreemap.org", problem = MapServer.Problem.NOT_HTTPS),
+                MapServerUiState(
+                    loaded = true, text = "http://x.example", storedText = MapServer.DEFAULT_STYLE, host = "tiles.openfreemap.org",
+                    problem = MapServer.Problem.NOT_HTTPS,
+                ),
                 {}, {}, {}, {},
             )
         }
