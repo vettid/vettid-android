@@ -19,7 +19,14 @@ object ShareTime {
             return DateFormat.getTimeFormat(context).also { it.timeZone = tz }.format(Date.from(at))
         }
         val skeleton = if (DateFormat.is24HourFormat(context)) "MMMdHHmm" else "MMMdhmma"
-        return java.text.SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale)
-            .also { it.timeZone = tz }.format(Date.from(at))
+        // A locale with a calendar extension can yield pattern letters SimpleDateFormat refuses, and this text is also the
+        // location service's notification: then the locale's own medium date and short time, never a throw.
+        return runCatching {
+            java.text.SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale)
+                .also { it.timeZone = tz }.format(Date.from(at))
+        }.getOrElse {
+            java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT)
+                .withLocale(locale).withZone(zone).format(at)
+        }
     }
 }

@@ -85,10 +85,25 @@ class SharingTextTest {
     }
 
     @Test
-    fun anotherDayComesFirst() {
+    fun anotherDayNamesTheDate() {
         val t = ShareTime.format(app, until.plusSeconds(3 * 86_400), now, ZoneOffset.UTC)
         assertTrue(t, t.contains(","))
         assertTrue(t, t.contains("Nov"))
+    }
+
+    @Test
+    fun anotherDayFollowsThePhones12Or24HourSetting() {
+        val later = until.plusSeconds(3 * 86_400)
+        try {
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, "24")
+            val h24 = ShareTime.format(app, later, now, ZoneOffset.UTC)
+            assertTrue(h24, h24.contains("15:30") && !h24.contains("PM"))
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, "12")
+            val h12 = ShareTime.format(app, later, now, ZoneOffset.UTC)
+            assertTrue(h12, h12.contains("3:30") && h12.contains("PM"))
+        } finally {
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, null)
+        }
     }
 
     @Test
