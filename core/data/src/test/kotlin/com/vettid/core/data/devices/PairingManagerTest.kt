@@ -34,6 +34,7 @@ private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObjec
 @OptIn(ExperimentalCoroutinesApi::class)
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [36])
+@Suppress("LargeClass") // one scenario per rule of the pairing machine
 class PairingManagerTest {
     private var clock = Instant.parse("2026-10-26T12:00:00Z")
 
@@ -68,8 +69,17 @@ class PairingManagerTest {
             return byRole[role.wire] ?: created
         }
 
+        /** Holds the next approval (once) until completed; [approveEntered] says it got there. */
+        var holdApprove: CompletableDeferred<Unit>? = null
+        val approveEntered = CompletableDeferred<Unit>()
+
         override suspend fun approve(pairingId: String, sessionSeconds: Int?) {
             calls += "approve:$pairingId:$sessionSeconds"
+            holdApprove?.let {
+                holdApprove = null
+                approveEntered.complete(Unit)
+                it.await()
+            }
             onApprove()
             refuse["approve"]?.let { throw VaultOpException("device.pair.approve", it) }
         }
@@ -707,6 +717,25 @@ class PairingManagerTest {
         assertTrue(ops.calls.contains("reject:pa"))
     }
 
+    /**
+     * Runs the test scheduler's current tasks until [until] holds, waiting for the request threads in real time but never
+     * advancing the virtual clock (a code's own end must not fire). Gives up after [timeoutMs] so no test can hang.
+     */
+    private fun TestScope.pump(timeoutMs: Long = 10_000, until: () -> Boolean) {
+        val end = System.nanoTime() + timeoutMs * 1_000_000
+        while (!until()) {
+            check(System.nanoTime() < end) { "timed out waiting" }
+            runCurrent()
+            Thread.sleep(5)
+        }
+    }
+
+    private fun held(m: PairingManager): String? = when (val st = m.state.value.stage) {
+        is PairingStage.Code -> st.code.pairingId
+        is PairingStage.CodeExpired -> st.pairingId
+        else -> null
+    }
+
     @Test
     fun aCreateOfTheOtherRoleStillInFlightIsSupersededDroppedAndRejected() = runTest {
         val ops = Ops().also { both(it) }
@@ -714,22 +743,75 @@ class PairingManagerTest {
         ops.holdNext = gate
         val m = manager(ops)
         val first = launch { m.start(PairRole.AGENT) }
-        runCurrent()
+        pump { ops.held.isCompleted }
         assertTrue(m.state.value.stage is PairingStage.Creating)
-        ops.held.await()
         // The desktop button while the agent's create is out: the desktop code is made, not skipped.
         m.start(PairRole.DESKTOP)
         assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
         gate.complete(Unit)
-        first.join()
-        // The agent's late answer is dropped (the desktop's pairing is still the one held; waiting for the answer let the
-        // test clock reach the desktop code's own end, hence "or expired") and that pairing is rejected.
-        val held = m.state.value.stage
-        assertEquals("pd", (held as? PairingStage.Code)?.code?.pairingId ?: (held as PairingStage.CodeExpired).pairingId)
+        pump { first.isCompleted && ops.calls.contains("reject:pa") }
+        // The agent's late answer is dropped (the desktop code is still the one shown, exactly) and that pairing is rejected.
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
         assertEquals(PairRole.DESKTOP, m.state.value.role)
-        assertTrue(ops.calls.contains("reject:pa"))
         assertFalse(ops.calls.contains("reject:pd"))
+    }
+
+    @Test
+    fun aSupersededCreateIsRejectedEvenWhenItsCallerWasCancelled() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        first.cancel()
+        m.start(PairRole.DESKTOP)
+        gate.complete(Unit)
+        pump { ops.calls.contains("reject:pa") }
+        assertEquals("pd", held(m))
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+    }
+
+    @Test
+    fun aLockDuringCreatingShowsNothingAndRejectsTheAnswerWhenItArrives() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        m.clear()
+        assertEquals(PairingState(), m.state.value)
+        gate.complete(Unit)
+        pump { first.isCompleted && ops.calls.contains("reject:pa") }
+        // Nothing of it was shown.
+        assertEquals(PairingState(), m.state.value)
+        assertEquals(listOf("create", "reject:pa"), ops.calls)
+    }
+
+    @Test
+    fun anApprovalInFlightIsNotSwitchedByTheOtherButton() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.onEvent(pending(id = "pa"))
+        val gate = CompletableDeferred<Unit>()
+        ops.holdApprove = gate
+        val approving = launch { m.approve(3600) }
+        pump { ops.approveEntered.isCompleted }
+        val before = m.state.value
+        assertTrue(before.busy)
+        m.start(PairRole.DESKTOP)
+        // Nothing changed: the same state and role, and no create (so no new generation either: the approval still settles).
+        assertEquals(before, m.state.value)
+        assertEquals(PairRole.AGENT, m.state.value.role)
+        assertEquals(listOf("agent"), ops.roles)
+        gate.complete(Unit)
+        // The approval settles as Paired (not dropped by a new generation); its search for the id then needs virtual time.
+        pump { m.state.value.stage is PairingStage.Paired }
         advanceUntilIdle()
+        assertTrue(approving.isCompleted)
+        assertEquals(PairRole.AGENT, m.state.value.role)
     }
 
     @Test

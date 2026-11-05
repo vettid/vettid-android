@@ -337,24 +337,38 @@ class PairingManager(
             flow.value = PairingState(PairingStage.Creating, busy = true)
         }
         replaced?.let { id -> scope.launch { sendReject(id) } }
-        var stale: String? = null
-        try {
-            val code = sent { read(ops().create(wanted), wanted) }
-            synchronized(lock) {
-                if (gen != generation) {
-                    stale = code.pairingId
-                } else {
-                    timer = scope.launch { endAt(code.exp, gen) { it is PairingStage.Code } }
-                    flow.value = PairingState(PairingStage.Code(code))
+        // Once sent, the answer is applied (or rejected) whatever became of the caller: a cancelled screen must neither strand
+        // the pairing in Creating nor leave an unwanted code at the vault.
+        withContext(NonCancellable) {
+            try {
+                val code = vaultGuard { read(ops().create(wanted), wanted) }
+                var stale: String? = null
+                synchronized(lock) {
+                    if (gen != generation) {
+                        // Superseded or cleared while the request was out: not shown. Told it is not wanted, unless it is the
+                        // pairing held now.
+                        if (code.pairingId != heldId(flow.value.stage)) stale = code.pairingId
+                    } else {
+                        timer = scope.launch { endAt(code.exp, gen) { it is PairingStage.Code } }
+                        flow.value = PairingState(PairingStage.Code(code))
+                    }
+                }
+                // In the manager's scope, like the replaced id's: it never depends on the caller staying alive.
+                stale?.let { id -> scope.launch { sendReject(id) } }
+            } catch (e: VaultFailure) {
+                synchronized(lock) {
+                    if (gen == generation) flow.value = PairingState(PairingStage.Idle, error = e.kind, errorCode = e.shownCode)
                 }
             }
-        } catch (e: VaultFailure) {
-            synchronized(lock) {
-                if (gen == generation) flow.value = PairingState(PairingStage.Idle, error = e.kind, errorCode = e.shownCode)
-            }
         }
-        // A code that came back after it was superseded (or the vault locked) is not wanted: best effort.
-        stale?.let { sendReject(it) }
+    }
+
+    /** The id of the pairing a stage holds, if it holds one. */
+    private fun heldId(stage: PairingStage): String? = when (stage) {
+        is PairingStage.Code -> stage.code.pairingId
+        is PairingStage.CodeExpired -> stage.pairingId
+        is PairingStage.Compare -> stage.pending.pairingId
+        else -> null
     }
 
     /**

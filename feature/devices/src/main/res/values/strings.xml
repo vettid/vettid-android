@@ -131,7 +131,6 @@
     <string name="pair_choose">Choose what it may use</string>
     <string name="pair_later">Later</string>
     <!-- Said once a minute to a screen reader while the code counts down. -->
-    <!-- Said once a minute to a screen reader while the code counts down. -->
     <plurals name="pair_minutes_left">
         <item quantity="one">%1$d minute left</item>
         <item quantity="other">%1$d minutes left</item>
