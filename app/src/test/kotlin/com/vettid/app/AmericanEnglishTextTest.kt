@@ -42,13 +42,14 @@ class AmericanEnglishTextTest {
             "kilometres", "organise", "organised", "organisation", "recognise", "authorise", "realise", "apologise",
             "minimise", "prioritise", "customise", "summarise", "finalise", "optimisation", "cancelled", "Cancelling",
             "labelled", "labelling", "travelled", "travelling", "licence", "grey", "catalogue", "programme", "whilst",
-            "enrolment", "judgement", "defence", "analyse", "analysed", "analysing",
+            "enrolment", "judgement", "defence", "analyse", "analysed", "analysing", "north-east", "south-west",
         )
         british.forEach { assertTrue("$it is not matched", British.containsMatchIn("a $it b")) }
         val american = listOf(
             "color", "favorite", "center", "meter", "organize", "organization", "recognize", "canceled", "canceling",
             "license", "gray", "catalog", "program", "while", "enroll", "enrolled", "enrollment", "judgment", "defense",
-            "analyze", "analysis", "raise", "raised", "precise", "Unauthorized", "licensed", "cancel", "cancellation",
+            "northeast", "southwest", "analyze", "analysis", "raise", "raised", "precise", "Unauthorized", "licensed", "cancel",
+            "cancellation",
         )
         american.forEach { assertFalse("$it is matched", British.containsMatchIn("a $it b")) }
     }
@@ -101,6 +102,7 @@ class AmericanEnglishTextTest {
                 """\bcancell(ed|ing)\b""", """\blabell(ed|ing)\b""", """\btravell(ed|ing|er|ers)\b""",
                 """\blicences?\b""", """\bgreys?\b""", """\bcatalogues?\b""", """\bprogrammes?\b""", """\bwhilst\b""",
                 """\benrolments?\b""", """\bjudgement\b""", """\bdefences?\b""", """\banalys(e|ed|es|ing)\b""",
+                """\b(north|south)-(east|west)\b""",
             ).joinToString("|"),
             RegexOption.IGNORE_CASE,
         )
