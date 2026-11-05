@@ -74,7 +74,8 @@ data class TransferInUiState(
     val deadline: Instant? = null,
     val secondsLeft: Long = 0,
     /**
-     * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) The countdown reached 0: the old phone can no longer
+     * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+     * The countdown reached 0: the old phone can no longer
      * approve, and the repository is checking one last time (the settlement window, about 90 s). The screen hides the
      * code and says so, and offers no cancel or new code: the repository refuses both until the window ends.
      */

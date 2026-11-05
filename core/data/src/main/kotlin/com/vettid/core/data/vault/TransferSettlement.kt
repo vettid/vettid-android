@@ -13,8 +13,9 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * (A6 audit N1; VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) What the settlement of a transfer to this phone needs of the device, so that the step can be tested
- * without the manager. [VaultManager] gives it over the real device.
+ * (A6 audit N1; VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+ * What the settlement of a transfer to this phone needs of the device, so that the step can be tested without the manager.
+ * [VaultManager] gives it over the real device.
  */
 internal interface SettleDevice {
     val transferInPending: TransferInState?
@@ -53,6 +54,27 @@ internal sealed interface Settled {
 private const val RELAY_LIMITS_BOUND_MS = 5_000L
 private const val REJECTION_LOOK_MS = 50L
 
+/** The relay's advertised visibility timeout, within a short bound; null when it cannot be read (the default applies). */
+private suspend fun readVisibility(d: SettleDevice): Long? = try {
+    withTimeoutOrNull(RELAY_LIMITS_BOUND_MS) { d.relayVisibilitySeconds() }
+} catch (e: CancellationException) {
+    throw e
+} catch (_: Exception) {
+    null
+}
+
+/**
+ * Ended by a rejection (or an abandon): a rejection is still in the device's inbox and ends the wait as REJECTED, as it
+ * would have before the deadline; otherwise a short timeout.
+ */
+private suspend fun lookForRejection(d: SettleDevice) {
+    try {
+        d.awaitTransfer(Duration.ofMillis(REJECTION_LOOK_MS))
+    } catch (_: TimeoutCancellationException) {
+        // none: abandoned
+    }
+}
+
 /**
  * The settlement of a transfer to this phone past its deadline (see [TransferInResume.atDeadline]): the window's length
  * from the relay's advertised value (default 60 s), the request wiring (`wait=0` while the collection runs, a long poll
@@ -68,13 +90,7 @@ internal suspend fun settleTransfer(
         TransferInResume.Settle(windowMs = TransferInResume.windowMs(it), maxExtraMs = TransferInResume.visibilityMs(it))
     },
 ): Settled {
-    val visibility = try {
-        withTimeoutOrNull(RELAY_LIMITS_BOUND_MS) { d.relayVisibilitySeconds() }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (_: Exception) { // the relay's own value is not known: the default (60 s)
-        null
-    }
+    val visibility = readVisibility(d)
     val settle = timing(visibility)
     // Read inside the lock (by due): the transfer this step settles.
     var started: Instant? = null
@@ -98,19 +114,16 @@ internal suspend fun settleTransfer(
         settle = settle,
         awaitRound = { d.awaitCollectorRound() },
     )
-    if (!paired && !dropped && sessionIsCurrent()) {
-        // Ended by a rejection (or an abandon): a rejection is still in the device's inbox and ends the wait as
-        // REJECTED, as it would have before the deadline.
-        try {
-            d.awaitTransfer(Duration.ofMillis(REJECTION_LOOK_MS))
-        } catch (_: TimeoutCancellationException) {
-            // none: abandoned
-        }
-    }
+    if (!paired && !dropped && sessionIsCurrent()) lookForRejection(d)
+    return outcome(d, ended = !paired && !dropped && !sessionIsCurrent())
+}
+
+/** Paired, or the session went away before a decision ([ended]), or dropped. */
+private fun outcome(d: SettleDevice, ended: Boolean): Settled {
     val pending = d.transferInPending
     return when {
         pending?.paired == true && d.deviceId != null -> Settled.Paired(pending)
-        !paired && !dropped && !sessionIsCurrent() -> Settled.SessionGone
+        ended -> Settled.SessionGone
         else -> Settled.Dropped
     }
 }

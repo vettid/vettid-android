@@ -4261,7 +4261,8 @@ class VaultManager(
      * brings is applied by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility
      * timeout (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired`
      * leased for that long. The window is the relay's advertised `visibility_timeout_seconds` (60 when none) + the
-     * long-poll cap + 5 s, about 90 s (clamped to 0-300 s; VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)); see
+     * long-poll cap + 5 s, about 90 s (clamped to 0-300 s;
+     * VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)); see
      * [TransferInResume.atDeadline] for how each request is sized and why none is cancelled while it can hold a message.
      * While the collection runs, our collects are `wait=0` (it long-polls already); otherwise each is a long poll of what
      * is left. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects included:

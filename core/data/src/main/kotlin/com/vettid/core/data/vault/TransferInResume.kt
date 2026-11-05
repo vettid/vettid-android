@@ -17,7 +17,9 @@ import java.time.Instant
  * ([Settle.windowMs]: [windowMs] of the relay's advertised visibility timeout) before it drops the transfer:
  * VAULT-MESSAGING §11.14.10 rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
  * (RELAY-PROTOCOL §6.3) before dropping. A single collect could miss a `device.paired` that a killed app's parked
- * long-poll had leased for 60 s. The window is VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537) (owner decisions a and a/a, 2026-11-05): the
+ * long-poll had leased for 60 s. The window is
+ * VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)
+ * (owner decisions a and a/a, 2026-11-05): the
  * visibility timeout plus the long-poll cap plus a margin, because a dead request may have been taken up to a long poll
  * before the settlement began and its lease then ends that much later. A request that is out at the relay is never
  * cancelled while it can still hold a message: each one is sized to what is left of the window and given its wait plus a
@@ -131,8 +133,10 @@ internal object TransferInResume {
      * [Settle.transportMs] like every request, before the decision: a relay that hangs longer than that at that point can
      * still hold a lease past the drop (an accepted trade-off). Waiting for the collection's own round is [awaitRound],
      * before and after each request and never under the request's bound: it has its own (the poll cap plus the
-     * transport bound), and one that runs out is no abandoned request (nothing of ours was out), so it moves nothing. Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
-     * [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected (the member's abandon and a new code are not offered during the
+     * transport bound), and one that runs out is no abandoned request (nothing of ours was out), so it moves nothing.
+     * Between collects [Settle.pauseMs]; after a failure the pause
+     * doubles (up to [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected (the member's abandon
+     * and a new code are not offered during the
      * window) or the session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
      * window had passed. Cancellation propagates, with no drop.
      */
