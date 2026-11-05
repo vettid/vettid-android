@@ -1158,10 +1158,9 @@ class VaultDevice private constructor(
     private suspend fun ackBestEffort(msgId: String) {
         try {
             own.ack(msgId)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            // handled already; redelivered after its lease and dropped as seen
+        } catch (_: java.io.IOException) {
+            // A refused or lost ack (RelayException is an IOException): the message is handled already, and a redelivery
+            // after its lease is dropped as seen. Anything else (a programming error) still surfaces.
         }
     }
 
