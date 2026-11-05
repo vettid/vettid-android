@@ -827,6 +827,8 @@ class PairingManagerTest {
         m.start(PairRole.DESKTOP)
         advanceUntilIdle()
         assertEquals(PairRole.DESKTOP, m.state.value.role)
+        // The replaced comparison's reject goes out in the manager's own scope, on a real thread: wait for it.
+        pump { ops.calls.contains("reject:pa") }
         assertTrue(ops.calls.contains("reject:pa"))
     }
 
