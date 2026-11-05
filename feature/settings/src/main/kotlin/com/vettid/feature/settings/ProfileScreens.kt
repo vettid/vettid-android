@@ -287,6 +287,8 @@ private fun ProfileItemPicker(state: SharedProfileUiState, actions: SharedProfil
             }
         },
         confirmButton = { TextButton(onClick = { actions.onPickItem(false) }) { Text(stringResource(R.string.settings_cancel)) } },
+        // The list scrolls by itself.
+        scrollBody = false,
     )
 }
 

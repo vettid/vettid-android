@@ -254,6 +254,9 @@ object KeptTransfer {
 object TransferInWait {
     val WAIT: java.time.Duration = java.time.Duration.ofMinutes(11)
 
+    /** The vault's own window for the approval (VAULT-MESSAGING §6.7, 0.10.4), counted from the stored start. */
+    val VAULT_WINDOW: java.time.Duration = java.time.Duration.ofMinutes(10)
+
     private val MIN_LEFT: java.time.Duration = java.time.Duration.ofSeconds(1)
 
     /** What is left of [WAIT] at [now] for a transfer this phone started at [started] (at least a second). */

@@ -89,6 +89,7 @@ fun NavGraphBuilder.votesDestination(chrome: ShellChrome, host: VotesHost) {
                 onSubmitPassword = vm::submitPassword,
                 onCheck = vm::checkWithService,
                 onAnswerRestore = vm::answerRestore,
+                onDismissRestore = vm::dismissRestore,
                 onSaveProof = vm::askProof,
                 onDismissProofWarning = vm::dismissProofWarning,
                 onFetchProof = vm::fetchProof,

@@ -35,10 +35,49 @@ class TransferInDeadlineCallTest {
     }
 
     @Test
-    fun aStartPastTheDeadlineCollectsBeforeAnythingElse() {
+    fun aStartPastTheDeadlineShowsTheWaitAndSettlesInTheBackground() {
         val b = body("private suspend fun evaluate()")
         assertTrue(b.any { it.contains("TransferInResume.decide(pendingIn, d.deviceId, Instant.now())") })
-        assertTrue(b.any { it.contains("TransferInResume.Action.DEADLINE -> atTransferDeadline(s)") })
+        assertTrue(b.any { it.contains("TransferInResume.Action.WAIT -> return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)") })
+        assertTrue(b.any { it == "startSettlement(s)" })
+        assertFalse("never blocks the start for the window", b.any { it.contains("atTransferDeadline(") })
+    }
+
+    /** (VAULT-MESSAGING 0.85.2) No abandon and no new code while the settlement window runs. */
+    @Test
+    fun noAbandonAndNoNewCodeDuringTheWindow() {
+        val guard = "if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"
+        assertTrue(body("override suspend fun transferIn(code: String): String {").any { it == guard })
+        val abandon = body("override suspend fun abandonTransferIn()")
+        assertTrue(abandon.any { it.contains("settlements.active || TransferInResume.pastVaultWindow(") })
+        assertTrue(abandon.any { it.contains("MoveRepository.CODE_TRANSFER_SETTLING") })
+    }
+
+    /**
+     * (the recheck of #302) Nothing forgets an unpaired device that holds an unsettled transfer: not a setup-code redeem,
+     * not a recovery, not a new code (all through freshDeviceIfUnpaired), not forgetSetupCode. And a start past the
+     * deadline starts the settlement itself.
+     */
+    @Test
+    fun theSetupLinkPathsAreGuardedAndAStartPastTheDeadlineSettlesOnItsOwn() {
+        val guard = "if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"
+        assertTrue(body("private suspend fun freshDeviceIfUnpaired()").any { it == guard })
+        val forget = "if (session?.device?.let(::transferPinned) == true) throw VaultFailure(FailureKind.BUSY, " +
+            "MoveRepository.CODE_TRANSFER_SETTLING)"
+        assertTrue(body("override suspend fun forgetSetupCode()").any { it == forget })
+        val pinned = body("private fun transferPinned(")
+        assertTrue(pinned.any { it.contains("settlements.active") && it.contains("TransferInResume.deadlineDue(") })
+        val ev = body("private suspend fun evaluate()")
+        val at = ev.indexOfFirst { it == "TransferInResume.Action.DEADLINE -> {" }
+        assertTrue("the start settles at once", at >= 0 && ev[at + 1] == "startSettlement(s)")
+        val start = body("private fun startSettlement(")
+        assertTrue("every outcome: the phase is read again", start.any { it == "refresh()" })
+        assertFalse("not only when paired", start.any { it.contains("paired != null") })
+        val wait = body("override suspend fun awaitTransferIn()")
+        val done = "return@guard completeTransferIn(s, rec, local.userGuid"
+        assertTrue("completed in the background: the completed result", wait.any { it.startsWith(done) })
+        assertTrue("a transfer with nothing to wait for is not waited for", body("override suspend fun awaitTransferIn()")
+            .any { it.contains("MoveRepository.CODE_TRANSFER_SESSION_ENDED") })
     }
 
     /**
@@ -52,10 +91,12 @@ class TransferInDeadlineCallTest {
         assertTrue("the collection is deferred at a start past the deadline", start >= 0)
         assertEquals("device.start(scope)", code[start + 1])
         val dl = body("private suspend fun atTransferDeadline(")
-        assertTrue(dl.any { it == "collect = { d.deadlineCollect() }," })
-        val due = "due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },"
-        assertTrue("due while waiting too", dl.any { it == due })
-        assertTrue(dl.any { it.startsWith("d.start(scope)") })
+        assertTrue("single-flight in the manager's scope", dl.any { it.startsWith("return settlements.run(") })
+        val wiring = "settleTransfer(DeviceSettle(d), { session?.device === d }, transferDeadline)"
+        assertTrue("the wiring is the tested unit", dl.any { it.contains(wiring) })
+        val gone = "Settled.SessionGone -> throw VaultFailure(FailureKind.RETRY"
+        assertTrue("a session that went away is no drop", dl.any { it.contains(gone) })
+        assertTrue(dl.any { it.contains("d.start(scope)") })
         val after = body("private suspend fun afterUnlocked(")
         val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }
         val create = after.indexOfFirst { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" }

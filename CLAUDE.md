@@ -625,7 +625,7 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
 `connections.detail`, `approvals.critical`, `messages.held`, `messages.held_empty`, `history.held`, `history.held_empty`; recovery and transfer: `recover.pin`, `recover.no_backup`; the recovery code typed instead of scanned (ANDROID-PLAN 0.1.33, VAULT-MESSAGING 0.25.0 §11.11.10: `RecoveryCodes` / `TypedRecoveryCode` in `:core:altchan`, the claim by locator, `RecoverStep.TYPE`; the real screen sets `FLAG_SECURE` through `SecureWindow`, the catalog's does not), `recover.type`, `recover.type_partial`, `recover.type_complete`, `recover.type_refused`, `recover.type_bad_check`, `recover.type_short_code`, `recover.type_not_found`, `recover.type_bad_code`, `recover.type_rate_limited`;
-`transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
+`transfer_in.compare`, `transfer_in.checking`, `transfer_in.session_ended`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognize: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance
 (MEMBER-API 1.2.0), `unlock.paused`, `unlock.paused_preflight`; the app's own checks of the vault's software failing (owner report 2026-10-11: `FailureKind.RELEASE_UNKNOWN`, `MANIFEST_UNAVAILABLE`, `ENCLAVE`, never the phone's `ATTESTATION` text; `enclaveFailure` in `Guard.kt`), `unlock.release_unknown`, `unlock.manifest_unavailable`, `unlock.enclave_unverified`; the canary manifest (VAULT-RELEASES §10.1 step 9),
@@ -677,7 +677,7 @@ vettid.org repo's `local/android-ui/`).
   shown, because the screens report their input in effects after the first frame. The gate's clock wakes at the next boundary
   (warning, deadline, deadline plus the deferral), not only every 15 s. The key layer lets through Back (a voluntary check closes with it on API 31-32) and the phone's own keys (`ownerCheckLayerEats`:
   volume up, down and mute, the headset hook, media play, pause, play/pause, stop, next and previous, call and end call), so a
-  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer still eats every key). While a
+  call or music keeps its keys; every other key is eaten (the app lock's `AppLockGate` layer lets Tab, the D-pad keys, Enter and Space through to the lock screen, `appLockLayerEats`, and eats every other key: nothing is composed under the lock). While a
   call screen is shown (`LocalCallScreenShown`, provided by `CallOverlay`) the check's own Back handler is off, so Back is the
   call screen's. A check that said it passed keeps the shell uncovered while `gated` is still true for at most
   `OWNER_CHECK_PASSED_MS` (10 s) and not for a new deadline (saved). The undecided frame also clears semantics and takes every

@@ -84,6 +84,7 @@ import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -215,7 +216,10 @@ fun AskLocationDialog(ask: LocationAsk, name: String, onNote: (String) -> Unit, 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 if (ask.sent) {
-                    Text(stringResource(R.string.connections_location_ask_sent, name), modifier = Modifier.testTag("ask_location_sent"))
+                    Text(
+                        stringResource(R.string.connections_location_ask_sent, name),
+                        modifier = Modifier.testTag("ask_location_sent").announced(),
+                    )
                 } else {
                     OutlinedTextField(
                         value = ask.note,
@@ -232,14 +236,14 @@ fun AskLocationDialog(ask: LocationAsk, name: String, onNote: (String) -> Unit, 
                     Text(
                         pluralStringResource(R.plurals.connections_location_ask_limit, n, name, n),
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.testTag("ask_location_limit"),
+                        modifier = Modifier.testTag("ask_location_limit").announced(),
                     )
                 }
                 ask.error?.let { e ->
                     Text(
                         failureText(e.messageRes(), e.vaultCode(ask.errorCode)),
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.testTag("ask_location_error"),
+                        modifier = Modifier.testTag("ask_location_error").announced(),
                     )
                 }
             }

@@ -276,6 +276,12 @@
     <string name="transfer_in_compare_title">Compare the code</string>
     <string name="transfer_in_compare_body">Your old phone shows a code too. If they are the same, approve the move there with your PIN and credential password.</string>
     <string name="transfer_in_waiting">Waiting for your old phone (%1$s left)</string>
+    <!-- NEW (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)), for owner approval -->
+    <string name="transfer_in_checking">Checking whether your old phone approved in time…</string>
+    <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->
+    <string name="transfer_in_session_ended_title">The move stopped on this phone</string>
+    <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->
+    <string name="transfer_in_session_ended_body">This phone stopped before it could check whether your old phone approved. If you approved the move there, recover your vault on this phone. If not, show a new code on your old phone.</string>
     <string name="transfer_in_cancel">Cancel</string>
     <string name="transfer_in_rejected_title">Rejected on your phone</string>
     <string name="transfer_in_rejected_body">The move was rejected on your old phone. Nothing changed: your vault stays with your old phone. To try again, show a new code on the old phone.</string>

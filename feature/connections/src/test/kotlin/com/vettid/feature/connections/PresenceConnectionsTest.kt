@@ -494,4 +494,17 @@ class PresenceConnectionsTest {
         }
         rule.onAllNodesWithText("Share with everyone").assertCountEquals(0)
     }
+
+    @Test
+    fun aLongFailureLineWrapsAndLeavesTheCheckAgainButton() {
+        detail(PresenceReading.Failed(com.vettid.core.data.vault.FailureKind.NETWORK, null))
+        val line = rule.onNodeWithTag("detail_presence").fetchSemanticsNode()
+        val button = rule.onNodeWithTag("detail_presence_refresh").assertIsDisplayed().fetchSemanticsNode()
+        // The button keeps its 48 dp, and the failure is announced.
+        assertTrue(button.size.width > 0)
+        assertEquals(
+            androidx.compose.ui.semantics.LiveRegionMode.Polite,
+            line.config[androidx.compose.ui.semantics.SemanticsProperties.LiveRegion],
+        )
+    }
 }

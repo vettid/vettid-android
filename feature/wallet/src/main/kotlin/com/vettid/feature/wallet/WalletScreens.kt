@@ -51,6 +51,7 @@ import com.vettid.core.ui.components.WipesOnCover
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.ExcludeScreenFromAutofill
 import com.vettid.core.ui.components.FormScaffold
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.components.NoKeyboardLearning
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.SecureWindow
@@ -423,7 +424,7 @@ private fun CheckStep(state: BackupUiState, actions: BackupActions, modifier: Mo
             Text(
                 stringResource(R.string.wallet_check_wrong, w + 1),
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("check_wrong"),
+                modifier = Modifier.testTag("check_wrong").announced(),
             )
             TextButton(onClick = actions.onShowAgain, enabled = !state.busy, modifier = Modifier.testTag("check_show_again")) {
                 Text(stringResource(R.string.wallet_check_show_again))

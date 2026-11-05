@@ -10,6 +10,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -55,7 +57,7 @@ fun AppLockGate(
                 .testTag("app_lock_layer")
                 .focusRequester(layer)
                 .focusable()
-                .onKeyEvent { true },
+                .onKeyEvent { appLockLayerEats(it.key) },
         ) { lockScreen() }
         LaunchedEffect(Unit) { runCatching { layer.requestFocus() } }
     } else {
@@ -64,3 +66,15 @@ fun AppLockGate(
 }
 
 private const val CONTENT_KEY = "app"
+
+/**
+ * Whether the lock layer takes [key]. It takes every key except those that move focus and press a button (Tab, the D-pad,
+ * Enter, Space), so a keyboard or switch user can operate the lock screen (A6 audit A17). That is safe here, unlike on the owner
+ * check's cover: nothing is composed under the lock, so these keys can only reach the lock screen.
+ */
+internal fun appLockLayerEats(key: Key): Boolean = key !in LOCK_SCREEN_KEYS
+
+private val LOCK_SCREEN_KEYS = setOf(
+    Key.Tab, Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight, Key.DirectionCenter,
+    Key.Enter, Key.NumPadEnter, Key.Spacebar,
+)

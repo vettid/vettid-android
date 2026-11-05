@@ -42,7 +42,8 @@ enum class TransferInStep {
     REJECTED,
 
     /**
-     * No approval by the 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5): the one collect at
+     * No approval by the 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5): the collects for the
+     * settlement window at
      * the deadline brought no `device.paired`, so the handshake was dropped. A new code is offered.
      */
     TIMED_OUT,
@@ -58,6 +59,13 @@ enum class TransferInStep {
      * could not be verified (a dropped `hs.init` is never answered). A new code is offered.
      */
     NOT_ANSWERED,
+
+    /**
+     * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5; the recheck of #302) The session ended before the settlement could say
+     * whether the old phone approved (a dead mailbox, a wipe, a sign-out): neither dropped nor finishing. The member
+     * scans a new code, or recovers the vault if the move was approved.
+     */
+    SESSION_ENDED,
 }
 
 /** Immutable UI state of the transfer on the new phone. */
@@ -72,6 +80,13 @@ data class TransferInUiState(
     /** 10 minutes after `hs.init` (§6.7, 0.10.4). */
     val deadline: Instant? = null,
     val secondsLeft: Long = 0,
+    /**
+     * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+     * The countdown reached 0: the old phone can no longer
+     * approve, and the repository is checking one last time (the settlement window, about 90 s). The screen hides the
+     * code and says so, and offers no cancel or new code: the repository refuses both until the window ends.
+     */
+    val settling: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
@@ -154,8 +169,13 @@ class TransferInViewModel @Inject constructor(
 
     override fun paste() = state.update { it.copy(step = TransferInStep.PASTE, inputProblem = null, error = null) }
 
+    /** No cancel, Back or new code while the settlement window runs. */
+    private fun settlingNow() = state.value.step == TransferInStep.COMPARE && state.value.settling
+
     override fun back(): Boolean {
         val s = state.value
+        // During the window Back leaves the screen and abandons nothing: the settlement goes on in the manager's scope.
+        if (settlingNow()) return false
         return when (s.step) {
             TransferInStep.SCAN, TransferInStep.PASTE -> {
                 state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
@@ -180,6 +200,7 @@ class TransferInViewModel @Inject constructor(
 
     /** Checks the code locally first: nothing is fetched for a code of another kind or an expired one. */
     private fun start(text: String) {
+        if (settlingNow()) return
         val problem = when (InviteLinks.parseTransfer(text, Instant.now(clock))) {
             is InviteLinks.TransferParsed.Ok -> null
             InviteLinks.TransferParsed.Expired -> FailureKind.INVITE_EXPIRED
@@ -206,15 +227,22 @@ class TransferInViewModel @Inject constructor(
                 abandon()
                 return@launch
             }
-            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = deadline) }
-            waitForApproval(deadline) { move.awaitTransferIn() }
+            // The countdown from the stored start (what the repository judges by), not from before the claim.
+            val stored = try {
+                move.transferInWaiting()?.startedAt?.plus(WINDOW)
+            } catch (_: VaultFailure) {
+                null
+            }
+            val shown = stored ?: deadline
+            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = shown) }
+            waitForApproval(shown) { move.awaitTransferIn() }
         }
     }
 
     /**
      * Waits for the old phone's approval; [deadline] is the countdown shown (the vault's 10 minutes). The wait itself runs
-     * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository collects
-     * once and then completes or drops; nothing here extends it.
+     * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository
+     * collects for about 90 s (the relay's visibility timeout + 25 s + 5 s) and then completes or drops; nothing here extends it.
      */
     private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Boolean) {
         startTicker(deadline)
@@ -229,6 +257,12 @@ class TransferInViewModel @Inject constructor(
                 when (e.kind) {
                     FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
                     FailureKind.NO_RESPONSE -> it.copy(step = TransferInStep.TIMED_OUT, sas = null, secondsLeft = 0)
+                    FailureKind.RETRY ->
+                        if (e.code == MoveRepository.CODE_TRANSFER_SESSION_ENDED) {
+                            it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false)
+                        } else {
+                            it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                        }
                     // The steps after the approval (the take-over): kept, and resumed (here, or at the next start).
                     else -> it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
                 }
@@ -263,7 +297,7 @@ class TransferInViewModel @Inject constructor(
         ticker = viewModelScope.launch {
             while (true) {
                 val left = Duration.between(Instant.now(clock), deadline).seconds.coerceAtLeast(0)
-                state.update { it.copy(secondsLeft = left) }
+                state.update { it.copy(secondsLeft = left, settling = left == 0L) }
                 if (left == 0L) break
                 delay(TICK_MS)
             }
@@ -275,6 +309,7 @@ class TransferInViewModel @Inject constructor(
      * N1) Once it was shown, the old phone may have approved it, so the member confirms first ([confirmCancel]).
      */
     override fun cancel() {
+        if (settlingNow()) return
         val step = state.value.step
         if (step == TransferInStep.COMPARE) {
             state.update { it.copy(confirmCancel = true) }
@@ -284,7 +319,7 @@ class TransferInViewModel @Inject constructor(
     }
 
     override fun confirmCancel() {
-        if (!state.value.confirmCancel) return
+        if (!state.value.confirmCancel || settlingNow()) return
         drop()
     }
 
@@ -305,14 +340,17 @@ class TransferInViewModel @Inject constructor(
         }
     }
 
-    override fun again() = state.update { TransferInUiState(step = TransferInStep.SCAN) }
+    override fun again() {
+        if (settlingNow()) return
+        state.update { TransferInUiState(step = TransferInStep.SCAN) }
+    }
 
     override fun finish() {
         viewModelScope.launch { vault.finishSetup() }
     }
 
     private companion object {
-        val WINDOW: Duration = Duration.ofMinutes(10)
+        val WINDOW: Duration = com.vettid.core.data.vault.TransferInWait.VAULT_WINDOW
         const val TICK_MS = 1000L
     }
 }

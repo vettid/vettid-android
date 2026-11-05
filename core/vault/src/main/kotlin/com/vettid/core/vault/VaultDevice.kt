@@ -1084,12 +1084,15 @@ class VaultDevice private constructor(
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
-     * was never answered, or at the transfer's 11-minute deadline after its collect (A6 audit N1; VAULT-MESSAGING 0.56.2
-     * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
-     * everything.
+     * was never answered, or at the transfer's 11-minute deadline after its settlement window of collects
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5).
+     * With [onlyStartedAt], only the transfer that started then. Under the device's lock, and never once
+     * `device.paired` was applied: a paired device keeps everything.
      */
-    suspend fun abandonTransfer() = lock.withLock {
+    suspend fun abandonTransfer(onlyStartedAt: Instant? = null) = lock.withLock {
         if (st.deviceId != null) return@withLock
+        // The settlement drops only the transfer it settles: not one the member started again meanwhile.
+        if (onlyStartedAt != null && st.transferIn?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock
         dropPairing()
         st.vault = null
         st.transferIn = null
@@ -1118,33 +1121,35 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
-     * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
-     * and the round in flight after it. The caller bounds the whole (30 s) and then decides; [abandonTransfer] keeps
-     * everything once `device.paired` was applied.
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` by
+     * default (the settlement passes a long poll) and `max` at its cap, each message handled (a transfer's
+     * `device.paired` applied) and acked. A failed collect is thrown; a failed ack is not: the message is handled
+     * already, it comes again after its lease and is dropped by the `seenInner` check, and the rest of the batch
+     * (a `device.paired` behind it) must still be handled. The settlement window's caller bounds it by its wait plus a
+     * transport bound, and waits for the collection's round ([awaitCollectorRound]) outside that bound: a message the
+     * round leased is invisible to this collect until the round ended.
      */
-    suspend fun deadlineCollect() {
-        awaitCollectorRound()
-        collectOnce()
-        awaitCollectorRound()
-    }
-
-    /**
-     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` and `max` at
-     * its cap, each message handled (a transfer's `device.paired` applied) and acked. Transport failures are thrown; the
-     * caller bounds the time.
-     */
-    suspend fun collectOnce(): Int {
-        val msgs = own.collect(Duration.ZERO, Int.MAX_VALUE)
+    suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
+        val msgs = own.collect(wait, Int.MAX_VALUE)
         for (m in msgs) {
             try {
                 handle(m)
-                own.ack(m.msgId)
+                ackBestEffort(m.msgId)
             } catch (_: LeaveUnacked) {
                 // redelivered after its lease
             }
         }
         return msgs.size
+    }
+
+    @Suppress("TooGenericExceptionCaught") // whatever the ack hits, the batch goes on
+    private suspend fun ackBestEffort(msgId: String) {
+        try {
+            own.ack(msgId)
+        } catch (_: java.io.IOException) {
+            // A refused or lost ack (RelayException is an IOException): the message is handled already, and a redelivery
+            // after its lease is dropped as seen. Anything else (a programming error) still surfaces.
+        }
     }
 
     /** (N1) The app has taken the transferred vault's credential over: the transfer to this phone is finished. */
