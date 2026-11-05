@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Settings → Privacy → Map server (ANDROID-PLAN §4 "Location", L2; the tile server decision of 2026-11-05). -->
+    <string name="settings_map_server_title">Map server</string> <!-- NEW: not in the plan (the row and the form's title) -->
+    <!-- Owner-approved 2026-11-05 (L2 tile server decision): the second line of the note, the host -->
+    <string name="settings_map_server_current">This map\'s server is %1$s.</string>
+    <string name="settings_map_server_url_label">Style address</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_server_save">Save</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_server_default">Use default</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_server_saved">Saved.</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_server_note">After you change the server, VettID shows the note about it again before it loads a map from the new one.</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_url_not_a_url">That is not a web address.</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_url_not_https">The address must start with https://.</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_url_credentials">Leave out the user name and password.</string> <!-- NEW: not in the plan -->
+    <string name="settings_map_url_no_host">The address needs a server name.</string> <!-- NEW: not in the plan -->
+</resources>

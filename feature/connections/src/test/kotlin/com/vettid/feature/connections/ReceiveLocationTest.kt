@@ -60,6 +60,7 @@ class ReceiveLocationTest {
     val main = MainDispatcherRule()
 
     private val location = FakeLocation()
+    private val prefs = com.vettid.core.data.prefs.InMemoryPreferencesRepository()
     private val vault = com.vettid.core.testing.FakeVault()
     private val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"), FakeSocial.connection("c2", "Kim"))) }
     private val now = Instant.now()
@@ -292,7 +293,7 @@ class ReceiveLocationTest {
 
     // --- the position ---
 
-    private fun positionVm() = PositionViewModel(SavedStateHandle(mapOf(PositionRoute.ARG to "c1")), location, social, vault)
+    private fun positionVm() = PositionViewModel(SavedStateHandle(mapOf(PositionRoute.ARG to "c1")), location, social, vault, prefs)
 
     @Test
     fun thePositionScreenShowsCoordinatesAccuracyAgeAndTheOffsetOnlyWhenKnown() = runTest {

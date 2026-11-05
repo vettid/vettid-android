@@ -48,6 +48,19 @@ class LocationManifestTest {
     }
 
     @Test
+    fun theMapLibraryDoesNotAddWifiStateOrAWifiRequirementToTheApp() {
+        val app = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }.newDocumentBuilder()
+            .parse(File("../../app/src/main/AndroidManifest.xml"))
+        val tools = "http://schemas.android.com/tools"
+        fun removed(tag: String, name: String) = app.getElementsByTagName(tag).let { l ->
+            (0 until l.length).map { l.item(it) as Element }
+                .any { it.getAttributeNS(ns, "name") == name && it.getAttributeNS(tools, "node") == "remove" }
+        }
+        assertTrue(removed("uses-permission", "android.permission.ACCESS_WIFI_STATE"))
+        assertTrue(removed("uses-feature", "android.hardware.wifi"))
+    }
+
+    @Test
     fun aPhoneWithoutGpsIsNotExcluded() {
         val features = doc.getElementsByTagName("uses-feature")
         val required = (0 until features.length).map { features.item(it) as Element }.associate {

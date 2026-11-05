@@ -254,8 +254,11 @@ object AppModule {
         m: VaultManager,
         prefs: PreferencesRepository,
         appLock: AppLock,
+        http: OkHttpClient,
         @AppScope scope: CoroutineScope,
     ): LocationRepository {
+        // The map's client derives from the shared one (its pool, network gate and retry), never a client of its own.
+        com.vettid.core.map.MapNetwork.install(http)
         val names = combine(
             m.social.connections,
             appLock.coverFlow(scope),

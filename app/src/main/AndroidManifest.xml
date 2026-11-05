@@ -4,6 +4,9 @@
 
     <!-- The relay and the member API (ANDROID-PLAN §5). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The map library (:core:map) merges Wi-Fi state access and a Wi-Fi feature; the map needs neither (Location L2). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" tools:node="remove" />
+    <uses-feature android:name="android.hardware.wifi" tools:node="remove" />
     <!-- Whether a network is usable before a request is retried after Doze (TransportRetry). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- The biometric app lock (ANDROID-PLAN D6). -->
