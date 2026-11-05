@@ -4231,7 +4231,11 @@ class VaultManager(
     @Volatile
     private var openTransferId: String? = null
 
-    override suspend fun transferIn(code: String): String = enrolments.transferIn(code)
+    override suspend fun transferIn(code: String): String {
+        // One transfer and one window at a time: a new code only after the settlement window ended.
+        if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
+        return enrolments.transferIn(code)
+    }
 
     override suspend fun awaitTransferIn(): Boolean = guard {
         // Read before the wait and the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
@@ -4257,60 +4261,57 @@ class VaultManager(
      * brings is applied by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility
      * timeout (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired`
      * leased for that long. The window is the relay's advertised `visibility_timeout_seconds` (60 when none) + the
-     * long-poll cap + 5 s, about 90 s (clamped to 30-300 s; the lead's call on owner decision a, 2026-11-05: the half-open case); see
+     * long-poll cap + 5 s, about 90 s (clamped to 0-300 s; VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)); see
      * [TransferInResume.atDeadline] for how each request is sized and why none is cancelled while it can hold a message.
      * While the collection runs, our collects are `wait=0` (it long-polls already); otherwise each is a long poll of what
      * is left. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects included:
      * the handshake is dropped, once the window has passed, and null. A rejection or the member's abandon ends the window
-     * at once (a rejection then ends as `PairingRejectedException`, REJECTED); so does the session going away.
+     * at once (a rejection then ends as `PairingRejectedException`, REJECTED); the member's abandon and a new code are
+     * refused while it runs ([settlements] `active`), one window at a time; so does the session going away, which
+     * is no drop ([MoveRepository.CODE_TRANSFER_SESSION_ENDED]). It runs once per transfer in the manager's own scope
+     * ([SingleFlight]), so the screen leaving stops the waiting, not the settlement. The wiring is [settleTransfer].
      */
     private suspend fun atTransferDeadline(s: Session): TransferInState? {
         val d = s.device
-        val visibility = try {
-            withTimeoutOrNull(RELAY_LIMITS_BOUND_MS) { d.relayLimits().visibilityTimeoutSeconds }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null // the relay's own value is not known: the default (60 s)
-        }
-        val settle = TransferInResume.Settle(windowMs = TransferInResume.windowMs(visibility))
-        // Read inside the lock (by due): the transfer this step settles.
-        var started: Instant? = null
-        var dropped = false
-        // This transfer on this session only: a rejection, the member's abandon, a new code, a wipe or a forget ends the
-        // window at once.
-        val same = { started != null && session?.device === d && d.transferInPending?.startedAt == started }
-        return try {
-            // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
-            // inside: a second one never drops what the first one's collect is about to apply.
-            val paired = transferDeadline.run(
-                due = {
-                    val t = d.transferInPending
-                    started = t?.startedAt
-                    TransferInResume.deadlineDue(t, d.deviceId, Instant.now())
-                },
-                paired = { d.transferInPending?.paired == true && d.deviceId != null },
-                collect = { waitMs -> d.deadlineCollect(Duration.ofMillis(waitMs)) },
-                drop = {
-                    dropped = true
-                    d.abandonTransfer(onlyStartedAt = started)
-                },
-                alive = same,
-                settle = settle,
-            )
-            if (!paired && !dropped && session?.device === d) {
-                // Ended by a rejection (or an abandon): a rejection is still in the device's inbox and ends the wait as
-                // REJECTED, as it would have before the deadline.
-                try {
-                    d.awaitTransfer(Duration.ofMillis(REJECTION_LOOK_MS))
-                } catch (_: TimeoutCancellationException) {
-                    // none: abandoned
+        // Single-flight, in the manager's own scope: leaving the screen stops the waiting, not the settlement (a window
+        // cancelled halfway would leave the keys held with nothing to drop them); a second caller joins the running one.
+        return settlements.run(d to d.transferInPending?.startedAt) {
+            try {
+                val settled = settleTransfer(DeviceSettle(d), { session?.device === d }, transferDeadline)
+                when (settled) {
+                    is Settled.Paired -> settled.transfer
+                    Settled.Dropped -> null
+                    // Not "dropped": the session went away (a lock, a wipe, a forget); the screen offers to try again.
+                    Settled.SessionGone -> throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
                 }
+            } finally {
+                // deferred at a start past the deadline (session()); running already otherwise. Not for a session that is gone.
+                if (session?.device === d) d.start(scope)
             }
-            if (d.transferInPending?.paired == true && d.deviceId != null) d.transferInPending else null
-        } finally {
-            // deferred at a start past the deadline (session()); running already otherwise. Not for a session that is gone.
-            if (session?.device === d) d.start(scope)
+        }
+    }
+
+    /** The settlement's run, one per transfer, in [scope]. */
+    private val settlements = SingleFlight<TransferInState?>(scope)
+
+    /** The device as the settlement needs it. */
+    private class DeviceSettle(private val d: VaultDevice) : SettleDevice {
+        override val transferInPending get() = d.transferInPending
+        override val deviceId get() = d.deviceId
+        override val collecting get() = d.collecting
+
+        override suspend fun relayVisibilitySeconds(): Long? = d.relayLimits().visibilityTimeoutSeconds
+
+        override suspend fun awaitCollectorRound() = d.awaitCollectorRound()
+
+        override suspend fun collectOnce(wait: Duration) {
+            d.collectOnce(wait)
+        }
+
+        override suspend fun abandonTransfer(onlyStartedAt: Instant) = d.abandonTransfer(onlyStartedAt)
+
+        override suspend fun awaitTransfer(timeout: Duration) {
+            d.awaitTransfer(timeout)
         }
     }
 
@@ -4358,6 +4359,8 @@ class VaultManager(
     }
 
     override suspend fun abandonTransferIn() = guard {
+        // Not during the settlement window: a leased device.paired must not be thrown away (VAULT-MESSAGING 0.84.2).
+        if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         session().device.abandonTransfer()
     }
 
@@ -4849,8 +4852,6 @@ class VaultManager(
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val LOCATION_FILE = "location-shares.bin"
-        private const val RELAY_LIMITS_BOUND_MS = 5_000L
-        private const val REJECTION_LOOK_MS = 50L
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"

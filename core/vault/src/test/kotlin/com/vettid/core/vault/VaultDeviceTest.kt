@@ -1265,7 +1265,7 @@ class VaultDeviceTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             d.start(scope)
             while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // leased by the collection's round
-            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.deadlineCollect() } }
+            val deadline = async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(10_000) { d.awaitCollectorRound(); d.collectOnce(); d.awaitCollectorRound() } }
             kotlinx.coroutines.delay(500)
             assertFalse("waits for the round that holds it", deadline.isCompleted)
             assertFalse(d.transferInPending!!.paired)

@@ -236,12 +236,66 @@ class TransferInResumeTest {
         assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
     }
 
-    /** (recheck L-a) A relay's advertised visibility timeout is trusted within 30 to 300 s only. */
+    /**
+     * (review of #302, 1) With the collection running, a request is: the collection's round (25 s), our own collect
+     * (10 s), the round again (25 s). The round waits are not under the request's bound: the request gets its own wait
+     * plus 30 s. A bound that covered all of it (60 s here, against 30 s at the end of the window) cut our request while
+     * it was out at the relay.
+     */
+    @Test
+    fun theCollectionsRoundIsNotUnderOurRequestsBound() = runTest {
+        var isPaired = false
+        var drops = 0
+        var requestCut = false
+        val round: suspend () -> Unit = { delay(40_000) }
+        val request: suspend (Long) -> Unit = {
+            try {
+                delay(10_000)
+                isPaired = true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                requestCut = true
+                throw e
+            }
+        }
+        // A window already at its end: the one final request (wait=0, bound 30 s) decides.
+        val settle = TransferInResume.Settle(windowMs = 1_000, now = { testScheduler.currentTime })
+        assertTrue(TransferInResume.atDeadline({ isPaired }, request, { drops++ }, settle = settle, awaitRound = round))
+        assertFalse("our request was not cut", requestCut)
+        assertEquals(0, drops)
+    }
+
+    /** A round wait that never ends is bounded on its own and is not an abandoned request: the window is not extended. */
+    @Test
+    fun aRoundThatNeverEndsIsBoundedAndMovesNothing() = runTest {
+        var droppedAt = -1L
+        val round: suspend () -> Unit = { CompletableDeferred<Unit>().await() }
+        val settle = timing()
+        assertFalse(TransferInResume.atDeadline({ false }, {}, { droppedAt = t }, settle = settle, awaitRound = round))
+        // Each step waits 55 s twice for the round (before and after its request): the loop's one step and the final one;
+        // nothing was pushed out by the rounds (a round is no abandoned request).
+        assertEquals(4 * 55_000L, droppedAt)
+    }
+
+    /** (review of #302, 5) Abandoned requests move the end out by at most the clamped visibility timeout. */
+    @Test
+    fun theExtensionIsCappedAtTheVisibilityTimeout() = runTest {
+        assertEquals(60_000L, TransferInResume.SETTLE_MAX_EXTRA_MS)
+        assertEquals(60_000L, TransferInResume.visibilityMs(null))
+        assertEquals(300_000L, TransferInResume.visibilityMs(3_600))
+        assertEquals(0L, TransferInResume.visibilityMs(0))
+        var droppedAt = -1L
+        val settle = TransferInResume.Settle(maxExtraMs = 10_000, now = { testScheduler.currentTime })
+        TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = settle)
+        // First end 90 s, at most 10 s more; the last request started before 100 s and is bounded by wait + 30 s.
+        assertTrue("dropped at $droppedAt", droppedAt <= 100_000 + 25_000 + 30_000)
+    }
+
+    /** (recheck L-a) A relay's advertised visibility timeout is trusted within 0 to 300 s only. */
     @Test
     fun theAdvertisedVisibilityTimeoutIsClamped() {
         assertEquals(300_000L + 30_000L, TransferInResume.windowMs(3_600))
-        assertEquals(30_000L + 30_000L, TransferInResume.windowMs(0))
-        assertEquals(30_000L + 30_000L, TransferInResume.windowMs(-5))
+        assertEquals(30_000L, TransferInResume.windowMs(0))
+        assertEquals(30_000L, TransferInResume.windowMs(-5))
         assertEquals(90_000L, TransferInResume.windowMs(60))
     }
 

@@ -621,17 +621,23 @@ fun TransferInContent(
         }
         TransferInStep.COMPARE -> FormScaffold(
             title = stringResource(R.string.transfer_in_compare_title),
-            body = stringResource(R.string.transfer_in_compare_body),
+            // (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) Past the countdown the old phone can no longer approve: no code, no "0:00 left".
+            body = if (state.settling) null else stringResource(R.string.transfer_in_compare_body),
             primaryLabel = null,
             onPrimary = {},
-            secondaryLabel = stringResource(R.string.transfer_in_cancel),
+            // No cancel during the settlement window: a device.paired may be leased and must not be thrown away.
+            secondaryLabel = if (state.settling) null else stringResource(R.string.transfer_in_cancel),
             onSecondary = actions::cancel,
         ) {
             // (A6 audit N1) The screen stays on while the member approves on the old phone.
             KeepScreenOn()
-            state.sas?.let { SasBox(it) }
-            Spacer(Modifier.height(Spacing.l))
-            Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
+            if (state.settling) {
+                Waiting(stringResource(R.string.transfer_in_checking), Modifier.testTag("checking_old_phone"))
+            } else {
+                state.sas?.let { SasBox(it) }
+                Spacer(Modifier.height(Spacing.l))
+                Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
+            }
         }
         // Release R (§11.14.10): the new phone finishes the move with its own secret before anything else.
         TransferInStep.DONE -> if (state.phoneSecret) {

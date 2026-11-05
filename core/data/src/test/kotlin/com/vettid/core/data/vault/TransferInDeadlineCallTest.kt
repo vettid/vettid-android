@@ -42,6 +42,14 @@ class TransferInDeadlineCallTest {
         assertFalse("never blocks the start for the window", b.any { it.contains("atTransferDeadline(") })
     }
 
+    /** (VAULT-MESSAGING 0.84.2) No abandon and no new code while the settlement window runs. */
+    @Test
+    fun noAbandonAndNoNewCodeDuringTheWindow() {
+        val guard = "if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"
+        assertTrue(body("override suspend fun transferIn(code: String): String {").any { it == guard })
+        assertTrue(body("override suspend fun abandonTransferIn()").any { it == guard })
+    }
+
     /**
      * (#187 recheck) A start past the deadline does its collect before the collection can lease the waiting device.paired;
      * the deadline waits for a round in flight; and a paired transfer never reaches credential.create.
@@ -53,12 +61,11 @@ class TransferInDeadlineCallTest {
         assertTrue("the collection is deferred at a start past the deadline", start >= 0)
         assertEquals("device.start(scope)", code[start + 1])
         val dl = body("private suspend fun atTransferDeadline(")
-        assertTrue(dl.any { it.startsWith("collect = { waitMs -> d.deadlineCollect(") })
-        assertTrue("only this transfer is dropped", dl.any { it.contains("abandonTransfer(onlyStartedAt = started)") })
-        assertTrue("due while waiting too", dl.any { it == "TransferInResume.deadlineDue(t, d.deviceId, Instant.now())" })
-        assertTrue("the transfer is read inside the lock", dl.any { it == "started = t?.startedAt" })
-        assertTrue("one session only", dl.any { it.contains("session?.device === d") })
-        assertTrue("a rejection ends as REJECTED", dl.any { it.startsWith("d.awaitTransfer(") })
+        assertTrue("single-flight in the manager's scope", dl.any { it.startsWith("return settlements.run(") })
+        val wiring = "settleTransfer(DeviceSettle(d), { session?.device === d }, transferDeadline)"
+        assertTrue("the wiring is the tested unit", dl.any { it.contains(wiring) })
+        val gone = "Settled.SessionGone -> throw VaultFailure(FailureKind.RETRY"
+        assertTrue("a session that went away is no drop", dl.any { it.contains(gone) })
         assertTrue(dl.any { it.contains("d.start(scope)") })
         val after = body("private suspend fun afterUnlocked(")
         val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }

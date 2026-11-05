@@ -47,6 +47,7 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
         assertEquals("042817", vm.uiState.value.sas)
         assertTrue(vm.uiState.value.secondsLeft in 590..600)
+        assertFalse("not settling while the old phone can approve", vm.uiState.value.settling)
         vault.transferApproval.complete(Unit)
         advanceTimeBy(1500)
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
@@ -112,12 +113,31 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
         assertEquals("042817", vm.uiState.value.sas)
         assertEquals(0L, vm.uiState.value.secondsLeft)
+        assertTrue("the countdown is over: the screen hides the code and says it is checking", vm.uiState.value.settling)
         assertTrue("the settlement is the repository's wait", "awaitTransferIn" in vault.calls)
         advanceTimeBy(60_000) // still settling: nothing decided by the screen
         assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
         vault.transferApproval.complete(Unit)
         advanceTimeBy(1500)
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+    }
+
+    /** (VAULT-MESSAGING 0.84.2) No cancel, Back or new code is acted on while the settlement window runs. */
+    @Test
+    fun nothingCanBeAbandonedOrReStartedDuringTheWindow() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.settling)
+        vm.cancel()
+        vm.confirmCancel()
+        assertTrue("Back is consumed", vm.back())
+        vm.again()
+        vm.submitInput()
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.confirmCancel)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+        assertFalse("no new code was sent", "transferIn" in vault.calls)
     }
 
     @Test

@@ -1121,25 +1121,13 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One request of the transfer's settlement window, before
-     * anything is dropped: the collection's round in flight (it may hold a leased `device.paired`), one collect of its own
-     * ([collectOnce]), and the round in flight after it. While the collection is running it long-polls already, so ours
-     * is `wait=0` then; a long poll of [wait] is made only when it is not running. The caller sizes [wait] to what is left
-     * of its window, gives the whole its wait plus a transport bound and never cuts it earlier ([abandonTransfer] keeps
-     * everything once `device.paired` was applied).
-     */
-    suspend fun deadlineCollect(wait: Duration = Duration.ZERO) {
-        awaitCollectorRound()
-        collectOnce(if (collecting) Duration.ZERO else wait)
-        awaitCollectorRound()
-    }
-
-    /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One collect of this device's mailbox, `wait=0` by
      * default (the settlement passes a long poll) and `max` at its cap, each message handled (a transfer's
      * `device.paired` applied) and acked. A failed collect is thrown; a failed ack is not: the message is handled
      * already, it comes again after its lease and is dropped by the `seenInner` check, and the rest of the batch
-     * (a `device.paired` behind it) must still be handled. The caller bounds the time.
+     * (a `device.paired` behind it) must still be handled. The settlement window's caller bounds it by its wait plus a
+     * transport bound, and waits for the collection's round ([awaitCollectorRound]) outside that bound: a message the
+     * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
         val msgs = own.collect(wait, Int.MAX_VALUE)

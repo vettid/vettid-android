@@ -17,7 +17,7 @@ import java.time.Instant
  * ([Settle.windowMs]: [windowMs] of the relay's advertised visibility timeout) before it drops the transfer:
  * VAULT-MESSAGING §11.14.10 rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
  * (RELAY-PROTOCOL §6.3) before dropping. A single collect could miss a `device.paired` that a killed app's parked
- * long-poll had leased for 60 s. The window is the lead's call on owner decision a, 2026-11-05 (the half-open case): the
+ * long-poll had leased for 60 s. The window is VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537) (owner decisions a and a/a, 2026-11-05): the
  * visibility timeout plus the long-poll cap plus a margin, because a dead request may have been taken up to a long poll
  * before the settlement began and its lease then ends that much later. A request that is out at the relay is never
  * cancelled while it can still hold a message: each one is sized to what is left of the window and given its wait plus a
@@ -52,7 +52,7 @@ internal object TransferInResume {
     const val DEFAULT_VISIBILITY_S = 60L
 
     /** The advertised visibility timeout is trusted only within these bounds (a relay must not pin the keys for an hour). */
-    const val MIN_VISIBILITY_S = 30L
+    const val MIN_VISIBILITY_S = 0L
     const val MAX_VISIBILITY_S = 300L
 
     /** The long poll of each collect of the settlement (the relay's cap, RELAY-PROTOCOL §6.3). */
@@ -63,12 +63,11 @@ internal object TransferInResume {
 
     /**
      * The settlement window (the lead's rule): the relay's advertised visibility timeout ([visibilitySeconds], 60 s when
-     * it advertises none, kept within [MIN_VISIBILITY_S] to [MAX_VISIBILITY_S]) + the long-poll cap (25 s) + 5 s:
-     * 90 s today. The lead's call on owner decision a, 2026-11-05 (the half-open case).
+     * it advertises none, kept within 0 to 300 s) + the long-poll cap (25 s) + 5 s:
+     * 90 s today. VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537).
      */
     fun windowMs(visibilitySeconds: Long? = null): Long =
-        (visibilitySeconds ?: DEFAULT_VISIBILITY_S).coerceIn(MIN_VISIBILITY_S, MAX_VISIBILITY_S) * MS +
-            SETTLE_POLL_S * MS + SETTLE_MARGIN_MS
+        visibilityMs(visibilitySeconds) + SETTLE_POLL_S * MS + SETTLE_MARGIN_MS
 
     /** The window with the relay's visibility timeout at its default. */
     val SETTLE_WINDOW_MS: Long = windowMs()
@@ -82,8 +81,12 @@ internal object TransferInResume {
     /** What is kept back from the end of the window for handling what a request brings. */
     const val HANDLING_MARGIN_MS = 5_000L
 
-    /** The most that abandoned requests can move the end of the window out by. */
-    const val SETTLE_MAX_EXTRA_MS = 60_000L
+    /** The most that abandoned requests can move the end of the window out by (by default one visibility timeout). */
+    const val SETTLE_MAX_EXTRA_MS = DEFAULT_VISIBILITY_S * MS
+
+    /** The advertised visibility timeout in ms, kept within 0 to 300 s (60 s when none). */
+    fun visibilityMs(visibilitySeconds: Long? = null): Long =
+        (visibilitySeconds ?: DEFAULT_VISIBILITY_S).coerceIn(MIN_VISIBILITY_S, MAX_VISIBILITY_S) * MS
 
     /**
      * The timing of a settlement, all of it a parameter for tests (which pass [now] from the test scheduler).
@@ -126,9 +129,11 @@ internal object TransferInResume {
      * [Settle.maxExtraMs] past the first end; so does a request that failed with anything but a [RelayException], since
      * a status means nothing was leased). The window ends with one final `wait=0` collect, itself bounded by
      * [Settle.transportMs] like every request, before the decision: a relay that hangs longer than that at that point can
-     * still hold a lease past the drop (an accepted trade-off). Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
-     * [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected, abandoned or replaced, or the
-     * session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
+     * still hold a lease past the drop (an accepted trade-off). Waiting for the collection's own round is [awaitRound],
+     * before and after each request and never under the request's bound: it has its own (the poll cap plus the
+     * transport bound), and one that runs out is no abandoned request (nothing of ours was out), so it moves nothing. Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
+     * [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected (the member's abandon and a new code are not offered during the
+     * window) or the session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
      * window had passed. Cancellation propagates, with no drop.
      */
     suspend fun atDeadline(
@@ -137,9 +142,10 @@ internal object TransferInResume {
         drop: suspend () -> Unit,
         alive: () -> Boolean = { true },
         settle: Settle = Settle(),
+        awaitRound: suspend () -> Unit = {},
     ): Boolean {
         if (paired()) return true
-        val out = Requests(settle, collect)
+        val out = Requests(settle, collect, awaitRound)
         while (alive() && !paired() && out.left() > 0) {
             out.send((out.left() - settle.handlingMs).coerceIn(0L, settle.pollMs))
             if (alive() && !paired()) delay(out.pause())
@@ -152,7 +158,11 @@ internal object TransferInResume {
     }
 
     /** The requests of one settlement: its window's end (which abandoned requests move out) and its failures. */
-    private class Requests(private val settle: Settle, private val collect: suspend (waitMs: Long) -> Unit) {
+    private class Requests(
+        private val settle: Settle,
+        private val collect: suspend (waitMs: Long) -> Unit,
+        private val round: suspend () -> Unit,
+    ) {
         private val firstEnd = settle.now() + settle.windowMs
         private var endAt = firstEnd
         private var failures = 0
@@ -168,8 +178,27 @@ internal object TransferInResume {
             endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
         }
 
-        @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
+        /** One step of the window: the collection's round, our request, the collection's round again. */
         suspend fun send(waitMs: Long) {
+            awaitRound()
+            request(waitMs)
+            awaitRound()
+        }
+
+        /** The collection's round in flight may hold a leased message: waited for, within its own bound. */
+        @Suppress("TooGenericExceptionCaught") // a round that fails is no reason to stop
+        private suspend fun awaitRound() {
+            try {
+                withTimeoutOrNull(settle.pollMs + settle.transportMs) { round() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // nothing of ours was out
+            }
+        }
+
+        @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
+        private suspend fun request(waitMs: Long) {
             try {
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
                 if (withTimeoutOrNull(waitMs + settle.transportMs) { collect(waitMs) } == null) {
@@ -227,8 +256,9 @@ internal object TransferInResume {
             drop: suspend () -> Unit,
             alive: () -> Boolean = { true },
             settle: Settle = Settle(),
+            awaitRound: suspend () -> Unit = {},
         ): Boolean = lock.withLock {
-            if (due()) atDeadline(paired, collect, drop, alive, settle) else paired()
+            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound) else paired()
         }
     }
 }
