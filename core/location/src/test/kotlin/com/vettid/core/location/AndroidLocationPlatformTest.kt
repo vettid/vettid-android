@@ -71,7 +71,13 @@ class AndroidLocationPlatformTest {
         val n = shadowOf(manager).allNotifications.single()
         assertEquals(Channels.LOCATION, n.channelId)
         assertEquals("Your location hasn't reached ${com.vettid.core.data.account.AccountNames.isolate("Samira")} for 25 minutes.", title(n))
-        assertNotNull("it opens the app", n.contentIntent)
+        val tap = shadowOf(n.contentIntent).savedIntent
+        assertEquals(com.vettid.core.notify.NotifyIntents.ACTION_OPEN_CONNECTION, tap.action)
+        assertEquals("c1", tap.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_CONNECTION_ID))
+        assertEquals("explicit, to the app's own activity", app.packageName, tap.component?.packageName)
+        assertTrue(shadowOf(n.contentIntent).isActivity)
+        assertTrue("immutable", (shadowOf(n.contentIntent).flags and android.app.PendingIntent.FLAG_IMMUTABLE) != 0)
+        assertEquals("the lock-screen version has no tap and no id", null, n.publicVersion.contentIntent)
         assertEquals("the lock screen never names anybody", "Your location isn't getting through.", title(n.publicVersion))
         // The same notice is updated, not doubled.
         p.updateStalled("c1", 26)

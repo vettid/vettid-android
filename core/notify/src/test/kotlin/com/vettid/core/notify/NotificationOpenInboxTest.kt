@@ -15,4 +15,13 @@ class NotificationOpenInboxTest {
         assertEquals(listOf("f1"), tapped)
         assertEquals(NotificationOpenInbox.Open.Item("f1"), inbox.pending.value)
     }
+
+    @Test
+    fun aTappedConnectionIsHandedToTheShellAndIsNotAnItem() {
+        val tapped = mutableListOf<String>()
+        val inbox = NotificationOpenInbox { tapped += it }
+        inbox.offer(NotificationOpenInbox.Open.Connection("c1"))
+        assertEquals(emptyList<String>(), tapped)
+        assertEquals(NotificationOpenInbox.Open.Connection("c1"), inbox.pending.value)
+    }
 }

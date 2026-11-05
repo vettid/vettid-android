@@ -542,10 +542,11 @@ class LocationSharing(
     }
 
     /** The check passed or came due: sending pauses or goes on, and a stop the vault refused is tried again. Also on a timer. */
-    fun onGateChanged() {
-        // A check that passes may have been due unseen (a deadline passing changes no value, and nothing wakes the phone): the
-        // lift itself starts the stall clocks over, so the time it was due can never count.
-        synchronized(lock) { if (unlocked() && !due()) wasGated = true }
+    fun onGateChanged(lifted: Boolean) {
+        // A pause that lifts may have been unseen (a deadline passing changes no value, and nothing wakes the phone): the lift
+        // itself starts the stall clocks over, so the time it was due can never count. Any other change of the check (an early
+        // pass, the idle lock, a failure count) leaves a real stall alone.
+        if (lifted) synchronized(lock) { if (unlocked() && !due()) wasGated = true }
         tick()
     }
 

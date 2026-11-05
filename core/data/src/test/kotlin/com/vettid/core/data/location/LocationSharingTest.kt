@@ -1492,7 +1492,7 @@ class LocationSharingTest {
         assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
         assertEquals(0, r.platform.stallEpisodes)
         due = false
-        r.sharing.onGateChanged()
+        r.sharing.onGateChanged(lifted = true)
         // Ten minutes before the pause plus eight after would be 18, yet the paused time reset the clock.
         r.elapse(Duration.ofMinutes(8))
         assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
@@ -1568,7 +1568,7 @@ class LocationSharingTest {
         clock = clock.plus(Duration.ofHours(2))
         elapsed += Duration.ofHours(2).toNanos()
         due = false
-        r.sharing.onGateChanged()
+        r.sharing.onGateChanged(lifted = true)
         r.settle()
         assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
         assertEquals(0, r.platform.stallEpisodes)
@@ -1576,6 +1576,21 @@ class LocationSharingTest {
         assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
         r.elapse(Duration.ofSeconds(5))
         assertEquals(1, r.sharing.serviceState.value.stalled.size)
+    }
+
+    @Test
+    fun aChangeOfTheCheckThatLiftsNothingLeavesARealStallAlone() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stallEpisodes)
+        r.sharing.onGateChanged(lifted = false) // an early pass, the idle lock or a failure count changed; due was false throughout
+        r.settle()
+        assertEquals(mapOf("c1" to 16), r.sharing.serviceState.value.stalled)
+        assertEquals(mapOf("c1" to 16), r.platform.stalledNow)
+        r.elapse(Duration.ofMinutes(2))
+        assertEquals(1, r.platform.stallEpisodes)
+        assertEquals(mapOf("c1" to 18), r.platform.stalledNow)
     }
 
     @Test

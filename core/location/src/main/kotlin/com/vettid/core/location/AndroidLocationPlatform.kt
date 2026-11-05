@@ -8,6 +8,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.vettid.core.notify.Channels
+import com.vettid.core.notify.NotifyIntents
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.location.LocationManager
@@ -95,8 +96,8 @@ class AndroidLocationPlatform(
     /**
      * "Your location hasn't reached {First} for {n} minutes." on the Location sharing channel (A6 N21), posted once for each stall.
      * The name is said only while [names] has it (empty under the app lock's cover or when the member's notifications hide
-     * names); else "Your location isn't getting through." The lock screen version never names anybody. It opens the app's main
-     * screen, as the ongoing notification does.
+     * names); else "Your location isn't getting through." The lock screen version never names anybody. A tap opens that connection's page
+     * (the share card), through the app's notification tap route.
      */
     override fun showStalled(connectionId: String, minutes: Int) {
         synchronized(stalled) {
@@ -136,8 +137,6 @@ class AndroidLocationPlatform(
             ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (!granted) return
         Channels.ensure(app)
-        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        val open = app.packageManager.getLaunchIntentForPackage(app.packageName)?.let { PendingIntent.getActivity(app, 0, it, flags) }
         val name = names.value[connectionId]?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
         val unnamed = app.getString(com.vettid.core.data.R.string.data_location_stalled_unnamed)
         val text = if (name != null) {
@@ -159,7 +158,7 @@ class AndroidLocationPlatform(
                     .setSilent(true)
                     .build(),
             )
-            .setContentIntent(open)
+            .setContentIntent(NotifyIntents.connection(app, connectionId))
             .build()
         runCatching { NotificationManagerCompat.from(app).notify(connectionId, STALLED_ID, n) }
     }
