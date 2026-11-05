@@ -90,4 +90,19 @@ class SharingTextTest {
         assertTrue(t, t.contains(","))
         assertTrue(t, t.contains("Nov"))
     }
+
+    @Test
+    fun anotherDayFollowsTheRegionsOrder() {
+        // One locale skeleton for date and time (owner decision 2026-11-05): month first in the US, day first in the UK.
+        fun inLocale(tag: String): android.content.Context {
+            val c = android.content.res.Configuration(app.resources.configuration)
+            c.setLocale(java.util.Locale.forLanguageTag(tag))
+            return app.createConfigurationContext(c)
+        }
+        val later = until.plusSeconds(3 * 86_400)
+        val us = ShareTime.format(inLocale("en-US"), later, now, ZoneOffset.UTC)
+        assertTrue(us, us.startsWith("Nov"))
+        val uk = ShareTime.format(inLocale("en-GB"), later, now, ZoneOffset.UTC)
+        assertTrue(uk, uk.indexOf("Nov") > 0 && uk.first().isDigit())
+    }
 }

@@ -1,6 +1,7 @@
 package com.vettid.feature.notifications
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -30,8 +31,15 @@ class DayTitleTest {
 
     @Test
     fun aGermanPhoneGetsItsOwnOrder() {
-        // Not a fixed English pattern: the locale's own words and punctuation.
+        // Not a fixed English pattern: German puts the day before the month and starts with its own weekday.
         val t = FeedSections.dayTitle(LocalDate.of(2026, 11, 2), today, Locale.GERMANY)
-        assertEquals(true, t.contains("Nov") && t.contains("2") && t.startsWith("Mo"))
+        assertTrue(t, t.startsWith("Mo"))
+        assertTrue(t, t.indexOf("2") in 0 until t.indexOf("Nov"))
+    }
+
+    @Test
+    fun theYearAppearsAcrossTheYearBoundary() {
+        // On 1 Jan 2027 a day of the year before is named with its year.
+        assertEquals("Wed, Dec 30, 2026", FeedSections.dayTitle(LocalDate.of(2026, 12, 30), LocalDate.of(2027, 1, 1), Locale.US))
     }
 }

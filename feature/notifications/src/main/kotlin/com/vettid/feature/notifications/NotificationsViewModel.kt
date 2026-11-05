@@ -28,10 +28,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import android.text.format.DateFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 import javax.inject.Inject
 
@@ -67,9 +69,11 @@ object FeedSections {
      * An older day group's title in the order of [locale]'s region (owner decision 2026-11-05: dates follow the phone's
      * region): "Mon, Oct 5" on a US phone, "Mon 5 Oct" in the UK, with the year when it is not [today]'s.
      */
-    fun dayTitle(day: LocalDate, today: LocalDate, locale: Locale = Locale.getDefault()): String {
+    fun dayTitle(day: LocalDate, today: LocalDate, locale: Locale): String {
         val skeleton = if (day.year == today.year) "EEEMMMd" else "EEEMMMdyyyy"
-        return DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(day)
+        // A locale with a calendar extension can yield pattern letters java.time refuses: then the locale's medium date.
+        return runCatching { DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(day) }
+            .getOrElse { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(day) }
     }
 }
 
