@@ -360,6 +360,15 @@ class VaultDevice private constructor(
     var collectRequestSince: Long? = null
         private set
 
+    private val cuts = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * How many times the collection's in-flight relay request was cut, by [stop] (a restart, a reconnect, a lock) or by
+     * the collection's scope ending with a request out. A cut request may have been handed a message that then stays
+     * leased for a visibility timeout (RELAY-PROTOCOL §6.3).
+     */
+    val collectorCuts: Long get() = cuts.get()
+
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
@@ -510,6 +519,7 @@ class VaultDevice private constructor(
                 // next start() collects again.
                 collectorEnd.value = e.code
             } catch (e: CancellationException) {
+                if (collectRequestSince != null) cuts.incrementAndGet() // the scope ended with a request out
                 throw e
             } catch (e: RuntimeException) {
                 // Anything else that ends it (a message the handler did not expect) is reported the same way, so
@@ -574,6 +584,9 @@ class VaultDevice private constructor(
     @Synchronized
     fun stop() {
         collectScope = null
+        // A request that is out at the relay is cut by this: it may have been handed a message (a device.paired) that
+        // stays leased to the dead request for a visibility timeout. Counted for the transfer's settlement window.
+        if (collectRequestSince != null) cuts.incrementAndGet()
         collector?.cancel()
         collector = null
         collectRequestSince = null

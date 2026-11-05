@@ -1474,6 +1474,35 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * The collector's in-flight request cut by a stop (a reconnect, a restart) is counted ([VaultDevice.collectorCuts]) for the
+     * transfer's settlement window; a stop with no request out is not.
+     */
+    @Test
+    fun stoppingTheCollectionWithARequestOutIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.stop() // nothing running
+            assertEquals(0L, d.collectorCuts)
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the collection's request is out, holding it
+            assertNotNull(d.collectRequestSince)
+            d.stop()
+            assertEquals(1L, d.collectorCuts)
+            leaseGate!!.countDown()
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
     @Test
     fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {

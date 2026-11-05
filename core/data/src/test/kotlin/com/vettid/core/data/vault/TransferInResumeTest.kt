@@ -306,6 +306,102 @@ class TransferInResumeTest {
         assertFalse(TransferInResume.pastVaultWindow(null, ten))
     }
 
+    // --- the collector's own request cut, or a process freeze, during the window ---
+
+    /** A monotonic clock with a jump: virtual time plus what a freeze took. */
+    private class FrozenClock(private val scope: TestScope) {
+        var jumpedMs = 0L
+        fun now() = scope.testScheduler.currentTime + jumpedMs
+    }
+
+    private fun TestScope.timingWith(clock: FrozenClock, maxExtraMs: Long = TransferInResume.SETTLE_MAX_EXTRA_MS) =
+        TransferInResume.Settle(maxExtraMs = maxExtraMs, now = clock::now)
+
+    /**
+     * The collector's in-flight request is cut (a stop or a reconnect) at 70 s; the message it was handed is leased for 60 s
+     * more, to 130 s, past the window's first end (90 s). The cut extends the window and the message is gathered. Without
+     * the extension the final collect at 90 s finds nothing and the transfer is dropped.
+     */
+    @Test
+    fun aCutCollectorRequestExtendsTheWindowSoTheLeasedMessageIsGathered() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        var cutDone = false
+        val round: suspend () -> Unit = {
+            if (!cutDone && clock.now() >= 70_000) {
+                cutDone = true
+                cutCount++ // the collector's request was cut now; the relay leases the message until 130 s
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (cutDone && clock.now() >= 130_000) isPaired = true else delay(w.coerceAtMost(5_000))
+        }
+        assertTrue(
+            TransferInResume.atDeadline(
+                { isPaired }, collect, { drops++ }, settle = timingWith(clock), awaitRound = round, cuts = { cutCount },
+            ),
+        )
+        assertEquals(0, drops)
+        assertTrue("paired after the first end: ${clock.now()}", clock.now() in 130_000..150_000)
+    }
+
+    /**
+     * A freeze: the process is frozen while the collector's request is out, and wakes 400 s later on the monotonic clock;
+     * the message it was handed becomes free 20 s after the wake. The frozen time does not count and the end is extended:
+     * the message is gathered. Without freeze detection the window is long over at the wake and drops at once.
+     */
+    @Test
+    fun aFreezeExtendsTheWindowSoALateLeaseIsGathered() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        var froze = false
+        var freeAt = Long.MAX_VALUE
+        val round: suspend () -> Unit = {
+            if (!froze) {
+                froze = true
+                clock.jumpedMs += 400_000 // the freeze
+                freeAt = clock.now() + 20_000
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w -> if (clock.now() >= freeAt) isPaired = true else delay(w.coerceAtMost(5_000)) }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), awaitRound = round))
+        assertEquals(0, drops)
+    }
+
+    /** Repeated cuts and freezes never extend the window past its first end plus the cap (in awake time). */
+    @Test
+    fun repeatedCutsAndFreezesStayWithinTheCap() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var drops = 0
+        var droppedAt = -1L
+        var frozenTotal = 0L
+        val round: suspend () -> Unit = {
+            cutCount++
+            clock.jumpedMs += 300_000
+            frozenTotal += 300_000
+        }
+        TransferInResume.atDeadline(
+            { false }, {}, { drops++; droppedAt = clock.now() }, settle = timingWith(clock, maxExtraMs = 20_000), awaitRound = round,
+            cuts = { cutCount },
+        )
+        assertEquals(1, drops)
+        val awake = droppedAt - frozenTotal
+        assertTrue("awake time $awake within first end + cap (+ a step's bounds)", awake <= 90_000 + 20_000 + 55_000)
+    }
+
+    /** No cut and no freeze: the window behaves as before (dropped exactly at its end). */
+    @Test
+    fun noCutAndNoFreezeLeavesTheWindowAsItWas() = runTest {
+        val clock = FrozenClock(this)
+        var droppedAt = -1L
+        TransferInResume.atDeadline({ false }, {}, { droppedAt = clock.now() }, settle = timingWith(clock))
+        assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    }
+
     /** (recheck L-a) A relay's advertised visibility timeout is trusted within 0 to 300 s only. */
     @Test
     fun theAdvertisedVisibilityTimeoutIsClamped() {
