@@ -61,7 +61,7 @@ enum class TransferInStep {
     NOT_ANSWERED,
 
     /**
-     * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5; the recheck of #302) The session ended before the settlement could say
+     * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5; the recheck of #302) The session ended before the settlement could say
      * whether the old phone approved (a dead mailbox, a wipe, a sign-out): neither dropped nor finishing. The member
      * scans a new code, or recovers the vault if the move was approved.
      */
@@ -81,7 +81,7 @@ data class TransferInUiState(
     val deadline: Instant? = null,
     val secondsLeft: Long = 0,
     /**
-     * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+     * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
      * The countdown reached 0: the old phone can no longer
      * approve, and the repository is checking one last time (the settlement window, about 90 s). The screen hides the
      * code and says so, and offers no cancel or new code: the repository refuses both until the window ends.

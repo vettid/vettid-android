@@ -122,7 +122,7 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
     }
 
-    /** (VAULT-MESSAGING 0.84.2) No cancel, Back or new code is acted on while the settlement window runs. */
+    /** (VAULT-MESSAGING 0.85.2) No cancel, Back or new code is acted on while the settlement window runs. */
     @Test
     fun nothingCanBeAbandonedOrReStartedDuringTheWindow() = runTest {
         val vm = pastDeadlineVm()

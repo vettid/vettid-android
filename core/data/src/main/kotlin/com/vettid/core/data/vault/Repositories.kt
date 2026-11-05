@@ -665,7 +665,7 @@ interface MoveRepository {
         const val CODE_TRANSFER_DROPPED = "transfer_dropped"
 
         /**
-         * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+         * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
          * [awaitTransferIn]'s settlement window was cut short because the session went away
          * (a wipe, a forget, a sign-out, a dead mailbox), with [FailureKind.RETRY]: the transfer was not dropped by it;
          * the screen offers a new code or a recovery.
@@ -673,7 +673,7 @@ interface MoveRepository {
         const val CODE_TRANSFER_SESSION_ENDED = "transfer_session_ended"
 
         /**
-         * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) The settlement window is running: a
+         * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) The settlement window is running: a
          * new code and the member's abandon are refused until it ends ([FailureKind.BUSY]); the screen does not offer them.
          */
         const val CODE_TRANSFER_SETTLING = "transfer_settling"

@@ -14,7 +14,7 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * (A6 audit N1; VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+ * (A6 audit N1; VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
  * What the settlement of a transfer to this phone needs of the device, so that the step can be tested without the manager.
  * [VaultManager] gives it over the real device.
  */

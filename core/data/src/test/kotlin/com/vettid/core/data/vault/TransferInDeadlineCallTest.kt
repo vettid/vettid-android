@@ -43,7 +43,7 @@ class TransferInDeadlineCallTest {
         assertFalse("never blocks the start for the window", b.any { it.contains("atTransferDeadline(") })
     }
 
-    /** (VAULT-MESSAGING 0.84.2) No abandon and no new code while the settlement window runs. */
+    /** (VAULT-MESSAGING 0.85.2) No abandon and no new code while the settlement window runs. */
     @Test
     fun noAbandonAndNoNewCodeDuringTheWindow() {
         val guard = "if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"

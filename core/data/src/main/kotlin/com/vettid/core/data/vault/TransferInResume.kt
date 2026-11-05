@@ -18,7 +18,7 @@ import java.time.Instant
  * VAULT-MESSAGING §11.14.10 rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
  * (RELAY-PROTOCOL §6.3) before dropping. A single collect could miss a `device.paired` that a killed app's parked
  * long-poll had leased for 60 s. The window is
- * VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)
+ * VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)
  * (owner decisions a and a/a, 2026-11-05): the
  * visibility timeout plus the long-poll cap plus a margin, because a dead request may have been taken up to a long poll
  * before the settlement began and its lease then ends that much later. A request that is out at the relay is never
@@ -66,7 +66,7 @@ internal object TransferInResume {
     /**
      * The settlement window (the lead's rule): the relay's advertised visibility timeout ([visibilitySeconds], 60 s when
      * it advertises none, kept within 0 to 300 s) + the long-poll cap (25 s) + 5 s:
-     * 90 s today. VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537).
+     * 90 s today. VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537).
      */
     fun windowMs(visibilitySeconds: Long? = null): Long =
         visibilityMs(visibilitySeconds) + SETTLE_POLL_S * MS + SETTLE_MARGIN_MS

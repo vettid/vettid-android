@@ -4282,7 +4282,7 @@ class VaultManager(
      * timeout (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired`
      * leased for that long. The window is the relay's advertised `visibility_timeout_seconds` (60 when none) + the
      * long-poll cap + 5 s, about 90 s (clamped to 0-300 s;
-     * VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)); see
+     * VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)); see
      * [TransferInResume.atDeadline] for how each request is sized and why none is cancelled while it can hold a message.
      * While the collection runs, our collects are `wait=0` (it long-polls already); otherwise each is a long poll of what
      * is left. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects included:
@@ -4400,7 +4400,7 @@ class VaultManager(
     }
 
     override suspend fun abandonTransferIn() = guard {
-        // Not during the settlement window: a leased device.paired must not be thrown away (VAULT-MESSAGING 0.84.2). The
+        // Not during the settlement window: a leased device.paired must not be thrown away (VAULT-MESSAGING 0.85.2). The
         // window starts at 11 minutes, but past the vault's 10 minutes (from the stored start) the old phone can no longer
         // approve either: no abandon from then on, whether or not the window has begun.
         val d = session().device

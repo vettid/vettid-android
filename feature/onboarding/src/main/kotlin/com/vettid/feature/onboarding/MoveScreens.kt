@@ -622,7 +622,7 @@ fun TransferInContent(
         }
         TransferInStep.COMPARE -> FormScaffold(
             title = stringResource(R.string.transfer_in_compare_title),
-            // (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+            // (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
             // Past the countdown the old phone can no longer approve: no code, no "0:00 left".
             body = if (state.settling) null else stringResource(R.string.transfer_in_compare_body),
             primaryLabel = null,
