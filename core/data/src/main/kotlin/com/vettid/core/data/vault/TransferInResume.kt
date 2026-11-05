@@ -104,7 +104,9 @@ internal object TransferInResume {
         val pollMs: Long = SETTLE_POLL_S * MS,
         val handlingMs: Long = HANDLING_MARGIN_MS,
         val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
-        val now: () -> Long = { android.os.SystemClock.elapsedRealtime() },
+        // A unit test's stub of SystemClock answers 0 (isReturnDefaultValues): a window on that clock would never end, so the
+        // default fails loudly there instead of hanging; a test passes its own clock. On a phone it is never 0 (since boot).
+        val now: () -> Long = { android.os.SystemClock.elapsedRealtime().also { check(it > 0) { "Settle.now: pass a clock in tests" } } },
         /**
          * How far past its own bound a phase of the step (a round wait, a request, a pause) may run before the monotonic
          * clock is taken to show a process freeze. A timeout fires at its bound give or take scheduling noise (seconds at
