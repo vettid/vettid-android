@@ -50,9 +50,10 @@ class MailboxCollector(
      */
     private val onReached: (Long) -> Unit = {},
     /**
-     * Called when a collect request failed with an I/O error that is not a relay status (a reset, a lost response while the
-     * body was read, a dropped stream): the relay may have handed it messages that stay leased to the dead request for a
-     * visibility timeout. A [RelayException] (a status came back) is not this.
+     * Called when a collect request ended badly after the relay may have handed it messages (they stay leased to the dead
+     * request for a visibility timeout): an I/O error (a reset, a lost response, a dropped stream), being cancelled with the
+     * request out, or, once messages arrived, a relay status on an ack or anything else that aborted the batch. A relay
+     * status on the request itself is not this.
      */
     private val onLost: () -> Unit = {},
 ) {
@@ -82,21 +83,35 @@ class MailboxCollector(
         }
     }
 
-    /** One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. */
+    /**
+     * One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. A request that ends
+     * badly after it may have been handed messages leaves them leased to the dead request, whatever the failure was: an
+     * I/O error, being cancelled, or (once messages arrived) a relay status on an ack or anything the handler threw; that
+     * is [onLost]. A relay status on the request itself, before any message came, is not.
+     */
+    @Suppress("TooGenericExceptionCaught") // anything that ends the round with messages in hand
     private suspend fun round(useSocket: Boolean, handle: suspend (RelayMessage) -> Unit) {
         val started = System.nanoTime()
+        var got = false
         onRequest(true)
         try {
             if (useSocket) {
-                stream(handle) { onReached(started) }
+                stream(handle, { got = true }) { onReached(started) }
             } else {
-                pollOnce(handle)
+                pollRound(handle) { got = true }
                 onReached(started)
             }
+        } catch (e: CancellationException) {
+            onLost() // cut with a request out
+            throw e
         } catch (e: RelayException) {
-            throw e // a status came back: nothing was handed out
+            if (got) onLost() // a status on an ack, with messages unhandled behind it
+            throw e
         } catch (e: IOException) {
             onLost()
+            throw e
+        } catch (e: RuntimeException) {
+            if (got) onLost()
             throw e
         } finally {
             onRequest(false)
@@ -104,15 +119,18 @@ class MailboxCollector(
     }
 
     /** One long-poll round: collects, handles and acks each message. Returns how many arrived. */
-    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int {
+    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle) {}
+
+    private suspend fun pollRound(handle: suspend (RelayMessage) -> Unit, onBatch: () -> Unit): Int {
         val msgs = client.collect(wait)
+        if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)
         }
         return msgs.size
     }
 
-    private suspend fun stream(handle: suspend (RelayMessage) -> Unit, reached: () -> Unit) {
+    private suspend fun stream(handle: suspend (RelayMessage) -> Unit, onMessage: () -> Unit, reached: () -> Unit) {
         val s = client.openStream()
         try {
             while (true) {
@@ -122,6 +140,7 @@ class MailboxCollector(
                     reached()
                     return // closed normally: reconnect
                 }
+                onMessage()
                 if (handled(m, handle) && !s.ack(m.msgId)) client.ack(m.msgId)
                 reached()
             }

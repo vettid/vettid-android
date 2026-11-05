@@ -1540,6 +1540,61 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * A batch [m1, m2] whose first ack is refused with a relay status aborts the rest of the batch: m2 (possibly the
+     * device.paired) stays leased and unhandled, so the collector's request counts as lost. (A status on the request itself,
+     * before any message, does not: see the test above.)
+     */
+    @Test
+    fun aRefusedAckMidBatchLeavesTheRestLeasedAndIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            batchSize = 2
+            refuseAck = true
+            queued.add(v.seal("test.noop", "{}"))
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (d.collecting) kotlinx.coroutines.delay(10) // the refused ack ends the collection
+            assertEquals(1L, d.collectorCuts)
+            refuseAck = false
+            batchSize = 1
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The collection's job cancelled (its scope ended, not [VaultDevice.stop]) with a request out is a cut too: counted
+     * where the round is cancelled.
+     */
+    @Test
+    fun theCollectionsScopeEndingWithARequestOutIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the request is out, holding the message
+            assertNotNull(d.collectRequestSince)
+            scope.cancel() // not stop()
+            leaseGate!!.countDown()
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10) // counted when the cancelled round unwinds
+            assertEquals(1L, d.collectorCuts)
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
     @Test
     fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {

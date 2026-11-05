@@ -371,6 +371,34 @@ class TransferInResumeTest {
         assertEquals(0, drops)
     }
 
+    /**
+     * A cut during the final wait=0 collect (at the window's end, 90 s) leaves a message leased until 110 s: the window goes
+     * on after that collect (the end moved out) and gathers it, instead of dropping with a leased message.
+     */
+    @Test
+    fun aCutDuringTheFinalCollectContinuesTheWindow() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        var freeAt = Long.MAX_VALUE
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 90_000 && freeAt == Long.MAX_VALUE) {
+                cutCount++ // cut during the final collect; the relay leases the message until 110 s
+                freeAt = 110_000
+            } else if (clock.now() >= freeAt) {
+                isPaired = true
+            } else {
+                delay(w.coerceAtMost(5_000))
+            }
+        }
+        assertTrue(
+            TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), cuts = { cutCount }),
+        )
+        assertEquals(0, drops)
+        assertTrue("gathered after the first end: ${clock.now()}", clock.now() >= 110_000)
+    }
+
     /** Repeated cuts and freezes never extend the window past its first end plus the cap (in awake time). */
     @Test
     fun repeatedCutsAndFreezesStayWithinTheCap() = runTest {

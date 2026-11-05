@@ -48,7 +48,6 @@ internal object TransferInResume {
     const val DEADLINE_COLLECT_MS = 30_000L
 
     private const val MS = 1_000L
-    private const val NANOS_PER_MS = 1_000_000L
 
     /** The relay's visibility timeout when it advertises none (RELAY-PROTOCOL §6.3). */
     const val DEFAULT_VISIBILITY_S = 60L
@@ -95,7 +94,8 @@ internal object TransferInResume {
 
     /**
      * The timing of a settlement, all of it a parameter for tests (which pass [now] from the test scheduler).
-     * [now] is a monotonic clock in milliseconds.
+     * [now] is a monotonic clock in milliseconds that keeps counting while the phone sleeps (`elapsedRealtime`): a suspend
+     * with a request out then shows as a phase far past its bound (a freeze), where `nanoTime` would not.
      */
     class Settle(
         val windowMs: Long = SETTLE_WINDOW_MS,
@@ -104,7 +104,7 @@ internal object TransferInResume {
         val pollMs: Long = SETTLE_POLL_S * MS,
         val handlingMs: Long = HANDLING_MARGIN_MS,
         val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
-        val now: () -> Long = { System.nanoTime() / NANOS_PER_MS },
+        val now: () -> Long = { android.os.SystemClock.elapsedRealtime() },
         /**
          * How far past its own bound a phase of the step (a round wait, a request, a pause) may run before the monotonic
          * clock is taken to show a process freeze. A timeout fires at its bound give or take scheduling noise (seconds at
