@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- NEW: not in the plan (the plain, non-linked credit shown on the map when the style names none; the tile license requires it) -->
+    <string name="core_map_attribution_fallback">© OpenMapTiles © OpenStreetMap contributors</string>
+    <!-- NEW: not in the plan (the map could not be set up) -->
+    <string name="core_map_unavailable">The map couldn\'t be started.</string>
+    <!-- NEW: not in the plan (the map server did not answer or refused) -->
+    <string name="core_map_load_failed">The map couldn\'t be loaded. Check the map server in Settings.</string>
+</resources>

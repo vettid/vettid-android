@@ -76,6 +76,9 @@ internal class FakeWallets : WalletOps {
     /** A vault before release 26: the wallet `create` answers has no `caps`. */
     var noCaps = false
 
+    /** The password this vault takes (a test may choose a distinctive one to look for). */
+    var password = "pw"
+
     /** The PIN this vault takes. */
     var pin = "123456"
 
@@ -91,7 +94,7 @@ internal class FakeWallets : WalletOps {
             importedPassphrase = item.passphrase?.let(::String)
         }
         createFails?.let { throw VaultOpException("wallet.create", it) }
-        if (String(password) != "pw") throw VaultOpException("wallet.create", "bad_password")
+        if (String(password) != this.password) throw VaultOpException("wallet.create", "bad_password")
         return wallet("01NEW000000000000000000000", name, network).let { w ->
             if (noCaps) w.copy(capsSupported = false).also { wallets[w.id] = it } else w
         }
@@ -113,7 +116,7 @@ internal class FakeWallets : WalletOps {
         calls += "caps.raise:$perTx:$perPeriod"
         capsRaiseFails?.let { throw VaultOpException("wallet.caps.raise", it) }
         if (String(pin) != this.pin) throw VaultOpException("wallet.caps.raise", "bad_pin")
-        if (String(password) != "pw") throw VaultOpException("wallet.caps.raise", "bad_password")
+        if (String(password) != this.password) throw VaultOpException("wallet.caps.raise", "bad_password")
         val w = wallets.getValue(walletId)
         if (version != w.version) throw VaultOpException("wallet.caps.raise", "conflict")
         return (version + 1).also {
@@ -141,14 +144,14 @@ internal class FakeWallets : WalletOps {
             if (pin == null) throw VaultOpException("item.reveal", "bad_request", "pin_required")
             if (String(pin) != this.pin) throw VaultOpException("item.reveal", "bad_pin")
         }
-        if (revealFails || String(password) != "pw") throw VaultOpException("item.reveal", "bad_password")
+        if (revealFails || String(password) != this.password) throw VaultOpException("item.reveal", "bad_password")
         return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
 
     override suspend fun delete(walletId: String, password: CharArray) {
         handedSecrets += password
         calls += "delete:$walletId"
-        if (deleteFails || String(password) != "pw") throw VaultOpException("item.delete", "bad_password")
+        if (deleteFails || String(password) != this.password) throw VaultOpException("item.delete", "bad_password")
         wallets.remove(walletId)
     }
 

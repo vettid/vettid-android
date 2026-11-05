@@ -16,6 +16,15 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
     // :core:chain's address derivation on the host JVM (see :core:chain's build file).
     testImplementation(libs.secp256k1.jni.jvm)
+}
+
+android {
+    testOptions.unitTests {
+        isIncludeAndroidResources = true
+        // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals.
+        all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }

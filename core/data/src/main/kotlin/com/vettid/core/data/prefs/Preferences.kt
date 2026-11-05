@@ -104,6 +104,13 @@ data class AppPreferences(
      */
     val presenceCardAnswered: Boolean = false,
     /**
+     * The member's own tile server style URL for the position screen's map (Location L2); null: the default
+     * (`MapServer.DEFAULT_STYLE`). A setting about what this phone loads, never location data. Checked when saved and again when read.
+     */
+    val mapStyleUrl: String? = null,
+    /** The host the map's privacy note was answered for ("Show map"); the map is not loaded from any other host. */
+    val mapNoteHost: String? = null,
+    /**
      * The preferences file was corrupt and was replaced by an empty one (A6 audit P4): every preference is back at
      * its default (the app lock is off) until the member has been told ([PreferencesRepository.acknowledgeReset]).
      */
@@ -151,6 +158,12 @@ interface PreferencesRepository {
 
     /** The member answered the one-time presence card ([AppPreferences.presenceCardAnswered]). */
     suspend fun setPresenceCardAnswered() {}
+
+    /** The map server: [styleUrl] checked by `MapServer.parse` (null: the default). */
+    suspend fun setMapStyleUrl(styleUrl: String?) {}
+
+    /** The member answered the map's privacy note ("Show map") for [host]. */
+    suspend fun setMapNoteHost(host: String) {}
 
     /** The member saw the notice that the preferences were reset ([AppPreferences.wasReset]). */
     suspend fun acknowledgeReset() {}
@@ -214,7 +227,17 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
                 p[PUSH_CONFIRM_PENDING] ?: false,
             ),
             presenceCardAnswered = p[PRESENCE_CARD_ANSWERED] ?: false,
+            mapStyleUrl = p[MAP_STYLE_URL],
+            mapNoteHost = p[MAP_NOTE_HOST],
         )
+    }
+
+    override suspend fun setMapStyleUrl(styleUrl: String?) {
+        store.edit { if (styleUrl == null) it.remove(MAP_STYLE_URL) else it[MAP_STYLE_URL] = styleUrl }
+    }
+
+    override suspend fun setMapNoteHost(host: String) {
+        store.edit { it[MAP_NOTE_HOST] = host }
     }
 
     override suspend fun setPresenceCardAnswered() {
@@ -311,6 +334,8 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val PUSH_UNREGISTER_PENDING = booleanPreferencesKey("push_unregister_pending")
         val PUSH_CONFIRM_PENDING = booleanPreferencesKey("push_confirm_pending")
         val PRESENCE_CARD_ANSWERED = booleanPreferencesKey("presence_card_answered")
+        val MAP_STYLE_URL = stringPreferencesKey("map_style_url")
+        val MAP_NOTE_HOST = stringPreferencesKey("map_note_host")
     }
 }
 
@@ -347,6 +372,10 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setPushMemory(m: PushMemory) = state.update { it.copy(push = m) }
 
     override suspend fun setPresenceCardAnswered() = state.update { it.copy(presenceCardAnswered = true) }
+
+    override suspend fun setMapStyleUrl(styleUrl: String?) = state.update { it.copy(mapStyleUrl = styleUrl) }
+
+    override suspend fun setMapNoteHost(host: String) = state.update { it.copy(mapNoteHost = host) }
 
     override suspend fun acknowledgeReset() = state.update { it.copy(wasReset = false) }
 
