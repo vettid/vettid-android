@@ -155,6 +155,40 @@ class FeedNotifierTest {
         assertEquals("f1", poster.shown.getValue("f1").itemId)
     }
 
+    /**
+     * The wallet's feed items (ANDROID-PLAN §4 "Wallet", "Notifications"; `wallet.created` is History only): all on Vault
+     * activity; a wallet's name only with names on and no cover; under the cover nothing is read and no txid or name is said.
+     */
+    @Test
+    fun theWalletsItemsNotifyOnVaultActivityAndNameTheWalletOnlyUncovered() = runTest {
+        notifier()
+        source.names = FeedNames(emptyMap(), mapOf("w1" to "Savings"))
+        val kinds = listOf("wallet.signed" to "ab12cd34", "wallet.cap_refused" to "w1", "wallet.caps_raised" to "w1")
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        kinds.forEachIndexed { i, (k, ref) -> arrive(item("u$i", kind = k, ref = ref).copy(connectionId = null, priority = "high")) }
+        for (i in kinds.indices) assertEquals(Channels.ACTIVITY, poster.shown.getValue("u$i").channel)
+        assertEquals("Bitcoin payment signed", poster.shown.getValue("u0").title)
+        assertEquals("A payment was refused by your spending limit", poster.shown.getValue("u1").title)
+        assertEquals("A spending limit was raised or removed on \u2068Savings\u2069", poster.shown.getValue("u2").title)
+        // Names only: the kind, never the wallet's name.
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES)
+        arrive(item("n2", kind = "wallet.caps_raised", ref = "w1").copy(connectionId = null, priority = "high"))
+        assertEquals("A spending limit was raised or removed", poster.shown.getValue("n2").title)
+        // Under the cover: the public form only, no name read, no txid anywhere.
+        val before = source.namesCalls
+        source.covered.value = true
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES_AND_TEXT)
+        kinds.forEachIndexed { i, (k, ref) -> arrive(item("c$i", kind = k, ref = ref).copy(connectionId = null, priority = "high")) }
+        assertEquals("no names read under the cover", before, source.namesCalls)
+        for (i in kinds.indices) {
+            val n = poster.shown.getValue("c$i")
+            assertEquals(Channels.ACTIVITY, n.channel)
+            assertEquals("New activity in VettID", n.title)
+            assertNull(n.text)
+            assertFalse("${n.title} ${n.text}".let { "Savings" in it || "ab12cd34" in it })
+        }
+    }
+
     @Test
     fun underTheCoverNothingIsReadAndAnArrivalKeepsItsSound() = runTest {
         notifier()

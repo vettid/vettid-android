@@ -84,6 +84,13 @@ internal class FakeWalletOps : WalletOps {
     var importedWords: String? = null
     var importedPassphrase: String? = null
 
+    /** The phrase (and passphrase) `item.reveal` answers. */
+    var words: List<String> = List(24) { "abandon" }
+    var passphrase: String? = null
+
+    /** The password this vault takes (a test may choose a distinctive one to look for). */
+    var password = "pw"
+
     /** The PIN and password this vault takes for `wallet.caps.raise` and a capped reveal. */
     var pin = "123456"
 
@@ -117,7 +124,7 @@ internal class FakeWalletOps : WalletOps {
             importedWords = String(item.mnemonic)
             importedPassphrase = item.passphrase?.let(::String)
         }
-        if (String(password) != "pw") refuse("wallet.create", "bad_password")
+        if (String(password) != this.password) refuse("wallet.create", "bad_password")
         val w = WalletFixtures.wallet(
             id = "01WALLET%018d".format(++created), network = network, nextReceive = 0, caps = WalletFixtures.DEFAULT_CAPS.takeUnless { noCaps },
         )
@@ -134,8 +141,8 @@ internal class FakeWalletOps : WalletOps {
             if (pin == null) refuse("item.reveal", "bad_request", "pin_required")
             if (String(pin) != this.pin) refuse("item.reveal", "bad_pin")
         }
-        if (revealFails || String(password) != "pw") refuse("item.reveal", "bad_password")
-        return RevealedPhrase(List(24) { "abandon" }.joinToString(" ").toCharArray())
+        if (revealFails || String(password) != this.password) refuse("item.reveal", "bad_password")
+        return RevealedPhrase(words.joinToString(" ").toCharArray(), passphrase?.toCharArray())
     }
 
     override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {
@@ -159,7 +166,7 @@ internal class FakeWalletOps : WalletOps {
         calls += "caps.raise:$perTx:$perPeriod"
         capsRaiseFails?.let { refuse("wallet.caps.raise", it) }
         if (String(pin) != this.pin) refuse("wallet.caps.raise", "bad_pin")
-        if (String(password) != "pw") refuse("wallet.caps.raise", "bad_password")
+        if (String(password) != this.password) refuse("wallet.caps.raise", "bad_password")
         val w = wallets.getValue(walletId)
         if (version != w.version) refuse("wallet.caps.raise", "conflict")
         return (version + 1).also {
@@ -170,7 +177,7 @@ internal class FakeWalletOps : WalletOps {
     override suspend fun delete(walletId: String, password: CharArray) {
         handedSecrets += password
         calls += "delete"
-        if (String(password) != "pw") refuse("item.delete", "bad_password")
+        if (String(password) != this.password) refuse("item.delete", "bad_password")
         wallets.remove(walletId)
     }
 
@@ -268,7 +275,7 @@ internal class FakeWalletOps : WalletOps {
         signNotSent?.let { return SignOutcome.NotSent(it) }
         signFailure?.let { throw it }
         signError?.let { return SignOutcome.Answered(SignReply.Refused(it)) }
-        if (String(password) != "pw") return refused("wallet.sign", "bad_password")
+        if (String(password) != this.password) return refused("wallet.sign", "bad_password")
         val signed = signedTx(psbtBase64)
         if (signUnreadable) return SignOutcome.Answered(SignReply.Ok(JsonObject(emptyMap())))
         if (unanswered < 0) return SignOutcome.Answered(SignReply.Ok(body(signed)))
