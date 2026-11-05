@@ -1,5 +1,7 @@
 package com.vettid.core.ui.format
 
+import android.content.Context
+import android.content.res.Configuration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -8,15 +10,34 @@ import java.time.format.FormatStyle
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 
-/** Dates and times as lists and conversations show them, in the phone's zone and locale. */
+/**
+ * Dates and times as lists and conversations show them, in the phone's zone and in the locale of the app's configuration (its
+ * first locale, as #292 and #295 do), read at each call; `Locale.getDefault()` only before [install] or with no locale.
+ */
 object Times {
+    @Volatile
+    private var configuration: (() -> Configuration)? = null
+
+    /** Called once by the application: the formats follow its resources' configuration from then on. */
+    fun install(context: Context) {
+        val app = context.applicationContext
+        installConfiguration { app.resources.configuration }
+    }
+
+    /** [install]'s seam for tests; null goes back to `Locale.getDefault()`. */
+    internal fun installConfiguration(source: (() -> Configuration)?) {
+        configuration = source
+    }
+
+    private fun locale(): Locale = configuration?.invoke()?.locales?.get(0) ?: Locale.getDefault()
+
     private fun zone(): ZoneId = ZoneId.systemDefault()
 
-    private val time get() = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(Locale.getDefault())
-    private val date get() = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault())
+    private val time get() = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale())
+    private val date get() = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale())
     private val dateTime
-        get() = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT).withLocale(Locale.getDefault())
-    private val weekday get() = DateTimeFormatter.ofPattern("EEE", Locale.getDefault())
+        get() = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT).withLocale(locale())
+    private val weekday get() = DateTimeFormatter.ofPattern("EEE", locale())
 
     /** A list row's date (Proton): the time today, the weekday this week, else the date. */
     fun short(at: Instant, now: Instant = Instant.now(), zone: ZoneId = zone()): String {
