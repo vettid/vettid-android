@@ -464,7 +464,7 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
     if (desktop) {
         // A desktop gets no rules or permissions (it asks for access sessions, which come to Approvals): nothing to choose.
         FormScaffold(
-            title = stringResource(R.string.pair_paired_title, DeviceText.sentenceDesktop(stage.name)),
+            title = stringResource(R.string.pair_paired_title, DeviceText.titleDesktop(stage.name)),
             body = stringResource(R.string.pair_paired_body_desktop),
             primaryLabel = stringResource(R.string.pair_done),
             onPrimary = actions.onDone,
@@ -473,9 +473,8 @@ private fun PairedStep(stage: PairingStage.Paired, actions: PairActions, modifie
         ) {}
         return
     }
-    val name = DeviceText.sentenceAgent(stage.name)
     FormScaffold(
-        title = stringResource(R.string.pair_paired_title, name),
+        title = stringResource(R.string.pair_paired_title, DeviceText.titleAgent(stage.name)),
         body = stringResource(R.string.pair_paired_body),
         primaryLabel = stringResource(R.string.pair_choose),
         onPrimary = { actions.onChooseItems(stage.deviceId) },

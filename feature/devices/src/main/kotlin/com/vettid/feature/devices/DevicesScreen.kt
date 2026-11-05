@@ -161,14 +161,14 @@ private fun PairChooser(onPair: () -> Unit, onPairDesktop: () -> Unit) {
 private fun DeviceList(state: DevicesUiState, now: Instant, onOpen: (String) -> Unit, onRetry: () -> Unit) {
     val (phone, others) = state.devices.partition { it.thisPhone }
     if (state.onlyThisPhone) {
-        // This phone only: "No agents yet".
+        // This phone only: "Nothing paired yet" (agents and desktops alike).
         Column(Modifier.fillMaxSize().testTag("devices")) {
             phone.forEach { ThisPhoneRow(it) }
             Box(Modifier.weight(1f)) {
                 EmptyState(
                     icon = Icons.Outlined.Devices,
-                    title = stringResource(R.string.devices_empty_title),
-                    body = stringResource(R.string.devices_empty_body),
+                    title = stringResource(R.string.devices_empty_title_any),
+                    body = stringResource(R.string.devices_empty_body_any),
                 )
             }
         }

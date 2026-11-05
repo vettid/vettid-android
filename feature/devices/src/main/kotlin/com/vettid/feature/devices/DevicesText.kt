@@ -80,6 +80,14 @@ internal object DeviceText {
     fun sentenceDesktop(name: String): String =
         if (name.isEmpty()) stringResource(R.string.devices_a_desktop) else AccountNames.isolate(desktopName(name))
 
+    /** The agent a pairing shows at the start of a title: its name isolated, "An agent" (capital) when it gave none. */
+    @Composable
+    fun titleAgent(name: String): String = AccountNames.isolate(agentName(name))
+
+    /** The desktop a pairing shows at the start of a title: its name isolated, "A desktop" (capital) when it gave none. */
+    @Composable
+    fun titleDesktop(name: String): String = AccountNames.isolate(desktopName(name))
+
     /** "Access until 15:40" (the date with it when not today), or "No access". */
     @Composable
     fun access(d: DeviceInfo, now: Instant, zone: ZoneId = ZoneId.systemDefault()): String {

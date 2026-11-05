@@ -113,9 +113,12 @@ class DevicesScreenTest {
     }
 
     @Test
-    fun thisPhoneAloneSaysNoAgentsYet() {
+    fun thisPhoneAloneSaysNothingIsPairedYetForAgentsAndDesktopsAlike() {
         list(state(phone))
-        rule.onNodeWithText("No agents yet").assertIsDisplayed()
+        rule.onNodeWithText("Nothing paired yet").assertIsDisplayed()
+        rule.onNodeWithText("Pair VettID on your computer, or pair an agent to let an AI assistant use items you choose.", substring = true)
+            .assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("No agents yet").fetchSemanticsNodes().size)
         rule.onNodeWithText("This phone").assertIsDisplayed()
     }
 

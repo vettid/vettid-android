@@ -142,6 +142,8 @@
     <string name="devices_pair_new">Pair an agent or desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="devices_pair_menu_open">Menu open</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="devices_pair_menu_closed">Menu closed</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="devices_empty_title_any">Nothing paired yet</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="devices_empty_body_any">Pair VettID on your computer, or pair an agent to let an AI assistant use items you choose. They act only while you allow it.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="devices_pair_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_title_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_code_body_desktop">Copy this code into VettID on your computer. It works once and expires in 10 minutes.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->

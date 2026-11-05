@@ -383,11 +383,11 @@ class PairingManager(
         val q = try {
             InviteQr.parseLink(link)
         } catch (e: CryptoException) {
-            throw VaultFailure(FailureKind.OTHER, "unreadable_result", cause = e)
+            throw unwanted(id, e)
         } catch (e: IllegalArgumentException) {
-            throw VaultFailure(FailureKind.OTHER, "unreadable_result", cause = e)
+            throw unwanted(id, e)
         }
-        if (q.kind != role.kind) throw VaultFailure(FailureKind.OTHER, "unreadable_result")
+        if (q.kind != role.kind) throw unwanted(id, null)
         val at = now()
         val own = Instant.ofEpochSecond(q.exp)
         // The earliest of what the vault says and what the link says, and never longer than a code lives (§6.4).
@@ -395,13 +395,24 @@ class PairingManager(
         return PairingCode(id, link, exp)
     }
 
+    /**
+     * A pairing the vault made that this phone will not show (a link of the other kind, or one that does not read): it is
+     * rejected by its id at once, in this manager's scope, instead of being left to expire. Nothing of it is shown.
+     */
+    private fun unwanted(id: String, cause: Throwable?): VaultFailure {
+        scope.launch { sendReject(id) }
+        return VaultFailure(FailureKind.OTHER, "unreadable_result", cause = cause)
+    }
+
     @Suppress("ReturnCount")
     override suspend fun approve(sessionSeconds: Int?) {
         val gen: Int
         val p: PendingPairing
+        val forRole: PairRole
         synchronized(lock) {
             val s = flow.value
             val c = s.stage as? PairingStage.Compare ?: return
+            forRole = role
             // Never an approval of what cannot be compared, nor after this phone's time ran out, nor twice.
             if (s.busy || !c.pending.comparable || !c.pending.ends.isAfter(now())) return
             if (sessionSeconds != null && sessionSeconds !in SESSION_MIN..SESSION_MAX) return
@@ -418,18 +429,18 @@ class PairingManager(
         // strand the pairing busy and watching.
         withContext(NonCancellable) {
             try {
-                settle(gen, p, sessionSeconds)
+                settle(gen, p, forRole, sessionSeconds)
             } finally {
                 synchronized(lock) { watching = false }
             }
         }
     }
 
-    private suspend fun settle(gen: Int, p: PendingPairing, sessionSeconds: Int?) {
+    private suspend fun settle(gen: Int, p: PendingPairing, forRole: PairRole, sessionSeconds: Int?) {
         try {
             sent { ops().approve(p.pairingId, sessionSeconds) }
         } catch (e: VaultFailure) {
-            failed(gen, p, e)
+            failed(gen, p, forRole, e)
             return
         }
         synchronized(lock) {
@@ -439,17 +450,17 @@ class PairingManager(
             flow.value = PairingState(PairingStage.Paired(p.name, null))
         }
         runCatching { onPaired() }
-        val id = findDevice(p)
+        val id = findDevice(p, forRole)
         synchronized(lock) {
             if (gen == generation && flow.value.stage is PairingStage.Paired) flow.value = PairingState(PairingStage.Paired(p.name, id))
         }
     }
 
     @Suppress("ReturnCount")
-    private suspend fun failed(gen: Int, p: PendingPairing, e: VaultFailure) {
+    private suspend fun failed(gen: Int, p: PendingPairing, forRole: PairRole, e: VaultFailure) {
         // No answer at all: the vault may have taken the approval. Look for the new device before saying anything.
         val unknown = e.kind == FailureKind.NETWORK || e.kind == FailureKind.NO_RESPONSE
-        val found = if (unknown) findDevice(p) else null
+        val found = if (unknown) findDevice(p, forRole) else null
         synchronized(lock) {
             watching = false
             if (gen != generation) return
@@ -485,8 +496,7 @@ class PairingManager(
      * none or more than one fits: the list opens instead.
      */
     @Suppress("ReturnCount")
-    private suspend fun findDevice(p: PendingPairing): String? {
-        val forRole = synchronized(lock) { role }
+    private suspend fun findDevice(p: PendingPairing, forRole: PairRole): String? {
         var waited = 0L
         while (waited < ID_WAIT.toMillis()) {
             synchronized(lock) { arrivals.singleOrNull()?.let { return it } }

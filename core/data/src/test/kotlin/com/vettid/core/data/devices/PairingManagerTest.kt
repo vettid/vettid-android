@@ -829,4 +829,48 @@ class PairingManagerTest {
         assertEquals(PairRole.DESKTOP, m.state.value.role)
         assertTrue(ops.calls.contains("reject:pa"))
     }
+
+    @Test
+    fun aReadablePairingWithTheWrongKindOrAnUnreadableLinkIsRejectedAtOnceAndNeverShown() = runTest {
+        val cases = listOf(
+            Triple(PairRole.AGENT, "p1", desktopLink()),
+            Triple(PairRole.DESKTOP, "p2", link()),
+            Triple(PairRole.AGENT, "p3", "not a link"),
+            Triple(PairRole.DESKTOP, "p4", "not a link"),
+        )
+        for ((role, id, bad) in cases) {
+            val ops = Ops()
+            ops.created = obj("""{"pairing_id":"$id","link":"$bad","exp":"${clock.plusSeconds(600)}"}""")
+            val m = manager(ops)
+            m.start(role)
+            // Nothing is shown, and the vault is told this pairing is not wanted (in the manager's scope).
+            assertEquals(PairingStage.Idle, m.state.value.stage)
+            assertEquals(FailureKind.OTHER, m.state.value.error)
+            pump { ops.calls.contains("reject:$id") }
+        }
+        // No readable id: nothing to reject.
+        val ops = Ops()
+        ops.created = obj("""{"link":"${link()}"}""")
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(listOf("create"), ops.calls)
+    }
+
+    @Test
+    fun pressingTheOtherButtonJustAfterPairedStartsTheOtherPairingAndTheLateSearchTouchesNothing() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops, listed = listOf(desktopDevice("d1", "Work laptop")))
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(id = "pd", name = "Work laptop", role = "desktop"))
+        val approving = launch { m.approve(3600) }
+        pump { m.state.value.stage is PairingStage.Paired }
+        // The id search is still waiting (virtual time); the member pairs an agent instead.
+        m.start(PairRole.AGENT)
+        assertEquals("pa", held(m))
+        assertEquals(PairRole.AGENT, m.state.value.role)
+        advanceUntilIdle()
+        assertTrue(approving.isCompleted)
+        assertEquals(PairRole.AGENT, m.state.value.role)
+    }
 }

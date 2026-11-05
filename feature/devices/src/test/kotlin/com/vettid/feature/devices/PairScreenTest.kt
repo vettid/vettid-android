@@ -319,4 +319,18 @@ class PairScreenTest {
         rule.onNodeWithText("Your vault did not answer. If", substring = true).assertIsDisplayed()
         noAgentWord()
     }
+
+    @Test
+    fun aPairedTitleWithNoNameStartsWithACapital() {
+        show(at(PairingStage.Paired("", "d1"), role = desk))
+        rule.onNodeWithText("A desktop", substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("a desktop is paired", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun anAgentsPairedTitleWithNoNameStartsWithACapitalToo() {
+        show(at(PairingStage.Paired("", "a1")))
+        rule.onNodeWithText("An agent", substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("an agent is paired", substring = true).fetchSemanticsNodes().size)
+    }
 }
