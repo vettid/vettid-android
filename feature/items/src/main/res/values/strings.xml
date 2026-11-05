@@ -3,7 +3,7 @@
     <!-- The Vault list ("Vault", not "Items", in the interface: ANDROID-PLAN 0.1.11) -->
     <string name="items_title">Vault</string>
     <string name="items_empty_title">Your vault is empty</string>
-    <string name="items_empty_body">Keep documents, logins and secrets in your vault, organised by tags</string>
+    <string name="items_empty_body">Keep documents, logins and secrets in your vault, organized by tags</string>
     <string name="items_add">Add to vault</string>
     <string name="items_search">Search by name or tag</string>
     <string name="items_search_open">Search your vault</string>
@@ -89,7 +89,7 @@
     <string name="items_template_note_secret">Secret: hidden until you reveal it</string>
     <string name="items_template_note_critical">Critical: inside your credential</string>
     <string name="items_template_passport">Passport</string>
-    <string name="items_template_drivers_license">Driver\'s licence</string>
+    <string name="items_template_drivers_license">Driver\'s license</string>
     <string name="items_template_national_id">National ID</string>
     <string name="items_template_login">Login</string>
     <string name="items_template_wifi">Wi-Fi network</string>
@@ -222,7 +222,7 @@
     <string name="items_category">Category</string>
     <string name="items_cd_choose_category">Choose a category</string>
     <string name="items_tags">Tags</string>
-    <string name="items_tags_note">Tags organise your vault and decide what you share. When you share a tag with a connection, items with that tag follow that sharing rule: you are asked first, or they are shared automatically.</string>
+    <string name="items_tags_note">Tags organize your vault and decide what you share. When you share a tag with a connection, items with that tag follow that sharing rule: you are asked first, or they are shared automatically.</string>
     <string name="items_tag_add">Add a tag</string>
     <string name="items_tag_hint">Lowercase letters, digits, spaces, hyphens (-) and underscores (_), up to 32 characters.</string>
     <string name="items_cd_remove_tag">Remove tag %1$s</string>

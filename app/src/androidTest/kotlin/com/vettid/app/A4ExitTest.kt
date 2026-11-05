@@ -281,8 +281,8 @@ class A4ExitTest {
             // --- 6. Favourite, and the connection's details. ---
             drawer("Connections")
             waitText(PEER_NAME, LONG_WAIT_MS)
-            rule.onAllNodes(hasContentDescription("Add $PEER_NAME to favourites")).onFirst().performClick()
-            rule.waitUntilAtLeastOneExists(hasContentDescription("Remove $PEER_NAME from favourites"), LONG_WAIT_MS)
+            rule.onAllNodes(hasContentDescription("Add $PEER_NAME to favorites")).onFirst().performClick()
+            rule.waitUntilAtLeastOneExists(hasContentDescription("Remove $PEER_NAME from favorites"), LONG_WAIT_MS)
             screenshot("connections-favourite")
             text(PEER_NAME).performClick()
             waitTag("detail_name", LONG_WAIT_MS)

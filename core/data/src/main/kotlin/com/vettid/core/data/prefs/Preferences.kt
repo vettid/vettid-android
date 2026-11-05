@@ -57,6 +57,12 @@ enum class AppLockMethod { BIOMETRICS, SCREEN_LOCK }
  */
 enum class NotificationMode { SERVICE, PUSH, OFF }
 
+/**
+ * How distances are written (owner decision 2026-11-05): [AUTOMATIC] follows the phone's region (miles in the US, Liberia and
+ * Myanmar, kilometers elsewhere), [MILES] and [KILOMETERS] override it. A display preference, never location data.
+ */
+enum class DistanceUnits { AUTOMATIC, MILES, KILOMETERS }
+
 /** What notifications show (ANDROID-PLAN 0.1.23, Notification modes 8): names (the default), names and message text, nothing. */
 enum class NotificationPreviews { NAMES, NAMES_AND_TEXT, NOTHING }
 
@@ -110,6 +116,8 @@ data class AppPreferences(
     val mapStyleUrl: String? = null,
     /** The host the map's privacy note was answered for ("Show map"); the map is not loaded from any other host. */
     val mapNoteHost: String? = null,
+    /** Miles or kilometers for the distances shown (Automatic: by the phone's region). */
+    val distanceUnits: DistanceUnits = DistanceUnits.AUTOMATIC,
     /**
      * The preferences file was corrupt and was replaced by an empty one (A6 audit P4): every preference is back at
      * its default (the app lock is off) until the member has been told ([PreferencesRepository.acknowledgeReset]).
@@ -164,6 +172,9 @@ interface PreferencesRepository {
 
     /** The member answered the map's privacy note ("Show map") for [host]. */
     suspend fun setMapNoteHost(host: String) {}
+
+    /** Miles, kilometers, or by region ([AppPreferences.distanceUnits]). */
+    suspend fun setDistanceUnits(units: DistanceUnits) {}
 
     /** The member saw the notice that the preferences were reset ([AppPreferences.wasReset]). */
     suspend fun acknowledgeReset() {}
@@ -229,7 +240,12 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
             presenceCardAnswered = p[PRESENCE_CARD_ANSWERED] ?: false,
             mapStyleUrl = p[MAP_STYLE_URL],
             mapNoteHost = p[MAP_NOTE_HOST],
+            distanceUnits = p[DISTANCE_UNITS]?.let { runCatching { DistanceUnits.valueOf(it) }.getOrNull() } ?: DistanceUnits.AUTOMATIC,
         )
+    }
+
+    override suspend fun setDistanceUnits(units: DistanceUnits) {
+        store.edit { it[DISTANCE_UNITS] = units.name }
     }
 
     override suspend fun setMapStyleUrl(styleUrl: String?) {
@@ -336,6 +352,7 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val PRESENCE_CARD_ANSWERED = booleanPreferencesKey("presence_card_answered")
         val MAP_STYLE_URL = stringPreferencesKey("map_style_url")
         val MAP_NOTE_HOST = stringPreferencesKey("map_note_host")
+        val DISTANCE_UNITS = stringPreferencesKey("distance_units")
     }
 }
 
@@ -376,6 +393,8 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setMapStyleUrl(styleUrl: String?) = state.update { it.copy(mapStyleUrl = styleUrl) }
 
     override suspend fun setMapNoteHost(host: String) = state.update { it.copy(mapNoteHost = host) }
+
+    override suspend fun setDistanceUnits(units: DistanceUnits) = state.update { it.copy(distanceUnits = units) }
 
     override suspend fun acknowledgeReset() = state.update { it.copy(wasReset = false) }
 

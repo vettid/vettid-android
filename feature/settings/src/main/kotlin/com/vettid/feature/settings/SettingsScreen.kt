@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Screenshot
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Timer
@@ -65,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.prefs.AppLockTimeout
+import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.messageRes
@@ -185,6 +187,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 acknowledgeInvalidated = vm::acknowledgeInvalidated,
                 setTimeout = vm::setAppLockTimeout,
                 setTheme = vm::setTheme,
+                setDistanceUnits = vm::setDistanceUnits,
                 setScreenshotsAllowed = vm::setScreenshotsAllowed,
                 accountSite = host.onOpenAccountSite,
                 deleteVault = { host.navigate(DeleteVaultRoute) },
@@ -355,6 +358,15 @@ fun nextThemeMode(mode: ThemeMode): ThemeMode = when (mode) {
 }
 
 @Composable
+private fun unitsLabel(u: DistanceUnits): String = stringResource(
+    when (u) {
+        DistanceUnits.AUTOMATIC -> R.string.settings_units_automatic
+        DistanceUnits.MILES -> R.string.settings_units_miles
+        DistanceUnits.KILOMETERS -> R.string.settings_units_kilometers
+    },
+)
+
+@Composable
 private fun themeLabel(t: ThemePreference): String = stringResource(
     when (t) {
         ThemePreference.SYSTEM -> R.string.settings_theme_system
@@ -393,6 +405,7 @@ data class SettingsActions(
     val acknowledgeInvalidated: () -> Unit = {},
     val setTimeout: (AppLockTimeout) -> Unit = {},
     val setTheme: (ThemePreference) -> Unit = {},
+    val setDistanceUnits: (DistanceUnits) -> Unit = {},
     /** "Allow screenshots": true only after the confirmation. */
     val setScreenshotsAllowed: (Boolean) -> Unit = {},
     val accountSite: () -> Unit = {},
@@ -450,10 +463,13 @@ fun SettingsContent(
     bell: com.vettid.core.ui.components.NotificationBell? = null,
     /** The "Allow screenshots?" confirmation shows from the start (the debug screen catalog). */
     askScreenshots: Boolean = false,
+    /** The Units picker shows from the start (the debug screen catalog). */
+    askUnits: Boolean = false,
 ) {
     val uri = LocalUriHandler.current
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
+    var unitsPicker by rememberSaveable { mutableStateOf(askUnits) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
     var methodPicker by rememberSaveable { mutableStateOf(false) }
     DetailScaffold(
@@ -613,6 +629,14 @@ fun SettingsContent(
                     modifier = Modifier.testTag("theme"),
                 )
                 SettingsDivider()
+                SettingsRow(
+                    label = stringResource(R.string.settings_app_units),
+                    onClick = { unitsPicker = true },
+                    icon = Icons.Outlined.Straighten,
+                    supporting = unitsLabel(state.preferences.distanceUnits),
+                    modifier = Modifier.testTag("units"),
+                )
+                SettingsDivider()
                 // ANDROID-PLAN 0.1.23: how notifications reach this phone, what they show, the channels.
                 SettingsRow(
                     label = stringResource(R.string.settings_app_notifications),
@@ -665,6 +689,16 @@ fun SettingsContent(
             label = { themeLabel(it) },
             onPick = { actions.setTheme(it); themePicker = false },
             onDismiss = { themePicker = false },
+        )
+    }
+    if (unitsPicker) {
+        ChoiceDialog(
+            title = stringResource(R.string.settings_app_units),
+            options = DistanceUnits.entries,
+            selected = state.preferences.distanceUnits,
+            label = { unitsLabel(it) },
+            onPick = { actions.setDistanceUnits(it); unitsPicker = false },
+            onDismiss = { unitsPicker = false },
         )
     }
     if (methodPicker) {

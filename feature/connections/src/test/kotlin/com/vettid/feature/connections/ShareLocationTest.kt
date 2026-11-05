@@ -31,6 +31,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import androidx.compose.runtime.collectAsState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -62,7 +63,11 @@ class ShareLocationTest {
         return f.value
     }
 
-    private fun vm() = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location)
+    private val prefs = com.vettid.core.data.prefs.InMemoryPreferencesRepository(
+        com.vettid.core.data.prefs.AppPreferences(distanceUnits = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS),
+    )
+
+    private fun vm() = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location, prefs)
 
     // --- the choices and the vault's bounds ---
 
@@ -335,6 +340,7 @@ class ShareLocationTest {
 
     private val open = ShareLocationUiState(
         "c1", open = true, permission = LocationPermission.PRECISE, availability = com.vettid.core.data.location.LocationAvailability.AVAILABLE,
+        units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS,
     )
 
     @Test
@@ -344,9 +350,9 @@ class ShareLocationTest {
         rule.onNodeWithText("Once").assertIsDisplayed()
         rule.onNodeWithText("Sends one position now; ends after 15 minutes").assertIsDisplayed()
         rule.onNodeWithText("For a while").assertIsDisplayed()
-        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few metres", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
+        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few meters", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
             .forEach { rule.requireText(it) }
-        rule.onNodeWithText("Approximate and City show the centre of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
+        rule.onNodeWithText("Approximate and City show the center of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
         rule.onNodeWithText("Let $sam keep the trail").assertIsDisplayed()
         rule.onNodeWithText("Without this, $sam sees only your latest position.").assertIsDisplayed()
         rule.onNodeWithTag("share_location_trail").assertIsDisplayed()
@@ -647,5 +653,27 @@ class ShareLocationTest {
         advanceUntilIdle()
         assertFalse(read(vm.uiState).alreadySharing)
         assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun thePrecisionNotesFollowTheUnitsSettingAtOnce() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.open()
+        advanceUntilIdle()
+        rule.setContent {
+            ShareLocationSheet(vm.uiState.collectAsState().value, sam, ShareLocationActions())
+        }
+        listOf("within about 1 km", "within a few meters", "within about 10 km").forEach { rule.requireText(it) }
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
+        advanceUntilIdle()
+        rule.waitForIdle()
+        listOf("within about half a mile", "within a few yards", "within about 6 miles").forEach { rule.requireText(it) }
+        assertEquals(0, rule.onAllNodesWithText("within about 1 km").fetchSemanticsNodes().size)
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC)
+        advanceUntilIdle()
+        rule.waitForIdle()
+        // Robolectric's default locale is en-US: Automatic reads as miles.
+        rule.requireText("within about half a mile")
     }
 }
