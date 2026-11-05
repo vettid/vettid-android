@@ -331,3 +331,10 @@ fun OwnerCheckRepository.checkCleared(): Flow<Unit> = flow {
  */
 fun ownerCheckDue(view: OwnerCheckView?, locked: Boolean, causeUnknown: Boolean, now: Instant): Boolean =
     view?.gated(now) == true || (locked && !causeUnknown)
+
+/**
+ * A pause lifted: [previous] is gated at [now] (a deadline that passed with no new value counts as gated) and [next] is not.
+ * One `now` for both, so a check due by its deadline with nothing looking still counts as a pause that lifts.
+ */
+fun pauseLifted(previous: OwnerCheckView?, next: OwnerCheckView?, now: Instant): Boolean =
+    previous?.gated(now) == true && next?.gated(now) != true

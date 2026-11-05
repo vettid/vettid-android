@@ -95,6 +95,10 @@ object NotifyIntents {
     const val ACTION_OPEN_SETTINGS = "com.vettid.app.action.OPEN_NOTIFICATION_SETTINGS"
     const val EXTRA_ITEM_ID = "com.vettid.app.extra.ITEM_ID"
 
+    /** The stalled-location notice's tap (A6 N21): the connection's page, where the share card is. */
+    const val ACTION_OPEN_CONNECTION = "com.vettid.app.action.OPEN_CONNECTION"
+    const val EXTRA_CONNECTION_ID = "com.vettid.app.extra.CONNECTION_ID"
+
     /** The member dismissed the notification [EXTRA_TAG] (swipe or clear all); a not-exported broadcast to this app only. */
     const val ACTION_DISMISSED = "com.vettid.app.action.NOTIFICATION_DISMISSED"
     const val EXTRA_TAG = "com.vettid.app.extra.NOTIFICATION_TAG"
@@ -119,6 +123,18 @@ object NotifyIntents {
         }
         return PendingIntent.getActivity(context, n.tag.hashCode(), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
+
+    /**
+     * The tap on a connection's notice: an explicit intent to the app's own launcher activity, immutable, carrying the
+     * connection id (the data URI tells one connection's PendingIntent from another's). Only the notification's own content
+     * intent has it; the lock-screen version has none.
+     */
+    fun connection(context: Context, connectionId: String): PendingIntent = PendingIntent.getActivity(
+        context, connectionId.hashCode(),
+        launch(context).setAction(ACTION_OPEN_CONNECTION).putExtra(EXTRA_CONNECTION_ID, connectionId)
+            .setData(android.net.Uri.fromParts("vettid", "connection", connectionId)),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     fun settings(context: Context): PendingIntent = PendingIntent.getActivity(
         context, ACTION_OPEN_SETTINGS.hashCode(), launch(context).setAction(ACTION_OPEN_SETTINGS),

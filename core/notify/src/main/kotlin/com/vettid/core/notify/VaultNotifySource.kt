@@ -82,6 +82,9 @@ class NotificationOpenInbox(
         data class Item(val itemId: String) : Open
 
         data object Settings : Open
+
+        /** A connection's page (the stalled-location notice). */
+        data class Connection(val connectionId: String) : Open
     }
 
     private val flow = MutableStateFlow<Open?>(null)
