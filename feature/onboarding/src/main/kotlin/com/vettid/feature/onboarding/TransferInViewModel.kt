@@ -174,8 +174,9 @@ class TransferInViewModel @Inject constructor(
 
     override fun back(): Boolean {
         val s = state.value
-        // During the window Back leaves the screen and abandons nothing: the settlement goes on in the manager's scope.
-        if (settlingNow()) return false
+        // During the window Back is consumed: nothing is abandoned, and leaving would only route straight back here
+        // (the phase is still TRANSFER_WAITING). The settlement goes on in the manager's scope.
+        if (settlingNow()) return true
         return when (s.step) {
             TransferInStep.SCAN, TransferInStep.PASTE -> {
                 state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }

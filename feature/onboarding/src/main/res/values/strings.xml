@@ -278,6 +278,8 @@
     <string name="transfer_in_waiting">Waiting for your old phone (%1$s left)</string>
     <!-- NEW (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)), for owner approval -->
     <string name="transfer_in_checking">Checking whether your old phone approved in time…</string>
+    <!-- NEW (follow-up to #302, the lead's recheck), for owner approval -->
+    <string name="transfer_in_checking_leave">You can leave the app. The check goes on without it.</string>
     <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->
     <string name="transfer_in_session_ended_title">The move stopped on this phone</string>
     <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->

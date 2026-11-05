@@ -635,6 +635,13 @@ fun TransferInContent(
             KeepScreenOn()
             if (state.settling) {
                 Waiting(stringResource(R.string.transfer_in_checking), Modifier.testTag("checking_old_phone"))
+                Spacer(Modifier.height(Spacing.s))
+                Text(
+                    stringResource(R.string.transfer_in_checking_leave),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("checking_leave_note"),
+                )
             } else {
                 state.sas?.let { SasBox(it) }
                 Spacer(Modifier.height(Spacing.l))

@@ -130,7 +130,7 @@ class TransferInViewModelTest {
         assertTrue(vm.uiState.value.settling)
         vm.cancel()
         vm.confirmCancel()
-        assertFalse("Back leaves the screen (the settlement goes on in the manager) and abandons nothing", vm.back())
+        assertTrue("Back is consumed: the screen stays and nothing is abandoned", vm.back())
         vm.again()
         vm.submitInput()
         advanceTimeBy(1_000)
@@ -138,6 +138,19 @@ class TransferInViewModelTest {
         assertFalse(vm.uiState.value.confirmCancel)
         assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
         assertFalse("no new code was sent", "transferIn" in vault.calls)
+    }
+
+    /** (follow-up to #302) Back while settling is consumed, abandons nothing and keeps the step. */
+    @Test
+    fun backIsConsumedWhileSettling() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.settling)
+        assertTrue(vm.back())
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.settling)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
     }
 
     /**
