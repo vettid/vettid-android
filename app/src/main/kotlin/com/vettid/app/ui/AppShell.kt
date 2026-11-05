@@ -72,6 +72,7 @@ import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.feature.credential.CredentialAlarmRoute
+import com.vettid.feature.credential.CredentialNewRoute
 import com.vettid.feature.credential.CredentialPasswordRoute
 import com.vettid.feature.credential.CredentialRotateRoute
 import com.vettid.feature.credential.CredentialRoute
@@ -305,6 +306,11 @@ fun AppShell(
                 }
                 // A start-over requested on the portal (VAULT-MESSAGING 0.16.0 §11.11.9): until it runs or is cancelled.
                 val deletionShown = deletion != null
+                // Not on the screens where the member replaces the keys (or changes the credential): the notice would sit over them.
+                val relayShown = relayRefused && current?.hierarchy?.any {
+                    it.hasRoute(CredentialRotateRoute::class) || it.hasRoute(CredentialNewRoute::class) ||
+                        it.hasRoute(CredentialPasswordRoute::class) || it.hasRoute(CredentialAlarmRoute::class)
+                } != true
                 deletion?.let { d ->
                     PendingDeletionBanner(
                         d,
@@ -314,8 +320,8 @@ fun AppShell(
                         failure = deletionFailure,
                     )
                 }
-                // The relay refused the vault's new key (0.84.0 §3.4): lasts while `vault.status` has `relay: "refused"`.
-                if (relayRefused) {
+// The relay refused the vault's new key (0.84.0 §3.4): lasts while `vault.status` has `relay: "refused"`.
+                if (relayShown) {
                     RelayRefusedNotice(
                         first = !alarmShown && !deletionShown,
                         onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
@@ -323,14 +329,14 @@ fun AppShell(
                 }
                 OwnerCheckBanners(
                     gate,
-                    first = !alarmShown && !deletionShown && !relayRefused,
+                    first = !alarmShown && !deletionShown && !relayShown,
                     onCheckNow = { asked = OwnerCheckMode.VOLUNTARY },
                     onHoldOn = gateVm::turnHoldOn,
                     onDismissNotices = gateVm::dismissNotices,
                 )
                 ReleaseUpdateBanner(
                     release,
-                    first = !alarmShown && !deletionShown && !relayRefused && !gate.bannerShown(),
+                    first = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown(),
                     onUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
                     onDismiss = releaseVm::dismiss,
                 )
@@ -340,10 +346,10 @@ fun AppShell(
                         Modifier.testTag("notify_note"),
                         stringResource(R.string.owner_check_notice_ok),
                         shell::noteShown,
-                        statusBarPadding = !alarmShown && !deletionShown && !relayRefused && !gate.bannerShown() && !release.visible,
+                        statusBarPadding = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown() && !release.visible,
                     )
                 }
-                val bannerShown = alarmShown || deletionShown || relayRefused || gate.bannerShown() || release.visible || notifyPrompt.note
+                val bannerShown = alarmShown || deletionShown || relayShown || gate.bannerShown() || release.visible || notifyPrompt.note
                 Box(
                     Modifier
                         .weight(1f)

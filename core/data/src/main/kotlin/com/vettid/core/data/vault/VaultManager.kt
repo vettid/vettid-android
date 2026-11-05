@@ -3314,6 +3314,9 @@ class VaultManager(
         s.openApi.credentialRotate(password, alarmOpen = alarmFlow.value != null)
         windowFlow.value = null
         refreshAlarm(s)
+        // (VAULT-MESSAGING 0.84.0) The new keys end a refused relay key: read `vault.status` again so that the notice goes.
+        runCatching { ownerCheck.refreshOwnerCheck() }
+        Unit
     }
 
     /**

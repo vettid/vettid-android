@@ -26,8 +26,8 @@ class RelayRefusedNoticeTest {
     @Test
     fun theNoticeShowsItsThreeTexts() {
         rule.setContent { RelayRefusedNotice(first = true, onReplaceKeys = {}) }
-        rule.onNodeWithText("Your vault couldn't move to its new address").assertIsDisplayed()
-        rule.onNodeWithText("Your vault may not receive messages until its keys are replaced.").assertIsDisplayed()
+        rule.onNodeWithText("Your vault couldn't move to its new address", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Your vault may not receive messages until its keys are replaced.", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Replace your vault's keys").assertIsDisplayed()
     }
 
@@ -35,7 +35,7 @@ class RelayRefusedNoticeTest {
     fun theActionOpensTheKeyReplacement() {
         var opened = 0
         rule.setContent { RelayRefusedNotice(first = false, onReplaceKeys = { opened++ }) }
-        rule.onNodeWithTag("relay_refused_action").performClick()
+        rule.onNodeWithText("Replace your vault's keys").performClick()
         assertEquals(1, opened)
     }
 

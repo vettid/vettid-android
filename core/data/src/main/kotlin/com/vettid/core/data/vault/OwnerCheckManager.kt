@@ -104,6 +104,41 @@ class OwnerCheckManager(
 
     /** (0.84.0) The latest `vault.status` had `relay: "refused"`; memory only, so that a restart shows nothing until a read. */
     private val relayFlow = MutableStateFlow(false)
+    private val relayLock = Any()
+    private val readSeq = java.util.concurrent.atomic.AtomicLong()
+    private var relayAppliedSeq = 0L
+
+    /** Feed items of `identity.rotation_failed` already acted on (memory only). */
+    private val rotationFailedSeen = HashSet<String>()
+
+    /** The one re-read after an unlock found the relay refused; cancelled at lock. */
+    private var relayRecheck: kotlinx.coroutines.Job? = null
+
+    /** Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled. */
+    private fun clearRelay() {
+        epoch.incrementAndGet()
+        synchronized(relayLock) {
+            relayFlow.value = false
+            relayRecheck?.cancel()
+            relayRecheck = null
+        }
+    }
+
+    /**
+     * (0.84.0) The vault tries the relay once per unlock, after the unlock's own `vault.status`: when that read found the
+     * relay refused, read once more a minute later (divided by the vault's time scale), only while the vault is open.
+     */
+    private fun scheduleRelayRecheck() {
+        synchronized(relayLock) {
+            if (!relayFlow.value) return
+            relayRecheck?.cancel()
+            val wait = TimeScales.divideMs(RELAY_RECHECK_MS, lastTimeScale)
+            relayRecheck = scope.launch {
+                kotlinx.coroutines.delay(wait)
+                if (!locked.value) runCatching { refreshOwnerCheck() }
+            }
+        }
+    }
 
     /** (Release L) The vault locked itself; kept on the phone until it opens again. */
     private val idleFlow = MutableStateFlow(saved?.takeIf { it.idleLocked }?.let { IdleLocked(it.idleAfter) })
@@ -157,7 +192,7 @@ class OwnerCheckManager(
         if (m.type == "vault.locking") {
             unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
             epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
-            relayFlow.value = false // a locked app shows no vault notice (0.84.0); the next `vault.status` after an unlock says again
+            clearRelay() // a locked app shows no vault notice (0.84.0); the next `vault.status` after an unlock says again
             if (VaultJson.str(m.body, "reason") != REASON_OWNER_CHECK) lockedOther = true
         }
         when (m.type) {
@@ -201,6 +236,7 @@ class OwnerCheckManager(
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
         causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true
+        clearRelay() // a lock found by a probe or by ten failed checks
     }
 
     /** Nothing says the vault is locked (an unlock, a passed check, a forgotten state). */
@@ -321,7 +357,10 @@ class OwnerCheckManager(
             epoch.incrementAndGet()
         }
         endIdleLocked()
-        scope.launch { runCatching { refreshOwnerCheck() } }
+        scope.launch {
+            runCatching { refreshOwnerCheck() }
+            if (afterUnlock) scheduleRelayRecheck()
+        }
     }
 
     /** The vault is open again: it no longer is locked by itself. */
@@ -351,6 +390,7 @@ class OwnerCheckManager(
         } catch (_: VaultFailure) {
             null
         }
+        scheduleRelayRecheck()
         if (v == null || !v.gated(now())) return
         val r = check(pin, password, null)
         unlockOutcome.value = r
@@ -411,11 +451,17 @@ class OwnerCheckManager(
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
         val epochAtStart = epoch.get()
+        val seq = readSeq.incrementAndGet()
         val read = vaultGuard(resend = true) { ops().statusRead() }
         val (st0, recovery, timeScale) = read
-        // The latest answer decides (0.84.0): `relay` absent takes the notice away. A read that is not the newest
-        // (the vault locked or was wiped meanwhile) is dropped by the epoch below.
-        if (epoch.get() == epochAtStart) relayFlow.value = read.relayRefused
+        // The latest answer decides (0.84.0): `relay` absent takes the notice away. Applied under the lock only if no lock,
+        // unlock or wipe came since the read began and no newer read was applied already.
+        synchronized(relayLock) {
+            if (epoch.get() == epochAtStart && seq > relayAppliedSeq) {
+                relayAppliedSeq = seq
+                relayFlow.value = read.relayRefused
+            }
+        }
         runCatching { onTimeScale(timeScale, since) }
         lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
         presenceFromStatus(recovery)
@@ -536,7 +582,7 @@ class OwnerCheckManager(
     override fun onLockedHere() {
         unlockPin = null
         epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
-        relayFlow.value = false
+        clearRelay()
         lockedHere = true
         lockedOther = true
         view.value?.let { set(it) }
@@ -599,6 +645,10 @@ class OwnerCheckManager(
      */
     fun onFeed(items: List<FeedItem>) {
         noticeFlow.value = items.mapNotNull { notice(it) }.sortedByDescending { it.at }
+        // (0.84.0) The vault tries the relay once per unlock, after the unlock's read: a new rotation_failed says it did.
+        val fresh = items.filter { it.kind == KIND_ROTATION_FAILED && it.status == STATUS_ACTIVE }
+            .count { synchronized(rotationFailedSeen) { rotationFailedSeen.add(it.itemId) } }
+        if (fresh > 0) scope.launch { runCatching { refreshOwnerCheck() } }
     }
 
     private fun notice(item: FeedItem): OwnerCheckNotice? {
@@ -643,7 +693,8 @@ class OwnerCheckManager(
         estimate = 0
         keepCount = false
         view.value = null
-        relayFlow.value = false
+        clearRelay()
+        rotationFailedSeen.clear()
         markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
@@ -752,6 +803,10 @@ class OwnerCheckManager(
         private const val CODE_BACKOFF = "backoff"
         private const val STATE_LOCKED = "locked"
         private const val STATUS_ACTIVE = "active"
+        private const val KIND_ROTATION_FAILED = "identity.rotation_failed"
+
+        /** (0.84.0) How long after an unlock that found the relay refused the status is read once more (before the time scale). */
+        private const val RELAY_RECHECK_MS = 60_000L
         private const val PRIORITY_URGENT = "urgent"
         private const val STATUS_AFTER_FAILURE_MS = 5_000L
         private const val HOLD_OFF_MARGIN_MIN = 10L
