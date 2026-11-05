@@ -365,7 +365,10 @@ private fun LoadFailed(onRetry: () -> Unit) {
     }
 }
 
-/** Needs attention ([day] null), Today, Yesterday, then the date ("Mon 5 Oct"; with the year when not this year's). */
+/**
+ * Needs attention ([day] null), Today, Yesterday, then the date in the configuration locale's order ("Mon, Oct 5" in the US,
+ * "Mon 5 Oct" in the UK; with the year when not this year's).
+ */
 @Composable
 private fun SectionHeader(day: LocalDate?) {
     val today = LocalDate.now(ZoneId.systemDefault())
@@ -374,7 +377,7 @@ private fun SectionHeader(day: LocalDate?) {
         day == today -> stringResource(R.string.notifications_today)
         day == today.minusDays(1) -> stringResource(R.string.notifications_yesterday)
         day == LocalDate.MIN -> stringResource(R.string.notifications_undated)
-        else -> FeedSections.dayTitle(day, today)
+        else -> FeedSections.dayTitle(day, today, androidx.compose.ui.platform.LocalConfiguration.current.locales[0])
     }
     Text(
         text,
