@@ -251,6 +251,31 @@ class LocationSharingTest {
             scope.runCurrent()
         }
 
+        /**
+         * Runs a call of the manager that goes through the vault (a real IO thread, `vaultGuard`) and waits for it **without the test
+         * body suspending**. While the body is suspended, runTest runs the scheduler on its own, with the virtual time jumping to the
+         * next timer (the 5 s watcher, every share's hour-long expiry): a slow IO thread then lets an hour pass and ends the shares
+         * before the call returns. Here only [TestScope.runCurrent] runs, so the clock stays where the test put it.
+         */
+        suspend fun <T> call(block: suspend () -> T): T {
+            val done = scope.async { runCatching { block() } }
+            settleUntil("the call to the manager did not finish") { done.isCompleted }
+            return done.await().getOrThrow()
+        }
+
+        suspend fun stop(shareId: String) = call { sharing.stop(shareId) }
+
+        /** Lets the manager's jobs run until [condition] holds, for at most [REAL_LIMIT_MS] of real time (it fails with [what]). */
+        fun settleUntil(what: String, condition: () -> Boolean) {
+            val limit = System.nanoTime() + REAL_LIMIT_MS * NANOS_PER_MS
+            scope.runCurrent()
+            while (!condition()) {
+                check(System.nanoTime() < limit) { "Timed out: $what" }
+                Thread.sleep(1)
+                scope.runCurrent()
+            }
+        }
+
         fun fix(accuracy: Double? = 20.0, age: Duration = Duration.ZERO, lat: Double = 52.52, lon: Double = 13.405) =
             Fix(lat, lon, accuracy, 34.0, 1.5, 90.0, clock.minus(age))
 
@@ -268,7 +293,7 @@ class LocationSharingTest {
             precision: SharePrecision = SharePrecision.APPROXIMATE,
             id: String = "c1",
         ): OutgoingShare {
-            val s = sharing.start(ShareRequest(id, timing, precision))
+            val s = call { sharing.start(ShareRequest(id, timing, precision)) }
             settle()
             return s
         }
@@ -342,10 +367,10 @@ class LocationSharingTest {
         r.begin(ShareTiming.ForAWhile(ShareLength.HOUR_1, ShareInterval.SECONDS_30), id = "c")
         assertEquals(30_000L, r.provider.requests.last().intervalMs)
         // The shortest one goes: the next shortest is asked for again.
-        r.sharing.stop("s3")
+        r.stop("s3")
         r.settle()
         assertEquals(60_000L, r.provider.requests.last().intervalMs)
-        r.sharing.stop(one.shareId)
+        r.stop(one.shareId)
         r.settle()
         assertEquals(300_000L, r.provider.requests.last().intervalMs)
     }
@@ -528,7 +553,7 @@ class LocationSharingTest {
     fun stoppingStopsSendingAtOnceAndTellsTheVault() = runTest {
         val r = rig()
         val s = r.begin()
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertEquals(listOf(s.shareId), r.ops.stops)
         assertTrue(r.sharing.outgoing.value.isEmpty())
@@ -547,7 +572,10 @@ class LocationSharingTest {
         r.sharing.stopAll()
         // Sending ended before the vault was told.
         assertFalse(r.sharing.serviceState.value.active)
-        r.settle()
+        // The stops run one after the other on the IO thread: wait for the last one, not for a fixed time.
+        r.settleUntil("both stops reached the vault and the shares are gone") {
+            synchronized(r.ops) { r.ops.stops.size } == 2 && r.sharing.outgoing.value.isEmpty()
+        }
         assertEquals(listOf("s1", "s2"), r.ops.stops.sorted())
         assertTrue(r.sharing.outgoing.value.isEmpty())
     }
@@ -559,7 +587,7 @@ class LocationSharingTest {
         val s = r.begin()
         due = true
         r.elapse(Duration.ofSeconds(5))
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertEquals(listOf(s.shareId), r.ops.stops)
         assertTrue(r.sharing.outgoing.value.isEmpty())
@@ -572,7 +600,7 @@ class LocationSharingTest {
         val s = r.begin()
         r.ops.stopRefusal = "internal"
         try {
-            r.sharing.stop(s.shareId)
+            r.stop(s.shareId)
             fail("expected a failure")
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.OTHER, e.kind)
@@ -591,7 +619,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(1, r.platform.starts)
         unlocked = false
@@ -822,7 +850,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "not_found"
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertTrue(r.sharing.outgoing.value.isEmpty())
     }
@@ -1060,7 +1088,7 @@ class LocationSharingTest {
         val a = r.begin(id = "a")
         r.begin(id = "b")
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(a.shareId) }
+        runCatching { r.stop(a.shareId) }
         r.settle()
         r.emit(r.fix())
         assertTrue("no update at all", r.ops.updates.isEmpty())
@@ -1088,7 +1116,7 @@ class LocationSharingTest {
         val read = backgroundScope.async { r.sharing.refresh() }
         // The read is at the vault before the stop (with settle() alone it could arrive after, and then no longer test the guard).
         r.ops.listAsked.await()
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         // The read answers with the list as it was when asked, which still has the share.
         gate.complete(Unit)
@@ -1117,7 +1145,7 @@ class LocationSharingTest {
         val r = rig(retry = listOf(5L, 15L, 60L).map { Duration.ofSeconds(it) })
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         repeat(6) { r.elapse(Duration.ofSeconds(5)) }
         // Now, and after 5, 10 and 25 seconds; a fixed 5 s would have made seven by 30 s.
         assertEquals(4, r.ops.stops.size)
@@ -1128,7 +1156,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(1, r.store.saved.size)
         r.sharing.forget()
@@ -1238,7 +1266,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(setOf("c1"), r.sharing.serviceState.value.stopping)
         r.ops.stopRefusal = null
@@ -1327,7 +1355,7 @@ class LocationSharingTest {
         r.ops.outgoing = "[${listed("s7", "dev-this")}]"
         r.sharing.resume()
         r.settle()
-        runCatching { r.sharing.stop("s7") }
+        runCatching { r.stop("s7") }
         r.settle()
         val kept = store.saved.single()
         assertEquals("s7", kept.shareId)
@@ -1344,7 +1372,7 @@ class LocationSharingTest {
         r.emit(r.fix(accuracy = 900.0))
         assertTrue(r.ops.updates.isEmpty())
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(a.shareId) }
+        runCatching { r.stop(a.shareId) }
         r.elapse(Duration.ofSeconds(61))
         assertTrue("the held position stays unsent", r.ops.updates.isEmpty())
     }
@@ -1533,7 +1561,7 @@ class LocationSharingTest {
         r.begin()
         r.elapse(stallAfter)
         assertEquals(1, r.platform.stalledNow.size)
-        r.sharing.stop("s1")
+        r.stop("s1")
         r.settle()
         assertTrue(r.platform.stalledNow.isEmpty())
         assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
@@ -1669,5 +1697,7 @@ class LocationSharingTest {
     private companion object {
         const val TRIES = 4
         const val SLEEP_MS = 15L
+        const val REAL_LIMIT_MS = 10_000L
+        const val NANOS_PER_MS = 1_000_000L
     }
 }
