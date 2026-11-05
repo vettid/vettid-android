@@ -157,7 +157,12 @@ class RelayClient(
     val mailboxId: String get() = RelayAuth.mailboxId(key.publicKey)
 
     /** Long-polls run longer than the default read timeout. */
-    private val pollHttp: OkHttpClient by lazy { http.newBuilder().readTimeout(POLL_READ_TIMEOUT_S, TimeUnit.SECONDS).build() }
+    private val pollHttp: OkHttpClient by lazy {
+        // OkHttp's own silent resend of a GET whose response was lost would hide the lost attempt from [execute] (and from
+        // [Call.onLostAttempt]): off here, so every attempt is seen. A connection that never carried the request is still
+        // resent by [TransportRetry] and by [execute].
+        http.newBuilder().readTimeout(POLL_READ_TIMEOUT_S, TimeUnit.SECONDS).retryOnConnectionFailure(false).build()
+    }
 
     internal class Call(
         val method: String,
@@ -170,6 +175,12 @@ class RelayClient(
         val longPoll: Boolean = false,
         /** A signed request's signature is accepted once (§4.1): [TransportRetry] resends it only if it never went out. */
         val transportRetry: TransportRetry.Policy = TransportRetry.Policy.UNSENT_ONLY,
+        /**
+         * Called for each attempt of [execute] that ended without the relay's own answer: an I/O error, or a 5xx (which a
+         * proxy can send after the relay handed messages out). The attempt may have been answered and its messages leased
+         * to it; the retry then finds the mailbox empty and the loss is invisible to the caller (a collect).
+         */
+        val onLostAttempt: (() -> Unit)? = null,
     )
 
     private fun backoffMillis(attempt: Int): Long {
@@ -192,9 +203,11 @@ class RelayClient(
             try {
                 return once(c, read)
             } catch (e: RelayException) {
+                if (e.status >= HTTP_SERVER_ERROR) c.onLostAttempt?.invoke()
                 if (!e.retryable) throw e
                 last = e
             } catch (e: IOException) {
+                c.onLostAttempt?.invoke()
                 last = e
             }
         }
@@ -300,9 +313,13 @@ class RelayClient(
     }
 
     /** Long-polls this mailbox (§6.3): [wait] ≤ 25 s, [max] ≤ 100. */
-    suspend fun collect(wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S), max: Int = DEFAULT_MAX): List<RelayMessage> {
+    suspend fun collect(
+        wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S),
+        max: Int = DEFAULT_MAX,
+        onLostAttempt: (() -> Unit)? = null,
+    ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
-        val o = json(Call("GET", "/v1/mailbox", query = q, longPoll = true)) ?: return emptyList()
+        val o = json(Call("GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt)) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }
     }
 
@@ -408,6 +425,7 @@ class RelayClient(
         private const val JITTER_MS = 250L
         private const val MS_PER_S = 1000L
         private const val HTTP_ERROR = 400
+        private const val HTTP_SERVER_ERROR = 500
         private const val HTTP_CREATED = 201
         private const val HTTP_NO_CONTENT = 204
         private const val ERROR_BODY_LIMIT = 4096

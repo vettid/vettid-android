@@ -522,7 +522,7 @@ class VaultDevice private constructor(
                 collectorEnd.value = e.code
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: RuntimeException) {
+            } catch (e: Exception) {
                 // Anything else that ends it (a message the handler did not expect) is reported the same way, so
                 // that the collection is started again rather than silently gone.
                 collectorEnd.value = e.javaClass.simpleName.ifEmpty { "error" }
@@ -585,9 +585,7 @@ class VaultDevice private constructor(
     @Synchronized
     fun stop() {
         collectScope = null
-        // A request that is out at the relay is cut by this: it may have been handed a message (a device.paired) that
-        // stays leased to the dead request for a visibility timeout. Counted for the transfer's settlement window.
-        if (collectRequestSince != null) cuts.incrementAndGet()
+        // A request that is out at the relay is cut by this; the cancelled round counts it (once) as lost.
         collector?.cancel()
         collector = null
         collectRequestSince = null
@@ -1144,7 +1142,7 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
-        val msgs = own.collect(wait, Int.MAX_VALUE)
+        val msgs = own.collect(wait, Int.MAX_VALUE, onLostAttempt = { cuts.incrementAndGet() })
         for (m in msgs) {
             try {
                 handle(m)

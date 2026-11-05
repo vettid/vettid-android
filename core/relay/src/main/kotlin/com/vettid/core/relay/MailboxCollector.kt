@@ -51,9 +51,10 @@ class MailboxCollector(
     private val onReached: (Long) -> Unit = {},
     /**
      * Called when a collect request ended badly after the relay may have handed it messages (they stay leased to the dead
-     * request for a visibility timeout): an I/O error (a reset, a lost response, a dropped stream), being cancelled with the
-     * request out, or, once messages arrived, a relay status on an ack or anything else that aborted the batch. A relay
-     * status on the request itself is not this.
+     * request for a visibility timeout): an I/O error (a reset, a lost response, a dropped stream; each attempt of the
+     * client's own retries too), a 5xx, a 200 that did not parse, being cancelled with the request out, or, once messages
+     * arrived, a relay status on an ack or anything else that aborted the batch. A 4xx that is the relay's own answer on the
+     * request itself is not this.
      */
     private val onLost: () -> Unit = {},
 ) {
@@ -105,13 +106,14 @@ class MailboxCollector(
             onLost() // cut with a request out
             throw e
         } catch (e: RelayException) {
-            if (got) onLost() // a status on an ack, with messages unhandled behind it
+            // A status on an ack with messages unhandled behind it, or a 5xx (a proxy can send one after the relay handed
+            // messages out). A 4xx that is the relay's own answer on the request itself handed nothing out.
+            if (got || e.status >= SERVER_ERROR) onLost()
             throw e
-        } catch (e: IOException) {
+        } catch (e: Exception) {
+            // An I/O error, or anything else (a 200 whose body did not parse, a checked failure of the handler): the
+            // request was answered or may have been, and what it brought is leased to a request that is gone.
             onLost()
-            throw e
-        } catch (e: RuntimeException) {
-            if (got) onLost()
             throw e
         } finally {
             onRequest(false)
@@ -122,7 +124,8 @@ class MailboxCollector(
     suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle) {}
 
     private suspend fun pollRound(handle: suspend (RelayMessage) -> Unit, onBatch: () -> Unit): Int {
-        val msgs = client.collect(wait)
+        // Every attempt that is lost (the transport retries hide it from the round) is a cut too.
+        val msgs = client.collect(wait, onLostAttempt = onLost)
         if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)
@@ -164,6 +167,7 @@ class MailboxCollector(
     }
 
     private companion object {
+        const val SERVER_ERROR = 500
         const val BASE_MS = 250L
         const val MAX_SHIFT = 7
         const val MAX_DELAY_MS = 30_000L

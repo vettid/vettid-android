@@ -113,6 +113,9 @@ class VaultDeviceTest {
     @Volatile
     private var dropCollect = false
 
+    /** When set, only the next collect (GET) is dropped; the one after it is served (a lost response, then the retry). */
+    private val dropNextCollect = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** When set, acks (DELETE) are refused with 403. */
     @Volatile
     private var refuseAck = false
@@ -194,6 +197,8 @@ class VaultDeviceTest {
                         refused.incrementAndGet()
                         MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
                     }
+                    path == "/v1/mailbox" && request.method == "GET" && dropNextCollect.compareAndSet(true, false) ->
+                        MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
                     path == "/v1/mailbox" && request.method == "GET" && dropCollect ->
                         MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
                     path == "/v1/mailbox" && request.method == "GET" && refuseCollect != null ->
@@ -1501,7 +1506,9 @@ class VaultDeviceTest {
             while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the collection's request is out, holding it
             assertNotNull(d.collectRequestSince)
             d.stop()
-            assertEquals(1L, d.collectorCuts)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10) // counted by the cancelled round
+            kotlinx.coroutines.delay(300)
+            assertEquals("exactly once", 1L, d.collectorCuts)
             leaseGate!!.countDown()
             scope.cancel()
             leaseGate = null
@@ -1591,6 +1598,29 @@ class VaultDeviceTest {
             while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10) // counted when the cancelled round unwinds
             assertEquals(1L, d.collectorCuts)
             leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * Exactly one collect response is lost; the client's own retry gets `[]` and the round succeeds (the message it carried is
+     * leased to the lost request). The loss is counted all the same, and the collection goes on.
+     */
+    @Test
+    fun aLostCollectResponseHiddenByTheRetryIsStillACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            dropNextCollect.set(true)
+            d.start(scope)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
+            assertTrue(d.collectorCuts >= 1L)
+            assertTrue("the retry succeeded: still collecting", d.collecting)
+            scope.cancel()
             serveMailbox = false
         }
     }
