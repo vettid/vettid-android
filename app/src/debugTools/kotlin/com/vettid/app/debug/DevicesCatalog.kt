@@ -15,6 +15,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.feature.devices.DeviceConfirm
 import com.vettid.feature.devices.DeviceFailure
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingCode
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PairingState
@@ -74,8 +75,13 @@ internal object DevicesCatalog {
     private val pending = PendingPairing("p1", "Claude on work laptop", "123456", now.plus(10, ChronoUnit.MINUTES))
 
     @Composable
-    private fun Pair(stage: PairingStage, sheet: Boolean = false, held: Boolean = false, error: FailureKind? = null) =
-        PairScreen(PairUiState(PairingState(stage, error = error), held = held, sheet = sheet), PairActions())
+    private fun Pair(
+        stage: PairingStage,
+        sheet: Boolean = false,
+        held: Boolean = false,
+        error: FailureKind? = null,
+        role: PairRole = PairRole.AGENT,
+    ) = PairScreen(PairUiState(PairingState(stage, error = error, role = role), held = held, sheet = sheet), PairActions())
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "devices" to { Screen(list(phone, agent, paused, desktop, unknown)) },
@@ -161,5 +167,17 @@ internal object DevicesCatalog {
         "devices.pair_paired" to { Pair(PairingStage.Paired("Claude on work laptop", "a1")) },
         "devices.pair_ended" to { Pair(PairingStage.Ended) },
         "devices.pair_lost" to { Pair(PairingStage.Idle, held = true) },
+        // Pair a desktop (owner decision 2026-11-05): the desktop's variants of the pairing screens.
+        "devices.pair_desktop_code" to { Pair(PairingStage.Code(code), role = PairRole.DESKTOP) },
+        "devices.pair_desktop_expired" to { Pair(PairingStage.CodeExpired("p1", now), role = PairRole.DESKTOP) },
+        "devices.pair_desktop_failed" to { Pair(PairingStage.Idle, error = FailureKind.NETWORK, role = PairRole.DESKTOP) },
+        "devices.pair_desktop_compare" to { Pair(PairingStage.Compare(pending), role = PairRole.DESKTOP) },
+        "devices.pair_desktop_compare_sheet" to { Pair(PairingStage.Compare(pending), sheet = true, role = PairRole.DESKTOP) },
+        "devices.pair_desktop_cannot_compare" to {
+            Pair(PairingStage.Compare(PendingPairing("p1", "Work laptop", null, pending.ends)), role = PairRole.DESKTOP)
+        },
+        "devices.pair_desktop_rejected" to { Pair(PairingStage.Rejected(told = true), role = PairRole.DESKTOP) },
+        "devices.pair_desktop_paired" to { Pair(PairingStage.Paired("Work laptop", "d1"), role = PairRole.DESKTOP) },
+        "devices.pair_desktop_ended" to { Pair(PairingStage.Ended, role = PairRole.DESKTOP) },
     )
 }

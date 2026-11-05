@@ -27,7 +27,7 @@ import java.time.Instant
 
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
-/** Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). */
+/** Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2; "Pair a desktop", owner decision 2026-11-05; VAULT-MESSAGING §6.7, §10.3). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [36])
@@ -43,7 +43,10 @@ class PairingManagerTest {
         val refuse = mutableMapOf<String, String>()
         var onApprove: () -> Unit = {}
 
-        override suspend fun create(): JsonObject {
+        val roles = mutableListOf<String>()
+
+        override suspend fun create(role: PairRole): JsonObject {
+            roles += role.wire
             calls += "create"
             refuse["create"]?.let { throw VaultOpException("device.pair.create", it) }
             return created
@@ -533,5 +536,125 @@ class PairingManagerTest {
         m.start()
         assertEquals(listOf("create"), ops.calls)
         assertTrue(m.state.value.stage is PairingStage.Compare)
+    }
+
+    private fun desktopLink() = link(InviteKind.DESKTOP)
+
+    private fun TestScope.desktop(ops: Ops, known: Set<String>? = setOf("me"), listed: List<DeviceInfo> = emptyList()) =
+        manager(ops, known, listed).also {
+            ops.created = obj("""{"pairing_id":"p1","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+        }
+
+    private fun desktopDevice(id: String, name: String) = DeviceInfo(id, "desktop", name, null, null, null, null)
+
+    @Test
+    fun aDesktopCodeAsksForTheDesktopRoleAndTheStateSaysSo() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        assertEquals(listOf("desktop"), ops.roles)
+        assertTrue(m.state.value.stage is PairingStage.Code)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        // The agent's button still asks for an agent.
+        val a = Ops()
+        manager(a).also { it.start() }
+        assertEquals(listOf("agent"), a.roles)
+    }
+
+    @Test
+    fun anAgentLinkIsRefusedForADesktopPairingAndTheReverse() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        // Default (an agent link) for a desktop pairing: never shown.
+        m.start(PairRole.DESKTOP)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(FailureKind.OTHER, m.state.value.error)
+        // A desktop link for an agent pairing: never shown.
+        ops.created = obj("""{"pairing_id":"p1","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+        m.acknowledge()
+        m.start(PairRole.AGENT)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(FailureKind.OTHER, m.state.value.error)
+        // The right kind for each is shown.
+        m.acknowledge()
+        m.start(PairRole.DESKTOP)
+        assertTrue(m.state.value.stage is PairingStage.Code)
+    }
+
+    @Test
+    fun aDesktopPairingIsComparedAndApprovedWithNoGrants() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(name = "Work laptop", role = "desktop"))
+        val c = m.state.value.stage as PairingStage.Compare
+        assertTrue(c.pending.comparable)
+        assertEquals("123456", c.pending.sas)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        m.approve(3600)
+        // The approval op has no place for grants: pairing id and the first session only.
+        assertEquals(listOf("create", "approve:p1:3600"), ops.calls)
+        assertTrue(m.state.value.stage is PairingStage.Paired)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+    }
+
+    @Test
+    fun aDesktopPairingWhosePendingIsForAnAgentOrHasNoCodeCanOnlyBeRejected() = runTest {
+        for ((sas, role) in listOf("123456" to "agent", "12345" to "desktop", "abcdef" to "desktop")) {
+            val ops = Ops()
+            val m = desktop(ops)
+            m.start(PairRole.DESKTOP)
+            m.onEvent(pending(sas = sas, role = role))
+            assertFalse("$sas $role", (m.state.value.stage as PairingStage.Compare).pending.comparable)
+            m.approve(3600)
+            assertEquals(listOf("create"), ops.calls)
+            m.reject()
+            assertEquals(listOf("create", "reject:p1"), ops.calls)
+        }
+        // And the agent's pairing refuses a desktop's pending.
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending(role = "desktop"))
+        assertFalse((m.state.value.stage as PairingStage.Compare).pending.comparable)
+    }
+
+    @Test
+    fun aMismatchRejectsADesktopPairing() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(role = "desktop"))
+        m.reject()
+        assertEquals(listOf("create", "reject:p1"), ops.calls)
+        assertEquals(PairingStage.Rejected(told = true), m.state.value.stage)
+    }
+
+    @Test
+    fun aDesktopCodeExpiresAndALockClearsIt() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        assertTrue(m.state.value.stage is PairingStage.CodeExpired)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        val n = desktop(Ops())
+        n.start(PairRole.DESKTOP)
+        n.onEvent(pending(role = "desktop"))
+        n.clear()
+        assertEquals(PairingState(), n.state.value)
+        n.onEvent(pending(role = "desktop"))
+        assertEquals(PairingStage.Idle, n.state.value.stage)
+    }
+
+    @Test
+    fun theNewDesktopsIdComesFromTheListAsADesktopNotAnAgent() = runTest {
+        val listed = listOf(agent("a1", "Work laptop"), desktopDevice("d1", "Work laptop"))
+        val m = desktop(Ops(), listed = listed)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(name = "Work laptop", role = "desktop"))
+        m.approve(3600)
+        assertEquals("d1", (m.state.value.stage as PairingStage.Paired).deviceId)
     }
 }

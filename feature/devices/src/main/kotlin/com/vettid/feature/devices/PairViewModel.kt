@@ -3,6 +3,7 @@ package com.vettid.feature.devices
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PairingState
@@ -50,7 +51,8 @@ data class PairUiState(
 }
 
 /**
- * Pairing an agent (ANDROID-PLAN 0.1.53 AA2). The pairing itself lives in [PairingRepository] (memory only); this holds
+ * Pairing an agent (ANDROID-PLAN 0.1.53 AA2) or a desktop (owner decision 2026-11-05). The pairing itself lives in
+ * [PairingRepository] (memory only); this holds
  * what the screen adds. Leaving the screen with a pairing not approved rejects it: an abandoned pairing grants nothing.
  */
 @HiltViewModel
@@ -60,6 +62,7 @@ class PairViewModel @Inject constructor(
     ownerCheck: OwnerCheckRepository,
 ) : ViewModel() {
     private val held: Boolean = saved.get<Boolean>(PairRoute.HELD) ?: false
+    private val role: PairRole = if (saved.get<Boolean>(PairRoute.DESKTOP) == true) PairRole.DESKTOP else PairRole.AGENT
     private val local = MutableStateFlow(PairUiState(held = held))
 
     /** The pairing the sheet was opened for. */
@@ -84,7 +87,12 @@ class PairViewModel @Inject constructor(
         // From the feed item the pairing is whatever is held; from the button, a new code (an unfinished one is kept).
         if (!held) {
             repo.acknowledge()
-            viewModelScope.launch { repo.start() }
+            viewModelScope.launch {
+                // A pairing still held for the other role is not shown under this button: it is rejected first.
+                val st = repo.state.value
+                if (st.stage !is PairingStage.Idle && st.role != role) repo.cancel()
+                repo.start(role)
+            }
         }
         // The daily check passed: a refused approval may be sent again.
         viewModelScope.launch {
@@ -101,7 +109,7 @@ class PairViewModel @Inject constructor(
         sawStage = false
         viewModelScope.launch {
             repo.acknowledge()
-            repo.start()
+            repo.start(repo.state.value.role)
         }
     }
 

@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.TopLevelScaffold
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
+import com.vettid.core.ui.components.DropdownMenu
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.CategoryHue
 import com.vettid.core.ui.theme.Spacing
@@ -67,6 +69,7 @@ fun DevicesScreen(
     onRetry: () -> Unit = {},
     onRemovedShown: () -> Unit = {},
     onPair: () -> Unit = {},
+    onPairDesktop: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
     // The name as the list shows it (a name that could pass for the phone or VettID comes with its role).
@@ -85,14 +88,7 @@ fun DevicesScreen(
             // Pair an agent (AA2), also with only this phone listed; not while the list could not be read at all.
             if (!state.loading && !(state.devices.isEmpty() && state.error != null)) {
                 BottomFloatingControls(
-                    end = {
-                        VettIdFab(
-                            icon = Icons.Outlined.Add,
-                            contentDescription = stringResource(R.string.devices_pair),
-                            onClick = onPair,
-                            modifier = Modifier.testTag("pair_agent"),
-                        )
-                    },
+                    end = { PairChooser(onPair, onPairDesktop) },
                 )
             }
         },
@@ -114,6 +110,38 @@ fun DevicesScreen(
                 )
             }
             else -> DeviceList(state, now, onOpen, onRetry)
+        }
+    }
+}
+
+/** The floating button offers both pairings: **Pair an agent** and **Pair a desktop** (owner decision 2026-11-05). */
+@Composable
+private fun PairChooser(onPair: () -> Unit, onPairDesktop: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        VettIdFab(
+            icon = Icons.Outlined.Add,
+            contentDescription = stringResource(R.string.devices_pair_new),
+            onClick = { open = true },
+            modifier = Modifier.testTag("pair_new"),
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.devices_pair)) },
+                onClick = {
+                    open = false
+                    onPair()
+                },
+                modifier = Modifier.testTag("pair_agent"),
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.devices_pair_desktop)) },
+                onClick = {
+                    open = false
+                    onPairDesktop()
+                },
+                modifier = Modifier.testTag("pair_desktop"),
+            )
         }
     }
 }
