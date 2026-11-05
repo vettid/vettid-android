@@ -872,5 +872,7 @@ class PairingManagerTest {
         advanceUntilIdle()
         assertTrue(approving.isCompleted)
         assertEquals(PairRole.AGENT, m.state.value.role)
+        // The late search wrote nothing: the agent's code is still the one held.
+        assertEquals("pa", held(m))
     }
 }
