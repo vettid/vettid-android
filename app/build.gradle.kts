@@ -199,6 +199,8 @@ android {
         jniLibs.keepDebugSymbols += "**/libjingle_peerconnection_so.so"
         // The same for the wallet's secp256k1 library (:core:chain; `check<Variant>Wallet` compares it with the pinned bytes).
         jniLibs.keepDebugSymbols += "**/libsecp256k1-jni.so"
+        // The same for the map's MapLibre library (:core:map, Location L2): the bytes of the pinned artifact, whatever the machine.
+        jniLibs.keepDebugSymbols += "**/libmaplibre.so"
         resources.excludes += listOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/versions/9/OSGI-INF/MANIFEST.MF")
     }
 

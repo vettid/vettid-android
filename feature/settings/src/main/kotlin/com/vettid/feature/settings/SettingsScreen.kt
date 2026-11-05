@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.vettid.core.data.map.MapServer
 import com.vettid.core.data.prefs.AppLockMethod
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Screenshot
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
@@ -191,6 +193,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 releaseUpdate = host.onReleaseUpdate,
                 notifications = { host.navigate(NotificationSettingsRoute) },
                 presence = { host.navigate(PresenceSettingsRoute) },
+                mapServer = { host.navigate(MapServerRoute) },
             ),
             ownerCheck = ownerCheck,
             ownerCheckActions = OwnerCheckSettingsActions(
@@ -339,6 +342,9 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<PresenceSettingsRoute> {
         PresenceSettingsRouteContent(hiltViewModel(), host.onBack)
     }
+    composable<MapServerRoute> {
+        MapServerRouteContent(hiltViewModel(), host.onBack)
+    }
 }
 
 /** The theme choice after [mode], cycling System → Light → Dark. */
@@ -397,6 +403,8 @@ data class SettingsActions(
     val notifications: () -> Unit = {},
     /** Settings → Privacy → Presence (ANDROID-PLAN §4 "Presence"): only where the vault has it. */
     val presence: () -> Unit = {},
+    /** Settings → Privacy → Map server (Location L2). */
+    val mapServer: () -> Unit = {},
 )
 
 /**
@@ -578,6 +586,14 @@ fun SettingsContent(
                     )
                     SettingsDivider()
                 }
+                SettingsRow(
+                    stringResource(R.string.settings_map_server_title),
+                    actions.mapServer,
+                    icon = Icons.Outlined.Map,
+                    supporting = MapServer.of(state.preferences).host,
+                    modifier = Modifier.testTag("map_server_row"),
+                )
+                SettingsDivider()
                 SettingsInfoRow(
                     stringResource(R.string.settings_privacy_sharing),
                     stringResource(R.string.settings_privacy_sharing_body),

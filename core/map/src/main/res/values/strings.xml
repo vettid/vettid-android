@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- NEW: not in the plan (the credit shown on the map when the map style names none; the tile licence requires it) -->
+    <string name="core_map_attribution_fallback">© OpenStreetMap contributors</string>
+</resources>

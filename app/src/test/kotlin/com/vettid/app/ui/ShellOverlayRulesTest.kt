@@ -42,6 +42,7 @@ class ShellOverlayRulesTest {
             "feature/items/src/main/kotlin/com/vettid/feature/items/SharingScreens.kt",
             "feature/items/src/main/kotlin/com/vettid/feature/items/TagsScreen.kt",
             "feature/messages/src/main/kotlin/com/vettid/feature/messages/MessagesScreen.kt",
+            "feature/settings/src/main/kotlin/com/vettid/feature/settings/MapServerSettings.kt",
             "feature/settings/src/main/kotlin/com/vettid/feature/settings/ProfileScreens.kt",
             "feature/settings/src/main/kotlin/com/vettid/feature/settings/SettingsDetailScreens.kt",
             "feature/settings/src/main/kotlin/com/vettid/feature/settings/TransferOutScreen.kt",
