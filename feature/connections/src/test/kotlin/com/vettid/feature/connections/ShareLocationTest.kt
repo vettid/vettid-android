@@ -676,4 +676,33 @@ class ShareLocationTest {
         // Robolectric's default locale is en-US: Automatic reads as miles.
         rule.requireText("within about half a mile")
     }
+
+    @Test
+    fun whileTheVaultsLocationSupportIsUnknownAFailedReadCanBeTriedAgain() = runTest {
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+        location.fail = VaultFailure(FailureKind.NETWORK)
+        val vm = vm()
+        vm.open()
+        vm.setOnce(true)
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, read(vm.uiState).error)
+        assertFalse(read(vm.uiState).available)
+        var tried = 0
+        sheet(read(vm.uiState), ShareLocationActions(onRetry = { tried++ }))
+        rule.onNodeWithTag("share_location_retry").assertIsDisplayed().performClick()
+        assertEquals(1, tried)
+        // The view model reads again and keeps what the member chose.
+        vm.retry()
+        advanceUntilIdle()
+        assertNull(read(vm.uiState).error)
+        assertTrue(read(vm.uiState).available)
+        assertTrue(read(vm.uiState).once)
+    }
+
+    @Test
+    fun aKnownAvailabilityHasNoTryAgainOnItsErrorCard() {
+        sheet(open.copy(error = FailureKind.NETWORK))
+        rule.onNodeWithTag("share_location_error").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("share_location_retry").fetchSemanticsNodes().size)
+    }
 }

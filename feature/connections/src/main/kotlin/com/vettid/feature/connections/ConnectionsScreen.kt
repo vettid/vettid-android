@@ -219,6 +219,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                         else -> share.start()
                     }
                 },
+                onRetry = share::retry,
                 onDismiss = share::dismiss,
             ),
         )

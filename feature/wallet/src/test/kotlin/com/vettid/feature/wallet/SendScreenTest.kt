@@ -465,8 +465,12 @@ class SendScreenTest {
 
     // --- cap_exceeded ---
 
-    private fun textOf(tag: String) =
-        rule.onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Text)!!.joinToString("") { it.text }
+    /** The texts of the node and of what is under it: an announced notice keeps its title and body in a node of their own. */
+    private fun textOf(tag: String): String {
+        fun texts(n: androidx.compose.ui.semantics.SemanticsNode): List<String> =
+            (n.config.getOrNull(SemanticsProperties.Text)?.map { it.text } ?: emptyList()) + n.children.flatMap { texts(it) }
+        return texts(rule.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode()).distinct().joinToString("")
+    }
 
     private fun capText(cap: CapText): String {
         show(done(SendOutcome.CapExceeded(cap)))
@@ -609,5 +613,40 @@ class SendScreenTest {
         // Without `secure = false` the screen holds the window secure (`SecureWindow()`, as the phrase screens do).
         rule.setContent { SendScreen(form(), SendActions()) }
         rule.onNodeWithTag("wallet_send_form").assertIsDisplayed()
+    }
+
+    @Test
+    fun theAmountStatesItsUnitAndTheUnitButtonsAreRadiosWithTheChosenOneSelected() {
+        show(form())
+        rule.onNodeWithTag("wallet_send_amount").assertIsDisplayed()
+        // The suffix is in the field's own node: the unit is said, not only drawn.
+        val texts = rule.onNodeWithTag("wallet_send_amount").fetchSemanticsNode().config[SemanticsProperties.Text].joinToString { it.text }
+        assertTrue(texts, texts.contains("sats") || rule.onAllNodesWithText("sats").fetchSemanticsNodes().isNotEmpty())
+        val sats = rule.onNodeWithTag("wallet_send_unit_sats").fetchSemanticsNode().config
+        val btc = rule.onNodeWithTag("wallet_send_unit_btc").fetchSemanticsNode().config
+        assertEquals(androidx.compose.ui.semantics.Role.RadioButton, sats[SemanticsProperties.Role])
+        assertEquals(androidx.compose.ui.semantics.Role.RadioButton, btc[SemanticsProperties.Role])
+        assertEquals(true, sats[SemanticsProperties.Selected])
+        assertEquals(false, btc[SemanticsProperties.Selected])
+    }
+
+    @Test
+    fun theUnconfirmedSwitchIsOneSwitchWithItsLabel() {
+        var changed: Boolean? = null
+        show(form(), SendActions(onUnconfirmed = { changed = it }))
+        val node = rule.onNodeWithTag("wallet_send_unconfirmed").performScrollTo()
+        val config = node.fetchSemanticsNode().config
+        assertEquals(androidx.compose.ui.semantics.Role.Switch, config[SemanticsProperties.Role])
+        assertEquals(androidx.compose.ui.state.ToggleableState.Off, config[SemanticsProperties.ToggleableState])
+        assertEquals("Include unconfirmed coins", config[SemanticsProperties.Text].joinToString { it.text })
+        node.performClick()
+        assertEquals(true, changed)
+    }
+
+    @Test
+    fun anOutcomeTheMemberDidNotTapForIsAnnounced() {
+        show(done(SendOutcome.Unsent))
+        val live = rule.onNodeWithTag("wallet_send_unsent").fetchSemanticsNode().config.getOrNull(SemanticsProperties.LiveRegion)
+        assertEquals(androidx.compose.ui.semantics.LiveRegionMode.Polite, live)
     }
 }

@@ -25,12 +25,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.DataView
 import com.vettid.core.ui.components.FormScaffold
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
@@ -194,7 +196,7 @@ internal fun DeviceRequestScreen(
             Text(
                 failureText(it, state.retryUntil, state.limit, state.errorCode),
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("failure"),
+                modifier = Modifier.testTag("failure").announced(),
             )
         }
     }
@@ -251,6 +253,8 @@ private fun HeldFacts(held: HeldShow?) {
                     .fillMaxWidth()
                     .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
                     .padding(Spacing.m)
+                    // One node: the label, the length and the agent's text are read together, as the agent's data (A6 audit A36).
+                    .semantics(mergeDescendants = true) {}
                     .testTag("use_data_box"),
             ) {
                 Text(

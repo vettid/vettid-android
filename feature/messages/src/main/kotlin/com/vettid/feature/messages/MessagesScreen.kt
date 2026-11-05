@@ -621,7 +621,12 @@ private fun Composer(state: ConversationUiState, name: String, actions: Conversa
             modifier = Modifier.size(Spacing.touchTarget).testTag("send"),
         ) {
             if (state.sending) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                // Named like the button it replaces, not a bare spinner (A6 audit A12).
+                val sending = stringResource(R.string.messages_send)
+                CircularProgressIndicator(
+                    Modifier.size(20.dp).semantics { contentDescription = sending }.testTag("sending"),
+                    strokeWidth = 2.dp,
+                )
             } else {
                 Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = stringResource(R.string.messages_send))
             }

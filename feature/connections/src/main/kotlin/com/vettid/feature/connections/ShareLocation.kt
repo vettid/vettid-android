@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -71,6 +72,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecondaryButton
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -174,6 +176,7 @@ data class ShareLocationUiState(
     val ongoing: Boolean get() = !once
 }
 
+@Suppress("TooManyFunctions")
 @HiltViewModel
 class ShareLocationViewModel @Inject constructor(
     savedState: SavedStateHandle,
@@ -210,6 +213,16 @@ class ShareLocationViewModel @Inject constructor(
     fun open() {
         local.update { ShareLocationUiState(id, open = true, permission = it.permission) }
         // Whether the vault has location is read first when it is not known yet (the permission waits for it).
+        readAvailability()
+    }
+
+    /** Reads again whether the vault has location after it failed, keeping what the member has chosen (A6 audit E27). */
+    fun retry() {
+        local.update { it.copy(error = null, errorCode = null) }
+        readAvailability()
+    }
+
+    private fun readAvailability() {
         if (location.availability.value == LocationAvailability.UNKNOWN) {
             viewModelScope.launch {
                 try {
@@ -294,6 +307,7 @@ data class ShareLocationActions(
     val onInterval: (ShareInterval) -> Unit = {},
     val onTrail: (Boolean) -> Unit = {},
     val onStart: () -> Unit = {},
+    val onRetry: () -> Unit = {},
     val onDismiss: () -> Unit = {},
 )
 
@@ -439,7 +453,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
                 stringResource(R.string.connections_location_permission_denied),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("share_location_permission_denied"),
+                modifier = Modifier.testTag("share_location_permission_denied").announced(),
             )
         }
     }
@@ -450,7 +464,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
                 stringResource(text),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("share_location_issue"),
+                modifier = Modifier.testTag("share_location_issue").announced(),
             )
         }
         val context = LocalContext.current
@@ -467,6 +481,18 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             title = stringResource(R.string.connections_error_title),
             body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
             modifier = Modifier.testTag("share_location_error"),
+            announce = LiveRegionMode.Polite,
+            // While the vault's location support is unknown, Start stays off: a failed read must be possible to repeat.
+            actions = if (state.availability == LocationAvailability.UNKNOWN) {
+                {
+                    androidx.compose.material3.TextButton(
+                        onClick = actions.onRetry,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("share_location_retry"),
+                    ) { Text(stringResource(R.string.connections_retry)) }
+                }
+            } else {
+                null
+            },
         )
     }
     if (state.alreadySharing) {
@@ -474,7 +500,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             stringResource(R.string.connections_location_already_sharing, name),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("share_location_already_sharing"),
+            modifier = Modifier.testTag("share_location_already_sharing").announced(),
         )
     }
     PrimaryButton(

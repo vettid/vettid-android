@@ -178,6 +178,22 @@ class SpendingLimitsScreenTest {
         rule.onNodeWithTag("limit_remove_period").performScrollTo().assertExists()
         rule.onNodeWithTag("limit_remove_tx").assertDoesNotExist()
     }
+
+    @Test
+    fun theRemoveLimitSwitchIsOneSwitchWithItsLabel() {
+        var changed: Boolean? = null
+        show(
+            state(perTx = null, perPeriod = 2_000_000, step = LimitsStep.RAISE, raise = true),
+            SpendingLimitsActions(onRemovePeriod = { changed = it }),
+        )
+        val node = rule.onNodeWithTag("limit_remove_period").performScrollTo()
+        val config = node.fetchSemanticsNode().config
+        assertEquals(androidx.compose.ui.semantics.Role.Switch, config[androidx.compose.ui.semantics.SemanticsProperties.Role])
+        assertEquals(androidx.compose.ui.state.ToggleableState.Off, config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState])
+        assertEquals("Remove this limit", config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString { it.text })
+        node.performClick()
+        assertEquals(true, changed)
+    }
 }
 
 private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTextCount(text: String, count: Int) {

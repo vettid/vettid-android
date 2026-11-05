@@ -285,4 +285,18 @@ class AgentRuleScreenTest {
         rule.onNodeWithTag("agent_rule_ways_warning").assertDoesNotExist()
         rule.onNodeWithText("Not used", substring = true).assertDoesNotExist()
     }
+
+    @Test
+    fun theExistingItemsSwitchIsOneSwitchWithItsLabelAndState() {
+        var changed: Boolean? = null
+        show(state(d = draft.copy(includeExisting = true)), RuleEditActions(onIncludeExisting = { changed = it }))
+        val node = rule.onNodeWithTag("rule_existing").performScrollTo()
+        val config = node.fetchSemanticsNode().config
+        assertEquals(androidx.compose.ui.semantics.Role.Switch, config[androidx.compose.ui.semantics.SemanticsProperties.Role])
+        assertEquals(androidx.compose.ui.state.ToggleableState.On, config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState])
+        // The label is in the same node, not beside a bare switch.
+        assertEquals(true, config[androidx.compose.ui.semantics.SemanticsProperties.Text].isNotEmpty())
+        node.performClick()
+        assertEquals(false, changed)
+    }
 }

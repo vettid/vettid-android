@@ -135,6 +135,7 @@ private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier
         stringResource(R.string.recover_failed_title),
         text ?: failureText(kind!!.messageRes(), kind.vaultCode(shownCode)),
         modifier.testTag("error"),
+        announce = LiveRegionMode.Polite,
     )
 }
 
