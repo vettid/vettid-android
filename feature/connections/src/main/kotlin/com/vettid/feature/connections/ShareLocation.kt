@@ -201,6 +201,9 @@ class ShareLocationViewModel @Inject constructor(
         s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a, units = u)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
 
+    // Declared before init: an initializer after it would reset the job that init's open() started.
+    private var readJob: kotlinx.coroutines.Job? = null
+
     init {
         if (requestId != null) open()
     }
@@ -223,8 +226,6 @@ class ShareLocationViewModel @Inject constructor(
         local.update { it.copy(error = null, errorCode = null) }
         readAvailability()
     }
-
-    private var readJob: kotlinx.coroutines.Job? = null
 
     private fun readAvailability() {
         if (location.availability.value == LocationAvailability.UNKNOWN) {
