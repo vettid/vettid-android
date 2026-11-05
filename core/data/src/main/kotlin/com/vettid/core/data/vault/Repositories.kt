@@ -544,8 +544,10 @@ interface MoveRepository {
     /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
-     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after one collect (A6 audit
-     * N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5). True when the vault gave this phone the member's
+     * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for the settlement
+     * window (the relay's advertised visibility timeout + the 25 s long-poll cap + 5 s, about 90 s;
+     * A6 audit N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5 erratum, owner decision a,
+     * 2026-11-05; RELAY-PROTOCOL §6.3). True when the vault gave this phone the member's
      * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
      * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
      */
@@ -656,8 +658,24 @@ interface MoveRepository {
 
         /**
          * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) [awaitTransferIn] reached the 11-minute deadline, and the
-         * one collect after it brought no `device.paired`: the handshake was dropped; a new code is needed.
+         * collecting for the settlement window after it (the relay's visibility timeout + 25 s + 5 s;
+         * rule 5 erratum, owner decision a, 2026-11-05; RELAY-PROTOCOL §6.3)
+         * brought no `device.paired`: the handshake was dropped; a new code is needed.
          */
         const val CODE_TRANSFER_DROPPED = "transfer_dropped"
+
+        /**
+         * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+         * [awaitTransferIn]'s settlement window was cut short because the session went away
+         * (a wipe, a forget, a sign-out, a dead mailbox), with [FailureKind.RETRY]: the transfer was not dropped by it;
+         * the screen offers a new code or a recovery.
+         */
+        const val CODE_TRANSFER_SESSION_ENDED = "transfer_session_ended"
+
+        /**
+         * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)) The settlement window is running: a
+         * new code and the member's abandon are refused until it ends ([FailureKind.BUSY]); the screen does not offer them.
+         */
+        const val CODE_TRANSFER_SETTLING = "transfer_settling"
     }
 }

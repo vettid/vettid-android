@@ -3,6 +3,7 @@ package com.vettid.feature.votes
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.ReportProblem
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -78,6 +83,7 @@ import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SecureWindow
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
@@ -107,6 +113,7 @@ data class VoteActions(
     val onPin: (String) -> Unit = {},
     val onConfirmRelease: () -> Unit = {},
     val onDismissCastProblem: () -> Unit = {},
+    val onDismissRestore: () -> Unit = {},
     val onCloseWindow: () -> Unit = {},
     val onDismissAlreadyVoted: () -> Unit = {},
     val proofFileName: () -> String = { "vettid-vote.json" },
@@ -214,6 +221,18 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 stringResource(R.string.vote_name_by_service),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // The list is in memory but the vote itself could not be read: say so, with Retry, not an empty page (A6 audit E26).
+        if (d == null && state.loadError != null) {
+            val e = state.loadError
+            NoticeCard(
+                kind = NoticeKind.WARNING,
+                title = stringResource(R.string.vote_error_title),
+                body = failureText(e.kind.messageRes(), e.kind.vaultCode(e.shownCode)),
+                modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("vote_detail_load_failed"),
+                announce = LiveRegionMode.Polite,
+                actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.votes_retry)) } },
             )
         }
         if (d != null) ProposalBody(d, service, s.closesAt?.let { Times.full(it) }, state)
@@ -342,6 +361,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                         NoticeKind.WARNING,
                         stringResource(R.string.vote_save_proof),
                         failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)),
+                        announce = LiveRegionMode.Polite,
                     )
                 }
                 // A problem record, once its proof is saved: Release (the vault refuses it until then, and for an open vote).
@@ -349,7 +369,13 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 if (state.proofExported && releasable && !state.released) {
                     SecondaryButton(stringResource(R.string.vote_release), actions.onRelease, modifier = Modifier.testTag("vote_release"))
                 }
-                if (state.released) Text(stringResource(R.string.vote_released), style = MaterialTheme.typography.bodyMedium)
+                if (state.released) {
+                    Text(
+                        stringResource(R.string.vote_released),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.announced(),
+                    )
+                }
             }
         }
     }
@@ -543,12 +569,14 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
     val sending = state.cast == CastStep.SENDING
     ModalBottomSheet(
         onDismissRequest = { if (!sending) actions.onDismissCast() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetUnlessSending(sending),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_confirm_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
+            BackHandler(enabled = sending) {}
             // The app's own sentence, never the proposal's, in its own element and read first.
             Text(
                 stringResource(R.string.vote_disclosure, service),
@@ -579,16 +607,34 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
     }
 }
 
+/**
+ * A sheet that a swipe, a tap on the scrim or Back cannot hide while the cast is on its way (A6 audit N22): Material animates to
+ * Hidden before it asks [androidx.compose.material3.ModalBottomSheet]'s `onDismissRequest`, so the guard is in the state.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun sheetUnlessSending(sending: Boolean): SheetState {
+    val sendingNow by rememberUpdatedState(sending)
+    return rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !sendingNow })
+}
+
 /** The unlock window prompt (ANDROID-PLAN §4), before `vote.cast` when the window is closed. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant) {
     val waiting = state.retryUntil?.isAfter(now) == true
-    ModalBottomSheet(onDismissRequest = actions.onDismissCast, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    // No dismiss and no Cancel while the cast is on its way: it would be sent whatever the screen shows (A6 audit N22).
+    val sending = state.cast == CastStep.SENDING
+    ModalBottomSheet(
+        onDismissRequest = { if (!sending) actions.onDismissCast() },
+        sheetState = sheetUnlessSending(sending),
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_password_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
+            BackHandler(enabled = sending) {}
             Text(
                 stringResource(R.string.vote_password_title),
                 style = MaterialTheme.typography.titleMedium,
@@ -611,7 +657,12 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
                 busy = state.cast == CastStep.SENDING,
                 modifier = Modifier.testTag("vote_password_confirm"),
             )
-            SecondaryButton(stringResource(com.vettid.core.ui.R.string.core_ui_cancel), actions.onDismissCast)
+            SecondaryButton(
+                stringResource(com.vettid.core.ui.R.string.core_ui_cancel),
+                actions.onDismissCast,
+                enabled = !sending,
+                modifier = Modifier.testTag("vote_password_cancel"),
+            )
         }
     }
 }
@@ -623,13 +674,25 @@ private fun RestoreDialog(state: VoteUiState, actions: VoteActions) {
     val choice = AccountNames.isolateOrNull(state.restoreLabel).orEmpty()
     val title = AccountNames.isolateOrNull(state.summary?.title).orEmpty()
     AlertDialog(
-        onDismissRequest = {},
+        // Back and the scrim close it for this visit, also offline, when neither answer can reach the vault (A6 audit E25).
+        onDismissRequest = { if (!state.restoreBusy) actions.onDismissRestore() },
         title = { Text(stringResource(R.string.vote_restore_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 Text(stringResource(R.string.vote_restore_body, service, choice, title))
                 state.restoreProblem?.let { p ->
-                    Text(failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)), color = MaterialTheme.colorScheme.error)
+                    Text(
+                        failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.announced().testTag("restore_problem"),
+                    )
+                }
+                TextButton(
+                    onClick = actions.onDismissRestore,
+                    enabled = !state.restoreBusy,
+                    modifier = Modifier.testTag("restore_back"),
+                ) {
+                    Text(stringResource(R.string.vote_confirm_back))
                 }
             }
         },

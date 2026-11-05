@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Share
@@ -474,7 +475,13 @@ private fun EndsSection(state: RuleEditUiState, onExpiry: (RuleExpiry) -> Unit) 
 
 @Composable
 private fun ExistingSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    // One control with its label and note (A6 audit A9): TalkBack reads "Switch, on", not a bare switch beside two texts.
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = on, role = Role.Switch, onValueChange = onChange)
+            .testTag("rule_existing"),
+    ) {
         Column(Modifier.weight(1f)) {
             Text(stringResource(R.string.items_rule_existing), style = MaterialTheme.typography.bodyLarge)
             Text(
@@ -483,7 +490,7 @@ private fun ExistingSwitch(on: Boolean, onChange: (Boolean) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = on, onCheckedChange = onChange, modifier = Modifier.testTag("rule_existing"))
+        Switch(checked = on, onCheckedChange = null)
     }
 }
 

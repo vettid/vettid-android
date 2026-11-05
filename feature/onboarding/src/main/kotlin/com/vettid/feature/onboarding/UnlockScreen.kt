@@ -360,7 +360,7 @@ fun UnlockContent(
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
                     imeAction = if (state.checkDue && !state.returnAsked) ImeAction.Next else ImeAction.Done,
-                    onImeAction = if (state.checkDue && !state.returnAsked) ({}) else actions::submit,
+                    onImeAction = if (state.checkDue && !state.returnAsked) null else actions::submit,
                     modifier = Modifier.testTag("unlock_pin"),
                 )
                 if (state.checkDue && !state.returnAsked) {

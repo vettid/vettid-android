@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +23,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -35,6 +42,7 @@ import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.QrScanner
 import com.vettid.core.ui.components.SecretField
@@ -341,6 +349,8 @@ private fun AmountField(state: SendUiState, actions: SendActions) {
         onValueChange = actions.onAmount,
         enabled = !state.sendAll,
         label = { Text(stringResource(R.string.wallet_send_amount_label)) },
+        // The unit is said by the field, not only by the fill of the buttons below (A6 audit A33).
+        suffix = { Text(stringResource(if (state.unit == AmountUnit.BTC) R.string.wallet_unit_btc else R.string.wallet_unit_sats)) },
         isError = bad,
         supportingText = if (bad) {
             { Text(stringResource(if (state.unit == AmountUnit.BTC) R.string.wallet_amount_bad else R.string.wallet_send_amount_sats_bad)) }
@@ -351,7 +361,11 @@ private fun AmountField(state: SendUiState, actions: SendActions) {
         keyboardOptions = KeyboardOptions(keyboardType = if (state.unit == AmountUnit.BTC) KeyboardType.Decimal else KeyboardType.Number),
         modifier = Modifier.fillMaxWidth().testTag("wallet_send_amount"),
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         UnitButton(R.string.wallet_send_unit_btc, state.unit == AmountUnit.BTC, "wallet_send_unit_btc") { actions.onUnit(AmountUnit.BTC) }
         UnitButton(R.string.wallet_send_unit_sats, state.unit == AmountUnit.SATS, "wallet_send_unit_sats") {
             actions.onUnit(AmountUnit.SATS)
@@ -370,10 +384,12 @@ private fun AmountField(state: SendUiState, actions: SendActions) {
 
 @Composable
 private fun UnitButton(label: Int, selected: Boolean, tag: String, onClick: () -> Unit) {
+    // A radio in a group, so the chosen unit is said, not only drawn (A6 audit A33).
+    val modifier = Modifier.testTag(tag).semantics { role = Role.RadioButton; this.selected = selected }
     if (selected) {
-        androidx.compose.material3.Button(onClick = onClick, modifier = Modifier.testTag(tag)) { Text(stringResource(label)) }
+        androidx.compose.material3.Button(onClick = onClick, modifier = modifier) { Text(stringResource(label)) }
     } else {
-        OutlinedButton(onClick = onClick, modifier = Modifier.testTag(tag)) { Text(stringResource(label)) }
+        OutlinedButton(onClick = onClick, modifier = modifier) { Text(stringResource(label)) }
     }
 }
 
@@ -384,7 +400,7 @@ private fun FeeChoices(state: SendUiState, actions: SendActions) {
         Text(
             stringResource(R.string.wallet_send_fees_failed),
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("wallet_send_fees_failed"),
+            modifier = Modifier.testTag("wallet_send_fees_failed").announced(),
         )
         TextButton(onClick = actions.onRetryFees, modifier = Modifier.testTag("wallet_send_fees_retry")) {
             Text(stringResource(R.string.wallet_try_again))
@@ -450,9 +466,15 @@ private fun FeeRow(selected: Boolean, enabled: Boolean, tag: String, onClick: ()
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, tag: String) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+    // One control with its label (A6 audit A32).
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(label, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange, modifier = Modifier.testTag(tag))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
@@ -462,7 +484,7 @@ private fun ProblemText(state: SendUiState, problem: SendProblem, actions: SendA
     Column(Modifier.fillMaxWidth().testTag("wallet_send_problem"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         when (problem) {
             is SendProblem.Refused -> PsbtProblem(problem.reason, problem.alarm, problem.byVault)
-            else -> Text(problemText(state, problem), color = MaterialTheme.colorScheme.error)
+            else -> Text(problemText(state, problem), color = MaterialTheme.colorScheme.error, modifier = Modifier.announced())
         }
         if (problem is SendProblem.NoChain || problem == SendProblem.ServerFailed) {
             TextButton(onClick = actions.onChainServer, modifier = Modifier.testTag("wallet_send_problem_chain_server")) {
@@ -511,9 +533,16 @@ private fun PsbtProblem(reason: String, alarm: Boolean, byVault: Boolean) {
         PsbtText.OTHER -> stringResource(R.string.wallet_psbt_other, reason)
     }
     if (alarm || kind == PsbtText.WRONG_SEED) {
-        NoticeCard(NoticeKind.URGENT, stringResource(R.string.wallet_send), text, Modifier.testTag("wallet_send_psbt_alarm"))
+        // The alarm for a wrong seed is assertive: it interrupts (A6 audit A29).
+        NoticeCard(
+            NoticeKind.URGENT,
+            stringResource(R.string.wallet_send),
+            text,
+            Modifier.testTag("wallet_send_psbt_alarm"),
+            announce = LiveRegionMode.Assertive,
+        )
     } else {
-        Text(text, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("wallet_send_psbt"))
+        Text(text, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("wallet_send_psbt").announced())
     }
     if (kind == PsbtText.TECHNICAL) {
         Text(stringResource(R.string.wallet_psbt_details), style = MaterialTheme.typography.labelLarge)
@@ -699,7 +728,7 @@ private fun DoneStep(state: SendUiState, actions: SendActions, modifier: Modifie
         if (state.discardLocked && !state.checking) {
             Text(stringResource(R.string.wallet_send_may_be_sent), modifier = Modifier.testTag("wallet_send_may_be_sent"))
         }
-        state.error?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error) }
+        state.error?.let { Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error, modifier = Modifier.announced()) }
     }
     if (state.discardAsk) {
         ConfirmDialog(
@@ -732,6 +761,7 @@ private fun OutcomeText(outcome: SendOutcome, discardLocked: Boolean) {
                 ),
             ),
             Modifier.testTag("wallet_send_sent"),
+            announce = LiveRegionMode.Polite,
         )
         is SendOutcome.BroadcastFailed -> {
             val host = outcome.host ?: stringResource(R.string.wallet_send_host_none)
@@ -741,10 +771,10 @@ private fun OutcomeText(outcome: SendOutcome, discardLocked: Boolean) {
                 } else {
                     stringResource(R.string.wallet_send_broadcast_failed, host, stringResource(reasonText(outcome.reason)))
                 },
-                modifier = Modifier.testTag("wallet_send_broadcast_failed"),
+                modifier = Modifier.testTag("wallet_send_broadcast_failed").announced(),
             )
         }
-        is SendOutcome.CapExceeded -> Text(capMessage(outcome.cap), modifier = Modifier.testTag("wallet_send_cap"))
+        is SendOutcome.CapExceeded -> Text(capMessage(outcome.cap), modifier = Modifier.testTag("wallet_send_cap").announced())
         is SendOutcome.InvalidPsbt -> PsbtProblem(outcome.reason, outcome.alarm, outcome.byVault)
         SendOutcome.SignedDiffers -> Note(R.string.wallet_send_signed_differs, "wallet_send_differs")
         SendOutcome.AlreadySigned -> Text(
@@ -752,7 +782,7 @@ private fun OutcomeText(outcome: SendOutcome, discardLocked: Boolean) {
                 stringResource(
                     if (discardLocked) R.string.wallet_send_already_signed_wait else R.string.wallet_send_already_signed_discard,
                 ),
-            modifier = Modifier.testTag("wallet_send_already"),
+            modifier = Modifier.testTag("wallet_send_already").announced(),
         )
         SendOutcome.Unanswered -> Note(R.string.wallet_send_unanswered, "wallet_send_unanswered")
         SendOutcome.Lapsed -> Note(R.string.wallet_send_lapsed, "wallet_send_lapsed")
@@ -764,7 +794,7 @@ private fun OutcomeText(outcome: SendOutcome, discardLocked: Boolean) {
 }
 
 @Composable
-private fun Note(text: Int, tag: String) = Text(stringResource(text), modifier = Modifier.testTag(tag))
+private fun Note(text: Int, tag: String) = Text(stringResource(text), modifier = Modifier.testTag(tag).announced())
 
 private fun reasonText(reason: BroadcastReason): Int = when (reason) {
     BroadcastReason.NO_ANSWER -> R.string.wallet_send_reason_other

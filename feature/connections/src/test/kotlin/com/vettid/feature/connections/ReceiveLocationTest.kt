@@ -319,7 +319,7 @@ class ReceiveLocationTest {
         val vm = positionVm()
         advanceUntilIdle()
         rule.setContent { PositionScreen(read(vm.uiState), {}, {}, {}, {}) }
-        rule.onNodeWithText("About 3.2 km north-east of this phone").assertIsDisplayed()
+        rule.onNodeWithText("About 3.2 km northeast of this phone").assertIsDisplayed()
     }
 
     @Test

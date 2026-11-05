@@ -314,7 +314,8 @@ private fun PinStep(step: ExportStep.Pin, actions: HistoryExportActions, modifie
         header = { Glyph(Icons.Outlined.Lock) },
     ) {
         val error = when {
-            waiting > 0 -> stringResource(R.string.history_export_pin_backoff, waiting)
+            // Said once; the counting text is the supporting line, which is not a live region (A6 audit A28).
+            waiting > 0 -> stringResource(R.string.history_export_pin_backoff_undated)
             step.error == FailureKind.BAD_PIN -> stringResource(R.string.history_export_pin_wrong)
             step.error == FailureKind.BACKOFF -> stringResource(R.string.history_export_pin_backoff_undated)
             step.error != null -> failureText(step.error.messageRes(), step.error.vaultCode(step.errorCode))
@@ -326,6 +327,7 @@ private fun PinStep(step: ExportStep.Pin, actions: HistoryExportActions, modifie
             label = stringResource(R.string.history_export_pin_label),
             isPin = true,
             error = error,
+            supporting = if (waiting > 0) stringResource(R.string.history_export_pin_backoff, waiting) else null,
             enabled = !step.busy,
             imeAction = ImeAction.Done,
             onImeAction = { if (step.canSend(Instant.now())) actions.onSubmitPin() },
