@@ -6,7 +6,7 @@ This is the close-out of the A6 audit's first three sections ([A6-AUDIT](A6-AUDI
 - every A, N and E finding of the audit, re-checked against current master;
 - the screens added since 2026-10-11, audited for the same three areas.
 
-Sections 4–8 of the audit (R, S, P, G, T) are not covered here. Nothing in the app was changed.
+Sections 4–8 of the audit (R, S, P, G, T) are not covered here. The audit itself changed nothing in the app; the fixes that followed are in the Status cells and the commits named there.
 
 - **Audited commit:** `1981bf36` (master, 2026-11-05).
 - **Method:** reading the code of the `:feature:*`, `:core:*` and `:app` main source sets, plus `git log` and
@@ -96,17 +96,17 @@ The audit's own A1 fix said this must never happen.
 | A5 | Public | **Fixed** `ed891c76` | `ui/Forms.kt:134` `KeyboardActions(onAny = { onImeAction() })` with default `{}`. `ImeAction.Next` with no focus move at `credential/NewCredential.kt:249,251,256`, `credential/CredentialScreens.kt:570,577,621`, `onboarding/OwnerCheckScreen.kt:235`, `onboarding/OnboardingScreens.kt:447,482`, `onboarding/UnlockScreen.kt:362-363`, `settings/SettingsDetailScreens.kt:473,477,488-489,747`, `settings/TransferOutScreen.kt:158`, `settings/NewPhoneSecret.kt:111` | Move focus down on Next | al-cal |
 | A6 | Public | Open | `StepList` rows `clearAndSetSemantics`, no live region (`ui/Forms.kt:504-543`); used at `onboarding/OnboardingScreens.kt:605`, `onboarding/ReleaseUpdateScreen.kt:210` | One polite live text for the current step | al-cal |
 | A7 | Public | **Partly** | #120 `146179bc`: "Copy the current code" (`items/ItemDetailScreen.kt:419`) | Code still `chunked(3).joinToString(" ")` with no description (`:406`); `items_otp_left` still "%1$d s" (`:414`). The fix needs a "N seconds left" text (**owner**) | al-cal, owner (text) |
-| A8 | Public | **Fixed** `ed891c76` (no line limit); selectable fingerprints remain | `ui/Settings.kt:203,217` `maxLines = 2` + ellipsis; vault id (`settings/SettingsDetailScreens.kt:219`), boot key (`:637`); no `SelectionContainer`, no monospace | Same fix | al-cal |
+| A8 | Public | **Partly** `ed891c76` (no line limit); selectable fingerprints remain | `ui/Settings.kt:203,217` `maxLines = 2` + ellipsis; vault id (`settings/SettingsDetailScreens.kt:219`), boot key (`:637`); no `SelectionContainer`, no monospace | Same fix | al-cal |
 | A9 | Public | **Fixed** `e58423ab` | `items/RuleEditScreen.kt:476-487` `ExistingSwitch`: texts beside a bare `Switch` | `Row.toggleable(role = Role.Switch)` | al-cal |
 | A10 | Public | Open | `items/ItemsViewModels.kt:729` only sets `showErrors`; no scroll or focus (`items/ItemEditScreen.kt:235`) | Same fix (M) | al-cal |
 | A11 | Public | Open | `settings/TransferOutViewModel.kt:322` `WINDOW` 10 min; ticker `:167-178`; plain `Window()` text (`settings/TransferOutScreen.kt:256,299-306`) | Announce at 2 min and 30 s; window length is an **owner** decision | al-cal, owner |
 | A12 | Public | **Partly** `e58423ab` (spinner named); a live region for a new message remains | No live region for a new message (`messages/MessagesScreen.kt:393`, scroll only); send button becomes a bare `CircularProgressIndicator` (`:623-624`) | Same fix | al-cal |
 | A13 | Public | Open | `items_masked_value` "••••••••" with no description (`items/ItemDetailScreen.kt:332`, `items/SharingScreens.kt:603`); `FieldRow` (`:313`) not merged | Same fix. "Hidden" is a new text (**owner**) | al-cal, owner (text) |
 | A14 | Public | **Fixed** `ed891c76` | `ui/ShellOverlays.kt:27-73` wrappers add no scroll; `ui/ConfirmDialog.kt:35` plain `Text`; the audited dialogs unchanged (e.g. `settings/SettingsScreen.kt:729,780`, `items/ItemDetailScreen.kt:447`, `credential/CredentialScreens.kt:423,456,486`, `items/SharingScreens.kt:519`) | `verticalScroll` in the `AlertDialog` wrapper's `text` slot and in `ConfirmDialog` covers most sites; also A41. Clipping Suspected | al-cal, lead |
-| A15 | Public | **Partly** `ed891c76` (drawer row and top bars); the safety code row remains | `ui/Drawer.kt:110` `.height(56.dp)`; `ui/TopBars.kt:65` `.height(72.dp)`, `:76` `maxLines = 1`; `ui/TopBarSearch.kt:89`; safety code a non-wrapping 40sp `Row` (`ui/Conversation.kt:102-121`) | `heightIn(min = …)`; wrap or scale the code. Effect Suspected | al-cal, lead |
+| A15 | Public | **Partly** `ed891c76` (drawer row and top bars); the safety code row and the `TopBars.kt:76` `maxLines = 1` title remain | `ui/Drawer.kt:110` `.height(56.dp)`; `ui/TopBars.kt:65` `.height(72.dp)`, `:76` `maxLines = 1`; `ui/TopBarSearch.kt:89`; safety code a non-wrapping 40sp `Row` (`ui/Conversation.kt:102-121`) | `heightIn(min = …)`; wrap or scale the code. Effect Suspected | al-cal, lead |
 | A16 | Public | **Partly** `e58423ab` (`Failure`/`ClaimFailure` announced); the hard `"\n"` and the second refusal in a group remain | `ClaimFailure`/`Failure` not announced (`onboarding/MoveScreens.kt:129-138,377-384`); hard `"\n"` (`onboarding/RecoverTypeScreen.kt:148`); a second refusal in a group not re-announced (`onboarding/RecoverViewModel.kt:353`) | Same fix | al-cal |
 | A17 | Public | **Fixed** `095cff60` | `app/ui/AppLockGate.kt:57-58` `.focusable().onKeyEvent { true }`. The lock screen is composed *instead of* the content, so nothing is beneath it | Let Tab, D-pad, Enter, Space through | al-cal |
-| A18 | Public | Open | `theme/Color.kt:144` (dark `Navy600`), `:178` (light `Mist300`) unchanged; no `SwitchDefaults` override. Numbers in the audit stand (C) | A 3:1 `outline` is a palette change against the website tokens: **owner** to approve the colour; then al-cal, and extend `ContrastTest` | owner, al-cal |
+| A18 | Public | Open | `theme/Color.kt:144` (dark `Navy600`), `:178` (light `Mist300`) unchanged; no `SwitchDefaults` override. Numbers in the audit stand (C) | A 3:1 `outline` is a palette change against the website tokens: **owner** to approve the color; then al-cal, and extend `ContrastTest` | owner, al-cal |
 | A19 | Polish | Open | `ui/Conversation.kt:75,130` `META_ALPHA = 0.8f`; `TagLabel` unchanged (C) | Drop the alpha | al-cal |
 | A20 | Polish | Open | `items/SharingScreens.kt:341,465,471`; `connections/ConnectionSharingCards.kt:355`; `connections/ConnectionsScreen.kt:555` | Names in descriptions (new texts, **owner**) | al-cal, owner |
 | A21 | Polish | Open | No `heading()` in `items/ItemEditScreen.kt`, `items/RuleEditScreen.kt`, `settings/ProfileScreens.kt`, `history/*`; only `selectableGroup` is `items/RuleEditScreen.kt:300` (pre-audit) | Same fix | al-cal |
@@ -127,8 +127,8 @@ The audit's own A1 fix said this must never happen.
   - `success` and `warning`;
   - `error` off the background;
   - `onPrimary`/`primary` and `onError`/`error`;
-  - colours with alpha.
-- The new features add no hard-coded colour; the only ones are the QR code's black and white
+  - colors with alpha.
+- The new features add no hard-coded color; the only ones are the QR code's black and white
   (`ui/QrCode.kt:89-90`).
 - New contrast concerns are the agent data box (A36, which uses `outline`) and the map's circle (A38).
 
@@ -240,14 +240,14 @@ These cover the screens added since 2026-10-11:
 | A33 | The BTC/sats unit is shown by button fill only, and the amount has no unit *(wallet)*. | `UnitButton` swaps `Button`/`OutlinedButton` with no selected state (`wallet/SendScreen.kt:354-378`); label "Amount" (`:343`) | A TalkBack user types 50000 meaning sats while BTC is selected. The review shows the true amount, but this is a money field | Unit suffix as `LimitField` (`wallet/Limits.kt:209`) with the existing `wallet_unit_btc`/`wallet_unit_sats`; `selectable(role = RadioButton)` in a `selectableGroup` | V; **Fixed** `e58423ab` | S | al-cal |
 | A34 | The recovery phrase grid may be read across columns *(wallet)*. | Two `Column`s in a `Row`, no traversal group (`wallet/WalletScreens.kt:367-380`) | TalkBack may read "1, 13, 2, 14…"; at 200% "24. word" wraps in a half-width column | `isTraversalGroup` on each column, or one column at a large font scale | V/S | S | al-cal, lead |
 | A35 | An agent rule row's spoken name hides its mode and the privacy warning. | `devices/DevicePageScreen.kt:425-431` sets `contentDescription` "%1$s: edit this rule" on a merged row, replacing the row's text: "Asks you each time"/"Allowed automatically", limits, and `core_ui_agent_ways_warning` (`:452-458`) | TalkBack never says that the agent may receive item values | Keep the merged text; move "edit this rule" to `onClick(label = …)` | V/S; **Fixed** `e58423ab` (the existing "%1$s: edit this rule" text is the click label) | S | al-cal |
-| A36 | The box that sets an agent's data apart is faint and not a unit for TalkBack. | `approvals/DeviceAsksScreen.kt:245-277`, border `colorScheme.outline` (`:252`; 1.81 / 1.41:1, A18) | Agent-supplied text such as "VettID checked this request" is read as separate plain lines, like app text | Merge label, byte count and data into one node now; the border follows A18 | V; C; **Fixed** `e58423ab` (semantics merge; the border colour stays with A18) | S | al-cal (merge), owner (A18 colour) |
+| A36 | The box that sets an agent's data apart is faint and not a unit for TalkBack. | `approvals/DeviceAsksScreen.kt:245-277`, border `colorScheme.outline` (`:252`; 1.81 / 1.41:1, A18) | Agent-supplied text such as "VettID checked this request" is read as separate plain lines, like app text | Merge label, byte count and data into one node now; the border follows A18 | V; C; **Fixed** `e58423ab` (semantics merge; the border color stays with A18) | S | al-cal (merge), owner (A18 color) |
 | A37 | The presence "Check again" button can be squeezed to zero width. | `connections/PresenceViews.kt:59-68`: an unweighted `Text` before `IconButton(Modifier.size(48.dp))` in a `Row` | Offline, the line is the full failure sentence and takes the width, and the button meant for that case disappears. At 200% font, the same for a dated line | `Modifier.weight(1f, fill = false)` on the text, or the failure on its own line | V/S; **Fixed** `e58423ab` | S | al-cal |
 
 #### Polish
 
 | ID | Finding | Evidence | Fix | Status | Size | Owner |
 |---|---|---|---|---|---|---|
-| A38 | Map circle under 3:1 on light tiles in the dark theme. | `map/MapLibreSurface.kt:60,128-139`: `primary` #FFC125 at 20% fill, 1 px line; OpenFreeMap Liberty is light in both themes; #FFC125 on near-white is about 1.6:1 | 2 px line in a darker colour (the gold ink) on the map whatever the theme | C/S | S | al-cal, lead |
+| A38 | Map circle under 3:1 on light tiles in the dark theme. | `map/MapLibreSurface.kt:60,128-139`: `primary` #FFC125 at 20% fill, 1 px line; OpenFreeMap Liberty is light in both themes; #FFC125 on near-white is about 1.6:1 | 2 px line in a darker color (the gold ink) on the map whatever the theme | C/S | S | al-cal, lead |
 | A39 | The map with TalkBack and large text. | Attribution `labelSmall`, up to 200 chars, no `maxLines`, in a fixed 280 dp box (`map/MapLibreSurface.kt:207-217`; `connections/LocationViews.kt:800,839`); "Map showing {name}'s position" set also when the map failed or is loading (`:837-843`); the map takes every drag (`map/MapLibreSurface.kt:227-230`) | Bound the attribution; description only when drawn; a drag handle or two-finger pan | S | S | al-cal, lead |
 | A40 | Choice semantics and headings in new code (A21 class). | Missing `heading()`: `items/AgentRuleEditor.kt:58,101,159`, `devices/PairScreen.kt:392`, `wallet/SendScreen.kt:382`, `wallet/ImportScreen.kt:251`, `wallet/ChainServerScreen.kt:73`, `wallet/WalletDetailScreen.kt:353`, `history/HistoryExportScreen.kt:259`. No `selectableGroup`: `items/AgentRuleEditor.kt:66-73`, `devices/PairScreen.kt:398-416`, `wallet/SendScreen.kt:393-419`, `connections/ShareLocation.kt:349-370`. Single choices as `FilterChip`s (read as checkboxes): `items/AgentRuleEditor.kt:160-168`, `wallet/ImportScreen.kt:252-261`, `wallet/Limits.kt:151-164`, `connections/ShareLocation.kt:353-363,386-396`. Address type by bold only (`wallet/WalletDetailScreen.kt:440-455`); Send all as a checkbox-role `selectable` (`wallet/SendScreen.kt:360-367`); transaction row no role (`wallet/TransactionsScreen.kt:106`) | Same fixes as A21/A24/A25 | V | S | al-cal |
 | A41 | New dialogs with long bodies do not scroll (A14). | Remove agent (`devices/DevicePageScreen.kt:476-497`), remove permission (`:503-514`), vote Release with PIN field (`votes/VoteScreen.kt:665-683`), Restore (`:628-634`), Ask for location (`connections/LocationViews.kt:205-240`) | With A14's wrapper fix | V/S; **Fixed** `ed891c76` | S | al-cal |
@@ -339,7 +339,7 @@ Also noted and not given a new ID:
   - The dot is drawn for Exact only.
 - **Wallet.**
   - Wrong PIN and password are announced through `SecretField`.
-  - Nothing is conveyed by colour alone ("+"/"−" and words).
+  - Nothing is conveyed by color alone ("+"/"−" and words).
   - Sats use the locale's grouping.
   - Every chain and vault wait is bounded.
   - Broadcast failures name the host and tell "no answer" from "refused".
@@ -406,7 +406,7 @@ start list, A1/A16's other silent texts, A15's safety code, A8's selectable fing
 
 **Public items that need the owner first:**
 
-- **A18** (the `outline` colour; A36's border follows it);
+- **A18** (the `outline` color; A36's border follows it);
 - **A2, A7, A13** (texts);
 - **A11** (window length);
 - **N8** (the "Starting your vault…" text);
@@ -512,7 +512,7 @@ and the request expiry use 12-hour with AM/PM while the share times use 24-hour 
 |---|---|
 | **al-cal** | Everything in "What to fix now"; then the remaining A, N and E items marked al-cal above, the M items first (A10, A31, N9, N12, N21 code, E2) |
 | **lead** | The phone checklist above, and the audit's checklist items for N1, N3, N8 and N20 |
-| **owner** | The `outline` colour (A18, A36); the transfer windows (A11); new texts for A2, A7, A13, A20, A24, A35, A42, A43, A44, N8, N14, N21, N24, N27, E3, E12, E22, E23, E27, E28, E31, E33, E35, E37, E38; the spec question N11; E14's wording. Each is set out under "Owner items in full" below |
+| **owner** | The `outline` color (A18, A36); the transfer windows (A11); new texts for A2, A7, A13, A20, A24, A35, A42, A43, A44, N8, N14, N21, N24, N27, E3, E12, E22, E23, E27, E28, E31, E33, E35, E37, E38; the spec question N11; E14's wording. Each is set out under "Owner items in full" below |
 
 ## Owner items in full
 
