@@ -13,6 +13,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -302,7 +303,7 @@ class ImportScreensTest {
         rule.setContent { WalletDetailScreen(state, WalletDetailActions(onRetryCaps = { retried++ }, onReceive = { received++ })) }
         rule.onNodeWithTag("wallet_caps_pending").assertIsDisplayed()
         rule.onNodeWithTag("wallet_receive").assertIsNotEnabled()
-        rule.onNodeWithTag("wallet_caps_retry").performClick()
+        rule.onNodeWithTag("wallet_caps_retry").assertTextEquals("Set the limit now").performClick()
         assertEquals(1, retried)
         state = state.copy(capsPending = false)
         rule.onNodeWithTag("wallet_caps_pending").assertDoesNotExist()
