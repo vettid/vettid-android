@@ -237,10 +237,10 @@ class SharingScreensTest {
                 TagsActions(onColour = { asked += it.tag; state = state.copy(dialog = TagDialog.Colour(it)) }, onPickColour = { picked += it }),
             )
         }
-        rule.onNodeWithContentDescription("Edit the colour of Shared profile").assertExists()
-        rule.onNodeWithContentDescription("Edit the colour of travel").performClick()
+        rule.onNodeWithContentDescription("Edit the color of Shared profile").assertExists()
+        rule.onNodeWithContentDescription("Edit the color of travel").performClick()
         assertEquals(listOf("travel"), asked)
-        rule.onNodeWithText("Colour of travel").assertIsDisplayed()
+        rule.onNodeWithText("Color of travel").assertIsDisplayed()
         // Ten swatches, the stored one checked.
         TagColors.names.forEach { rule.onNodeWithTag("tag_colour_$it").assertExists() }
         rule.onNodeWithTag("tag_colour_teal").assertIsSelected()
@@ -262,7 +262,7 @@ class SharingScreensTest {
         rule.setContent {
             TagsScreen(TagsUiState(TagRegistry(1, listOf(TagView("@profile", 2))), loading = false, dialog = TagDialog.ProfileColour), TagsActions())
         }
-        rule.onNodeWithText("Your shared profile always uses your colour").assertIsDisplayed()
+        rule.onNodeWithText("Your shared profile always uses your color").assertIsDisplayed()
         rule.onNodeWithTag("tag_colour_teal").assertDoesNotExist()
     }
 
