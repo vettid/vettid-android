@@ -2,6 +2,7 @@ package com.vettid.feature.history
 
 import androidx.annotation.StringRes
 import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.RecoveryRefs
 
 /**
@@ -277,9 +278,9 @@ object AuditKinds {
      * `item.deleted` stays. The folded entry stays in [entries] for the chain check and in an export.
      */
     fun listed(entries: List<AuditRecord>): List<AuditRecord> {
-        val wallets = entries.filter { it.kind == KIND_WALLET_DELETED && it.ref != null }.map { it.ref }.toSet()
-        return entries.filterNot {
-            hidden(it.kind, it.ref) || (it.kind == KIND_ITEM_DELETED && it.ref != null && it.ref in wallets)
+        val wallets = entries.filter { r -> r.kind == KIND_WALLET_DELETED }.mapNotNull { r -> r.ref }.toSet()
+        return entries.filterNot { r ->
+            hidden(r.kind, r.ref) || (r.kind == KIND_ITEM_DELETED && r.ref in wallets)
         }
     }
 
