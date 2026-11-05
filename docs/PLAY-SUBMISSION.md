@@ -15,6 +15,10 @@ the Console.
   installed from Google Play cannot enroll, receive a transfer or register for a recovery** until a production
   release pins it (class `google_play`). An internal-track install will stop at onboarding for every tester.
 - The Play listing must not go live on any track that members can install from before that release is `active`.
+  **No member-installable track (closed, open or production) opens before then.** Pinning takes a vault release:
+  `{digest, class: "google_play"}` added to vettid-vault's `enclave/releasecfg/prod.json` (today it pins one
+  `vettid` signer), that release reaching `active`, and the same digest added to the App Links documents
+  (`assetlinks.json` on account.vettid.org, and the relay's per ANDROID-PLAN §7). See step 3 in section 6 and Q8.
 
 ---
 
@@ -53,7 +57,7 @@ Upload the `full` distribution's release build only. `fossRelease` is the F-Droi
 - **Media and storage permissions.** None: `check<Variant>MediaPermissions` (`:376-406`, `:995-1005`).
 - **Google push** is linked but off unless the build has the four `vettidFcmRelease*` Gradle properties
   (`app/build.gradle.kts:29-44`, `:166-168`; README "Google push"). Without them the push components are disabled in the
-  manifest and Firebase is never initialised. See question Q4.
+  manifest and Firebase is never initialized. See question Q4.
 
 **Never pass `-PvettidCallsInRelease=true` or `-PvettidWalletInRelease=true` for the Play build**: either one changes
 the application id to `com.vettid.app.callscheck`, a check build that is never published (`app/build.gradle.kts:115-123`).
@@ -302,9 +306,20 @@ otherwise, `CLAUDE.md:141`). Location permission not yet granted, to show the pr
   account site; the app's part is the name change it sends to the vault.
 - **`vettid.org`**: the pinned release manifest is read (`MemberApiClient.kt:443`). **`votes.vettid.org`**: read only,
   no cookies, session or identifier (`VaultSession.kt:32`; `CLAUDE.md:413-419`; no `POST` to it exists).
-- **OpenFreeMap** (`tiles.openfreemap.org`, `MapServer.kt:18`), a third party: only after the member taps **Show map**
-  on a received position, with a generic User-Agent; it sees the phone's IP address and which map tiles (the area
-  around the **other** person's position) are fetched (`CLAUDE.md:143`).
+- **OpenFreeMap** (`tiles.openfreemap.org`, `MapServer.kt:18`), a third party, receives an **approximate location**:
+  the map tiles around a position another member shares with this member. When exactly:
+  - only on the position screen of a **received** share (the map is composed only with a received position, and goes
+    with the share's end, the lock and the daily check; `LocationViews.kt:834-837`). Nothing of the member's own
+    shares, and no map anywhere else;
+  - only after the member taps **Show map** on the privacy note naming the server's host (`LocationViews.kt:671-674`;
+    `MapSdk.kt:80`, `prepare` is called by Show map and by the map itself, never before). Nothing is fetched while
+    the note is up, and **Not now** fetches nothing for that visit;
+  - the answer is stored per host (`mapNoteHost`, `MapServer.kt:85`): **after one Show map, later position screens for
+    that host load the map without asking again**, until the member changes the server;
+  - requests go only to that host, over HTTPS, with a generic `Mozilla/5.0` User-Agent and no cache
+    (`CLAUDE.md:143`). OpenFreeMap sees the phone's IP address and which tiles are fetched. A member who sets their
+    own server (Settings → Privacy → Map server) sends the same to that server instead.
+- **No chain server** (Esplora, mempool.space) is contacted by a release build: the wallet is not in it (section 1).
 - **Google (Firebase)**: only in a build with the Firebase options and only after the member chooses Google push. The
   push token goes to the member's vault (`push.register`) and from it to VettID's push gateway, which asks Firebase
   for content-less wakes (README "Google push"; `CLAUDE.md:112-122`).
@@ -326,6 +341,14 @@ an ephemeral, end-to-end encrypted `location.update`; the vault forwards it, red
 chosen connection, and never writes it to vault state (VAULT-MESSAGING §8.5, lines 6711-6719, and line 6947). What
 never leaves the phone is listed above.
 
+**Gap between the in-app wording and the declaration.** The location permission text says "It asks only while you
+share, and sends nothing to anyone else." (`connections_location_permission`,
+`feature/connections/src/main/res/values/strings.xml:324`; the same words in `approvals_location_permission`,
+`feature/approvals/src/main/res/values/strings.xml:257`). The Data safety form declares location as collected (sent
+to the member's VettID-run vault) and shared (map tiles to OpenFreeMap). The sentence is true in the sense that only
+the chosen connection receives the position, but a reviewer may read it against the form. It is the plan's DRAFT text,
+shared with the iPhone app, so it is not reworded here: the owner's call (Q10).
+
 ### The key decision: data end-to-end encrypted to the member's own vault
 
 Most of what the app sends (messages, photos, vault items, location, connections, the attestation chain) goes only to
@@ -336,39 +359,53 @@ alternative would be.
 
 ### Answers per data type
 
-"Shared" is No throughout: transfers to another member happen only by the member's own action (a message, a share),
-which Play does not count as sharing (**To confirm**), and no data is sold or given to a third party for its own use.
+"Shared" is No **except Location: Approximate** (OpenFreeMap, above). Transfers to another member happen only by the
+member's own action (a message, a share), which Play does not count as sharing (**To confirm**), and no data is sold.
 "Encrypted in transit": Yes for everything (HTTPS/TLS to every endpoint; the map server must be HTTPS,
 `CLAUDE.md:143`; no cleartext in the release manifest). "Deletion": the member can delete the vault in the app
 (Settings → Account → **Delete vault**, `SettingsScreen.kt:658-660`) and request account deletion at
 `https://account.vettid.org/account/delete/` (Settings → Account → **Delete your VettID account**,
-`SettingsScreen.kt:663-668`; `Repositories.kt:16`; `CLAUDE.md:22`; **To confirm** the page is live).
+`SettingsScreen.kt:663-668`; `Repositories.kt:16`; `CLAUDE.md:22`). That URL answers with a 302 redirect: **To
+confirm** that the page it lands on is acceptable to Play as the deletion page (Play expects a page that names the app
+and explains the deletion).
 
-| Play data type | Collected | Optional | Purposes | Basis in the code / docs |
-|---|---|---|---|---|
-| Location: Approximate | Yes (E2E to the vault, ephemeral) | Yes | App functionality | `location.update` (`CLAUDE.md:141`); never stored on the phone or in vault state |
-| Location: Precise | Yes (E2E, ephemeral) | Yes (Exact only) | App functionality | Same; Exact needs fine location |
-| Personal info: Name | Yes | No (account) | App functionality, Account management | Account snapshot and name changes (VAULT-MESSAGING §2.2); shared profile name sent E2E |
-| Personal info: Email address | Yes | Yes (typed setup code only; the account site already has it) | Account management | `MemberApiClient.kt:234-236` |
-| Personal info: User IDs | Yes | No | App functionality, Account management, Security | `user_guid`, `vault_id`, app public key (`MemberApiClient.kt:238-241`; VAULT-MESSAGING §2.2) |
-| Personal info: Address, Phone number, Other info | Yes if the member stores them as vault items (E2E) | Yes | App functionality | Item templates `postal_address`, `phone_number`, passwords and secrets (`CLAUDE.md:635`) |
-| Personal info: Political or religious beliefs | **To confirm** | Yes | App functionality | Votes: the member's choice goes through their vault to the service that runs the vote (`CLAUDE.md:402-423`) |
-| Financial info: User payment info | Yes if stored as a vault item (E2E) | Yes | App functionality | The card item template (`items.edit_card`, `CLAUDE.md:635`). The wallet is not in release |
-| Messages: Other in-app messages | Yes (E2E) | Yes | App functionality | Messages through the vault (RELAY-PROTOCOL; `CLAUDE.md:7-10`) |
-| Photos and videos: Photos | Yes (E2E) | Yes | App functionality | Message photos (Photo Picker) and the profile photo taken in-app (`core/media/src/main/AndroidManifest.xml:2-3`; `CLAUDE.md:635`) |
-| Contacts | **To confirm** (No phone contacts are read; the VettID connections list lives in the vault, E2E) | — | App functionality | No `READ_CONTACTS` in any manifest |
-| App activity: Other user-generated content | Yes (E2E) | Yes | App functionality | Vault items, tags, notes |
-| App activity: App interactions | **To confirm** | No | App functionality, Security | The vault's History records the member's actions inside the enclave; the member API sees enroll/unlock/lock times |
-| Device or other IDs | Yes (E2E to the enclave); plus the push token when Google push is on | No / Yes (push) | Security (fraud prevention), App functionality | The attestation chain is a stable device identifier, kept inside the enclave (VAULT-MESSAGING §11.7, lines 14986-14988); push token (README "Google push") |
-| Audio, Files and docs, Calendar, Health and fitness, Web browsing, Installed apps, In-app search history | No | — | — | No such permission or code path in release (calls are not in release; History export is saved only on the phone) |
-| App info and performance: Crash logs, Diagnostics | No (by VettID) | — | — | No crash or analytics SDK (`app/build.gradle.kts:409-506`). Android vitals are Google's |
+| Play data type | Collected | Shared | Optional | Purposes | Basis in the code / docs |
+|---|---|---|---|---|---|
+| Location: Approximate | Yes, processed ephemerally (E2E to the vault) | **Yes**: OpenFreeMap receives the tile area around a received position, after Show map | Yes | App functionality | `location.update` (`CLAUDE.md:141`), never stored on the phone or in vault state; the map fetch as described above |
+| Location: Precise | Yes, processed ephemerally (E2E) | No | Yes (Exact only) | App functionality | Same; Exact needs fine location. The map draws a dot only for Exact, but the tiles fetched are an area, not a point (`CLAUDE.md:143`) |
+| Personal info: Name | Yes | No | No (account) | App functionality, Account management | Account snapshot and name changes (VAULT-MESSAGING §2.2); shared profile name sent E2E |
+| Personal info: Email address | Yes | No | Yes (typed setup code only; the account site already has it) | Account management | `MemberApiClient.kt:234-236` |
+| Personal info: User IDs | Yes | No | No | App functionality, Account management, Security | `user_guid`, `vault_id`, app public key (`MemberApiClient.kt:238-241`; VAULT-MESSAGING §2.2) |
+| Personal info: Address, Phone number, Other info | Yes if the member stores them as vault items (E2E) | No | Yes | App functionality | Item templates `postal_address`, `phone_number`, passwords and secrets (`CLAUDE.md:635`) |
+| Personal info: Political or religious beliefs | **To confirm** | No | Yes | App functionality | Votes: the member's choice goes through their vault to the service that runs the vote (`CLAUDE.md:402-423`) |
+| Financial info: User payment info | Yes if stored as a vault item (E2E) | No | Yes | App functionality | The card item template (`items.edit_card`, `CLAUDE.md:635`). The wallet is not in release |
+| Messages: Other in-app messages | Yes (E2E) | No | Yes | App functionality | Messages through the vault (RELAY-PROTOCOL; `CLAUDE.md:7-10`) |
+| Photos and videos: Photos | Yes (E2E) | No | Yes | App functionality | Message photos (Photo Picker) and the profile photo taken in-app (`core/media/src/main/AndroidManifest.xml:2-3`; `CLAUDE.md:635`) |
+| Contacts | **To confirm** (No phone contacts are read; the VettID connections list lives in the vault, E2E) | No | — | App functionality | No `READ_CONTACTS` in any manifest |
+| App activity: Other user-generated content | Yes (E2E) | No | Yes | App functionality | Vault items, tags, notes |
+| App activity: App interactions | Yes | No | No | App functionality, Security | The member API sees in the clear when the member enrolls, unlocks and locks (`MemberApiClient.kt:336-359`; VAULT-MESSAGING §2.2 line 2846). The vault's History of the member's actions stays inside the enclave |
+| Device or other IDs | Yes (E2E to the enclave); plus the push token when Google push is on | No | No / Yes (push) | Security (fraud prevention), App functionality | The attestation chain is a stable device identifier, kept inside the enclave (VAULT-MESSAGING §11.7, lines 14986-14988); push token (README "Google push") |
+| Audio, Files and docs, Calendar, Health and fitness, Web browsing, Installed apps, In-app search history | No | — | — | — | No such permission or code path in release (calls are not in release; History export is saved only on the phone) |
+| App info and performance: Crash logs, Diagnostics | No (by VettID) | — | — | — | No crash or analytics SDK (`app/build.gradle.kts:409-506`). Android vitals are Google's |
 
 **Also To confirm:** whether VettID's servers keep IP addresses (relay, member API, account site) and for how long;
 the relay's documented logs name only the route (vettid.org `docs/RELAY-PROTOCOL.md:856-873`). If they are kept,
 Play may expect them under Device or other IDs or Approximate location.
 
 **Security practices:** encrypted in transit: Yes. Deletion can be requested: Yes (above). Independent security
-review: owner's answer. Privacy policy URL: **[PLACEHOLDER: owner to supply]**.
+review: owner's answer.
+
+**Privacy policy URL: proposed `https://vettid.org/privacy/`** (it answers 200). Before filing, the owner checks that it
+covers at least:
+
+- **location forwarding**: positions go, end-to-end encrypted, to the member's own vault, which forwards them reduced
+  to the share's precision to the chosen connection and does not store them;
+- **OpenFreeMap**: the map tiles around a received position are fetched from OpenFreeMap (or the member's own map
+  server) after Show map, which sees the phone's IP address and the area;
+- **Play signing**: the Google Play version is signed by Google through Play App Signing, and the F-Droid and direct
+  versions by VettID (the listing sentence in ANDROID-PLAN §7);
+- what VettID's servers see in the clear (email, name, ids, enroll/unlock/lock times; section 4 above), the end-to-end
+  encryption of everything else, and account deletion at `https://account.vettid.org/account/delete/`.
 
 ---
 
@@ -421,17 +458,23 @@ crawler will see only onboarding.** The owner's options (question Q3):
    its text and video. Without it nothing below is filed.
 2. **Create or confirm the app** in the Play Console as `com.vettid.app` (question Q5: whether the v1 listing still
    exists). Enroll in Play App Signing with Google's generated key; register the dedicated **upload key** (ANDROID-PLAN
-   §7). Note the app-signing certificate's SHA-256 for the vault release that will pin it.
-3. **Build and sign** the bundle (section 1): run the checks, `:app:bundleFullRelease`, sign with the upload key.
-4. **Upload to Internal testing** with a tester list of the owner and named testers only.
-5. **Fill App content:** the two foreground-service declarations (section 3), the Data safety form (section 4), App
+   §7). Note the app-signing certificate's SHA-256 for the vault release that will pin it (**To confirm** whether the
+   Console shows it before the first upload).
+3. **Pin the Play key in a vault release** (Q8). The next production vault release adds
+   `{digest, class: "google_play"}` to `enclave/releasecfg/prod.json` and must reach `active`; the same digest goes into
+   account.vettid.org's `/.well-known/assetlinks.json` (and the relay's, ANDROID-PLAN §7). Until then a Play install
+   gets `signer_refused` and stops at onboarding, and **no member-installable track opens**. Steps 4-8 can go ahead on
+   the internal track meanwhile (Q7).
+4. **Build and sign** the bundle (section 1): run the checks, `:app:bundleFullRelease`, sign with the upload key.
+5. **Upload to Internal testing** with a tester list of the owner and named testers only.
+6. **Fill App content:** the two foreground-service declarations (section 3), the Data safety form (section 4), App
    access (section 5, option b), Ads: none, the content rating questionnaire (users communicate with each other and
    share location; no user-generated public content; **To confirm** the answers in the questionnaire), target
-   audience (adults, **To confirm**), the privacy policy URL, and the account deletion URL
+   audience (Q9), the privacy policy URL (`https://vettid.org/privacy/`, section 4), and the account deletion URL
    `https://account.vettid.org/account/delete/`.
-6. **Record the two videos** with the scripts in 3.1 and 3.2 on the test phone, with **Allow screenshots** on; upload
+7. **Record the two videos** with the scripts in 3.1 and 3.2 on the test phone, with **Allow screenshots** on; upload
    them where the Console accepts a link (**To confirm**: YouTube unlisted or another link the Console takes).
-7. **Read the pre-launch report** when it appears (usually within an hour of the upload, **To confirm**) and send me the
+8. **Read the pre-launch report** when it appears (usually within an hour of the upload, **To confirm**) and send me the
    blocking items: crashes, ANRs, security warnings, and accessibility findings with their screens.
 
 ---
@@ -462,7 +505,7 @@ push token. (b) Yes: set them; the on-phone service is still the default, and Da
 
 **Q5. Is there still a v1 listing for `com.vettid.app`?**
 ANDROID-PLAN D1 says the rewrite keeps the v1 listing and signing key; §7 says Google generates the app-signing key
-"at enrolment". (a) There is a listing: confirm which app-signing key it has; if it is not Google-generated, the §7
+"at enrollment". (a) There is a listing: confirm which app-signing key it has; if it is not Google-generated, the §7
 plan needs revisiting before upload. (b) There is none: create the app fresh.
 **Recommendation:** check in the Console before step 2 and tell me which; nothing is uploaded until it is known.
 
@@ -477,3 +520,15 @@ The plan forbids going live on "any track that members can install from" before 
 named testers only is not a member track. (b) No, wait.
 **Recommendation: (a)**, with testers limited to the owner and named testers, knowing every Play install stops at
 onboarding until the pin.
+
+**Q8. Which vault release pins the Play app-signing key?**
+It adds `{digest, class: "google_play"}` to `prod.json`, must reach `active`, and goes with the `assetlinks.json`
+change. (a) The next production release after the Play app-signing certificate is known. (b) A dedicated small release
+for it. (c) Later, with a planned feature release.
+**Recommendation: (a)**, as soon as the digest is shown in the Console; nothing member-installable opens before it.
+
+**Q9. Target audience: Adults (18+) only?** (yes / no) **Recommendation: yes.**
+
+**Q10. The location permission text "…and sends nothing to anyone else."** (section 4, the gap) (a) Keep it.
+(b) Reword it with the iPhone app (it is the plan's shared DRAFT), for example to say that only the chosen connection
+receives the position. **Recommendation: (b)**, before the listing goes live; not a blocker for the internal track.
