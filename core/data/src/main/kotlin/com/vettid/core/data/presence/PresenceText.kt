@@ -27,11 +27,16 @@ object PresenceText {
         is PresenceAge.Date -> res.getString(R.string.data_presence_active_date, dateText(res, age))
     }
 
-    /** "2 Nov" in the device's locale (day and month; with the year when it is not this year). */
+    /**
+     * "2 Nov" in the device's locale (day and month; with the year when it is not this year). A locale with a calendar
+     * extension can yield pattern letters java.time refuses: then the locale's medium date, never a throw (this text is on the
+     * connection page and in a conversation).
+     */
     private fun dateText(res: Resources, age: PresenceAge.Date): String {
-        val locale = res.configuration.locales[0]
+        val locale = res.configuration.locales[0] ?: java.util.Locale.getDefault()
         val skeleton = if (age.withYear) "dMMMyyyy" else "dMMM"
-        return DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(age.date)
+        return runCatching { DateTimeFormatter.ofPattern(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(age.date) }
+            .getOrElse { DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale).format(age.date) }
     }
 
     /**

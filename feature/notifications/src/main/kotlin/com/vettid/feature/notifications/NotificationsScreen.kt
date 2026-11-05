@@ -378,7 +378,7 @@ private fun SectionHeader(day: LocalDate?) {
         day == today -> stringResource(R.string.notifications_today)
         day == today.minusDays(1) -> stringResource(R.string.notifications_yesterday)
         day == LocalDate.MIN -> stringResource(R.string.notifications_undated)
-        else -> FeedSections.dayTitle(day, today, LocalConfiguration.current.locales[0])
+        else -> FeedSections.dayTitle(day, today, LocalConfiguration.current.locales[0] ?: java.util.Locale.getDefault())
     }
     Text(
         text,

@@ -107,6 +107,15 @@ class SharingTextTest {
     }
 
     @Test
+    fun aCalendarExtensionLocaleNeverThrows() {
+        // The location service's notification uses this text: a locale like zh-u-ca-chinese falls back, never throws.
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(java.util.Locale.forLanguageTag("zh-u-ca-chinese"))
+        val t = ShareTime.format(app.createConfigurationContext(c), until.plusSeconds(3 * 86_400), now, ZoneOffset.UTC)
+        assertTrue(t, t.isNotBlank())
+    }
+
+    @Test
     fun anotherDayFollowsTheRegionsOrder() {
         // One locale skeleton for date and time (owner decision 2026-11-05): month first in the US, day first in the UK.
         fun inLocale(tag: String): android.content.Context {

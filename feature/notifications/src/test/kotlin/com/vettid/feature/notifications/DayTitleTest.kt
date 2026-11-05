@@ -42,4 +42,11 @@ class DayTitleTest {
         // On 1 Jan 2027 a day of the year before is named with its year.
         assertEquals("Wed, Dec 30, 2026", FeedSections.dayTitle(LocalDate.of(2026, 12, 30), LocalDate.of(2027, 1, 1), Locale.US))
     }
+
+    @Test
+    fun aCalendarExtensionLocaleNeverThrows() {
+        val zh = java.util.Locale.forLanguageTag("zh-u-ca-chinese")
+        assertTrue(FeedSections.dayTitle(LocalDate.of(2026, 11, 2), today, zh).isNotBlank())
+        assertTrue(FeedSections.dayTitle(LocalDate.of(2025, 11, 2), today, zh).isNotBlank())
+    }
 }
