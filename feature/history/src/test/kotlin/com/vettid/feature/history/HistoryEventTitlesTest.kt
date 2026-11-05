@@ -302,6 +302,23 @@ class HistoryEventTitlesTest {
         }
     }
 
+    @Test
+    fun aDeletedWalletIsOneEntryAndOtherItemsStayListed() {
+        val entries = listOf(
+            AuditRecord("e5", 5, null, "item.deleted", ref = "01OTHER"),
+            AuditRecord("e4", 4, null, "item.deleted", ref = "01WALLET"),
+            AuditRecord("e3", 3, null, "wallet.deleted", ref = "01WALLET"),
+            AuditRecord("e2", 2, null, "item.deleted", ref = "01WALLET2"),
+            AuditRecord("e1", 1, null, "item.deleted", ref = null),
+        )
+        val s = HistoryUiState(entries = entries)
+        assertEquals(listOf(5L, 3L, 2L, 1L), s.shown.map { it.seq })
+        assertEquals(5, s.entries.size)
+        // A wallet entry alone, or an item entry with no wallet entry loaded, hides nothing.
+        assertEquals(listOf(4L), AuditKinds.listed(entries.filter { it.seq == 4L }).map { it.seq })
+        assertEquals(listOf(3L), AuditKinds.listed(entries.filter { it.seq == 3L }).map { it.seq })
+    }
+
     private fun entry(seq: Long, kind: String, ref: String, seconds: Long) =
         AuditEntry("e$seq", seq, t0.plusSeconds(seconds).toString(), kind, null, null, ref, null, "", "")
 

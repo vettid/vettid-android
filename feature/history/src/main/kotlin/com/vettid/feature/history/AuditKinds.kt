@@ -270,6 +270,22 @@ object AuditKinds {
         else -> false
     }
 
+    /**
+     * The entries to list, with the item entry of a deleted wallet folded into the wallet's (VAULT-MESSAGING §10.18: a wallet is
+     * deleted by `item.delete` of its item, so the vault audits both `item.deleted` and `wallet.deleted`, and the wallet's id is
+     * the item's id). An `item.deleted` is left out only when a `wallet.deleted` with the same `ref` is in [entries]; any other
+     * `item.deleted` stays. The folded entry stays in [entries] for the chain check and in an export.
+     */
+    fun listed(entries: List<AuditRecord>): List<AuditRecord> {
+        val wallets = entries.filter { it.kind == KIND_WALLET_DELETED && it.ref != null }.map { it.ref }.toSet()
+        return entries.filterNot {
+            hidden(it.kind, it.ref) || (it.kind == KIND_ITEM_DELETED && it.ref != null && it.ref in wallets)
+        }
+    }
+
+    private const val KIND_WALLET_DELETED = "wallet.deleted"
+    private const val KIND_ITEM_DELETED = "item.deleted"
+
     /** One line of an entry's **Details**. */
     sealed interface Detail {
         data class Line(@param:StringRes val res: Int) : Detail
