@@ -112,6 +112,20 @@ class ApprovedWordsTest {
         rule.onNodeWithText("A daily check failed: wrong credential password.").assertExists()
     }
 
+    /** (Owner decision 2026-11-05) A failed check with another ref, or none, is the general text, never the PIN one. */
+    @Test
+    fun aFailedCheckWithAnotherRefSaysADailyCheckFailed() = failedCheckSaysTheGeneralText("other")
+
+    @Test
+    fun aFailedCheckWithNoRefSaysADailyCheckFailed() = failedCheckSaysTheGeneralText(null)
+
+    private fun failedCheckSaysTheGeneralText(ref: String?) {
+        val gate = OwnerCheckGateState(notices = listOf(OwnerCheckNotice("n1", "owner_check.failed", ref, null, false)))
+        show(1) { OwnerCheckBanners(gate, first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {}) }
+        rule.onNodeWithText("A daily check failed.").assertExists()
+        rule.onNodeWithText("wrong PIN", substring = true).assertDoesNotExist()
+    }
+
     /** The early warning is only raised with a deadline, so its banner always names the time: the soon text is unreachable. */
     @Test
     fun theWarningIsOnlyRaisedWithADeadline() {
