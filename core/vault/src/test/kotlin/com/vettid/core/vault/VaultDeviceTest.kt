@@ -1399,6 +1399,44 @@ class VaultDeviceTest {
         assertNull(guid("""{"transfer":true,"user_guid":7}"""))
     }
 
+    /**
+     * (review L-series) The settlement drops only the transfer it settles: `abandonTransfer(onlyStartedAt)` does nothing
+     * for another transfer (one the member started again meanwhile) and drops the matching one.
+     */
+    @Test
+    fun abandonTransferOnlyDropsTheTransferItWasAskedFor() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            val started = d.transferInPending!!.startedAt
+            d.abandonTransfer(onlyStartedAt = started.minusMillis(1))
+            assertNotNull("another transfer's start: kept", d.transferInPending)
+            d.abandonTransfer(onlyStartedAt = started)
+            assertNull("the matching one: dropped", d.transferInPending)
+        }
+    }
+
+    /**
+     * (review M2) A rejection that arrived while the settlement collected is still in the device's inbox after the
+     * handler dropped the handshake: the wait that follows (`awaitTransfer`) ends with [PairingRejectedException].
+     */
+    @Test
+    fun aRejectionHandledBeforeTheWaitStillEndsItAsRejected() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertNull(d.transferInPending)
+            assertTrue(
+                runCatching { d.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is PairingRejectedException,
+            )
+        }
+    }
+
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
     @Test
     fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {

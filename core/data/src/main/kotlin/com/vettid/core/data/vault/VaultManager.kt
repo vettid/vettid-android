@@ -1474,8 +1474,9 @@ class VaultManager(
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
                 val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
-                // (A6 audit N1) A transfer past its deadline: its collect runs first (evaluate), before the collection
-                // can lease a waiting device.paired; the collection starts after it.
+                // (A6 audit N1) A transfer past its deadline: the collection stays stopped (it could lease a waiting
+                // device.paired before the settlement's collects); the settlement (atTransferDeadline, run by the
+                // transfer-in screen's wait) starts it when it ends. evaluate() publishes the waiting phase meanwhile.
                 if (TransferInResume.decide(device.transferInPending, device.deviceId, Instant.now()) != TransferInResume.Action.DEADLINE) {
                     device.start(scope)
                 }
@@ -1860,7 +1861,7 @@ class VaultManager(
                 return@guard AppPhase.Setup(SetupStage.FINISHING)
             }
             // Not running at the deadline (stopped, killed, the phone off): the same screen as while waiting. Its wait
-            // ([awaitTransferIn]) is already at the deadline and runs the settlement there, in the background (about 65 s,
+            // ([awaitTransferIn]) is already at the deadline and runs the settlement there, in the background (about 90 s,
             // never inside this evaluation); the transfer stays pinned meanwhile and is applied or dropped at its end.
             TransferInResume.Action.WAIT, TransferInResume.Action.DEADLINE -> return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)
             TransferInResume.Action.DROP -> d.abandonTransfer()
@@ -4250,32 +4251,65 @@ class VaultManager(
 
     /**
      * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.76) The transfer to this phone at its
-     * 11-minute deadline, or at the first start after it: collects of the mailbox (`wait=0`, `max` at its cap, each at most
-     * [TransferInResume.DEADLINE_COLLECT_MS], [TransferInResume.SETTLE_PAUSE_MS] apart) for up to
-     * [TransferInResume.SETTLE_WINDOW_MS], stopping as soon as paired; the `device.paired{transfer}` one brings is applied
-     * by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
-     * (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired` leased
-     * for 60 s. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects
-     * included: the handshake is dropped, once the window has passed, and null.
+     * 11-minute deadline, or at the first start after it, once the transfer-in screen's wait runs it: collects of the
+     * mailbox (`max` at its cap) for the settlement window, stopping as soon as paired; the `device.paired{transfer}` one
+     * brings is applied by the handler. Rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility
+     * timeout (RELAY-PROTOCOL §6.3) before dropping, because a killed app's parked collect may hold the `device.paired`
+     * leased for that long. The window is the relay's advertised `visibility_timeout_seconds` (60 when none) + the
+     * long-poll cap + 5 s, about 90 s (the lead's call on owner decision a, 2026-11-05: the half-open case); see
+     * [TransferInResume.atDeadline] for how each request is sized and why none is cancelled while it can hold a message.
+     * While the collection runs, our collects are `wait=0` (it long-polls already); otherwise each is a long poll of what
+     * is left. Paired: the transfer (to be completed by the take-over). Otherwise, failed or timed-out collects included:
+     * the handshake is dropped, once the window has passed, and null. A rejection or the member's abandon ends the window
+     * at once (a rejection then ends as `PairingRejectedException`, REJECTED); so does the session going away.
      */
     private suspend fun atTransferDeadline(s: Session): TransferInState? {
         val d = s.device
-        val started = d.transferInPending?.startedAt
-        // This transfer only: a rejection, the member's abandon or a new code ends the window at once.
-        val same = { d.transferInPending?.let { it.startedAt == started } == true }
+        val visibility = try {
+            withTimeoutOrNull(RELAY_LIMITS_BOUND_MS) { d.relayLimits().visibilityTimeoutSeconds }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null // the relay's own value is not known: the default (60 s)
+        }
+        val settle = TransferInResume.Settle(windowMs = TransferInResume.windowMs(visibility))
+        // Read inside the lock (by due): the transfer this step settles.
+        var started: Instant? = null
+        var dropped = false
+        // This transfer on this session only: a rejection, the member's abandon, a new code, a wipe or a forget ends the
+        // window at once.
+        val same = { started != null && session?.device === d && d.transferInPending?.startedAt == started }
         return try {
             // (#187 recheck) One deadline step at a time (the screen's wait and a start may both reach it), decided again
             // inside: a second one never drops what the first one's collect is about to apply.
             val paired = transferDeadline.run(
-                due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },
+                due = {
+                    val t = d.transferInPending
+                    started = t?.startedAt
+                    TransferInResume.deadlineDue(t, d.deviceId, Instant.now())
+                },
                 paired = { d.transferInPending?.paired == true && d.deviceId != null },
-                collect = { d.deadlineCollect(Duration.ofSeconds(TransferInResume.SETTLE_POLL_S)) },
-                drop = { d.abandonTransfer(onlyStartedAt = started) },
+                collect = { waitMs -> d.deadlineCollect(Duration.ofMillis(waitMs)) },
+                drop = {
+                    dropped = true
+                    d.abandonTransfer(onlyStartedAt = started)
+                },
                 alive = same,
+                settle = settle,
             )
-            if (paired) d.transferInPending else null
+            if (!paired && !dropped && session?.device === d) {
+                // Ended by a rejection (or an abandon): a rejection is still in the device's inbox and ends the wait as
+                // REJECTED, as it would have before the deadline.
+                try {
+                    d.awaitTransfer(Duration.ofMillis(REJECTION_LOOK_MS))
+                } catch (_: TimeoutCancellationException) {
+                    // none: abandoned
+                }
+            }
+            if (d.transferInPending?.paired == true && d.deviceId != null) d.transferInPending else null
         } finally {
-            d.start(scope) // deferred at a start past the deadline (session()); running already otherwise
+            // deferred at a start past the deadline (session()); running already otherwise. Not for a session that is gone.
+            if (session?.device === d) d.start(scope)
         }
     }
 
@@ -4814,6 +4848,8 @@ class VaultManager(
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val LOCATION_FILE = "location-shares.bin"
+        private const val RELAY_LIMITS_BOUND_MS = 5_000L
+        private const val REJECTION_LOOK_MS = 50L
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"

@@ -53,11 +53,13 @@ class TransferInDeadlineCallTest {
         assertTrue("the collection is deferred at a start past the deadline", start >= 0)
         assertEquals("device.start(scope)", code[start + 1])
         val dl = body("private suspend fun atTransferDeadline(")
-        assertTrue(dl.any { it.startsWith("collect = { d.deadlineCollect(") })
+        assertTrue(dl.any { it.startsWith("collect = { waitMs -> d.deadlineCollect(") })
         assertTrue("only this transfer is dropped", dl.any { it.contains("abandonTransfer(onlyStartedAt = started)") })
-        val due = "due = { TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now()) },"
-        assertTrue("due while waiting too", dl.any { it == due })
-        assertTrue(dl.any { it.startsWith("d.start(scope)") })
+        assertTrue("due while waiting too", dl.any { it == "TransferInResume.deadlineDue(t, d.deviceId, Instant.now())" })
+        assertTrue("the transfer is read inside the lock", dl.any { it == "started = t?.startedAt" })
+        assertTrue("one session only", dl.any { it.contains("session?.device === d") })
+        assertTrue("a rejection ends as REJECTED", dl.any { it.startsWith("d.awaitTransfer(") })
+        assertTrue(dl.any { it.contains("d.start(scope)") })
         val after = body("private suspend fun afterUnlocked(")
         val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }
         val create = after.indexOfFirst { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" }

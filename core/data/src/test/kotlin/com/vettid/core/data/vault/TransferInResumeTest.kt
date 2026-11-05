@@ -5,6 +5,8 @@ import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,98 +53,148 @@ class TransferInResumeTest {
         assertEquals(Action.DROP, TransferInResume.decide(TransferInState(at, null, paired = false, userGuid = null), null, deadline))
     }
 
-    /** At the deadline a device.paired waiting on the relay is applied by the one collect: completed, not dropped. */
+    private fun TestScope.timing(windowMs: Long = TransferInResume.SETTLE_WINDOW_MS) =
+        TransferInResume.Settle(windowMs = windowMs, now = { testScheduler.currentTime })
+
+    private val TestScope.t get() = testScheduler.currentTime
+
+    /**
+     * A mailbox whose device.paired is leased until [leaseEndsAt] (virtual ms) to a request that is gone: a collect
+     * (its [wait], after [roundWaitMs] of waiting for the collection's round) finds nothing before that time and gets the
+     * message at the moment the lease ends, if that is within its wait. A long poll takes its wait, like the relay's.
+     */
+    private class LeasedMailbox(
+        private val scope: TestScope,
+        private val leaseEndsAt: Long,
+        private val roundWaitMs: Long = 0,
+    ) {
+        var isPaired = false
+        val waits = mutableListOf<Long>()
+
+        suspend fun collect(waitMs: Long) {
+            waits += waitMs
+            if (roundWaitMs > 0) delay(roundWaitMs)
+            val end = scope.testScheduler.currentTime + waitMs
+            while (true) {
+                val now = scope.testScheduler.currentTime
+                if (now >= leaseEndsAt) { isPaired = true; return }
+                if (now >= end) return
+                delay(minOf(end, leaseEndsAt) - now)
+            }
+        }
+    }
+
+    /** At the deadline a device.paired waiting on the relay is applied by the first collect: completed, not dropped. */
     @Test
     fun aWaitingDevicePairedIsAppliedAtTheDeadline() = runTest {
         var isPaired = false
         var collects = 0
         var dropped = false
-        val r = TransferInResume.atDeadline({ isPaired }, { collects++; isPaired = true }, { dropped = true })
+        val r = TransferInResume.atDeadline({ isPaired }, { collects++; isPaired = true }, { dropped = true }, settle = timing())
         assertTrue(r)
         assertEquals(1, collects)
         assertFalse(dropped)
     }
 
     @Test
-    fun nothingWaitingIsDropped() = runTest {
-        var collects = 0
-        var dropped = false
-        assertFalse(TransferInResume.atDeadline({ false }, { collects++ }, { dropped = true }))
-        assertTrue("collected through the window, not once", collects > 1)
-        assertTrue(dropped)
+    fun nothingWaitingIsDroppedAfterTheFullWindowOfCollects() = runTest {
+        val box = LeasedMailbox(this, leaseEndsAt = Long.MAX_VALUE)
+        var droppedAt = -1L
+        assertFalse(TransferInResume.atDeadline({ box.isPaired }, box::collect, { droppedAt = t }, settle = timing()))
+        assertTrue("collected through the window, not once", box.waits.size > 1)
+        assertEquals("the full window, never earlier", TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+        assertEquals("ends with a wait=0 collect", 0L, box.waits.last())
     }
 
     @Test
-    fun aFailedCollectIsDropped() = runTest {
-        var dropped = false
-        assertFalse(TransferInResume.atDeadline({ false }, { throw IOException("relay unreachable") }, { dropped = true }))
-        assertTrue(dropped)
+    fun theWindowIsTheAdvertisedVisibilityTimeoutPlusThePollCapPlusAMargin() {
+        assertEquals(90_000L, TransferInResume.SETTLE_WINDOW_MS)
+        assertEquals(60_000L + 25_000L + 5_000L, TransferInResume.windowMs(60))
+        assertEquals(90_000L, TransferInResume.windowMs(null))
+        assertEquals(45_000L + 25_000L + 5_000L, TransferInResume.windowMs(45))
     }
 
-    /** A collect that hangs is bounded (30 s each); the window (65 s) still ends the step; then dropped. */
+    /** A request that hangs is given its wait plus the transport bound, is then abandoned, and the window goes on. */
     @Test
-    fun aCollectThatHangsIsBoundedThenDropped() = runTest {
-        var dropped = false
-        var collects = 0
-        val start = testScheduler.currentTime
-        assertFalse(
-            TransferInResume.atDeadline({ false }, { collects++; CompletableDeferred<Unit>().await() }, { dropped = true }),
+    fun aCollectThatHangsIsBoundedByItsWaitPlusTransportThenAbandoned() = runTest {
+        var droppedAt = -1L
+        val starts = mutableListOf<Long>()
+        val waits = mutableListOf<Long>()
+        TransferInResume.atDeadline(
+            { false }, { w -> waits += w; starts += t; CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = timing(),
         )
-        assertTrue(dropped)
-        assertTrue("each hung collect timed out and was retried", collects >= 2)
-        assertEquals(TransferInResume.SETTLE_WINDOW_MS, testScheduler.currentTime - start)
+        assertEquals("never cut before its wait plus 30 s: first starts at 0, next no earlier than 55 s", 0L, starts[0])
+        assertEquals(25_000L, waits[0])
+        assertTrue(starts[1] >= 25_000L + 30_000L)
+        assertTrue("an abandoned request may hold a lease: the window moved out", droppedAt > TransferInResume.SETTLE_WINDOW_MS)
+        assertTrue(droppedAt <= TransferInResume.SETTLE_WINDOW_MS + TransferInResume.SETTLE_MAX_EXTRA_MS + 25_000L + 30_000L)
     }
 
     @Test
     fun pairedAtTheFirstCollectReturnsAtOnce() = runTest {
         var isPaired = false
         var collects = 0
-        val start = testScheduler.currentTime
-        assertTrue(TransferInResume.atDeadline({ isPaired }, { collects++; isPaired = true }, { error("dropped") }))
+        assertTrue(TransferInResume.atDeadline({ isPaired }, { collects++; isPaired = true }, { error("dropped") }, settle = timing()))
         assertEquals(1, collects)
-        assertEquals(0, testScheduler.currentTime - start)
+        assertEquals(0, t)
     }
 
     /**
      * The restart after a kill: the vault's device.paired is leased for 60 s to the dead app's parked request. Collects
-     * before the lease ends find nothing; the first one after it gets the message and pairs. The old single collect
-     * dropped here.
+     * before the lease ends find nothing; the first one after it (a long poll running through it hands it over) gets
+     * the message and pairs. The old single collect dropped here.
      */
     @Test
     fun aMessageLeasedByADeadRequestIsCollectedWhenTheLeaseEnds() = runTest {
-        var isPaired = false
+        val box = LeasedMailbox(this, leaseEndsAt = 60_000)
         var drops = 0
-        val start = testScheduler.currentTime
-        val collect: suspend () -> Unit = {
-            if (testScheduler.currentTime - start >= 60_000) isPaired = true
-        }
-        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }))
+        assertTrue(TransferInResume.atDeadline({ box.isPaired }, box::collect, { drops++ }, settle = timing()))
         assertEquals(0, drops)
-        val took = testScheduler.currentTime - start
-        assertTrue("paired after the lease, within the window: $took", took in 60_000..TransferInResume.SETTLE_WINDOW_MS)
+        assertTrue("paired when the lease ended: $t", t in 60_000..61_000)
+        assertTrue("long polls were made", box.waits.any { it > 0 })
     }
 
+    /**
+     * (review H1) The lease of a message handed to our own long poll must not be cut short: with the collection's round
+     * waiting 20 s before every request and the message leased until 89.9 s, the old 30 s bound cut the poll (and the
+     * message stayed leased to a dead request past the window); now no request is cut before its wait plus 30 s, and the
+     * message is gathered when it comes free.
+     */
     @Test
-    fun neverPairedIsDroppedOnlyOnceTheWindowHasPassed() = runTest {
-        val start = testScheduler.currentTime
-        var droppedAt = -1L
-        assertFalse(
-            TransferInResume.atDeadline({ false }, {}, { droppedAt = testScheduler.currentTime - start }),
-        )
-        assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    fun ourOwnPollIsNotCutWhileItCanHoldAMessage() = runTest {
+        val box = LeasedMailbox(this, leaseEndsAt = 89_900, roundWaitMs = 20_000)
+        var drops = 0
+        assertTrue(TransferInResume.atDeadline({ box.isPaired }, box::collect, { drops++ }, settle = timing()))
+        assertEquals(0, drops)
+    }
+
+    /**
+     * (review M1) A delivery at the very edge of the window is handled in full: no cancelling timeout cuts the step; the
+     * final wait=0 collect gets it.
+     */
+    @Test
+    fun aDeliveryAtTheWindowsEdgeIsHandledInFull() = runTest {
+        val edge = TransferInResume.SETTLE_WINDOW_MS
+        val box = LeasedMailbox(this, leaseEndsAt = edge)
+        var drops = 0
+        assertTrue(TransferInResume.atDeadline({ box.isPaired }, box::collect, { drops++ }, settle = timing()))
+        assertEquals(0, drops)
+        // And a collect that is slow to handle what it brings (65 s + 2 s) is not cut either.
+        var isPaired = false
+        var d2 = 0
+        val slow: suspend (Long) -> Unit = { w -> if (w == 0L) { delay(2_000); isPaired = true } }
+        val before = t
+        assertTrue(TransferInResume.atDeadline({ isPaired }, slow, { d2++ }, settle = timing()))
+        assertEquals(0, d2)
+        assertTrue("only the last requests of the window bring it", t - before >= TransferInResume.SETTLE_WINDOW_MS - 10_000)
     }
 
     @Test
     fun failingCollectsDoNotEndTheWindowEarly() = runTest {
-        val start = testScheduler.currentTime
         var droppedAt = -1L
         var collects = 0
         assertFalse(
-            TransferInResume.atDeadline(
-                { false },
-                { collects++; throw IOException("relay unreachable") },
-                { droppedAt = testScheduler.currentTime - start },
-            ),
+            TransferInResume.atDeadline({ false }, { collects++; throw IOException("relay unreachable") }, { droppedAt = t }, settle = timing()),
         )
         assertTrue(collects > 1)
         assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
@@ -156,6 +208,7 @@ class TransferInResumeTest {
             { isPaired },
             { if (++collects < 3) throw IOException("down") else isPaired = true },
             { error("dropped") },
+            settle = timing(),
         )
         assertTrue(r)
         assertEquals(3, collects)
@@ -167,20 +220,19 @@ class TransferInResumeTest {
         var alive = true
         var drops = 0
         var collects = 0
-        val start = testScheduler.currentTime
         val r = TransferInResume.atDeadline(
-            { false }, { collects++; if (collects == 3) alive = false }, { drops++ }, alive = { alive },
+            { false }, { collects++; if (collects == 3) alive = false }, { drops++ }, alive = { alive }, settle = timing(),
         )
         assertFalse(r)
         assertEquals(0, drops)
         assertEquals(3, collects)
-        assertTrue(testScheduler.currentTime - start < TransferInResume.SETTLE_WINDOW_MS)
+        assertTrue(t < TransferInResume.SETTLE_WINDOW_MS)
     }
 
     @Test
     fun failedCollectsBackOff() = runTest {
         val at = mutableListOf<Long>()
-        TransferInResume.atDeadline({ false }, { at += testScheduler.currentTime; throw IOException("down") }, {})
+        TransferInResume.atDeadline({ false }, { at += t; throw IOException("down") }, {}, settle = timing())
         val gaps = at.zipWithNext { a, b -> b - a }
         assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), gaps.take(4))
         assertTrue(gaps.all { it <= 8_000L })
@@ -189,7 +241,8 @@ class TransferInResumeTest {
     @Test
     fun cancellationDuringTheWindowPropagatesWithoutADrop() = runTest {
         var drops = 0
-        val job = async { TransferInResume.atDeadline({ false }, {}, { drops++ }) }
+        val box = LeasedMailbox(this, leaseEndsAt = Long.MAX_VALUE)
+        val job = async { TransferInResume.atDeadline({ false }, box::collect, { drops++ }, settle = timing()) }
         testScheduler.advanceTimeBy(20_000)
         job.cancel()
         try {
@@ -204,7 +257,7 @@ class TransferInResumeTest {
     @Test
     fun anAlreadyPairedTransferIsNotCollectedForOrDropped() = runTest {
         var collects = 0
-        assertTrue(TransferInResume.atDeadline({ true }, { collects++ }, { error("dropped") }))
+        assertTrue(TransferInResume.atDeadline({ true }, { collects++ }, { error("dropped") }, settle = timing()))
         assertEquals(0, collects)
     }
 
@@ -245,7 +298,7 @@ class TransferInResumeTest {
     @Test
     fun theAnswerIsReadAfterTheDrop() = runTest {
         var isPaired = false
-        val r = TransferInResume.atDeadline({ isPaired }, {}, { isPaired = true })
+        val r = TransferInResume.atDeadline({ isPaired }, {}, { isPaired = true }, settle = timing())
         assertTrue(r)
     }
 
@@ -260,8 +313,8 @@ class TransferInResumeTest {
         val leased = CompletableDeferred<Unit>()
         val serial = TransferInResume.Serial()
         val due = { !isPaired }
-        val first = async { serial.run(due, { isPaired }, { leased.await(); isPaired = true }, { drops++ }) }
-        val second = async { serial.run(due, { isPaired }, {}, { drops++ }) }
+        val first = async { serial.run(due, { isPaired }, { leased.await(); isPaired = true }, { drops++ }, settle = timing()) }
+        val second = async { serial.run(due, { isPaired }, {}, { drops++ }, settle = timing()) }
         testScheduler.advanceTimeBy(1_000)
         assertFalse("the second waits for the first", second.isCompleted)
         leased.complete(Unit)
@@ -288,6 +341,7 @@ class TransferInResumeTest {
             paired = { false },
             collect = { collects++ },
             drop = { drops++ },
+            settle = timing(),
         )
         assertFalse(r)
         assertTrue("collected", collects >= 1)

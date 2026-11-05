@@ -12,10 +12,15 @@ import java.time.Instant
 /**
  * (A6 audit N1) A transfer to this phone that is not finished (VAULT-MESSAGING 0.56.2 §6.7.1, failures, and §11.14.10
  * rule 5; ANDROID-PLAN 0.1.76). One deadline: the stored start of the `hs.init` plus [TransferInWait.WAIT] (11
- * minutes), kept across restarts; no action of the member moves it. Past it the settlement collects for one relay
- * visibility timeout ([SETTLE_WINDOW_MS]) before it drops the transfer: VAULT-MESSAGING §11.14.10 rule 5 erratum (owner
- * decision a, 2026-11-05): collect for one relay visibility timeout (RELAY-PROTOCOL §6.3) before dropping. A single
- * collect could miss a `device.paired` that a killed app's parked long-poll had leased for 60 s.
+ * minutes), kept across restarts; no action of the member moves it. Past it the settlement collects for a window
+ * ([Settle.windowMs]: [windowMs] of the relay's advertised visibility timeout) before it drops the transfer:
+ * VAULT-MESSAGING §11.14.10 rule 5 erratum (owner decision a, 2026-11-05): collect for one relay visibility timeout
+ * (RELAY-PROTOCOL §6.3) before dropping. A single collect could miss a `device.paired` that a killed app's parked
+ * long-poll had leased for 60 s. The window is the lead's call on owner decision a, 2026-11-05 (the half-open case): the
+ * visibility timeout plus the long-poll cap plus a margin, because a dead request may have been taken up to a long poll
+ * before the settlement began and its lease then ends that much later. A request that is out at the relay is never
+ * cancelled while it can still hold a message: each one is sized to what is left of the window and given its wait plus a
+ * transport bound; one that still had to be abandoned moves the end of the window out by a whole window (capped).
  */
 internal object TransferInResume {
     enum class Action {
@@ -28,21 +33,36 @@ internal object TransferInResume {
         /** The code was shown and the deadline has not passed: the screen shows it again and goes on waiting. */
         WAIT,
 
-        /** The code was shown and the deadline passed while the app was not running: [atDeadline] now, first. */
+        /** The code was shown and the deadline passed while the app was not running: [atDeadline]; at a start it runs
+         * only when the transfer-in screen's wait does (the start publishes the waiting phase, pinned until then). */
         DEADLINE,
 
         /** No code was shown, so no `hs.fin` was sent: nothing can complete it, and it is dropped. */
         DROP,
     }
 
-    /** The bound of each collect of the settlement, its transport retries included (30 seconds). */
+    /** The transport bound added to a request's own wait (30 seconds); a request is never given less than wait + this. */
     const val DEADLINE_COLLECT_MS = 30_000L
 
+    /** The relay's visibility timeout when it advertises none (RELAY-PROTOCOL §6.3). */
+    const val DEFAULT_VISIBILITY_S = 60L
+
+    /** The long poll of each collect of the settlement (the relay's cap, RELAY-PROTOCOL §6.3). */
+    const val SETTLE_POLL_S = 25L
+
+    /** The margin after the visibility timeout and the long-poll cap. */
+    const val SETTLE_MARGIN_MS = 5_000L
+
     /**
-     * How long the settlement keeps collecting past the deadline before it drops: the relay's visibility timeout of 60 s
-     * (RELAY-PROTOCOL §6.3) plus a margin of 5 s, so that a `device.paired` leased to a dead request is handed out again.
+     * The settlement window: the relay's advertised visibility timeout ([visibilitySeconds], 60 s when it advertises
+     * none) + the long-poll cap (25 s) + 5 s: 90 s today. The lead's call on owner decision a, 2026-11-05 (the half-open
+     * case).
      */
-    const val SETTLE_WINDOW_MS = 65_000L
+    fun windowMs(visibilitySeconds: Long? = null): Long =
+        (visibilitySeconds ?: DEFAULT_VISIBILITY_S) * 1_000L + SETTLE_POLL_S * 1_000L + SETTLE_MARGIN_MS
+
+    /** The window with the relay's visibility timeout at its default. */
+    val SETTLE_WINDOW_MS: Long = windowMs()
 
     /** The pause between two collects of the settlement. */
     const val SETTLE_PAUSE_MS = 1_000L
@@ -50,8 +70,25 @@ internal object TransferInResume {
     /** A failed collect doubles the pause, at most this many times (1 s, 2 s, 4 s, 8 s). */
     const val MAX_BACKOFF_FACTOR = 3
 
-    /** The long poll of each collect of the settlement (the relay's cap, RELAY-PROTOCOL §6.3). */
-    const val SETTLE_POLL_S = 25L
+    /** What is kept back from the end of the window for handling what a request brings. */
+    const val HANDLING_MARGIN_MS = 5_000L
+
+    /** The most that abandoned requests can move the end of the window out by. */
+    const val SETTLE_MAX_EXTRA_MS = 60_000L
+
+    /**
+     * The timing of a settlement, all of it a parameter for tests (which pass [now] from the test scheduler).
+     * [now] is a monotonic clock in milliseconds.
+     */
+    class Settle(
+        val windowMs: Long = SETTLE_WINDOW_MS,
+        val pauseMs: Long = SETTLE_PAUSE_MS,
+        val transportMs: Long = DEADLINE_COLLECT_MS,
+        val pollMs: Long = SETTLE_POLL_S * 1_000L,
+        val handlingMs: Long = HANDLING_MARGIN_MS,
+        val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
+        val now: () -> Long = { System.nanoTime() / 1_000_000L },
+    )
 
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
         t == null -> Action.NONE
@@ -71,41 +108,57 @@ internal object TransferInResume {
         decide(t, deviceId, now) in setOf(Action.WAIT, Action.DEADLINE)
 
     /**
-     * At the deadline: unless [paired] already, [collect] (each bounded by [boundMs]; the handler applies a
-     * `device.paired{transfer}` it brings) and look at [paired] again, until paired or until [windowMs] has passed since
-     * this step began (§11.14.10 rule 5 erratum, owner decision a, 2026-11-05: one relay visibility timeout). Between
-     * collects [pauseMs]; after a failed or timed-out collect the pause doubles (up to [MAX_BACKOFF_FACTOR] times), and
-     * the window goes on. [alive] is false once this transfer was rejected by the old phone or abandoned by the member
-     * (or replaced by a new one): the window ends at once and nothing is dropped here. True when paired; otherwise
-     * [drop] ran once the window had passed. Cancellation propagates, with no drop.
+     * At the deadline: unless [paired] already, [collect] (given the wait of its request, in ms) and look at [paired]
+     * again, until paired or until [Settle.windowMs] has passed since this step began (§11.14.10 rule 5 erratum, owner
+     * decision a, 2026-11-05). No request that is out at the relay is cancelled while it can hold a message: each is
+     * sized to what is left of the window (its wait is what is left minus [Settle.handlingMs], at most [Settle.pollMs])
+     * and bounded by its wait plus [Settle.transportMs]; one that had to be abandoned may hold a message leased for a
+     * visibility timeout, so the end of the window moves to at least a whole window from then (at most
+     * [Settle.maxExtraMs] past the first end). The window ends with one final `wait=0` collect, whose delivery is
+     * handled in full, before the decision. Between collects [Settle.pauseMs]; after a failure the pause doubles (up to
+     * [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected, abandoned or replaced, or the
+     * session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
+     * window had passed. Cancellation propagates, with no drop.
      */
-    @Suppress("TooGenericExceptionCaught", "LongParameterList") // whatever ends a collect, the next one follows
+    @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
     suspend fun atDeadline(
         paired: () -> Boolean,
-        collect: suspend () -> Unit,
+        collect: suspend (waitMs: Long) -> Unit,
         drop: suspend () -> Unit,
-        boundMs: Long = DEADLINE_COLLECT_MS,
-        windowMs: Long = SETTLE_WINDOW_MS,
-        pauseMs: Long = SETTLE_PAUSE_MS,
         alive: () -> Boolean = { true },
+        settle: Settle = Settle(),
     ): Boolean {
-        if (!paired()) {
-            withTimeoutOrNull(windowMs) {
-                var failures = 0
-                while (alive() && !paired()) {
-                    try {
-                        val done = withTimeoutOrNull(boundMs) { collect() }
-                        failures = if (done == null) failures + 1 else 0
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        failures++ // a failed collect: tried again, with backoff, until the window ends
-                    }
-                    if (!alive() || paired()) break
-                    delay(pauseMs * (1L shl minOf(maxOf(failures - 1, 0), MAX_BACKOFF_FACTOR)))
+        if (paired()) return true
+        val firstEnd = settle.now() + settle.windowMs
+        var endAt = firstEnd
+        var failures = 0
+
+        suspend fun request(waitMs: Long) {
+            try {
+                // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
+                val done = withTimeoutOrNull(waitMs + settle.transportMs) { collect(waitMs) }
+                if (done == null) {
+                    failures++
+                    endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
+                } else {
+                    failures = 0
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                failures++ // a failed collect: tried again, with backoff, until the window ends
             }
         }
+
+        while (alive() && !paired()) {
+            val left = endAt - settle.now()
+            if (left <= 0) break
+            request((left - settle.handlingMs).coerceIn(0L, settle.pollMs))
+            if (!alive() || paired()) break
+            val pause = settle.pauseMs * (1L shl minOf(maxOf(failures - 1, 0), MAX_BACKOFF_FACTOR))
+            delay(minOf(pause, maxOf(endAt - settle.now(), 0L)))
+        }
+        if (alive() && !paired()) request(0L)
         // The drop refuses a paired device under its lock, so a device.paired the collection applied meanwhile is kept:
         // the answer is read after it.
         if (!paired() && alive()) drop()
@@ -146,14 +199,12 @@ internal object TransferInResume {
         suspend fun run(
             due: () -> Boolean,
             paired: () -> Boolean,
-            collect: suspend () -> Unit,
+            collect: suspend (waitMs: Long) -> Unit,
             drop: suspend () -> Unit,
-            boundMs: Long = DEADLINE_COLLECT_MS,
-            windowMs: Long = SETTLE_WINDOW_MS,
-            pauseMs: Long = SETTLE_PAUSE_MS,
             alive: () -> Boolean = { true },
+            settle: Settle = Settle(),
         ): Boolean = lock.withLock {
-            if (due()) atDeadline(paired, collect, drop, boundMs, windowMs, pauseMs, alive) else paired()
+            if (due()) atDeadline(paired, collect, drop, alive, settle) else paired()
         }
     }
 }

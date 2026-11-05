@@ -9,6 +9,7 @@ import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -83,6 +84,52 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.REJECTED, vm.uiState.value.step)
         vm.again()
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    private fun TestScope.pastDeadlineVm(): TransferInViewModel {
+        val start = Instant.now()
+        // Started 12 minutes ago: past the 11-minute deadline (the start published the waiting phase).
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(720))
+        return TransferInViewModel(vault, vault).also {
+            it.clock = object : Clock() {
+                override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+                override fun getZone(): ZoneId = ZoneOffset.UTC
+
+                override fun withZone(zone: ZoneId): Clock = this
+            }
+        }
+    }
+
+    /**
+     * (review) A start past the deadline shows the code with the countdown at 0 while the repository's settlement window
+     * runs (about 90 s, in its wait), and the late approval then completes the move.
+     */
+    @Test
+    fun aRestartPastTheDeadlineShowsCompareAtZeroThenDone() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertEquals(0L, vm.uiState.value.secondsLeft)
+        assertTrue("the settlement is the repository's wait", "awaitTransferIn" in vault.calls)
+        advanceTimeBy(60_000) // still settling: nothing decided by the screen
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+    }
+
+    @Test
+    fun aRestartPastTheDeadlineEndsTimedOutWhenTheSettlementDrops() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertEquals(0L, vm.uiState.value.secondsLeft)
+        advanceTimeBy(90_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.TIMED_OUT, vm.uiState.value.step)
     }
 
     /**

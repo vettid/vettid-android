@@ -1084,7 +1084,7 @@ class VaultDevice private constructor(
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
-     * was never answered, or at the transfer's 11-minute deadline after its collect (A6 audit N1; VAULT-MESSAGING 0.56.2
+     * was never answered, or at the transfer's 11-minute deadline after its settlement window of collects (A6 audit N1; VAULT-MESSAGING 0.56.2
      * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
      * everything.
      */
@@ -1120,14 +1120,16 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) What the transfer's deadline reads before anything is dropped:
-     * the collection's round in flight (it may hold a leased `device.paired`), one collect of its own ([collectOnce]),
-     * and the round in flight after it. The caller bounds each (30 s), repeats them for the settle window and then
-     * decides; [abandonTransfer] keeps everything once `device.paired` was applied.
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One request of the transfer's settlement window, before
+     * anything is dropped: the collection's round in flight (it may hold a leased `device.paired`), one collect of its own
+     * ([collectOnce]), and the round in flight after it. While the collection is running it long-polls already, so ours
+     * is `wait=0` then; a long poll of [wait] is made only when it is not running. The caller sizes [wait] to what is left
+     * of its window, gives the whole its wait plus a transport bound and never cuts it earlier ([abandonTransfer] keeps
+     * everything once `device.paired` was applied).
      */
     suspend fun deadlineCollect(wait: Duration = Duration.ZERO) {
         awaitCollectorRound()
-        collectOnce(wait)
+        collectOnce(if (collecting) Duration.ZERO else wait)
         awaitCollectorRound()
     }
 
