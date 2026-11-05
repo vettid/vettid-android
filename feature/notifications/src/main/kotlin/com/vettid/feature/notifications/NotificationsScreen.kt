@@ -72,7 +72,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -378,7 +378,7 @@ private fun SectionHeader(day: LocalDate?) {
         day == today -> stringResource(R.string.notifications_today)
         day == today.minusDays(1) -> stringResource(R.string.notifications_yesterday)
         day == LocalDate.MIN -> stringResource(R.string.notifications_undated)
-        else -> FeedSections.dayTitle(day, today, LocalConfiguration.current.locales[0] ?: java.util.Locale.getDefault())
+        else -> FeedSections.dayTitle(day, today, LocalLocale.current.platformLocale)
     }
     Text(
         text,
