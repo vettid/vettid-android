@@ -1084,9 +1084,10 @@ class VaultDevice private constructor(
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
-     * was never answered, or at the transfer's 11-minute deadline after its settlement window of collects (A6 audit N1; VAULT-MESSAGING 0.56.2
-     * §11.14.10 rule 5). Under the device's lock, and never once `device.paired` was applied: a paired device keeps
-     * everything.
+     * was never answered, or at the transfer's 11-minute deadline after its settlement window of collects
+     * (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5).
+     * With [onlyStartedAt], only the transfer that started then. Under the device's lock, and never once
+     * `device.paired` was applied: a paired device keeps everything.
      */
     suspend fun abandonTransfer(onlyStartedAt: Instant? = null) = lock.withLock {
         if (st.deviceId != null) return@withLock

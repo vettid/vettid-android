@@ -44,6 +44,9 @@ internal object TransferInResume {
     /** The transport bound added to a request's own wait (30 seconds); a request is never given less than wait + this. */
     const val DEADLINE_COLLECT_MS = 30_000L
 
+    private const val MS = 1_000L
+    private const val NANOS_PER_MS = 1_000_000L
+
     /** The relay's visibility timeout when it advertises none (RELAY-PROTOCOL §6.3). */
     const val DEFAULT_VISIBILITY_S = 60L
 
@@ -59,7 +62,7 @@ internal object TransferInResume {
      * case).
      */
     fun windowMs(visibilitySeconds: Long? = null): Long =
-        (visibilitySeconds ?: DEFAULT_VISIBILITY_S) * 1_000L + SETTLE_POLL_S * 1_000L + SETTLE_MARGIN_MS
+        (visibilitySeconds ?: DEFAULT_VISIBILITY_S) * MS + SETTLE_POLL_S * MS + SETTLE_MARGIN_MS
 
     /** The window with the relay's visibility timeout at its default. */
     val SETTLE_WINDOW_MS: Long = windowMs()
@@ -84,10 +87,10 @@ internal object TransferInResume {
         val windowMs: Long = SETTLE_WINDOW_MS,
         val pauseMs: Long = SETTLE_PAUSE_MS,
         val transportMs: Long = DEADLINE_COLLECT_MS,
-        val pollMs: Long = SETTLE_POLL_S * 1_000L,
+        val pollMs: Long = SETTLE_POLL_S * MS,
         val handlingMs: Long = HANDLING_MARGIN_MS,
         val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
-        val now: () -> Long = { System.nanoTime() / 1_000_000L },
+        val now: () -> Long = { System.nanoTime() / NANOS_PER_MS },
     )
 
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
@@ -120,7 +123,6 @@ internal object TransferInResume {
      * session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
      * window had passed. Cancellation propagates, with no drop.
      */
-    @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
     suspend fun atDeadline(
         paired: () -> Boolean,
         collect: suspend (waitMs: Long) -> Unit,
@@ -129,15 +131,35 @@ internal object TransferInResume {
         settle: Settle = Settle(),
     ): Boolean {
         if (paired()) return true
-        val firstEnd = settle.now() + settle.windowMs
-        var endAt = firstEnd
-        var failures = 0
+        val out = Requests(settle, collect)
+        while (alive() && !paired() && out.left() > 0) {
+            out.send((out.left() - settle.handlingMs).coerceIn(0L, settle.pollMs))
+            if (alive() && !paired()) delay(out.pause())
+        }
+        if (alive() && !paired()) out.send(0L)
+        // The drop refuses a paired device under its lock, so a device.paired the collection applied meanwhile is kept:
+        // the answer is read after it.
+        if (!paired() && alive()) drop()
+        return paired()
+    }
 
-        suspend fun request(waitMs: Long) {
+    /** The requests of one settlement: its window's end (which abandoned requests move out) and its failures. */
+    private class Requests(private val settle: Settle, private val collect: suspend (waitMs: Long) -> Unit) {
+        private val firstEnd = settle.now() + settle.windowMs
+        private var endAt = firstEnd
+        private var failures = 0
+
+        fun left(): Long = endAt - settle.now()
+
+        /** The pause before the next request: the base, doubled after each failure in a row, not past the end. */
+        fun pause(): Long =
+            minOf(settle.pauseMs * (1L shl minOf(maxOf(failures - 1, 0), MAX_BACKOFF_FACTOR)), maxOf(left(), 0L))
+
+        @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
+        suspend fun send(waitMs: Long) {
             try {
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
-                val done = withTimeoutOrNull(waitMs + settle.transportMs) { collect(waitMs) }
-                if (done == null) {
+                if (withTimeoutOrNull(waitMs + settle.transportMs) { collect(waitMs) } == null) {
                     failures++
                     endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
                 } else {
@@ -149,20 +171,6 @@ internal object TransferInResume {
                 failures++ // a failed collect: tried again, with backoff, until the window ends
             }
         }
-
-        while (alive() && !paired()) {
-            val left = endAt - settle.now()
-            if (left <= 0) break
-            request((left - settle.handlingMs).coerceIn(0L, settle.pollMs))
-            if (!alive() || paired()) break
-            val pause = settle.pauseMs * (1L shl minOf(maxOf(failures - 1, 0), MAX_BACKOFF_FACTOR))
-            delay(minOf(pause, maxOf(endAt - settle.now(), 0L)))
-        }
-        if (alive() && !paired()) request(0L)
-        // The drop refuses a paired device under its lock, so a device.paired the collection applied meanwhile is kept:
-        // the answer is read after it.
-        if (!paired() && alive()) drop()
-        return paired()
     }
 
     /** The paired transfer's `user_guid` (null from a vault release before 0.17.0). */

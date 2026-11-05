@@ -121,7 +121,10 @@ class TransferInResumeTest {
         val starts = mutableListOf<Long>()
         val waits = mutableListOf<Long>()
         TransferInResume.atDeadline(
-            { false }, { w -> waits += w; starts += t; CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = timing(),
+            { false },
+            { w -> waits += w; starts += t; CompletableDeferred<Unit>().await() },
+            { droppedAt = t },
+            settle = timing(),
         )
         assertEquals("never cut before its wait plus 30 s: first starts at 0, next no earlier than 55 s", 0L, starts[0])
         assertEquals(25_000L, waits[0])
@@ -194,7 +197,9 @@ class TransferInResumeTest {
         var droppedAt = -1L
         var collects = 0
         assertFalse(
-            TransferInResume.atDeadline({ false }, { collects++; throw IOException("relay unreachable") }, { droppedAt = t }, settle = timing()),
+            TransferInResume.atDeadline(
+                { false }, { collects++; throw IOException("relay unreachable") }, { droppedAt = t }, settle = timing(),
+            ),
         )
         assertTrue(collects > 1)
         assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
