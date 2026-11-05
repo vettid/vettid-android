@@ -44,8 +44,10 @@ class AndroidLocationPlatform(
         // The cover came up (or went): a notice that is still showing is posted again with the names that may be said now.
         scope.launch {
             names.collect {
-                val ids = synchronized(stalled) { stalled.entries.map { e -> e.key to e.value } }
-                ids.forEach { (id, minutes) -> if (isShowing(id)) post(id, minutes) }
+                // One monitor with show, update and clear: a notice cleared meanwhile (a lock) is not brought back.
+                synchronized(stalled) {
+                    stalled.entries.toList().forEach { (id, minutes) -> if (isShowing(id)) post(id, minutes) }
+                }
             }
         }
         LocationService.source = object : LocationServiceSource {
@@ -97,19 +99,25 @@ class AndroidLocationPlatform(
      * screen, as the ongoing notification does.
      */
     override fun showStalled(connectionId: String, minutes: Int) {
-        synchronized(stalled) { stalled[connectionId] = minutes }
-        post(connectionId, minutes)
+        synchronized(stalled) {
+            stalled[connectionId] = minutes
+            post(connectionId, minutes)
+        }
     }
 
     /** The minutes change in a notice that is still showing; one the member dismissed stays dismissed until the next stall. */
     override fun updateStalled(connectionId: String, minutes: Int) {
-        synchronized(stalled) { stalled[connectionId] = minutes }
-        if (isShowing(connectionId)) post(connectionId, minutes)
+        synchronized(stalled) {
+            stalled[connectionId] = minutes
+            if (isShowing(connectionId)) post(connectionId, minutes)
+        }
     }
 
     override fun clearStalled(connectionId: String) {
-        synchronized(stalled) { stalled.remove(connectionId) }
-        runCatching { NotificationManagerCompat.from(app).cancel(connectionId, STALLED_ID) }
+        synchronized(stalled) {
+            stalled.remove(connectionId)
+            runCatching { NotificationManagerCompat.from(app).cancel(connectionId, STALLED_ID) }
+        }
     }
 
     private fun isShowing(connectionId: String): Boolean = runCatching {

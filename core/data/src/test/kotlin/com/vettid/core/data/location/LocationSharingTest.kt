@@ -1564,8 +1564,7 @@ class LocationSharingTest {
         r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
         r.elapse(Duration.ofMinutes(1))
         due = true
-        r.sharing.onGateChanged()
-        // Nothing wakes the phone for two hours: no tick, only the clocks move.
+        // Nothing looks while it is due and nothing wakes the phone for two hours: only the clocks move.
         clock = clock.plus(Duration.ofHours(2))
         elapsed += Duration.ofHours(2).toNanos()
         due = false

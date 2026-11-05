@@ -147,4 +147,17 @@ class AndroidLocationPlatformTest {
         platform() // a new process
         assertTrue(active().isEmpty())
     }
+
+    @Test
+    fun aClearedNoticeIsNotBroughtBackByTheCoverComingUp() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val names = MutableStateFlow(mapOf("c1" to "Samira"))
+        val p = platform(names)
+        p.showStalled("c1", 20)
+        // A lock: the cover comes up and the share's notice is cleared in the same moment.
+        p.clearStalled("c1")
+        names.value = emptyMap()
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertTrue(active().isEmpty())
+    }
 }

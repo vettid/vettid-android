@@ -542,7 +542,12 @@ class LocationSharing(
     }
 
     /** The check passed or came due: sending pauses or goes on, and a stop the vault refused is tried again. Also on a timer. */
-    fun onGateChanged() = tick()
+    fun onGateChanged() {
+        // A check that passes may have been due unseen (a deadline passing changes no value, and nothing wakes the phone): the
+        // lift itself starts the stall clocks over, so the time it was due can never count.
+        synchronized(lock) { if (unlocked() && !due()) wasGated = true }
+        tick()
+    }
 
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
