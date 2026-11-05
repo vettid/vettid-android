@@ -665,6 +665,7 @@ vettid.org repo's `local/android-ui/`).
   `WipesOnCover` and refuses fully qualified windows of their own outside `VettIdApp.kt`. Rule: `ownerCheckMode()` /
   `rememberOwnerCheckMode()` in `OwnerCheckGate.kt` (`OwnerCheckInputTest`). The refused-request text "What you entered is
   kept: the check opens when you leave this screen" is unchanged (owner decision a).
+  Failed-check texts (owner decision 2026-11-05, signed): the vault counts a wrong PIN on any credential operation (a wallet limit raise, `item.reveal` of a capped wallet) as a failed check and audits `owner_check.failed` (`ref` `pin`), so the PIN variant is not "daily": the shell banner (`owner_check_notice_failed_pin`) reads "A PIN check failed: wrong PIN.", the feed (`data_feed_check_failed_pin`) "A PIN check failed: wrong PIN" and History (`history_kind_owner_check_failed_pin`, `AuditKinds.title` for `ref` `pin`) the same; the password variant ("A daily check failed: wrong credential password.") and History's "Daily check failed" for other refs are unchanged. The wallet detail's button under "Receiving is off until your spending limit is set." is "Set the limit now" (`wallet_caps_set_now`, same `retryCaps`).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto

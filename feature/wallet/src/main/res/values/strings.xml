@@ -19,6 +19,7 @@
     <string name="wallet_network_regtest">Regtest</string> <!-- new: devStack only -->
     <string name="wallet_list_failed">Your wallets couldn\'t be read.</string> <!-- new -->
     <string name="wallet_try_again">Try again</string> <!-- new -->
+    <string name="wallet_caps_set_now">Set the limit now</string> <!-- Owner-approved 2026-11-05 -->
 
     <!-- Create -->
     <string name="wallet_new_title">New wallet</string> <!-- screens table -->
