@@ -11,10 +11,13 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -45,11 +48,24 @@ class PairingManagerTest {
 
         val roles = mutableListOf<String>()
 
+        /** An answer per role (else [created]), and a gate that holds the next create (once) until it is completed. */
+        val byRole = mutableMapOf<String, JsonObject>()
+        var holdNext: CompletableDeferred<Unit>? = null
+
+        /** Completed when an agent create reached the gate (the request runs on another thread, so a test must wait for it). */
+        val held = CompletableDeferred<Unit>()
+
         override suspend fun create(role: PairRole): JsonObject {
             roles += role.wire
             calls += "create"
             refuse["create"]?.let { throw VaultOpException("device.pair.create", it) }
-            return created
+            val gate = holdNext
+            if (gate != null && role == PairRole.AGENT) {
+                holdNext = null
+                held.complete(Unit)
+                gate.await()
+            }
+            return byRole[role.wire] ?: created
         }
 
         override suspend fun approve(pairingId: String, sessionSeconds: Int?) {
@@ -656,5 +672,77 @@ class PairingManagerTest {
         m.onEvent(pending(name = "Work laptop", role = "desktop"))
         m.approve(3600)
         assertEquals("d1", (m.state.value.stage as PairingStage.Paired).deviceId)
+    }
+
+    private fun both(ops: Ops) {
+        ops.byRole["agent"] = obj("""{"pairing_id":"pa","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
+        ops.byRole["desktop"] = obj("""{"pairing_id":"pd","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+    }
+
+    @Test
+    fun theOtherButtonRejectsTheHeldCodeAndReplacesItInOneStep() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        assertEquals("pa", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        m.start(PairRole.DESKTOP)
+        // Already the desktop's code: nothing of the agent's is left to read, and the old id is told it is not wanted.
+        val s = m.state.value
+        assertEquals(PairRole.DESKTOP, s.role)
+        assertEquals("pd", (s.stage as PairingStage.Code).code.pairingId)
+        // (Idle runs the reject, and the virtual time the code's own end.)
+        advanceUntilIdle()
+        assertEquals(listOf("create", "create", "reject:pa"), ops.calls)
+    }
+
+    @Test
+    fun theOtherButtonRejectsAHeldComparisonToo() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.onEvent(pending(id = "pa"))
+        m.start(PairRole.DESKTOP)
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        advanceUntilIdle()
+        assertTrue(ops.calls.contains("reject:pa"))
+    }
+
+    @Test
+    fun aCreateOfTheOtherRoleStillInFlightIsSupersededDroppedAndRejected() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        runCurrent()
+        assertTrue(m.state.value.stage is PairingStage.Creating)
+        ops.held.await()
+        // The desktop button while the agent's create is out: the desktop code is made, not skipped.
+        m.start(PairRole.DESKTOP)
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        gate.complete(Unit)
+        first.join()
+        // The agent's late answer is dropped (the desktop's pairing is still the one held; waiting for the answer let the
+        // test clock reach the desktop code's own end, hence "or expired") and that pairing is rejected.
+        val held = m.state.value.stage
+        assertEquals("pd", (held as? PairingStage.Code)?.code?.pairingId ?: (held as PairingStage.CodeExpired).pairingId)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        assertTrue(ops.calls.contains("reject:pa"))
+        assertFalse(ops.calls.contains("reject:pd"))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun theSameRoleKeepsAHeldCodeButTheOtherRoleReplacesAComparison() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.start(PairRole.AGENT)
+        assertEquals(listOf("create"), ops.calls)
+        m.onEvent(pending(id = "pa"))
+        m.start(PairRole.DESKTOP)
+        advanceUntilIdle()
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        assertTrue(ops.calls.contains("reject:pa"))
     }
 }

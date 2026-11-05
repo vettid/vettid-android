@@ -50,10 +50,10 @@ class PairingCode(val pairingId: String, val link: String, val exp: Instant) {
 }
 
 /**
- * A pairing the agent has answered (`device.pair.pending`): what the member compares. [name] is what the agent says
+ * A pairing the new device has answered (`device.pair.pending`): what the member compares. [name] is what the device says
  * about itself, sanitised (never trusted); [sas] is the six digits, or null when the event did not carry six digits or
- * was not for an agent, so that it cannot be compared and only rejected. [ends] is when this phone stops offering the
- * approval (10 minutes after the event, never later than the vault's own end).
+ * was not for the role this phone made the code for, so that it cannot be compared and only rejected. [ends] is when this
+ * phone stops offering the approval (10 minutes after the event, never later than the vault's own end).
  */
 class PendingPairing(
     val pairingId: String,
@@ -88,7 +88,7 @@ sealed interface PairingStage {
 
     /**
      * The code expired unused: nothing was paired. The pairing's id and end are kept, only to take a late answer of the
-     * agent (a pending up to [LATE] after [exp]); the code itself is gone, and the comparison is still required.
+     * device (a pending up to [LATE] after [exp]); the code itself is gone, and the comparison is still required.
      */
     data class CodeExpired(val pairingId: String, val exp: Instant) : PairingStage {
         companion object {
@@ -96,13 +96,13 @@ sealed interface PairingStage {
         }
     }
 
-    /** Step 2: the agent has answered; the member compares the code. */
+    /** Step 2: the new device has answered; the member compares the code. */
     data class Compare(val pending: PendingPairing) : PairingStage
 
-    /** The member rejected it. [told]: the vault took the rejection (the agent is told); false when the request failed. */
+    /** The member rejected it. [told]: the vault took the rejection (the device is told); false when the request failed. */
     data class Rejected(val told: Boolean) : PairingStage
 
-    /** The approval went through. [deviceId] is the new agent's id when known (null: the list opens instead). */
+    /** The approval went through. [deviceId] is the new device's id when known (null: the list opens instead). */
     data class Paired(val name: String, val deviceId: String?) : PairingStage
 
     /** The pairing ended without an approval (its time ran out, or the vault refused the approval): nothing is paired. */
@@ -115,9 +115,9 @@ data class PairingState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
-    /** With [PairingStage.Ended]: the approval's outcome is unknown (no answer), so the agent may be in the list. */
+    /** With [PairingStage.Ended]: the approval's outcome is unknown (no answer), so the device may be in the list. */
     val unknownOutcome: Boolean = false,
-    /** With [unknownOutcome]: the name the agent gave itself (sanitised), for "If <name> is listed…". */
+    /** With [unknownOutcome]: the name the device gave itself (sanitised), for "If <name> is listed…". */
     val agentName: String? = null,
     /** What this pairing is for: the screens say "agent" or "desktop" by it. Set by [PairingManager.start]. */
     val role: PairRole = PairRole.AGENT,
@@ -141,11 +141,15 @@ internal class VaultPairingOps(private val api: VaultApi) : PairingOps {
     override suspend fun reject(pairingId: String) = api.devicePairReject(pairingId)
 }
 
-/** Pairing an agent (ANDROID-PLAN 0.1.53 AA2), as the screens use it. Every failure is a [VaultFailure] in the state. */
+/** Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2), as the screens use it. Every failure is a [VaultFailure] in the state. */
 interface PairingRepository {
     val state: StateFlow<PairingState>
 
-    /** Step 1: `device.pair.create{role}`; also "New code". A pairing already shown or compared is kept. */
+    /**
+     * Step 1: `device.pair.create{role}`; also "New code". A pairing already shown or compared for the same role is kept;
+     * one held for the other role is rejected and replaced in this call, and a create of the other role still in flight is
+     * superseded (its answer is dropped and rejected).
+     */
     suspend fun start(role: PairRole = PairRole.AGENT)
 
     /** Step 3: `device.pair.approve`, with the first access length in seconds (null: no access yet); never any grants. */
@@ -170,7 +174,7 @@ interface PairingRepository {
  * nothing. Memory only: [clear] (lock, hold, wipe, deletion) drops all of it. Events reach it through [onEvent] only
  * after the app's lock guard took them.
  *
- * [knownDeviceIds] (null while the list was never read) and [readDevices] find the new agent's `device_id` when the
+ * [knownDeviceIds] (null while the list was never read) and [readDevices] find the new device's `device_id` when the
  * `device.paired` feed item does not arrive in time ([ID_WAIT]).
  */
 class PairingManager(
@@ -241,7 +245,7 @@ class PairingManager(
         }
     }
 
-    /** `device.pair.pending` for the pairing shown, and the `device.paired` feed item that names the new agent. */
+    /** `device.pair.pending` for the pairing shown, and the `device.paired` feed item that names the new device. */
     fun onEvent(m: VaultMessage) {
         when (m.type) {
             "device.pair.pending" -> pending(m.body)
@@ -279,7 +283,7 @@ class PairingManager(
         }
     }
 
-    /** Whether [stage] is the pairing [id] this phone made and still takes the agent's answer at [at]. */
+    /** Whether [stage] is the pairing [id] this phone made and still takes the device's answer at [at]. */
     private fun ours(stage: PairingStage, id: String, at: Instant): Boolean = when (stage) {
         is PairingStage.Code -> stage.code.pairingId == id && stage.code.exp.isAfter(at)
         is PairingStage.CodeExpired -> stage.pairingId == id && !at.isAfter(stage.exp.plus(PairingStage.CodeExpired.LATE))
@@ -304,31 +308,53 @@ class PairingManager(
         }
     }
 
-    @Suppress("ReturnCount") // the guards of a state machine: each is one early exit
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // the guards of a state machine: each is one early exit
     override suspend fun start(role: PairRole) {
         val gen: Int
         val wanted = role
+        // A pairing of the other role that this start replaces: the vault is told it is not wanted.
+        var replaced: String? = null
         synchronized(lock) {
             val s = flow.value
-            if (s.busy || s.stage is PairingStage.Creating || s.stage is PairingStage.Compare) return
-            if (s.stage is PairingStage.Code && s.stage.code.exp.isAfter(now())) return
+            if (s.stage !is PairingStage.Idle && this.role != wanted) {
+                // The other button: the held pairing is rejected and replaced in one step, so no state of it is left behind. An
+                // approval in flight is not interrupted. A create in flight is superseded: its answer is dropped and rejected.
+                if (s.busy && s.stage !is PairingStage.Creating) return
+                replaced = when (val st = s.stage) {
+                    is PairingStage.Code -> st.code.pairingId
+                    is PairingStage.CodeExpired -> st.pairingId
+                    is PairingStage.Compare -> st.pending.pairingId
+                    else -> null
+                }
+                generation++
+            } else {
+                if (s.busy || s.stage is PairingStage.Creating || s.stage is PairingStage.Compare) return
+                if (s.stage is PairingStage.Code && s.stage.code.exp.isAfter(now())) return
+            }
             gen = generation
             timer?.cancel()
             this.role = wanted
             flow.value = PairingState(PairingStage.Creating, busy = true)
         }
+        replaced?.let { id -> scope.launch { sendReject(id) } }
+        var stale: String? = null
         try {
             val code = sent { read(ops().create(wanted), wanted) }
             synchronized(lock) {
-                if (gen != generation) return
-                timer = scope.launch { endAt(code.exp, gen) { it is PairingStage.Code } }
-                flow.value = PairingState(PairingStage.Code(code))
+                if (gen != generation) {
+                    stale = code.pairingId
+                } else {
+                    timer = scope.launch { endAt(code.exp, gen) { it is PairingStage.Code } }
+                    flow.value = PairingState(PairingStage.Code(code))
+                }
             }
         } catch (e: VaultFailure) {
             synchronized(lock) {
                 if (gen == generation) flow.value = PairingState(PairingStage.Idle, error = e.kind, errorCode = e.shownCode)
             }
         }
+        // A code that came back after it was superseded (or the vault locked) is not wanted: best effort.
+        stale?.let { sendReject(it) }
     }
 
     /**
@@ -407,7 +433,7 @@ class PairingManager(
 
     @Suppress("ReturnCount")
     private suspend fun failed(gen: Int, p: PendingPairing, e: VaultFailure) {
-        // No answer at all: the vault may have taken the approval. Look for the new agent before saying anything.
+        // No answer at all: the vault may have taken the approval. Look for the new device before saying anything.
         val unknown = e.kind == FailureKind.NETWORK || e.kind == FailureKind.NO_RESPONSE
         val found = if (unknown) findDevice(p) else null
         synchronized(lock) {
@@ -440,8 +466,8 @@ class PairingManager(
     }
 
     /**
-     * The new agent's `device_id` (ANDROID-PLAN 0.1.53 AA2 step 4): from the `device.paired` feed item, else within
-     * [ID_WAIT] from the list, the one agent entry that was not listed before and carries the compared name. Null when
+     * The new device's `device_id` (ANDROID-PLAN 0.1.53 AA2 step 4): from the `device.paired` feed item, else within
+     * [ID_WAIT] from the list, the one entry of the role that was not listed before and carries the compared name. Null when
      * none or more than one fits: the list opens instead.
      */
     @Suppress("ReturnCount")

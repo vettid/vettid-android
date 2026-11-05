@@ -68,15 +68,28 @@ class PairViewModel @Inject constructor(
     /** The pairing the sheet was opened for. */
     private val sheetFor = MutableStateFlow<String?>(null)
 
+    /**
+     * The role of the last pairing seen that was not nothing: a held screen (opened from a feed item) has no route role, and
+     * a cleared state (a lock, a hold) says AGENT whatever was held, so "New code" never takes its role from the repository.
+     */
+    private var seenRole: PairRole = role
+
+    /** What a new code is made for: the button's role, or for a held screen the role of what it last showed. */
+    private fun codeRole(): PairRole = if (held) seenRole else role
+
     /** A stage other than nothing was seen, and the screen is not being closed. */
     private var sawStage = false
     private val closing = MutableStateFlow(false)
 
     val uiState: StateFlow<PairUiState> = combine(local, repo.state, sheetFor, closing) { l, p, forId, leaving ->
         val st = p.stage
-        if (st !is PairingStage.Idle) sawStage = true
+        if (st !is PairingStage.Idle) {
+            sawStage = true
+            seenRole = p.role
+        }
         l.copy(
-            pairing = p,
+            // The screens say the role of what was shown, also once it was taken away (the lock's "This pairing has ended").
+            pairing = if (st is PairingStage.Idle) p.copy(role = codeRole()) else p,
             sheet = st is PairingStage.Compare && forId == st.pending.pairingId,
             interrupted = sawStage && !leaving && st is PairingStage.Idle && p.error == null && !p.busy,
         )
@@ -87,12 +100,8 @@ class PairViewModel @Inject constructor(
         // From the feed item the pairing is whatever is held; from the button, a new code (an unfinished one is kept).
         if (!held) {
             repo.acknowledge()
-            viewModelScope.launch {
-                // A pairing still held for the other role is not shown under this button: it is rejected first.
-                val st = repo.state.value
-                if (st.stage !is PairingStage.Idle && st.role != role) repo.cancel()
-                repo.start(role)
-            }
+            // A pairing held for the other role is rejected and replaced by the repository in this one call.
+            viewModelScope.launch { repo.start(role) }
         }
         // The daily check passed: a refused approval may be sent again.
         viewModelScope.launch {
@@ -109,7 +118,7 @@ class PairViewModel @Inject constructor(
         sawStage = false
         viewModelScope.launch {
             repo.acknowledge()
-            repo.start(repo.state.value.role)
+            repo.start(codeRole())
         }
     }
 

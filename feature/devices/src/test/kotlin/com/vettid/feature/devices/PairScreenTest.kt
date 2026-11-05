@@ -238,7 +238,7 @@ class PairScreenTest {
     fun theDesktopCodeScreenSaysDesktopAndKeepsTheAgentsControls() {
         show(at(PairingStage.Code(PairingCode("p1", desktopLink, exp)), role = desk))
         rule.onNodeWithText("Pair a desktop").assertIsDisplayed()
-        rule.onNodeWithText("Scan this code with VettID Desktop, or copy it there. It works once and expires in 10 minutes.").assertIsDisplayed()
+        rule.onNodeWithText("Copy this code into VettID on your computer. It works once and expires in 10 minutes.").assertIsDisplayed()
         rule.onNodeWithTag("pair_qr").assertExists()
         rule.onNodeWithTag("pair_countdown").assertTextContains("Expires in 9:41")
         rule.onNodeWithTag("pair_copy").assertExists()
@@ -288,22 +288,35 @@ class PairScreenTest {
         assertEquals(listOf("done"), calls)
     }
 
+    /** Nothing says "the agent" or "an agent" (the screen's "Devices & agents" is the place's own name). */
+    private fun noAgentWord() {
+        for (phrase in listOf("the agent", "an agent", "your agent")) {
+            assertEquals(phrase, 0, rule.onAllNodesWithText(phrase, substring = true, ignoreCase = true).fetchSemanticsNodes().size)
+        }
+    }
+
     @Test
-    fun theDesktopRejectionEndAndUnconfirmedTextsNameTheDesktop() {
+    fun theDesktopRejectionEndAndUnconfirmedTextsNameTheDesktopAndNeverTheAgent() {
         show(at(PairingStage.Rejected(told = true), role = desk))
         rule.onNodeWithText("The desktop is told it was rejected.", substring = true).assertIsDisplayed()
+        noAgentWord()
     }
 
     @Test
     fun theDesktopEndedPairingKeepsThePlainWords() {
         show(PairUiState(PairingState(PairingStage.Ended, role = desk)))
+        rule.onNodeWithText("Not paired").assertIsDisplayed()
         rule.onNodeWithText("This pairing has ended. Start again from Devices & agents.").assertIsDisplayed()
+        rule.onNodeWithText("Done").performClick()
+        assertEquals(listOf("done"), calls)
     }
 
     @Test
-    fun anUnconfirmedDesktopApprovalNamesThatDesktop() {
+    fun anUnconfirmedDesktopApprovalNamesThatDesktopAndNeverTheAgent() {
         show(PairUiState(PairingState(PairingStage.Ended, unknownOutcome = true, agentName = "Work laptop", role = desk)))
         rule.onNodeWithText("Pairing not confirmed").assertIsDisplayed()
-        rule.onNodeWithText("If", substring = true).assertExists()
+        rule.onNodeWithText("Work laptop", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Your vault did not answer. If", substring = true).assertIsDisplayed()
+        noAgentWord()
     }
 }

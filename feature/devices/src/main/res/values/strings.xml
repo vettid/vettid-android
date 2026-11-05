@@ -131,22 +131,26 @@
     <string name="pair_choose">Choose what it may use</string>
     <string name="pair_later">Later</string>
     <!-- Said once a minute to a screen reader while the code counts down. -->
-    <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05): every string below, to the end of this block. The
-         agent's texts above are unchanged; these are the desktop's variants and the chooser. -->
-    <string name="devices_pair_new">Pair a device</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <!-- Said once a minute to a screen reader while the code counts down. -->
+    <plurals name="pair_minutes_left">
+        <item quantity="one">%1$d minute left</item>
+        <item quantity="other">%1$d minutes left</item>
+    </plurals>
+
+    <!-- Pair a desktop (owner decision 2026-11-05, reversing ANDROID-PLAN decision 9). Every string in this block is NEW: not
+         in the plan, not yet approved. The agent's texts above are unchanged; these are the desktop's variants and the
+         chooser's. -->
+    <string name="devices_pair_new">Pair an agent or desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="devices_pair_menu_open">Menu open</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="devices_pair_menu_closed">Menu closed</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="devices_pair_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_title_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_code_body_desktop">Scan this code with VettID Desktop, or copy it there. It works once and expires in 10 minutes.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="pair_code_body_desktop">Copy this code into VettID on your computer. It works once and expires in 10 minutes.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_compare_body_desktop">Does the desktop show %1$s? Approve only if the codes match.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_calls_itself_note_desktop">The code proves this phone talks to the desktop you just gave the code to. The name is only what the desktop says about itself.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_rejected_body_desktop">The desktop is told it was rejected. If you did not expect a code, someone else may have the pairing code; it no longer works.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_allow_body_desktop">A desktop acts only while you allow access.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="pair_paired_body_desktop">When it asks for access, the request comes to Approvals.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-
-    <plurals name="pair_minutes_left">
-        <item quantity="one">%1$d minute left</item>
-        <item quantity="other">%1$d minutes left</item>
-    </plurals>
 
     <!-- AA4, ANDROID-PLAN 0.1.116 §4 "What an agent may use: share rules": "draft" = the plan\'s text word for word, "new" = proposed here. -->
     <string name="devices_rules_title">What it may use</string> <!-- draft -->

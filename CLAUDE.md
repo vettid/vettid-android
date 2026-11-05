@@ -263,6 +263,14 @@ The A2 exit test:
   paired and that its access requests come to Approvals; it offers only **Done** (no "Choose what it may use", no rules or
   permissions). Desktops are listed, ended and removed as before and their session requests are approved as before. The
   desktop's texts are `*_desktop` strings marked `NEW: not in the plan`; the agent's are unchanged. Catalog: `devices.pair_desktop_*`.
+  **The role switch is atomic** in `PairingManager.start(role)` (under its lock): a pairing held for the other role (a live or
+  expired code, a comparison not being approved) is replaced and its id rejected in the background; a create of the other role
+  still in flight is superseded (`generation`), its answer is dropped and rejected when it arrives (any dropped create is
+  rejected, a lock's too); an approval in flight is not switched. `PairViewModel` owns its role and never takes it from a
+  cleared state (a lock or hold clears the repository to AGENT): the route's role, or for a held screen the role of the last
+  non-idle pairing it saw (`seenRole`), also for "New code" and for the words of "This pairing has ended". The chooser button
+  announces a menu (`Role.DropdownList`, "Menu open/closed"). Approvals: a held desktop pairing's entry says "desktop"
+  (`ApprovalDetailUiState.pairingDesktop`, `approvals_pair_compare_body_desktop`).
 
 - What an agent may use (ANDROID-PLAN 0.1.116 §4 AA4, decisions 1-8, 17 and 18; VAULT-MESSAGING 0.83.2 §10.12, §10.11, §11.10.9):
   an agent's share rules, on the agent's page under **What it may use** (`share.rule.list{agent_id}` via

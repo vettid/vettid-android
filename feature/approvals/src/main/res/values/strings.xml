@@ -240,6 +240,7 @@
     <string name="approvals_pair_title_named">%1$s asks to pair</string> <!-- draft -->
     <string name="approvals_pair_body">This pairing can\'t be checked on this phone any more, so it can\'t be approved here. Reject it, or let it expire: it ends by itself within 10 minutes and nothing is paired. If you want to pair, start again.</string> <!-- new -->
     <string name="approvals_pair_compare_body">Compare the code on the agent with the one in VettID before you allow it.</string> <!-- new -->
+    <string name="approvals_pair_compare_body_desktop">Compare the code on the desktop with the one in VettID before you allow it.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="approvals_pair_compare">Compare the code</string> <!-- new -->
     <string name="approvals_pair_reject">Reject</string> <!-- new -->
 </resources>

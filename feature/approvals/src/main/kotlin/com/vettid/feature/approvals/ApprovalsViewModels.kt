@@ -280,6 +280,8 @@ data class ApprovalDetailUiState(
     val pairingHeld: Boolean = false,
     /** (AA5) The held pairing's name for the entry, sanitised by the pairing; null when none. */
     val pairingName: String? = null,
+    /** The held pairing is for a desktop (Pair a desktop, owner decision 2026-11-05): the entry says "desktop", not "agent". */
+    val pairingDesktop: Boolean = false,
     /** The item cache has been read (or failed): until then a held request's item is "Loading…", and nothing is approvable. */
     val itemsLoaded: Boolean = true,
 ) {
@@ -477,6 +479,7 @@ class ApprovalDetailViewModel @Inject constructor(
                 // Only the feed item of the pairing this phone holds (its `ref` is the event's `pending_id`) is named and compared.
                 pairingHeld = ourPairing(shown, x.pairing),
                 pairingName = com.vettid.core.data.feed.FeedNames.pairingName(x.pairing).takeIf { ourPairing(shown, x.pairing) },
+                pairingDesktop = ourPairing(shown, x.pairing) && x.pairing.role == com.vettid.core.data.devices.PairRole.DESKTOP,
                 itemsLoaded = x.itemsLoaded,
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.

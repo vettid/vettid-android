@@ -77,7 +77,7 @@ class DevicesScreenTest {
         var pairs = 0
         rule.setContent { DevicesScreen(state(phone), chrome, now = now, onPair = { pairs++ }) }
         // The button offers both pairings (owner decision 2026-11-05); Pair an agent is the agent's.
-        rule.onNodeWithContentDescription("Pair a device").performClick()
+        rule.onNodeWithContentDescription("Pair an agent or desktop").performClick()
         rule.onNodeWithText("Pair an agent").performClick()
         assertEquals(1, pairs)
     }

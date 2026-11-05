@@ -94,8 +94,8 @@ data class PairActions(
 )
 
 /**
- * Pairing an agent (ANDROID-PLAN 0.1.53 AA2): the code (QR and text, Copy, Share, its countdown), the comparison of the
- * six digits with the agent's, the choice of first access, and the end of it. The window is kept out of screenshots and
+ * Pairing an agent (ANDROID-PLAN 0.1.53 AA2) or a desktop: the code (QR and text, Copy, Share, its countdown), the
+ * comparison of the six digits with the device's, the choice of first access, and the end of it. The window is kept out of screenshots and
  * the recent-apps preview for the whole flow (the code is a bearer secret for 10 minutes, decision 1).
  */
 @Composable
@@ -364,7 +364,7 @@ private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActi
     if (state.sheet && sas != null) AllowSheet(state, actions, desktop)
 }
 
-/** "Does the agent show **123 456**?": the digits in two groups of three, large; read digit by digit by a screen reader. */
+/** "Does the agent (or desktop) show **123 456**?": the digits in two groups of three, large; read digit by digit by a screen reader. */
 @Composable
 private fun SasSentence(sas: String, desktop: Boolean) {
     val grouped = "${sas.substring(0, GROUP)} ${sas.substring(GROUP)}"

@@ -178,11 +178,53 @@ class PairViewModelTest {
     }
 
     @Test
-    fun aPairingHeldForTheOtherRoleIsRejectedBeforeANewOneStarts() = runTest {
+    fun aPairingHeldForTheOtherRoleIsReplacedByTheRepositoryInOneCall() = runTest {
         pairing.state.value = PairingState(PairingStage.Code(PairingCode("p1", "x", exp)), role = PairRole.AGENT)
         vm(desktop = true)
         advanceUntilIdle()
-        assertEquals(listOf("acknowledge", "cancel", "start:desktop"), pairing.calls)
+        // No cancel then start from the screen: the repository switches in `start`.
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+    }
+
+    @Test
+    fun newCodeAfterALockKeepsTheDesktopRoleOfTheRoute() = runTest {
+        val vm = vm(desktop = true)
+        advanceUntilIdle()
+        pairing.state.value = PairingState(PairingStage.Code(PairingCode("p1", "x", exp)), role = PairRole.DESKTOP)
+        advanceUntilIdle()
+        // The lock clears the repository: nothing, and the role of nothing is AGENT.
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        // The screen still says what it showed.
+        assertEquals(PairRole.DESKTOP, vm.uiState.value.pairing.role)
+        assertTrue(vm.uiState.value.interrupted)
+        pairing.calls.clear()
+        vm.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+    }
+
+    @Test
+    fun newCodeOnAHeldScreenKeepsTheRoleItLastShowed() = runTest {
+        val vm = vm(held = true)
+        pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.DESKTOP)
+        advanceUntilIdle()
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        pairing.calls.clear()
+        vm.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+        // And an agent's held pairing starts an agent's.
+        val agent = vm(held = true)
+        pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.AGENT)
+        advanceUntilIdle()
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        pairing.calls.clear()
+        agent.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start"), pairing.calls)
     }
 
     @Test
