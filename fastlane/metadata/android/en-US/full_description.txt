@@ -11,7 +11,7 @@ You need a VettID membership. Get a setup code on the VettID account site, scan 
 * An optional app lock, and a daily check of your PIN and credential password.
 
 Privacy:
-* What the app sends to your vault is end to end encrypted to it. Your connections' vaults talk to your vault, never to your phone.
+* What the app sends to your vault is end-to-end encrypted to it. Your connections' vaults talk to your vault, never to your phone.
 * The app checks your vault's enclave attestation against VettID's published releases.
 * VettID's relay cannot read what it carries; it sees timing and sizes. VettID's account service knows your account and when your vault is unlocked.
 * No position is stored on the phone.
@@ -19,6 +19,6 @@ Privacy:
 
 This build contains no Google software. Notifications come through VettID's on-phone service, which keeps its own connection to your vault. Calls and the Bitcoin wallet are not included.
 
-This app is signed only with VettID's own key, which Google never holds; your vault accepts only apps signed with a key it knows. F-Droid builds the same source and publishes VettID's signed APK only if the two match apart from the signature. A Google Play install, if one is ever offered, has a different certificate and cannot update an F-Droid install: moving between them means a transfer or a recovery.
+This app is signed only with VettID's own key, which Google never holds; your vault accepts only apps signed with a key it knows. F-Droid builds the same source and publishes VettID's signed APK only if the two match apart from the signature.
 
 Requires Android 12 or later. Licensed AGPL-3.0.
