@@ -490,4 +490,35 @@ class VoteScreenTest {
         val said = clean(description)
         assertTrue(said, said.startsWith("Adopt the budget, from the service Example Cooperative, You voted"))
     }
+
+    @Test
+    fun aVoteThatCannotBeReadShowsItsErrorWithRetry() {
+        val s = summary()
+        var retried = 0
+        show(
+            state(s, d = null).copy(loadError = VoteProblem(com.vettid.core.data.vault.FailureKind.NETWORK, null, null)),
+            VoteActions(onRetry = { retried++ }),
+        )
+        rule.onNodeWithTag("vote_detail_load_failed").assertIsDisplayed()
+        shown("Try again").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun cancelInThePasswordPromptIsOffWhileTheCastIsOnItsWay() {
+        val s = summary()
+        show(state(s, selected = "yes", cast = CastStep.SENDING).copy(password = "hunter2"))
+        rule.onNodeWithTag("vote_password_sheet").assertIsDisplayed()
+        rule.onNodeWithTag("vote_password_cancel").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theRestoreQuestionCanBeLeftWithBack() {
+        val s = summary().copy(confirmPending = true, canCast = false, cannotCast = "checking")
+        val d = detail(s).copy(serviceBallotChoiceId = "yes")
+        var left = 0
+        show(state(s, d), VoteActions(onDismissRestore = { left++ }))
+        rule.onNodeWithTag("restore_back").performClick()
+        assertEquals(1, left)
+    }
 }

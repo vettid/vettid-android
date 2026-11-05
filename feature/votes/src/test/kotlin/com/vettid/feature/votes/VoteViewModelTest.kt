@@ -14,6 +14,7 @@ import com.vettid.core.data.votes.VoteCheck
 import com.vettid.core.data.votes.VoteDetail
 import com.vettid.core.data.votes.VoteState
 import com.vettid.core.data.votes.VoteSummary
+import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.testing.FakeVotes
@@ -543,5 +544,64 @@ class VoteViewModelTest {
         assertEquals("Yes", vm.uiState.value.choiceLabel)
         vm.dismissAlreadyVoted()
         assertFalse(vm.uiState.value.alreadyVoted)
+    }
+
+    /** A repository whose cast stays in flight until [gate] is completed. */
+    private class SlowCast(private val inner: FakeVotes, val gate: kotlinx.coroutines.CompletableDeferred<Unit>) : VotesRepository by inner {
+        override suspend fun cast(connectionId: String, proposalId: String, choiceId: String, password: String?): BallotState {
+            gate.await()
+            return inner.cast(connectionId, proposalId, choiceId, password)
+        }
+    }
+
+    @Test
+    fun backAndCancelDoNothingWhileTheCastIsOnItsWay() = runTest {
+        publish(summary())
+        votes.windowIsOpen = true
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = VoteViewModel(
+            SavedStateHandle(mapOf(VoteRoute.CONNECTION to CONN, VoteRoute.PROPOSAL to PID)), SlowCast(votes, gate), FakeSocial(), files, FakeVault(),
+        )
+        advanceUntilIdle()
+        vm.select("no")
+        vm.askCast()
+        vm.confirmCast()
+        assertEquals(CastStep.SENDING, vm.uiState.value.cast)
+        vm.dismissCast()
+        assertEquals(CastStep.SENDING, vm.uiState.value.cast)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(CastStep.NONE, vm.uiState.value.cast)
+        assertEquals(1, votes.calls.count { it == "cast:$CONN/$PID:no" })
+    }
+
+    @Test
+    fun backOnTheRestoreQuestionClosesItForThisVisitAndNothingIsSent() = runTest {
+        val s = summary(confirmPending = true)
+        publish(s, detail(s, service = "no"))
+        val vm = vm()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.restoreAsked)
+        vm.dismissRestore()
+        assertFalse(vm.uiState.value.restoreAsked)
+        assertTrue(votes.calls.none { it.startsWith("confirm") })
+        // A new visit asks again.
+        assertTrue(vm().also { advanceUntilIdle() }.uiState.value.restoreAsked)
+    }
+
+    @Test
+    fun aVoteThatCannotBeReadKeepsItsLoadErrorWithTheListInMemory() = runTest {
+        votes.votes.value = listOf(summary())
+        val vm = vm()
+        advanceUntilIdle()
+        val ui = vm.uiState.value
+        assertTrue(ui.summary != null && ui.detail == null)
+        assertEquals(FailureKind.NOT_FOUND, ui.loadError?.kind)
+        // Retry reads it again.
+        votes.details["$CONN/$PID"] = detail(summary())
+        vm.refresh()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.loadError)
+        assertEquals("Text", vm.uiState.value.detail?.text)
     }
 }
