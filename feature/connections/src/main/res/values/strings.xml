@@ -330,4 +330,81 @@
     <string name="connections_location_sharing_until">Sharing your location until %1$s</string>
     <!-- NEW: not in the plan (words from its screen notes). -->
     <string name="connections_location_stop">Stop</string>
+
+    <!-- Receiving a connection's location (ANDROID-PLAN §4 "Location", L1b). DRAFT = the plan's text; NEW = not in the plan. -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Incoming card -->
+    <string name="connections_location_incoming">%1$s\'s location · %2$s · within %3$s</string>
+    <!-- NEW: not in the plan (the card before the position's accuracy is known) -->
+    <string name="connections_location_incoming_no_accuracy">%1$s\'s location · %2$s</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Incoming card -->
+    <string name="connections_location_until">Until %1$s</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Connection detail ("Stop receiving") -->
+    <string name="connections_location_stop_receiving">Stop receiving</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Connection detail ("Ask for location") -->
+    <string name="connections_location_ask">Ask for location</string>
+    <!-- NEW: not in the plan (the ask dialog) -->
+    <string name="connections_location_ask_title">Ask %1$s where they are</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_ask_note">Note (optional)</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_ask_send">Ask</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_ask_sent">%1$s can now choose to share their location with you.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Ask limit (the plan\'s "{n} minutes" made a plural so that 1 reads "1 minute") -->
+    <plurals name="connections_location_ask_limit">
+        <item quantity="one">You asked %1$s a few minutes ago. You can ask again in %2$d minute.</item>
+        <item quantity="other">You asked %1$s a few minutes ago. You can ask again in %2$d minutes.</item>
+    </plurals>
+    <!-- NEW: not in the plan (the glance\'s icon description) -->
+    <string name="connections_location_glance">Shares their location with you</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
+    <string name="connections_location_sharing_with">You\'re sharing with</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
+    <string name="connections_location_shared_with_you">Shared with you</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer) -->
+    <string name="connections_location_requests">Requests</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Location (drawer): "Last sent 2 min ago" -->
+    <string name="connections_location_last_sent">Last sent %1$s ago</string>
+    <!-- NEW: not in the plan (a position sent under a minute ago) -->
+    <string name="connections_location_last_sent_now">Last sent just now</string>
+    <!-- NEW: not in the plan (the drawer entry\'s title; the plan names the screen "Location") -->
+    <string name="connections_location_screen_title">Location</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_empty_title">No location sharing</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_empty_body">Shares you start, shares from your connections and their requests appear here.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="connections_location_request">%1$s asks where you are</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_request_open">Answer in Approvals</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_position_open">Show position</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_open_connection">Open connection</string>
+    <!-- NEW: not in the plan (the position screen) -->
+    <string name="connections_location_position_title">%1$s\'s location</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_position_none">%1$s is not sharing their location with you.</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_position_waiting">Waiting for the first position…</string>
+    <!-- NEW: not in the plan (the accuracy as text, from the plan\'s "within 1 km") -->
+    <string name="connections_location_position_within">Within %1$s</string>
+    <!-- NEW: not in the plan -->
+    <string name="connections_location_position_age">Updated %1$s ago</string>
+    <!-- NEW: not in the plan (an update under a minute old) -->
+    <string name="connections_location_position_age_now">Updated just now</string>
+    <!-- NEW: not in the plan (no maps app on the phone) -->
+    <string name="connections_location_no_maps">No maps app can open this.</string>
+    <!-- NEW: not in the plan (a pasted note was cut) -->
+    <string name="connections_location_ask_trimmed">The note was shortened to fit.</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, A position ("Open in maps app") -->
+    <string name="connections_location_open_maps">Open in maps app</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Open in maps -->
+    <string name="connections_location_open_maps_confirm">This hands the position to another app.</string>
+    <!-- NEW: not in the plan (the confirm button) -->
+    <string name="connections_location_open_maps_go">Open</string>
+    <!-- NEW: not in the plan (a share that is not Exact: the point stands for an area, not the place itself) -->
+    <string name="connections_location_position_area">Center of an area, not an exact spot.</string>
+    <!-- NEW: not in the plan (Share for a while from a request while a share to that connection is active) -->
+    <string name="connections_location_already_sharing">You\'re already sharing your location with %1$s.</string>
 </resources>

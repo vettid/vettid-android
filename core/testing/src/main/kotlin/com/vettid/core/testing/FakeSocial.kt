@@ -330,6 +330,11 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop("share:$ruleId")
     }
 
+    override suspend fun dismissLocationRequest(requestId: String) {
+        call("dismissLocationRequest:$requestId")
+        drop("location:$requestId")
+    }
+
     override suspend fun declineDeviceRequest(key: String) {
         call("declineDeviceRequest")
         drop(key)

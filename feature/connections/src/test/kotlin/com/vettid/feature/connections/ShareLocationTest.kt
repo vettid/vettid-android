@@ -577,4 +577,75 @@ class ShareLocationTest {
         assertEquals(listOf(share.shareId), location.stopped)
         assertNull(read(vm.uiState).location)
     }
+
+    @Test
+    fun theRequestIdIsUsedOnceAndThenForgotten() = runTest {
+        val handle = SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1", ConnectionDetailRoute.ARG_REQUEST to "r7"))
+        val vm = ShareLocationViewModel(handle, location)
+        assertTrue("the sheet opens with the request", read(vm.uiState).open)
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals("r7", location.started.single().requestId)
+        assertNull(handle.get<String?>(ConnectionDetailRoute.ARG_REQUEST))
+        // dismissed before starting: forgotten too, and a second start has none
+        val handle2 = SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c2", ConnectionDetailRoute.ARG_REQUEST to "r8"))
+        val vm2 = ShareLocationViewModel(handle2, location)
+        vm2.dismiss()
+        assertNull(handle2.get<String?>(ConnectionDetailRoute.ARG_REQUEST))
+    }
+
+    @Test
+    fun answeringARequestWhileSharingWithThatConnectionStartsNothing() = runTest {
+        location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.started.clear()
+        val vm = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1", ConnectionDetailRoute.ARG_REQUEST to "r1")), location)
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        assertTrue(read(vm.uiState).alreadySharing)
+        // without a request, the sheet still replaces a share, as before
+        val plain = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location)
+        plain.open()
+        plain.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals(1, location.started.size)
+    }
+
+    private fun fromRequest() = ShareLocationViewModel(
+        SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1", ConnectionDetailRoute.ARG_REQUEST to "r1")), location,
+    )
+
+    @Test
+    fun aShareBeingStoppedDoesNotBlockTheSheetButAnActiveOneBesideItDoes() = runTest {
+        val old = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.started.clear()
+        location.holdStopping(old.shareId)
+        val vm = fromRequest()
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals("a stopping share alone is not sharing: the sheet starts", 1, location.started.size)
+        assertFalse(read(vm.uiState).alreadySharing)
+        // now an active one beside the stopping one
+        location.started.clear()
+        val vm2 = fromRequest()
+        vm2.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        assertTrue(read(vm2.uiState).alreadySharing)
+    }
+
+    @Test
+    fun theAlreadySharingNoticeIsClearedByALaterStart() = runTest {
+        val share = location.start(com.vettid.core.data.location.ShareRequest("c1"))
+        location.started.clear()
+        val vm = fromRequest()
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(read(vm.uiState).alreadySharing)
+        location.stop(share.shareId) // the share ends
+        vm.start()
+        advanceUntilIdle()
+        assertFalse(read(vm.uiState).alreadySharing)
+        assertEquals(1, location.started.size)
+    }
 }

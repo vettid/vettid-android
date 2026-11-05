@@ -9,6 +9,7 @@ import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.TaskAlt
@@ -16,6 +17,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.vettid.app.R
 import com.vettid.feature.approvals.ApprovalsRoute
 import com.vettid.feature.connections.ConnectionsRoute
+import com.vettid.feature.connections.LocationRoute
 import com.vettid.feature.devices.DevicesRoute
 import com.vettid.feature.history.HistoryRoute
 import com.vettid.core.data.wallet.WalletRoute
@@ -39,6 +41,8 @@ enum class TopLevelDestination(
     // Votes (ANDROID-PLAN 0.1.102), after Approvals: shown only when the vault answers `vote.list` and holds a vote or a
     // connection to connect again (no empty screen); its badge counts open votes not yet voted on. Not in Approvals.
     Votes(VotesRoute, Icons.Outlined.HowToVote, R.string.nav_votes, group = 0),
+    // Location (ANDROID-PLAN §4 "Location", L1b), after Votes: shown only while the vault has location.
+    Location(LocationRoute, Icons.Outlined.LocationOn, R.string.nav_location, group = 0),
     // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
     // Bitcoin wallets (ANDROID-PLAN §4 "Wallet"): after Vault (Items). Shown while the vault is open unless it answered that it has

@@ -233,6 +233,7 @@ class HistoryViewModel @Inject constructor(
                     wallet = AuditKinds.itemOf(r.kind, r.ref) in state.value.walletItems,
                 ),
                 isolate = false,
+                direction = r.direction,
             ),
             // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
             AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),

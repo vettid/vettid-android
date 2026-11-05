@@ -16,6 +16,7 @@ object FeedAsks {
             "grant" -> setOf("grant.request") to rest
             "critical" -> setOf("critical-secret.use.request") to rest
             "share" -> setOf("share.pending") to rest
+            "location" -> setOf("location.request") to rest
             // `device:<type>:<id>`, the type being the feed kind (`approval.pending`, `device.session.pending`).
             "device" -> rest.substringBeforeLast(':', "").takeIf { it in DEVICE_KINDS }?.let { setOf(it) to rest.substringAfterLast(':') }
             else -> null
@@ -31,6 +32,7 @@ object FeedAsks {
             "grant.request" -> "grant:$ref"
             "critical-secret.use.request" -> "critical:$ref"
             "share.pending" -> "share:$ref"
+            "location.request" -> "location:$ref"
             in DEVICE_KINDS -> "device:$kind:$ref"
             else -> null
         }

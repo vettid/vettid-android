@@ -99,4 +99,22 @@ class LocationApiTest {
         assertEquals("LocationSample", sample().toString())
         assertNull(runCatching { "${sample()}".contains("52.52") }.getOrNull()?.takeIf { it })
     }
+
+    // --- receiving (L1b) ---
+
+    @Test
+    fun aRequestsNoteIsAtMost256BytesOfUtf8() {
+        val ok = locationRequestBody("c1", "x".repeat(256))
+        assertEquals(setOf("connection_id", "note"), ok.keys)
+        // 256 bytes exactly: 128 two-byte characters; one more byte is refused.
+        locationRequestBody("c1", "\u00e9".repeat(128))
+        refused { locationRequestBody("c1", "x".repeat(257)) }
+        refused { locationRequestBody("c1", "\u00e9".repeat(128) + "x") }
+    }
+
+    @Test
+    fun aBlankNoteIsLeftOut() {
+        assertEquals(setOf("connection_id"), locationRequestBody("c1", null).keys)
+        assertEquals(setOf("connection_id"), locationRequestBody("c1", "  ").keys)
+    }
 }

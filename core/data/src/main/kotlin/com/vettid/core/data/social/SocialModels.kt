@@ -467,6 +467,24 @@ sealed interface Approval {
     }
 
     /**
+     * `location.request.pending` (§10.16, ANDROID-PLAN §4 "Location", L1b): a connection asks where the member is. There is no
+     * decline message: **Not now** sends nothing and the request ends at [exp] (24 h). [note] is the asker's, shown as text.
+     */
+    data class LocationRequest(
+        val requestId: String,
+        val connectionId: String,
+        val note: String?,
+        override val receivedAt: Instant,
+        override val exp: Instant?,
+        override val connectionName: String? = null,
+        override val connectionService: Boolean = false,
+        /** The connection's first name for "{First} asks where you are"; null before the names arrive. */
+        val firstName: String? = null,
+    ) : Approval {
+        override val key: String get() = "location:$requestId"
+    }
+
+    /**
      * Requests of desktops and agents (`approval.pending`, `device.session.pending`,
      * §6.8): shown as typed rows; v1 pairs no desktops or agents, so they can only be declined.
      */

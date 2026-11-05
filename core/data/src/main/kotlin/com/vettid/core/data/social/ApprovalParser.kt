@@ -26,7 +26,7 @@ object ApprovalParser {
     /** The event types the Approvals screen shows. */
     val TYPES = setOf(
         "connection.authenticate.pending", "grant.pending", "critical-secret-use.pending",
-        "share.pending", "approval.pending", "device.session.pending",
+        "share.pending", "approval.pending", "device.session.pending", "location.request.pending",
     )
 
     private fun JsonObject.s(k: String): String? = VaultJson.str(this, k)
@@ -69,6 +69,7 @@ object ApprovalParser {
                 )
             }
         }
+        "location.request.pending" -> locationRequest(body, at)
         "grant.pending" -> grant(body, at)
         "critical-secret-use.pending" -> critical(body, at)
         "share.pending" -> {
@@ -100,6 +101,22 @@ object ApprovalParser {
             )
         }
         else -> null
+    }
+
+    /**
+     * `location.request.pending`: `{request_id, connection_id, note?, exp}`. A `note` that is present and not a string, or over 256
+     * bytes, makes the request unreadable; a request without `exp` is not shown (the vault always sends it, and it ends the ask).
+     */
+    fun locationRequest(body: JsonObject, at: Instant): Approval.LocationRequest? {
+        val id = body.s("request_id")?.takeIf { it.isNotEmpty() }
+        val conn = body.s("connection_id")?.takeIf { it.isNotEmpty() }
+        val exp = instant(body.s("exp"))
+        val noteRaw = body["note"]
+        val note = body.s("note")
+        val max = com.vettid.core.vault.LocationRequestLimits.NOTE_MAX_BYTES
+        val noteOk = noteRaw == null || (note != null && note.toByteArray(Charsets.UTF_8).size <= max)
+        val whole = id != null && conn != null && exp != null
+        return if (whole && noteOk) Approval.LocationRequest(id!!, conn!!, note, at, exp!!) else null
     }
 
     /** An item of `share.pending` or an entry of `share.pending.list` (§10.12; 0.23.0 `ask_rule_id`, `shared`). */

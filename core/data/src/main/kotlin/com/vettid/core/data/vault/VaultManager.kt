@@ -1180,6 +1180,7 @@ class VaultManager(
                     steps.step { devices.clear() }
                     steps.step { votes.clear() }
                     steps.step { presence.clear() } // held or due: no presence is asked or shown
+                    steps.step { location.clearReceived() } // held: no received position or incoming share is kept (L1b)
                     steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
@@ -1187,10 +1188,14 @@ class VaultManager(
                     steps.step { feed.open() }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
+                    steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 }
                 // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
-                if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) steps.step { presence.start() }
+                if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) {
+                    steps.step { presence.start() }
+                    steps.step { location.reopenReceived() } // events were not taken while the check was due
+                }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {

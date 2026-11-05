@@ -127,6 +127,12 @@ interface ApprovalsRepository {
     /** Re-reads the connection requests (`connection.request.list`, §10.4). */
     suspend fun refreshRequests()
 
+    /**
+     * **Not now** on a location request (ANDROID-PLAN §4 "Location", L1b): nothing is sent (the vault has no decline); the request
+     * leaves the list and stays away until the vault is locked (it ends by itself after 24 hours).
+     */
+    suspend fun dismissLocationRequest(requestId: String) = Unit
+
     /** Approves an incoming request (the inviter's side) after comparing the safety code. */
     suspend fun approveConnection(pendingId: String)
 

@@ -10,6 +10,7 @@ import com.vettid.core.notify.Channels
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.location.LocationManager
+import com.vettid.core.data.location.Fix
 import com.vettid.core.data.location.LocationPlatform
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.PositionProvider
@@ -88,4 +89,42 @@ class AndroidLocationPlatform(
 
     override fun precise(): Boolean =
         ContextCompat.checkSelfPermission(app, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Where this phone is now, for the distance and direction of a received position. **Only when the member has already allowed
+     * location** (the permission is never asked for here) and the phone's location switch is on: one fix is asked for from the
+     * platform (`getCurrentLocation`, the best provider the phone has), waited for at most [HERE_WAIT_MS], and dropped by the
+     * caller once the offset is worked out. A stale position the system remembers is never read.
+     */
+    override suspend fun currentFix(): Fix? {
+        val manager = app.getSystemService(LocationManager::class.java)
+        val provider = manager?.takeIf { allowedToLocate() && it.isLocationEnabled }
+            ?.let { PlatformPositionProvider.providersOf(it).firstOrNull() }
+        return if (manager == null || provider == null) null else fixNow(manager, provider)
+    }
+
+    /** Either location permission is already granted (never asked for here). */
+    private fun allowedToLocate(): Boolean = listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        .any { ContextCompat.checkSelfPermission(app, it) == PackageManager.PERMISSION_GRANTED }
+
+    @android.annotation.SuppressLint("MissingPermission") // [allowedToLocate] was checked by the caller
+    private suspend fun fixNow(manager: LocationManager, provider: String): Fix? = try {
+        kotlinx.coroutines.withTimeoutOrNull(HERE_WAIT_MS) {
+            kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val signal = android.os.CancellationSignal()
+                cont.invokeOnCancellation { signal.cancel() }
+                manager.getCurrentLocation(provider, signal, app.mainExecutor) { location ->
+                    // A fix older than 2 minutes by the platform's uptime clock is no answer to "where is this phone now".
+                    val now = android.os.SystemClock.elapsedRealtimeNanos()
+                    val fresh = location?.takeIf { now - it.elapsedRealtimeNanos <= HERE_MAX_AGE_NANOS }
+                    cont.resumeWith(Result.success(fresh?.let { PlatformPositionProvider.fixOf(it, java.time.Instant.now()) }))
+                }
+            }
+        }
+    } catch (_: SecurityException) {
+        null
+    }
 }
+
+private const val HERE_WAIT_MS = 5_000L
+private const val HERE_MAX_AGE_NANOS = 120_000_000_000L

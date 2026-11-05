@@ -282,6 +282,10 @@ data class ApprovalDetailUiState(
     val pairingName: String? = null,
     /** The item cache has been read (or failed): until then a held request's item is "Loading…", and nothing is approvable. */
     val itemsLoaded: Boolean = true,
+    /** A location request could not be answered by sharing because nothing could be sent (permission, location switch…). */
+    val locationIssue: com.vettid.core.data.location.SendIssue? = null,
+    /** This phone already shares its location with the asker until then: Share once and Share for a while… are not offered. */
+    val sharingUntil: Instant? = null,
 ) {
     /**
      * A request is open for the member's decision (any kind, a device's or an agent's too), typed or not: the daily owner check
@@ -356,6 +360,7 @@ class ApprovalDetailViewModel @Inject constructor(
     private val ownerCheck: OwnerCheckRepository,
     private val connections: ConnectionsRepository,
     private val pairing: PairingRepository,
+    private val location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val settled = ItemsSettled()
@@ -457,8 +462,11 @@ class ApprovalDetailViewModel @Inject constructor(
         return d.isPairing && held != null && held == d.id
     }
 
+    /** The member's outgoing shares and what is being stopped: Share once and Share for a while… wait while one to the asker is active. */
+    private val sharingNow = combine(location.outgoing, location.serviceState) { o, s -> o to s }
+
     val uiState: StateFlow<ApprovalDetailUiState> =
-        combine(local, repo.approvals, clock, aux) { s, list, now, x ->
+        combine(local, repo.approvals, clock, aux, sharingNow) { s, list, now, x, sharing ->
             val a = list.firstOrNull { it.key == key }
             val shown = (a ?: s.approval)?.let { DeviceAsks.named(it, x.devices) }
             // The challenger withdrew it (0.80.0): the screen stays and says so, whatever else is true of the request.
@@ -478,6 +486,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 pairingHeld = ourPairing(shown, x.pairing),
                 pairingName = com.vettid.core.data.feed.FeedNames.pairingName(x.pairing).takeIf { ourPairing(shown, x.pairing) },
                 itemsLoaded = x.itemsLoaded,
+                sharingUntil = (shown as? Approval.LocationRequest)?.let {
+                    sharingUntil(sharing.first, sharing.second, it.connectionId, now)
+                },
                 held = held,
                 // Past the session's end the request reads as a first request: no notice, only Deny.
                 renewalUntil = Renewal.expiresAt(shown, x.devices, s.deviceListRead, now),
@@ -555,6 +566,7 @@ class ApprovalDetailViewModel @Inject constructor(
      * [shown]: for a share decision, the item ids the screen showed when the member tapped. Only those are decided, so a
      * `share.pending` batch that lands just before the tap is not included or declined unseen (§10.12).
      */
+    @Suppress("CyclomaticComplexMethod")
     fun approve(shown: List<String>? = null) {
         val s = local.value.copy(
             approval = uiState.value.approval ?: local.value.approval,
@@ -586,6 +598,8 @@ class ApprovalDetailViewModel @Inject constructor(
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
                 }
                 is Approval.DeviceRequest -> approveDevice(a, s.allowSeconds)
+                // Answered by Share once / Share for a while… (shareOnce, the share sheet), never by Approve.
+                is Approval.LocationRequest -> Unit
             }
         }
     }
@@ -604,6 +618,94 @@ class ApprovalDetailViewModel @Inject constructor(
         local.update { it.copy(outcome = outcome) }
     }
 
+    /**
+     * **Share once** (ANDROID-PLAN §4 "Location", L1b): one position now at the sheet's default precision (Approximate), answering this
+     * request (`request_id`). The phone's permission is the screen's to ask first. Refused for a service.
+     */
+    fun shareOnce() {
+        val a = (uiState.value.approval as? Approval.LocationRequest)?.takeIf { mayShareOnce(it) } ?: return
+        local.update { it.copy(busy = true, error = null, errorCode = null, locationIssue = null) }
+        viewModelScope.launch {
+            try {
+                location.start(
+                    com.vettid.core.data.location.ShareRequest(
+                        a.connectionId,
+                        com.vettid.core.data.location.ShareTiming.Once,
+                        com.vettid.core.data.location.SharePrecision.APPROXIMATE,
+                        requestId = a.requestId,
+                    ),
+                )
+                repo.dismissLocationRequest(a.requestId)
+                local.update { it.copy(busy = false, done = true) }
+            } catch (e: VaultFailure) {
+                // Nothing could be sent (permission, location off, app not in front): the request stays, with the reason shown.
+                val issue = com.vettid.core.data.location.SendIssue.of(e.code)
+                local.update {
+                    it.copy(busy = false, error = e.kind.takeIf { issue == null }, errorCode = e.shownCode, locationIssue = issue)
+                }
+            }
+        }
+    }
+
+    /**
+     * One share per tap: a second tap (or the permission result of the first) while a start is out does nothing; and none while
+     * already sharing with this connection (a share not ended, not being stopped, not over): another would replace it.
+     */
+    private fun mayShareOnce(a: Approval.LocationRequest): Boolean = !local.value.busy && mayShare(a)
+
+    /**
+     * Whether this request may be answered by sharing at all: not from a service, not expired, still listed (it may have been closed
+     * elsewhere while the permission prompt was up), and no share to the asker active. Share once and Share for a while both follow it.
+     */
+    private fun mayShare(a: Approval.LocationRequest): Boolean = !a.connectionService && !expiredNow(a) &&
+        repo.approvals.value.any { it.key == a.key } &&
+        sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) == null
+
+    /** **Share for a while…**: the request to open the connection's share sheet for, or null when it may not be answered by sharing. */
+    fun shareWhileTarget(): Approval.LocationRequest? = (uiState.value.approval as? Approval.LocationRequest)?.takeIf { mayShare(it) }
+
+    /** The phone's permission is being asked for (the system's prompt is up): taps wait, and the result starts the share once. */
+    fun permissionAsked(): Boolean {
+        var taken = false
+        local.update {
+            taken = !it.busy
+            if (taken) it.copy(busy = true, error = null, errorCode = null, locationIssue = null) else it
+        }
+        return taken
+    }
+
+    /** The permission is granted now (the member came back from Android's settings): the stale reason goes. */
+    fun permissionNowGranted() = local.update {
+        if (it.locationIssue == com.vettid.core.data.location.SendIssue.NO_PERMISSION) it.copy(locationIssue = null) else it
+    }
+
+    /** The permission prompt came back: granted, the share starts (once); refused, the request stays with its reason. */
+    fun permissionAnswered(granted: Boolean) {
+        local.update { it.copy(busy = false) }
+        if (granted) {
+            shareOnce()
+        } else {
+            local.update { it.copy(locationIssue = com.vettid.core.data.location.SendIssue.NO_PERMISSION) }
+        }
+    }
+
+    /** **Not now**: nothing is sent (the vault has no decline); the request leaves the list and ends by itself after 24 hours. */
+    fun notNow() {
+        val a = uiState.value.approval as? Approval.LocationRequest ?: return
+        viewModelScope.launch {
+            repo.dismissLocationRequest(a.requestId)
+            local.update { it.copy(done = true) }
+        }
+    }
+
+    /** When the active outgoing share to [connectionId] ends, or null when there is none (`activeShareTo` in `:core:data`). */
+    private fun sharingUntil(
+        shares: List<com.vettid.core.data.location.OutgoingShare>,
+        service: com.vettid.core.data.location.ServiceState,
+        connectionId: String,
+        now: Instant,
+    ): Instant? = com.vettid.core.data.location.activeShareTo(shares, service, connectionId, now)?.expiresAt
+
     /** The length of access chosen for a session request (AA5, decision 6). */
     fun chooseSeconds(seconds: Int) = local.update { it.copy(sessionSeconds = seconds) }
 
@@ -621,6 +723,7 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)
                 is Approval.ShareDecision -> repo.decideShare(a.ruleId, include = emptyList(), decline = shown ?: a.items.map { it.itemId })
                 is Approval.DeviceRequest -> denyDevice(a)
+                is Approval.LocationRequest -> repo.dismissLocationRequest(a.requestId)
             }
         }
     }

@@ -242,4 +242,22 @@
     <string name="approvals_pair_compare_body">Compare the code on the agent with the one in VettID before you allow it.</string> <!-- new -->
     <string name="approvals_pair_compare">Compare the code</string> <!-- new -->
     <string name="approvals_pair_reject">Reject</string> <!-- new -->
+
+    <!-- Location requests (ANDROID-PLAN §4 "Location", L1b). DRAFT = the plan's text; NEW = not in the plan. -->
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_title">%1$s asks where you are</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_once">Share once</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_while">Share for a while…</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Request -->
+    <string name="approvals_location_not_now">Not now</string>
+    <!-- DRAFT: ANDROID-PLAN §4 Location, Permission (same text as the share sheet's) -->
+    <string name="approvals_location_permission">To share your location, VettID needs to know where this phone is. It asks only while you share, and sends nothing to anyone else.</string>
+    <!-- NEW: not in the plan (the same sentence as the share sheet's, for a refusal that Android will not ask about again) -->
+    <string name="approvals_location_permission_denied">Location is off for VettID. Allow it in Android settings to share your location.</string>
+    <!-- NEW: not in the plan (the same words as the share sheet) -->
+    <string name="approvals_location_open_settings">Open settings</string>
+    <!-- NEW: not in the plan (the asker already has a share from this phone; lead decision) -->
+    <string name="approvals_location_already_sharing">You\'re already sharing your location with %1$s until %2$s.</string>
 </resources>

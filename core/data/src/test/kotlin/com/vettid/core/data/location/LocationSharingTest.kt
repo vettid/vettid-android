@@ -627,6 +627,31 @@ class LocationSharingTest {
     }
 
     @Test
+    fun theIncomingListIsReadAgainWithBackoffAfterAHoldUntilItWorks() = runTest {
+        val r = rig(retry = listOf(Duration.ofSeconds(5)))
+        r.ops.listRefusal = "internal"
+        r.sharing.reopenReceived()
+        r.settle()
+        val first = r.ops.lists
+        assertTrue(first >= 1)
+        r.elapse(Duration.ofSeconds(6))
+        assertTrue("tried again", r.ops.lists > first)
+        r.ops.listRefusal = null
+        r.elapse(Duration.ofSeconds(6))
+        val worked = r.ops.lists
+        r.elapse(Duration.ofSeconds(30))
+        assertEquals("it stops once the read worked", worked, r.ops.lists)
+        // a lock ends it
+        r.ops.listRefusal = "internal"
+        r.sharing.reopenReceived()
+        r.settle()
+        r.sharing.clear()
+        val atLock = r.ops.lists
+        r.elapse(Duration.ofSeconds(30))
+        assertEquals(atLock, r.ops.lists)
+    }
+
+    @Test
     fun aListReadDoesNotForgetAShareStartedAfterItWasAsked() = runTest {
         val r = rig()
         // The list read starts and is held at the vault; a share is started meanwhile and is not in the answer. The read is

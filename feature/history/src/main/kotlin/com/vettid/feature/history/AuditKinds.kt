@@ -84,6 +84,9 @@ object AuditKinds {
         data class Unknown(val kind: String) : Title
 
         /** [res] with a number read from the entry's `ref` ([n]) and the number of recovery attempts ([of]). */
+        /** [res] (a plural) for the number [n] read from the entry's `ref`. */
+        data class Plural(@param:androidx.annotation.PluralsRes val res: Int, val n: Int) : Title
+
         data class Counted(@param:StringRes val res: Int, val n: Int, val of: Int = RecoveryRefs.ATTEMPTS) : Title
 
         /**
@@ -125,7 +128,7 @@ object AuditKinds {
      * first, then those that name the connection, device or item, then the fixed titles.
      */
     @Suppress("ReturnCount", "CyclomaticComplexMethod")
-    fun title(kind: String, ref: String? = null): Title {
+    fun title(kind: String, ref: String? = null, direction: String? = null): Title {
         when (kind) {
             KIND_ATTEMPT -> return RecoveryRefs.attempt(ref)?.let { Title.Counted(R.string.history_kind_recovery_attempt, it.n) }
                 ?: Title.Known(R.string.history_kind_recovery_attempt_any)
@@ -137,6 +140,7 @@ object AuditKinds {
             KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
         }
         voteTitle(kind, ref)?.let { return it }
+        locationTitle(kind, ref, direction)?.let { return it }
         NAMED[kind]?.let { return it }
         TITLES[kind]?.let { return Title.Known(it) }
         if (kind.endsWith(SUMMARY)) TITLES[kind.removeSuffix(SUMMARY)]?.let { return Title.Summary(it) }
@@ -144,6 +148,46 @@ object AuditKinds {
         if (kind.startsWith(DROP) && kind.length > DROP.length) return Title.Dropped(kind.removePrefix(DROP).replace('_', ' '))
         return Title.Unknown(kind)
     }
+
+    /**
+     * The location entries (ANDROID-PLAN §4 "Location", History), by `direction` where the plan has two titles; each names the
+     * connection ("First Last") and drops it when it is gone. History never shows a position: `ref` is a share or request id, or
+     * the number of positions deleted, and nothing else is read from it. A kind without the direction it needs keeps its generic title.
+     */
+    private fun locationTitle(kind: String, ref: String?, direction: String?): Title? = when {
+        kind == "location.history.deleted" ->
+            ref?.toIntOrNull()?.takeIf { it >= 0 }?.let { Title.Plural(R.plurals.history_kind_location_history_deleted_n, it) }
+        kind in LOCATION_DROPS -> named(R.string.history_kind_drop_location_named, R.string.history_kind_drop_location_any)
+        else -> LOCATION_TITLES[kind to direction] ?: LOCATION_TITLES[kind to null]
+    }
+
+    /** (kind, direction) to its title; a null direction is for the kinds that do not depend on it. */
+    private val LOCATION_TITLES: Map<Pair<String, String?>, Title> = mapOf(
+        ("location.share.started" to null) to
+            named(R.string.history_kind_location_share_started_named, R.string.history_kind_location_share_started_any),
+        ("location.share.stopped" to "out") to
+            named(R.string.history_kind_location_share_stopped_out, R.string.history_kind_location_share_stopped_out_any),
+        ("location.share.stopped" to "in") to
+            named(R.string.history_kind_location_share_stopped_in, R.string.history_kind_location_share_stopped_in_any),
+        ("location.share.received" to null) to
+            named(R.string.history_kind_location_share_received_named, R.string.history_kind_location_share_received_any),
+        ("location.share.ended" to "in") to
+            named(R.string.history_kind_location_share_ended_in, R.string.history_kind_location_share_ended_in_any),
+        ("location.share.ended" to "out") to
+            named(R.string.history_kind_location_share_ended_out, R.string.history_kind_location_share_ended_out_any),
+        ("location.requested" to "out") to
+            named(R.string.history_kind_location_requested_out, R.string.history_kind_location_requested_out_any),
+        ("location.requested" to "in") to
+            named(R.string.history_kind_location_requested_in, R.string.history_kind_location_requested_in_any),
+        ("location.history.shared" to null) to
+            named(R.string.history_kind_location_history_shared_named, R.string.history_kind_location_history_shared),
+        ("location.history.received" to null) to
+            named(R.string.history_kind_location_history_received_named, R.string.history_kind_location_history_received),
+    )
+
+    private fun named(res: Int, any: Int) = Title.Named(res, any, Who.CONNECTION)
+
+    private val LOCATION_DROPS = setOf("drop.location", "drop.location_rate", "drop.location_malformed", "drop.location_limit")
 
     /** The proposal id of a vote entry's `ref` (`<proposal_id>` or `<proposal_id>:<detail>`); the pair is with the entry's connection. */
     fun voteOf(kind: String, ref: String?): String? =
