@@ -20,6 +20,7 @@ import com.vettid.core.notify.FeedNotifier
 import com.vettid.core.notify.ModeController
 import com.vettid.core.notify.NoVaultSweep
 import com.vettid.core.notify.PushRegistrar
+import com.vettid.core.ui.format.Times
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -102,6 +103,8 @@ class VettIdApplication : DistributionApplication() {
     }
 
     override fun onCreate() {
+        // First, as it needs nothing: lists, conversations and details format dates in the configuration's locale (Times).
+        Times.install(this)
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
         // not live to finish is finished now (owner decision, 2026-10-05; LocalWipe).
         LocalWipe(AndroidWipeTargets(this)).resumeIfPending()
