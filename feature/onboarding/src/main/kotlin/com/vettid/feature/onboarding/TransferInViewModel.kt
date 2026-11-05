@@ -298,7 +298,7 @@ class TransferInViewModel @Inject constructor(
         ticker = viewModelScope.launch {
             while (true) {
                 val left = Duration.between(Instant.now(clock), deadline).seconds.coerceAtLeast(0)
-                state.update { it.copy(secondsLeft = left, settling = left == 0L) }
+                state.update { it.copy(secondsLeft = left, settling = left == 0L, confirmCancel = it.confirmCancel && left != 0L) }
                 if (left == 0L) break
                 delay(TICK_MS)
             }

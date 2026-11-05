@@ -115,14 +115,23 @@ internal fun ScannerBox(
 }
 
 @Composable
-private fun Waiting(text: String, modifier: Modifier = Modifier) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-    ) {
-        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.size(Spacing.m))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
+private fun Waiting(text: String, modifier: Modifier = Modifier, note: String? = null) {
+    // (follow-up to #302) The optional note is inside the same polite live region, so TalkBack reads both lines at once.
+    Column(modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(Spacing.m))
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (note != null) {
+            Spacer(Modifier.height(Spacing.s))
+            Text(
+                note,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("checking_leave_note"),
+            )
+        }
     }
 }
 
@@ -634,13 +643,10 @@ fun TransferInContent(
             // (A6 audit N1) The screen stays on while the member approves on the old phone.
             KeepScreenOn()
             if (state.settling) {
-                Waiting(stringResource(R.string.transfer_in_checking), Modifier.testTag("checking_old_phone"))
-                Spacer(Modifier.height(Spacing.s))
-                Text(
-                    stringResource(R.string.transfer_in_checking_leave),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("checking_leave_note"),
+                Waiting(
+                    stringResource(R.string.transfer_in_checking),
+                    Modifier.testTag("checking_old_phone"),
+                    note = stringResource(R.string.transfer_in_checking_leave),
                 )
             } else {
                 state.sas?.let { SasBox(it) }
