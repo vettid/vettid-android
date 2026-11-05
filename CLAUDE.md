@@ -591,6 +591,7 @@ The A2 exit test:
   `wallet.send_invalid_output_amount`, `wallet.send_invalid_technical`, `wallet.send_invalid_wrong_seed`, `wallet.send_invalid_other`,
   `wallet.send_signed_differs`, `wallet.send_already_signed`, `wallet.send_already_signed_locked`, `wallet.send_unreadable`, `wallet.send_unanswered`, `wallet.send_lapsed`, `wallet.send_superseded`,
   `wallet.send_duplicate`, `wallet.send_unsent`, `wallet.send_discard`.
+  Close-out (data directory scan; device parts in `docs/WALLET-DEVICE-CHECKS.md`): `WalletDataDirectoryScanTest` in `:core:wallet` (manager: create, check, reveal with PIN, import, send with the PSBT and the signed transaction) and in `:feature:wallet` (the view models), Robolectric, real `WalletFlags` over a `KeystoreFileStore` with a test key; the whole data directory is scanned (`SecretScan`: UTF-8, UTF-16, hex, base64 at three alignments, raw bytes; each word and the phrase) and `wallet-flags.bin` (+ `chain-servers.bin`) are the only wallet files. Feed `wallet.signed|cap_refused|caps_raised` are on Vault activity and name the wallet only uncovered (`FeedNotifierTest`); `wallet.created` is History only.
 
 ## Device testing
 
