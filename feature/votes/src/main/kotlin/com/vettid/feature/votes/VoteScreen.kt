@@ -575,7 +575,7 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_confirm_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
-            // Back while the cast is on its way does nothing: Material's own back handler hides the sheet without asking.
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
             BackHandler(enabled = sending) {}
             // The app's own sentence, never the proposal's, in its own element and read first.
             Text(
@@ -633,7 +633,7 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_password_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
-            // Back while the cast is on its way does nothing: Material's own back handler hides the sheet without asking.
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
             BackHandler(enabled = sending) {}
             Text(
                 stringResource(R.string.vote_password_title),
