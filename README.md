@@ -432,8 +432,8 @@ a recovery, not an update (owner decision 2026-10-11). For that:
 - The draft F-Droid metadata is [docs/fdroid/com.vettid.app.yml](docs/fdroid/com.vettid.app.yml)
   (`Binaries`, `AllowedAPKSigningKeys`); it has not been submitted.
 
-There is no store listing text in this repository yet. F-Droid reads it from
-`fastlane/metadata/android/en-US/` (`title.txt`, `short_description.txt` of at
+The listing texts are in `fastlane/metadata/android/en-US/`, drafted and awaiting owner approval.
+F-Droid reads the listing from that directory (`title.txt`, `short_description.txt` of at
 most 80 characters, `full_description.txt`, `images/icon.png`,
 `images/phoneScreenshots/`, `changelogs/<versionCode>.txt`).
 
