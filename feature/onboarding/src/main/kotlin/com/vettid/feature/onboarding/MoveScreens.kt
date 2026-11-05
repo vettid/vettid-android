@@ -518,9 +518,9 @@ fun MovedScreen(body: String, onGo: () -> Unit) {
 
 /** The transfer on this (new) phone, driven by [TransferInViewModel]. [onLeave] returns to the onboarding choice. */
 @Composable
-fun TransferInFlow(onLeave: () -> Unit, viewModel: TransferInViewModel = hiltViewModel()) {
+fun TransferInFlow(onLeave: () -> Unit, onRecover: () -> Unit = {}, viewModel: TransferInViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    TransferInContent(state, viewModel, onLeave)
+    TransferInContent(state, viewModel, onLeave, onRecover)
 }
 
 /** One transfer step on the new phone for [state] (stateless). */
@@ -530,6 +530,7 @@ fun TransferInContent(
     state: TransferInUiState,
     actions: TransferInActions,
     onLeave: () -> Unit,
+    onRecover: () -> Unit = {},
     camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val back: () -> Unit = { if (!actions.back()) onLeave() }
@@ -688,6 +689,16 @@ fun TransferInContent(
         ) {
             Failure(state.error, null, shownCode = state.errorShown)
         }
+        // (the recheck of #302) The session ended: neither dropped nor finishing; a new code, or recovery if it was approved.
+        TransferInStep.SESSION_ENDED -> FormScaffold(
+            title = stringResource(R.string.transfer_in_session_ended_title),
+            body = stringResource(R.string.transfer_in_session_ended_body),
+            primaryLabel = stringResource(R.string.transfer_in_scan_new),
+            onPrimary = actions::again,
+            secondaryLabel = stringResource(R.string.onboarding_elsewhere_recover),
+            onSecondary = onRecover,
+            modifier = Modifier.testTag("transfer_session_ended"),
+        ) {}
         TransferInStep.NOT_ANSWERED -> FormScaffold(
             title = stringResource(R.string.transfer_in_no_answer_title),
             body = stringResource(R.string.transfer_in_no_answer),

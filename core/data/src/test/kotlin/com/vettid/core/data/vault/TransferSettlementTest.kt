@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.PairingRejectedException
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CompletableDeferred
@@ -42,6 +43,7 @@ class TransferSettlementTest {
         val waits = mutableListOf<Duration>()
         val abandoned = mutableListOf<Instant>()
         var roundMs = 0L
+        var mailboxGone = false
 
         override suspend fun relayVisibilitySeconds() = visibility
 
@@ -49,6 +51,7 @@ class TransferSettlementTest {
 
         override suspend fun collectOnce(wait: Duration) {
             waits += wait
+            if (mailboxGone) throw RelayException(404, RelayException.MAILBOX_UNKNOWN, "gone")
             delay(wait.toMillis())
             val p = pairedAtMs
             if (p != null && scope.testScheduler.currentTime >= p) {
@@ -159,6 +162,19 @@ class TransferSettlementTest {
         assertTrue(run(d, windowOf = { 1_000L }).await() is Settled.Paired)
     }
 
+    /**
+     * (the recheck of #302) `404 mailbox_unknown` is an ended session: the window stops at once (not retried), the outcome
+     * is the session's, and the dead handshake goes so that a new code or a recovery is possible.
+     */
+    @Test
+    fun aGoneMailboxEndsTheSessionNotTheWindowLater() = runTest {
+        val d = FakeDevice(shown, this).apply { mailboxGone = true }
+        assertEquals(Settled.SessionGone, run(d).await())
+        assertEquals("not retried until the window's end", 1, d.waits.size)
+        assertTrue(testScheduler.currentTime < 1_000)
+        assertEquals(listOf(at), d.abandoned)
+    }
+
     /** An app stopped during the window runs a full window again at its next start, from that start. */
     @Test
     fun killedDuringTheWindowRunsAFullWindowAtTheNextStart() = runTest {
@@ -230,21 +246,25 @@ class TransferSettlementTest {
         outer.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 
+    /**
+     * A failure reaches the waiter. With nobody waiting the job still runs and fails: that must not cancel its scope (a
+     * scope without a supervisor would be cancelled by an uncaught failure of an async job).
+     */
     @Test
     fun aFailureReachesTheWaiterAndNobodyElse() = runTest {
-        val outer = CoroutineScope(coroutineContext + kotlinx.coroutines.SupervisorJob())
+        val job = kotlinx.coroutines.Job()
+        val outer = CoroutineScope(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler) + job)
         val flight = SingleFlight<String>(outer)
-        try {
-            flight.run(at) { throw PairingRejectedException() }
-            fail("thrown")
-        } catch (_: PairingRejectedException) {
-            // expected
-        }
-        // Nobody waiting: a failure is simply dropped.
+        val waiter = async { runCatching { flight.run(at) { throw PairingRejectedException() } } }
+        testScheduler.runCurrent()
+        assertTrue(waiter.await().exceptionOrNull() is PairingRejectedException)
+        // Nobody waiting: the caller leaves while the job is parked, then the job fails.
         val left = async { flight.run(at.plusSeconds(1)) { delay(10); throw PairingRejectedException() } }
+        testScheduler.runCurrent() // the job has started and is parked
         left.cancel()
         testScheduler.advanceTimeBy(100)
-        assertFalse(outer.coroutineContext[kotlinx.coroutines.Job]!!.isCancelled)
-        outer.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        testScheduler.runCurrent()
+        assertTrue("the failure with nobody waiting cancelled nothing", job.isActive)
+        job.cancel()
     }
 }

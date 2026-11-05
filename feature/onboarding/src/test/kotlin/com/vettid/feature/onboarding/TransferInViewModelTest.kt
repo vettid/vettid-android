@@ -140,6 +140,39 @@ class TransferInViewModelTest {
         assertFalse("no new code was sent", "transferIn" in vault.calls)
     }
 
+    /**
+     * (the recheck of #302) A session that ended is neither "dropped" nor "finishing": its own step, with a new code or a
+     * recovery; the finishing retry is not offered.
+     */
+    @Test
+    fun anEndedSessionHasItsOwnStepAndNoFinishingRetry() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        vault.transferApproval.completeExceptionally(
+            FakeVault.failure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED),
+        )
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertNull(vm.uiState.value.sas)
+        assertFalse(vm.uiState.value.settling)
+        vm.retryFinish()
+        advanceTimeBy(1500)
+        assertEquals("no finishing retry from here", TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertEquals("no second wait", 1, vault.calls.count { it == "awaitTransferIn" })
+        vm.again()
+        assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    /** Any other RETRY (a failed take-over) is still the finishing step. */
+    @Test
+    fun anotherRetryFailureIsStillTheFinishingStep() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.RETRY, "enroll_not_made"))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.FINISHING_FAILED, vm.uiState.value.step)
+    }
+
     @Test
     fun aRestartPastTheDeadlineEndsTimedOutWhenTheSettlementDrops() = runTest {
         val vm = pastDeadlineVm()

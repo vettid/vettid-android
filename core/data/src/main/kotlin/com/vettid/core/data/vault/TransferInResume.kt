@@ -227,8 +227,8 @@ internal object TransferInResume {
 
     /**
      * The wait for the approval: [await] for what is left until the one deadline, counted from the start the device stored
-     * just before the `hs.init` ([pending]; [now] when nothing is stored), then [atDeadline] (collects for the settle window, then
-     * applied or dropped). [Approved] when paired; null when dropped.
+     * just before the `hs.init` ([pending]), then [atDeadline] (collects for the settle window, then applied or dropped).
+     * [Approved] when paired; null when dropped, and at once when no transfer is pending (nothing to wait for).
      */
     suspend fun awaitApproval(
         pending: () -> TransferInState?,
@@ -236,7 +236,7 @@ internal object TransferInResume {
         await: suspend (Duration) -> String?,
         atDeadline: suspend () -> TransferInState?,
     ): Approved? {
-        val started = pending()?.startedAt ?: now()
+        val started = pending()?.startedAt ?: return null
         return try {
             Approved(await(TransferInWait.left(started, now())))
         } catch (_: TimeoutCancellationException) {

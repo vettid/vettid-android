@@ -59,6 +59,13 @@ enum class TransferInStep {
      * could not be verified (a dropped `hs.init` is never answered). A new code is offered.
      */
     NOT_ANSWERED,
+
+    /**
+     * (VAULT-MESSAGING 0.84.2 §11.14.10 rule 5; the recheck of #302) The session ended before the settlement could say
+     * whether the old phone approved (a dead mailbox, a wipe, a sign-out): neither dropped nor finishing. The member
+     * scans a new code, or recovers the vault if the move was approved.
+     */
+    SESSION_ENDED,
 }
 
 /** Immutable UI state of the transfer on the new phone. */
@@ -242,6 +249,12 @@ class TransferInViewModel @Inject constructor(
                 when (e.kind) {
                     FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
                     FailureKind.NO_RESPONSE -> it.copy(step = TransferInStep.TIMED_OUT, sas = null, secondsLeft = 0)
+                    FailureKind.RETRY ->
+                        if (e.code == MoveRepository.CODE_TRANSFER_SESSION_ENDED) {
+                            it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false)
+                        } else {
+                            it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                        }
                     // The steps after the approval (the take-over): kept, and resumed (here, or at the next start).
                     else -> it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
                 }

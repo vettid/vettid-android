@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -92,30 +93,67 @@ internal suspend fun settleTransfer(
 ): Settled {
     val visibility = readVisibility(d)
     val settle = timing(visibility)
-    // Read inside the lock (by due): the transfer this step settles.
-    var started: Instant? = null
-    var dropped = false
-    // This transfer on this session only: a rejection (the handler dropped the handshake), a wipe or a forget ends the
-    // window at once. The member's abandon and a new code are not offered during the window.
-    val same = { started != null && sessionIsCurrent() && d.transferInPending?.startedAt == started }
+    val run = SettleRun(d, sessionIsCurrent, now)
     val paired = serial.run(
-        due = {
-            val t = d.transferInPending
-            started = t?.startedAt
-            TransferInResume.deadlineDue(t, d.deviceId, now())
-        },
+        due = run::due,
         paired = { d.transferInPending?.paired == true && d.deviceId != null },
-        collect = { waitMs -> d.collectOnce(if (d.collecting) Duration.ZERO else Duration.ofMillis(waitMs)) },
-        drop = {
-            dropped = true
-            started?.let { d.abandonTransfer(onlyStartedAt = it) }
-        },
-        alive = same,
+        collect = run::collect,
+        drop = run::drop,
+        alive = run::alive,
         settle = settle,
         awaitRound = { d.awaitCollectorRound() },
     )
-    if (!paired && !dropped && sessionIsCurrent()) lookForRejection(d)
-    return outcome(d, ended = !paired && !dropped && !sessionIsCurrent())
+    val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
+    // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.
+    if (run.mailboxGone && !paired) run.started?.let { d.abandonTransfer(onlyStartedAt = it) }
+    val undecided = !paired && !run.dropped && !run.mailboxGone
+    if (undecided && sessionIsCurrent()) lookForRejection(d)
+    return outcome(d, ended)
+}
+
+/** The state of one settlement: the transfer it settles (read inside the lock), whether it dropped, a gone mailbox. */
+private class SettleRun(
+    private val d: SettleDevice,
+    private val sessionIsCurrent: () -> Boolean,
+    private val now: () -> Instant,
+) {
+    var started: Instant? = null
+        private set
+    var dropped = false
+        private set
+
+    /** `404 mailbox_unknown` (the mailbox is gone): the session ended, nothing can come any more. */
+    var mailboxGone = false
+        private set
+
+    fun due(): Boolean {
+        val t = d.transferInPending
+        started = t?.startedAt
+        return TransferInResume.deadlineDue(t, d.deviceId, now())
+    }
+
+    /**
+     * This transfer on this session only: a rejection (the handler dropped the handshake), a wipe, a forget or a gone
+     * mailbox ends the window at once. The member's abandon and a new code are not offered during the window.
+     */
+    fun alive(): Boolean {
+        if (started == null || mailboxGone) return false
+        return sessionIsCurrent() && d.transferInPending?.startedAt == started
+    }
+
+    suspend fun collect(waitMs: Long) {
+        try {
+            d.collectOnce(if (d.collecting) Duration.ZERO else Duration.ofMillis(waitMs))
+        } catch (e: RelayException) {
+            if (e.code == RelayException.MAILBOX_UNKNOWN) mailboxGone = true
+            throw e
+        }
+    }
+
+    suspend fun drop() {
+        dropped = true
+        started?.let { d.abandonTransfer(onlyStartedAt = it) }
+    }
 }
 
 /** Paired, or the session went away before a decision ([ended]), or dropped. */

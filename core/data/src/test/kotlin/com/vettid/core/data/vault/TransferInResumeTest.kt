@@ -408,9 +408,10 @@ class TransferInResumeTest {
         val r = TransferInResume.awaitApproval({ shown }, { now }, { left -> asked = left; "m-1" }) { error("no deadline") }
         assertEquals(Duration.ofMinutes(6), asked)
         assertEquals(TransferInResume.Approved("m-1"), r)
-        // Nothing stored: the whole 11 minutes.
-        TransferInResume.awaitApproval({ null }, { now }, { left -> asked = left; null }) { error("no deadline") }
-        assertEquals(Duration.ofMinutes(11), asked)
+        // Nothing stored: nothing to wait for (not 11 minutes counted from now), and no deadline step either.
+        asked = null
+        assertEquals(null, TransferInResume.awaitApproval({ null }, { now }, { left -> asked = left; "x" }) { error("no deadline") })
+        assertEquals(null, asked)
     }
 
     /** The wait ran out: the deadline's collect decides, applied (paired) or dropped (null). */

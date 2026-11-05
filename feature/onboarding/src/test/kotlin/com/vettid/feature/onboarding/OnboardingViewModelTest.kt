@@ -121,6 +121,19 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
     }
 
+    /** (the recheck of #302) A setup link is ignored while the transfer-in screen is up (its window keeps the device). */
+    @Test
+    fun appLinkIsIgnoredWhileTheTransferScreenIsUp() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.startTransfer()
+        assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        inbox.offer("https://account.vettid.org/vault/enroll/#s=$secret")
+        advanceUntilIdle()
+        assertFalse("redeemSetupCode" in vault.calls)
+        assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+    }
+
     @Test
     fun anotherEnvironmentsAppLinkIsNotRedeemed() = runTest {
         val vm = vm()
