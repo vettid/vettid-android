@@ -2,7 +2,7 @@
 <resources>
     <!-- Settings → Privacy → Map server (ANDROID-PLAN §4 "Location", L2; the tile server decision of 2026-11-05). -->
     <string name="settings_map_server_title">Map server</string> <!-- NEW: not in the plan (the row and the form's title) -->
-    <!-- NEW: owner-approved wording 2026-11-05 (L2 tile server decision): the second line of the note, the host -->
+    <!-- Owner-approved 2026-11-05 (L2 tile server decision): the second line of the note, the host -->
     <string name="settings_map_server_current">This map\'s server is %1$s.</string>
     <string name="settings_map_server_url_label">Style address</string> <!-- NEW: not in the plan -->
     <string name="settings_map_server_save">Save</string> <!-- NEW: not in the plan -->

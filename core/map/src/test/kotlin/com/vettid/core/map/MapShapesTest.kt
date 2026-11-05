@@ -43,4 +43,12 @@ class MapShapesTest {
         assertEquals("MapContent", c.toString())
         assertEquals("MapPoint", c.position.toString())
     }
+
+    @Test
+    fun noTrailIsAnEmptyCollection() {
+        val c = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 10.0, listOf(MapPoint(1.0, 2.0)))
+        assertEquals(MapShapes.EMPTY, MapShapes.trailGeoJson(c))
+        val two = MapContent("https://x.example/s", MapPoint(48.5, 2.25), 10.0, listOf(MapPoint(1.0, 2.0), MapPoint(1.5, 2.5)))
+        assertTrue(MapShapes.trailGeoJson(two).contains("LineString"))
+    }
 }

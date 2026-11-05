@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.data.map
 
 import com.vettid.core.data.prefs.AppPreferences
@@ -48,7 +51,7 @@ class MapServerTest {
         assertEquals(MapServer.Problem.NOT_A_URL, problem("https://tiles example.org/x"))
         assertEquals(MapServer.Problem.NOT_A_URL, problem("https://tiles.example.org/" + "a".repeat(MapServer.MAX_LENGTH)))
         val ok = MapServer.parse("  https://Maps.Example.org:8443/styles/x.json  ") as MapServer.Check.Ok
-        assertEquals("maps.example.org", ok.host)
+        assertEquals("maps.example.org:8443", ok.host)
         assertEquals("https://Maps.Example.org:8443/styles/x.json", ok.url)
     }
 
@@ -67,6 +70,18 @@ class MapServerTest {
         assertTrue(samePlace.noteAnswered)
         // Going back to the default is a changed host as well.
         assertFalse(MapServer.of(AppPreferences(mapNoteHost = "maps.example.org")).noteAnswered)
+    }
+
+    @Test
+    fun anExplicitPortIsAnotherServerForTheNote() {
+        val port = MapServer.parse("https://maps.example.org:8443/s.json") as MapServer.Check.Ok
+        assertEquals("maps.example.org:8443", port.host)
+        assertEquals("maps.example.org", (MapServer.parse("https://maps.example.org:443/s.json") as MapServer.Check.Ok).host)
+        val answeredForPlain = AppPreferences(mapStyleUrl = "https://maps.example.org:8443/s.json", mapNoteHost = "maps.example.org")
+        assertFalse(MapServer.of(answeredForPlain).noteAnswered)
+        val answeredForPort = AppPreferences(mapStyleUrl = "https://maps.example.org:8443/s.json", mapNoteHost = "maps.example.org:8443")
+        assertTrue(MapServer.of(answeredForPort).noteAnswered)
+        assertFalse(MapServer.of(AppPreferences(mapStyleUrl = "https://maps.example.org/s.json", mapNoteHost = "maps.example.org:8443")).noteAnswered)
     }
 
     @Test

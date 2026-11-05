@@ -20,11 +20,16 @@ object MapServer {
     /** Longer than any style URL. */
     const val MAX_LENGTH = 2048
 
+    private const val HTTPS_PORT = 443
+
     /** Why a typed address is refused, before anything is saved or fetched. */
     enum class Problem { NOT_A_URL, NOT_HTTPS, CREDENTIALS, NO_HOST }
 
     sealed interface Check {
-        /** [url] as stored (trimmed) and its lower-case [host], for "This map's server is …". */
+        /**
+         * [url] as stored (trimmed) and the server's lower-case [host] for "This map's server is …": `host`, or `host:port` when the
+         * port is not 443 (an explicit other port is another server).
+         */
         class Ok(val url: String, val host: String) : Check {
             override fun toString(): String = "MapServer.Ok($host)"
         }
@@ -61,8 +66,10 @@ object MapServer {
 
     /** The lower-case host, or null when it does not parse; with [parseOnly] an address with no host reads as "".  */
     private fun hostOf(t: String, parseOnly: Boolean = false): String? = try {
-        val host = URI(t).host?.lowercase()
-        if (parseOnly) host ?: "" else host
+        val uri = URI(t)
+        val host = uri.host?.lowercase()
+        val shown = if (host != null && uri.port != -1 && uri.port != HTTPS_PORT) "$host:${uri.port}" else host
+        if (parseOnly) shown ?: "" else shown
     } catch (_: URISyntaxException) {
         null
     }

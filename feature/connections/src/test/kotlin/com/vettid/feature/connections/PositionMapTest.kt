@@ -111,6 +111,14 @@ class PositionMapTest {
     }
 
     @Test
+    fun theNoteGateAndTheRequestRuleAgreeOnTheServer() {
+        for (u in listOf("https://tiles.openfreemap.org/styles/liberty", "https://Maps.Example.org:8443/s.json", "https://maps.example.org:443/s")) {
+            val ok = MapServer.parse(u) as MapServer.Check.Ok
+            assertEquals(ok.host, com.vettid.core.map.MapRequestPolicy.authorityOf(u))
+        }
+    }
+
+    @Test
     fun showMapAnswersTheNoteForTheHostAndThenTheMapAppears() = runTest {
         location.incoming.value = listOf(share())
         val vm = vm()

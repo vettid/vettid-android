@@ -11,6 +11,18 @@ dependencies {
     implementation(libs.maplibre.sdk)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.core.ktx)
+    // MapNetwork: the client the SDK loads with (https to the noted server only, a generic User-Agent).
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+}
+
+android {
+    testOptions.unitTests {
+        isIncludeAndroidResources = true
+        // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals.
+        all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }

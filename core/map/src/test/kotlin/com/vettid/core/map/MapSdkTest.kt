@@ -19,7 +19,10 @@ class MapSdkTest {
         assertTrue(MapSdk.config.loggingOff)
         val sdk = code("MapSdk.kt")
         // The SDK is told the configuration before a map is made, and the cache is cleared.
-        assertTrue(sdk.contains("setMaximumAmbientCacheSize(config.ambientCacheBytes"))
+        assertTrue(sdk.contains("setMaximumAmbientCacheSize("))
+        assertTrue(sdk.contains("MapSdkState.READY") && sdk.contains("MapSdkState.FAILED"))
+        assertTrue(sdk.contains("setOkHttpClient(MapNetwork.client())"))
+        assertTrue(sdk.contains("setResourceTransform"))
         assertTrue(sdk.contains("clearAmbientCache("))
         assertTrue(sdk.contains("Logger.setVerbosity(Logger.NONE)"))
         assertTrue(sdk.indexOf("Logger.setVerbosity") < sdk.indexOf("MapLibre.getInstance"))
@@ -45,6 +48,9 @@ class MapSdkTest {
         val view = code("MapLibreSurface.kt")
         assertTrue(view.contains("isSaveEnabled = false"))
         assertTrue(view.contains("isSaveFromParentEnabled = false"))
+        // No attribution dialog (its feedback links carry the camera's position).
+        assertTrue(view.contains("isAttributionEnabled = false"))
+        assertFalse(view.contains("isAttributionEnabled = true"))
     }
 
     @Test

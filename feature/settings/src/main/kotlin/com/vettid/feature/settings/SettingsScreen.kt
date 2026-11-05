@@ -586,14 +586,16 @@ fun SettingsContent(
                     )
                     SettingsDivider()
                 }
-                SettingsRow(
-                    stringResource(R.string.settings_map_server_title),
-                    actions.mapServer,
-                    icon = Icons.Outlined.Map,
-                    supporting = MapServer.of(state.preferences).host,
-                    modifier = Modifier.testTag("map_server_row"),
-                )
-                SettingsDivider()
+                if (state.mapServerShown) {
+                    SettingsRow(
+                        stringResource(R.string.settings_map_server_title),
+                        actions.mapServer,
+                        icon = Icons.Outlined.Map,
+                        supporting = MapServer.of(state.preferences).host,
+                        modifier = Modifier.testTag("map_server_row"),
+                    )
+                    SettingsDivider()
+                }
                 SettingsInfoRow(
                     stringResource(R.string.settings_privacy_sharing),
                     stringResource(R.string.settings_privacy_sharing_body),

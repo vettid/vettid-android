@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.feature.settings
 
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -100,6 +103,12 @@ class MapServerSettingsTest {
         advanceUntilIdle()
         assertNull(prefs.preferences.first().mapStyleUrl)
         assertTrue(vm.uiState.value.isDefault)
+    }
+
+    @Test
+    fun theHostLineIsTheOwnersWordForWord() {
+        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
+        assertEquals("This map's server is tiles.openfreemap.org.", r.getString(R.string.settings_map_server_current, "tiles.openfreemap.org"))
     }
 
     @Test

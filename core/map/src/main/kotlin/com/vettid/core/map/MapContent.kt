@@ -22,8 +22,15 @@ class MapContent(
     val position: MapPoint,
     val radiusM: Double,
     val trail: List<MapPoint> = emptyList(),
+    /** Which share this is (its id, never a position): the camera frames again when it changes, and follows until the member moves it. */
+    val shareKey: String = "",
 ) {
     override fun toString(): String = "MapContent"
+
+    /** The same picture: nothing to draw again. */
+    fun sameDrawing(o: MapContent?): Boolean = o != null && styleUrl == o.styleUrl && radiusM == o.radiusM &&
+        position.lat == o.position.lat && position.lon == o.position.lon && trail.size == o.trail.size &&
+        trail.indices.all { trail[it].lat == o.trail[it].lat && trail[it].lon == o.trail[it].lon }
 }
 
 /** How the screen asks for a map: the real one ([MapLibreSurface]) or, in tests, a fake that records what it was given. */
@@ -70,8 +77,13 @@ object MapShapes {
     fun pointGeoJson(c: MapContent): String =
         feature(String.format(Locale.ROOT, """{"type":"Point","coordinates":[%.7f,%.7f]}""", c.position.lon, c.position.lat))
 
-    fun trailGeoJson(c: MapContent): String =
-        feature("""{"type":"LineString","coordinates":${coordinates(MapCircle.trailOf(c.trail))}}""")
+    /** No trail is an empty collection, not a line with no points. */
+    fun trailGeoJson(c: MapContent): String {
+        val trail = MapCircle.trailOf(c.trail)
+        return if (trail.isEmpty()) EMPTY else feature("""{"type":"LineString","coordinates":${coordinates(trail)}}""")
+    }
+
+    const val EMPTY = """{"type":"FeatureCollection","features":[]}"""
 
     /** What the camera should show: the circle and the trail. */
     fun framed(c: MapContent): List<MapPoint> =
