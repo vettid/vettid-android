@@ -201,7 +201,8 @@
     <string name="data_feed_credential_rotated">Your credential was renewed</string>
     <string name="data_feed_credential_reset">Your credential was reset</string>
     <string name="data_feed_check_failed">A daily check failed</string>
-    <string name="data_feed_check_failed_pin">A daily check failed: wrong PIN</string>
+    <!-- Owner-approved 2026-11-05 (replaces the daily-check wording) -->
+    <string name="data_feed_check_failed_pin">A PIN check failed: wrong PIN</string>
     <string name="data_feed_check_failed_password">A daily check failed: wrong password</string>
     <string name="data_feed_check_locked">Your vault locked after 10 failed checks</string>
     <string name="data_feed_hold_off_until">Hold turned off until %1$s</string>

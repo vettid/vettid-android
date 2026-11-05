@@ -254,7 +254,7 @@ class WalletDetailViewModel @Inject constructor(
         }
     }
 
-    /** "Try again" on the note that Receive is off: the pending `wallet.caps.set`, and nothing else. */
+    /** "Set the limit now" on the note that Receive is off: the pending `wallet.caps.set`, and nothing else. */
     fun retryCaps() {
         if (!mutable.value.capsPending || !mutable.value.idle) return
         viewModelScope.launch {

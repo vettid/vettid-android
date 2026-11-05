@@ -66,6 +66,7 @@ class NotificationsTest {
         assertEquals("\u2068Alice\u2069 asks for \u2068Passport\u2069", FeedKinds.title(item("grant.request", ref = "g1"), names).resolve(res))
         assertEquals("\u2068Alice\u2069 asks for 3 things", FeedKinds.title(item("grant.request", count = 3), names).resolve(res))
         assertEquals("3 things", FeedKinds.supporting(item("grant.request", count = 3), names)?.resolve(res))
+        assertEquals("A PIN check failed: wrong PIN", FeedKinds.title(item("owner_check.failed", ref = "pin"), names).resolve(res))
         assertEquals("A daily check failed: wrong password", FeedKinds.title(item("owner_check.failed", ref = "password"), names).resolve(res))
         // VAULT-MESSAGING 0.27.0 §11.7.1: the classes of a signer change, in the plan's words; never a raw kind.
         val changed = item("device.signer_changed", c = null, ref = "vettid:google_play", priority = "high")

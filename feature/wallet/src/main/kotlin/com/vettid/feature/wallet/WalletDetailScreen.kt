@@ -225,7 +225,7 @@ private fun CapsNotes(state: WalletDetailUiState, actions: WalletDetailActions) 
             modifier = Modifier.testTag("wallet_caps_pending"),
         )
         TextButton(onClick = actions.onRetryCaps, modifier = Modifier.testTag("wallet_caps_retry")) {
-            Text(stringResource(R.string.wallet_try_again))
+            Text(stringResource(R.string.wallet_caps_set_now))
         }
         // Only while the file cannot be read: the one way out that does not leave a wallet without its limit question.
         if (state.settingsUnreadable) {

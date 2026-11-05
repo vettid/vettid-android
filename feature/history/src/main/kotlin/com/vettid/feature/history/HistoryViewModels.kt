@@ -85,9 +85,9 @@ data class HistoryUiState(
 
     /**
      * The entries the list shows: [entries] without the hidden kinds (ANDROID-PLAN 0.1.52 §4 "Event titles"), which
-     * stay in [entries] for the chain check.
+     * stay in [entries] for the chain check, and the `item.deleted` of a deleted wallet (shown once, as `wallet.deleted`).
      */
-    val shown: List<AuditRecord> by lazy { entries.filterNot { AuditKinds.hidden(it.kind, it.ref) } }
+    val shown: List<AuditRecord> by lazy { AuditKinds.listed(entries) }
 
     /** Nothing to show and nothing filtered: "No history yet" (with hidden entries read and more to read, the list loads on). */
     val emptyHistory: Boolean get() = shown.isEmpty() && filter.isEmpty && (end || entries.isEmpty())
