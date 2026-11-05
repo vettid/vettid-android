@@ -122,6 +122,13 @@ internal object LocationCatalog {
         "connections.detail_location_off" to {
             Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = SendIssue.LOCATION_OFF))
         },
+        // A6 N21: no position has reached the person for 25 minutes (cause unknown), and with a known cause (the fix-it action).
+        "connections.detail_location_stalled" to {
+            Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), stalledMinutes = 25))
+        },
+        "connections.detail_location_stalled_off" to {
+            Detail(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = SendIssue.LOCATION_OFF, stalledMinutes = 25))
+        },
         "connections.detail_location_missed" to {
             ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, locationMissed = true), DetailActions())
         },

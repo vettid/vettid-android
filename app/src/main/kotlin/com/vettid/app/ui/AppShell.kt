@@ -525,6 +525,9 @@ fun AppShell(
         shell.tapTaken()
         when (t) {
             NotificationOpenInbox.Open.Settings -> navController.navigate(NotificationSettingsRoute) { launchSingleTop = true }
+            // A connection that is gone closes its own page back to where the member was.
+            is NotificationOpenInbox.Open.Connection ->
+                navController.navigate(ConnectionDetailRoute(t.connectionId)) { launchSingleTop = true }
             is NotificationOpenInbox.Open.Item -> {
                 val target = shell.openItem(t.itemId)?.let { FeedKinds.target(it, shell.openAsks()) }
                 if (target == null || target == FeedTarget.Sheet) {

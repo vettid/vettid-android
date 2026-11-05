@@ -293,6 +293,13 @@
     <string name="data_location_open_settings">Open settings</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Paused). The same words as the ongoing notification's. -->
     <string name="data_location_paused">Paused until your daily check.</string>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). On the card and in the notice: %1$s the first name, %2$d the minutes. -->
+    <plurals name="data_location_stalled">
+        <item quantity="one">Your location hasn\'t reached %1$s for %2$d minute.</item>
+        <item quantity="other">Your location hasn\'t reached %1$s for %2$d minutes.</item>
+    </plurals>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). The notice without a name: the app lock's cover is up, or names are not shown. -->
+    <string name="data_location_stalled_unnamed">Your location isn\'t getting through.</string>
     <string name="data_location_missed">No position was found, so nothing was sent.</string>
 
     <!-- Receiving a connection's location (ANDROID-PLAN §4 "Location", L1b). All NEW: not in the plan. -->
