@@ -38,6 +38,8 @@ fun AlertDialog(
     shape: Shape = AlertDialogDefaults.shape,
     containerColor: Color = AlertDialogDefaults.containerColor,
     properties: DialogProperties = DialogProperties(),
+    /** The body scrolls (A6 audit A14). False for a body that scrolls by itself (a `LazyColumn`): a scroll around it throws. */
+    scrollBody: Boolean = true,
 ) {
     if (LocalCheckCovered.current) return
     androidx.compose.material3.AlertDialog(
@@ -48,7 +50,7 @@ fun AlertDialog(
         icon = icon,
         title = title,
         // The body scrolls (A6 audit A14, A41): a long body at 200% font must not push the buttons off the screen.
-        text = text?.let { body -> { Box(Modifier.verticalScroll(rememberScrollState())) { body() } } },
+        text = if (scrollBody) text?.let { body -> { Box(Modifier.verticalScroll(rememberScrollState())) { body() } } } else text,
         shape = shape,
         containerColor = containerColor,
         properties = properties,

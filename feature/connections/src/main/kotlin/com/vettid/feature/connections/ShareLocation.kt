@@ -218,13 +218,17 @@ class ShareLocationViewModel @Inject constructor(
 
     /** Reads again whether the vault has location after it failed, keeping what the member has chosen (A6 audit E27). */
     fun retry() {
+        // Not while a read is on its way (a second tap).
+        if (readJob?.isActive == true) return
         local.update { it.copy(error = null, errorCode = null) }
         readAvailability()
     }
 
+    private var readJob: kotlinx.coroutines.Job? = null
+
     private fun readAvailability() {
         if (location.availability.value == LocationAvailability.UNKNOWN) {
-            viewModelScope.launch {
+            readJob = viewModelScope.launch {
                 try {
                     location.refresh()
                 } catch (e: VaultFailure) {

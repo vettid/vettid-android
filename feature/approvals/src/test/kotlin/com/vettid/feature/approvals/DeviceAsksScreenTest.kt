@@ -140,7 +140,9 @@ class DeviceAsksScreenTest {
 
     @Test
     fun aFailureOfTheDecisionIsAnnounced() {
-        show(state(held(HeldRequest.ItemUse("i1", "f1", "ping".toByteArray()))).copy(error = com.vettid.core.data.vault.FailureKind.NETWORK))
+        val failed = state(held(HeldRequest.ItemUse("i1", "f1", "ping".toByteArray())))
+            .copy(error = com.vettid.core.data.vault.FailureKind.NETWORK)
+        show(failed)
         val live = rule.onNodeWithTag("failure").fetchSemanticsNode().config.getOrNull(SemanticsProperties.LiveRegion)
         assertEquals(androidx.compose.ui.semantics.LiveRegionMode.Polite, live)
     }
@@ -150,8 +152,10 @@ class DeviceAsksScreenTest {
         show(state(held(HeldRequest.ItemUse("i1", "f1", "ping 12:00".toByteArray()))))
         val box = rule.onNodeWithTag("use_data_box").fetchSemanticsNode()
         val texts = box.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
-        assertTrue(texts.any { it == "ping 12:00" })
-        assertTrue(texts.size >= 2)
+        // The label, the byte count and the agent's text are all in the one node.
+        assertTrue(texts.joinToString("|"), texts.any { it == "Data from the agent" })
+        assertTrue(texts.joinToString("|"), texts.any { it.contains("10") && it.contains("byte") })
+        assertTrue(texts.joinToString("|"), texts.any { it == "ping 12:00" })
     }
 
     @Test

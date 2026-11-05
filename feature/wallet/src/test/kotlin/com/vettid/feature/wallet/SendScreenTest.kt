@@ -3,6 +3,7 @@
 
 package com.vettid.feature.wallet
 
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -620,8 +621,10 @@ class SendScreenTest {
         show(form())
         rule.onNodeWithTag("wallet_send_amount").assertIsDisplayed()
         // The suffix is in the field's own node: the unit is said, not only drawn.
-        val texts = rule.onNodeWithTag("wallet_send_amount").fetchSemanticsNode().config[SemanticsProperties.Text].joinToString { it.text }
-        assertTrue(texts, texts.contains("sats") || rule.onAllNodesWithText("sats").fetchSemanticsNodes().isNotEmpty())
+        // Under the amount field alone, not the unit button that also says "sats".
+        val inField = androidx.compose.ui.test.hasText("sats") and
+            androidx.compose.ui.test.hasAnyAncestor(androidx.compose.ui.test.hasTestTag("wallet_send_amount"))
+        rule.onAllNodes(inField, useUnmergedTree = true).assertCountEquals(1)
         val sats = rule.onNodeWithTag("wallet_send_unit_sats").fetchSemanticsNode().config
         val btc = rule.onNodeWithTag("wallet_send_unit_btc").fetchSemanticsNode().config
         assertEquals(androidx.compose.ui.semantics.Role.RadioButton, sats[SemanticsProperties.Role])

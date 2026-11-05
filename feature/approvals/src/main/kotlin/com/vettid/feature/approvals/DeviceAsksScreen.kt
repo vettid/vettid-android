@@ -196,7 +196,8 @@ internal fun DeviceRequestScreen(
             Text(
                 failureText(it, state.retryUntil, state.limit, state.errorCode),
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("failure").announced(),
+                // A wait that counts down is not announced: it would be read out every second (as A28).
+                modifier = Modifier.testTag("failure").let { m -> if (state.retryUntil == null) m.announced() else m },
             )
         }
     }
@@ -246,8 +247,7 @@ private fun HeldFacts(held: HeldShow?) {
     when (held) {
         is HeldShow.Use -> {
             Spacer(Modifier.height(Spacing.m))
-            Label(stringResource(R.string.approvals_held_use_data))
-            // In a box with its length, so that the agent's text cannot pass for one of the app's own lines.
+            // In a box with its label and length, so that the agent's text cannot pass for one of the app's own lines.
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -257,6 +257,7 @@ private fun HeldFacts(held: HeldShow?) {
                     .semantics(mergeDescendants = true) {}
                     .testTag("use_data_box"),
             ) {
+                Label(stringResource(R.string.approvals_held_use_data))
                 Text(
                     pluralStringResource(R.plurals.approvals_held_use_bytes, held.bytes, held.bytes),
                     style = MaterialTheme.typography.labelMedium,

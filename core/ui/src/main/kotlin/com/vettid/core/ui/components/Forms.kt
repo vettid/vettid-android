@@ -93,7 +93,8 @@ fun SecretField(
     error: String? = null,
     supporting: String? = null,
     imeAction: ImeAction = ImeAction.Done,
-    onImeAction: () -> Unit = {},
+    /** What the keyboard's action does. Null: Done does nothing and Next moves focus to the next field. */
+    onImeAction: (() -> Unit)? = null,
     enabled: Boolean = true,
     holdsInput: Boolean = true,
 ) {
@@ -136,11 +137,15 @@ fun SecretField(
             imeAction = imeAction,
             autoCorrectEnabled = false,
         ),
-        // Next moves on to the next field (A6 audit A5); the caller's action still runs first.
+        // Next moves on to the next field (A6 audit A5) unless the caller handles the action itself.
         keyboardActions = KeyboardActions(
             onAny = {
-                onImeAction()
-                if (imeAction == ImeAction.Next) focusManager.moveFocus(FocusDirection.Down)
+                // A caller that handles the action (the item editor moves focus itself) is not followed by a second move.
+                if (onImeAction != null) {
+                    onImeAction()
+                } else if (imeAction == ImeAction.Next) {
+                    focusManager.moveFocus(FocusDirection.Down)
+                }
             },
         ),
         trailingIcon = {

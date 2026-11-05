@@ -547,7 +547,10 @@ class VoteViewModelTest {
     }
 
     /** A repository whose cast stays in flight until [gate] is completed. */
-    private class SlowCast(private val inner: FakeVotes, val gate: kotlinx.coroutines.CompletableDeferred<Unit>) : VotesRepository by inner {
+    private class SlowCast(
+        private val inner: FakeVotes,
+        val gate: kotlinx.coroutines.CompletableDeferred<Unit>,
+    ) : VotesRepository by inner {
         override suspend fun cast(connectionId: String, proposalId: String, choiceId: String, password: String?): BallotState {
             gate.await()
             return inner.cast(connectionId, proposalId, choiceId, password)
@@ -560,7 +563,11 @@ class VoteViewModelTest {
         votes.windowIsOpen = true
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         val vm = VoteViewModel(
-            SavedStateHandle(mapOf(VoteRoute.CONNECTION to CONN, VoteRoute.PROPOSAL to PID)), SlowCast(votes, gate), FakeSocial(), files, FakeVault(),
+            SavedStateHandle(mapOf(VoteRoute.CONNECTION to CONN, VoteRoute.PROPOSAL to PID)),
+            SlowCast(votes, gate),
+            FakeSocial(),
+            files,
+            FakeVault(),
         )
         advanceUntilIdle()
         vm.select("no")

@@ -6,6 +6,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -47,6 +48,25 @@ class A6CloseoutSemanticsTest {
         }
         rule.onNodeWithTag("first").performImeAction()
         rule.onNodeWithTag("second").assertIsFocused()
+    }
+
+    @Test
+    fun nextOnAFieldWhoseCallerHandlesItRunsThatAndMovesFocusNoFurther() {
+        var handled = 0
+        rule.setContent {
+            Column {
+                // A password that is not the last field: its caller moves focus itself (the item editor), once.
+                SecretField(
+                    "", {}, "Password",
+                    imeAction = ImeAction.Next, onImeAction = { handled++ }, modifier = Modifier.testTag("first"),
+                )
+                SecretField("", {}, "Confirm", modifier = Modifier.testTag("second"))
+                SecretField("", {}, "Third", modifier = Modifier.testTag("third"))
+            }
+        }
+        rule.onNodeWithTag("first").performImeAction()
+        assertEquals(1, handled)
+        rule.onNodeWithTag("second").assertIsNotFocused()
     }
 
     @Test

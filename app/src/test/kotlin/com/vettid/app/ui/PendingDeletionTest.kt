@@ -16,6 +16,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
@@ -53,6 +54,23 @@ class PendingDeletionTest {
         vm.cancel()
         assertNull(vm.failure.value)
         assertNull(vault.pendingDeletion.value)
+    }
+
+    @Test
+    fun aFailureGoesWhenTheDeletionChangesOrIsGone() = runTest {
+        val vault = FakeVault(AppPhase.Unlocked)
+        vault.pendingDeletion.value = DeletionView(Instant.now().plusSeconds(3_600), false, "d1")
+        vault.fail["cancelDeletion"] = VaultFailure(FailureKind.NETWORK)
+        val vm = PendingDeletionViewModel(vault)
+        vm.cancel()
+        assertNotNull(vm.failure.value)
+        vault.pendingDeletion.value = DeletionView(Instant.now().plusSeconds(7_200), false, "d2")
+        assertNull(vm.failure.value)
+        vault.fail["cancelDeletion"] = VaultFailure(FailureKind.NETWORK)
+        vm.cancel()
+        assertNotNull(vm.failure.value)
+        vault.pendingDeletion.value = null
+        assertNull(vm.failure.value)
     }
 
     @Test

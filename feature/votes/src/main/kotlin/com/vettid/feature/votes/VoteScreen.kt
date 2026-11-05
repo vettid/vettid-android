@@ -26,6 +26,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.ReportProblem
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -564,7 +568,7 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
     val sending = state.cast == CastStep.SENDING
     ModalBottomSheet(
         onDismissRequest = { if (!sending) actions.onDismissCast() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetUnlessSending(sending),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_confirm_sheet"),
@@ -600,6 +604,17 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
     }
 }
 
+/**
+ * A sheet that a swipe, a tap on the scrim or Back cannot hide while the cast is on its way (A6 audit N22): Material animates to
+ * Hidden before it asks [androidx.compose.material3.ModalBottomSheet]'s `onDismissRequest`, so the guard is in the state.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun sheetUnlessSending(sending: Boolean): SheetState {
+    val sendingNow by rememberUpdatedState(sending)
+    return rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !sendingNow })
+}
+
 /** The unlock window prompt (ANDROID-PLAN §4), before `vote.cast` when the window is closed. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -609,7 +624,7 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
     val sending = state.cast == CastStep.SENDING
     ModalBottomSheet(
         onDismissRequest = { if (!sending) actions.onDismissCast() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetUnlessSending(sending),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_password_sheet"),

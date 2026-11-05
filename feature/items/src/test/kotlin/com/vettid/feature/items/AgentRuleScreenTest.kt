@@ -293,7 +293,8 @@ class AgentRuleScreenTest {
         val node = rule.onNodeWithTag("rule_existing").performScrollTo()
         val config = node.fetchSemanticsNode().config
         assertEquals(androidx.compose.ui.semantics.Role.Switch, config[androidx.compose.ui.semantics.SemanticsProperties.Role])
-        assertEquals(androidx.compose.ui.state.ToggleableState.On, config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState])
+        val toggle = config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState]
+        assertEquals(androidx.compose.ui.state.ToggleableState.On, toggle)
         // The label is in the same node, not beside a bare switch.
         assertEquals(true, config[androidx.compose.ui.semantics.SemanticsProperties.Text].isNotEmpty())
         node.performClick()

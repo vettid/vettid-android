@@ -37,6 +37,11 @@ class PendingDeletionViewModel @Inject constructor(private val vault: VaultRepos
     /** Why the last "Cancel deletion" did not go through (A6 audit E4); gone with the next try. */
     val failure: StateFlow<DeletionCancelFailure?> = failureFlow.asStateFlow()
 
+    init {
+        // A failure belongs to the deletion it was about: a changed or gone deletion clears it.
+        viewModelScope.launch { vault.pendingDeletion.collect { failureFlow.value = null } }
+    }
+
     fun cancel() {
         if (busyFlow.value) return
         busyFlow.value = true

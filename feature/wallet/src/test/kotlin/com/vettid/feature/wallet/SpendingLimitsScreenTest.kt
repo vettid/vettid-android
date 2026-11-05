@@ -189,7 +189,8 @@ class SpendingLimitsScreenTest {
         val node = rule.onNodeWithTag("limit_remove_period").performScrollTo()
         val config = node.fetchSemanticsNode().config
         assertEquals(androidx.compose.ui.semantics.Role.Switch, config[androidx.compose.ui.semantics.SemanticsProperties.Role])
-        assertEquals(androidx.compose.ui.state.ToggleableState.Off, config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState])
+        val toggle = config[androidx.compose.ui.semantics.SemanticsProperties.ToggleableState]
+        assertEquals(androidx.compose.ui.state.ToggleableState.Off, toggle)
         assertEquals("Remove this limit", config[androidx.compose.ui.semantics.SemanticsProperties.Text].joinToString { it.text })
         node.performClick()
         assertEquals(true, changed)
