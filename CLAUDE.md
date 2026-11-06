@@ -417,6 +417,14 @@ The A2 exit test:
   the lists, the entries and each results submit as separate stages, so one bad item stops nothing else; the member's row and its
   Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
+  `VoteRows.read` parses the two documents once; `PublishedResults.observe` is the rest of the observer's check (BALLOT-PROTOCOL
+  §8.4, VAULT-MESSAGING 0.86.4 §10.19.6 step 1: the tags number the proposal's `eligible` and reach its `record_root`, each
+  `choice_id` is the proposal's, the tally and `counts.ballots` recompute, each `ballot_sig` verifies) and is **not yet called
+  by `checkResults`** (the spec's "don't add up" path needs the approved `vote_results_dont_add_up` string). Every vote signature
+  the app checks goes through `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: Bouncy Castle's own verify is
+  cofactored and takes an `R` of small order, so the small-order and `y < p` rules are a table and a mixed-order point is
+  decided by `Ed25519Exact`, cofactorless). A real choice whose label reads "Abstain" (ANDROID-PLAN 0.1.117 matching) is shown
+  by its id (`VoteWire.readsAbstain`); the reserved `abstain` keeps its label until `vote_choice_abstain` is added.
   `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
   stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,

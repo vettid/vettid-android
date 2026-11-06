@@ -51,7 +51,8 @@ class VoteObserveTest {
             if (r.vk == null) {
                 append("null")
             } else {
-                append("{\"ballot_sig\":\"${Base64s.encodeStd(r.sig!!)}\",\"choice_id\":\"${r.choice}\",\"vk\":\"${Base64s.encodeStd(r.vk)}\"}")
+                append("{\"ballot_sig\":\"${Base64s.encodeStd(r.sig!!)}\",\"choice_id\":\"${r.choice}\",")
+                append("\"vk\":\"${Base64s.encodeStd(r.vk)}\"}")
             }
             append(",\"record_tag\":\"${Base64s.encodeStd(r.tag)}\"}")
         }
