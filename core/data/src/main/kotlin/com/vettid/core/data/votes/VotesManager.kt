@@ -1326,11 +1326,11 @@ class VotesManager(
         // existing not-rechecked line, and no number.
         val at = now().toEpochMilli()
         if (withContext(io) { recheckRowsWait(key, at) }) return@run notRechecked(key, gen)
-        // The callback runs in the site client's blocking read, which a lock does not interrupt (review of #319, L1): it
-        // stamps only while this recheck's job is active and no wipe happened since it began.
-        val job = kotlinx.coroutines.currentCoroutineContext()[Job]
+        // The callback runs in the site client's blocking read, which a lock does not interrupt: bytes received count whatever
+        // the job's state (#321 L1: a lock partway still spent them); only a wipe since the recheck began drops the stamp
+        // (the epoch, review of #319 L1).
         val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n ->
-            if (n > 0 && job?.isActive != false) stampRecheckRows(key, at, epoch)
+            if (n > 0) stampRecheckRows(key, at, epoch)
         }) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)

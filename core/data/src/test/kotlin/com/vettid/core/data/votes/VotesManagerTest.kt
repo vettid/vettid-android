@@ -2604,4 +2604,19 @@ class VotesManagerTest {
         restarted.forgetStored()
         assertTrue(stamps.load().isEmpty())
     }
+
+    @Test
+    fun aLockDuringTheRechecksDownloadStillCountsTheBytes() = runTest {
+        // L1: a lock (clear: the recheck's job is cancelled) while the bytes arrive; they were spent, so the cap counts them.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val m = manager(ops, site, unmetered = { false })
+        site.beforeReceived = { m.clear() }
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.recheck(CONN, PID))
+        site.beforeReceived = null
+        m.refresh()
+        assertEquals("held: the cut download counted", ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+    }
 }
