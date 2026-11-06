@@ -84,7 +84,11 @@ class TransferInSettleFreezeTest {
         assertEquals("the request that was out, and one final collect", 2, calls)
     }
 
-    /** The same freeze with nothing there: the drop comes at once after the one final collect, with no further extension. */
+    /**
+     * The same freeze with nothing there: no further extension; the one final collect waits only for the lease of the request
+     * that was out when it froze (#308 R2: its bytes may reach the relay at the wake, 600 s, which parks it for its 25 s
+     * wait: the lease to 685 s, the collect at 700 s), then the drop.
+     */
     @Test
     fun aLongFreezeWithNothingThereDropsAtOnceAfterOneFinalCollect() = runTest {
         val clock = FrozenClock(this)
@@ -98,7 +102,7 @@ class TransferInSettleFreezeTest {
         assertFalse(TransferInResume.atDeadline({ false }, collect, { drops++; droppedAt = clock.now() }, settle = timingWith(clock)))
         assertEquals(1, drops)
         assertEquals("the request that was out, and one final collect", 2, calls)
-        assertTrue("dropped at the wake: $droppedAt", droppedAt - 600_000 <= 1_000)
+        assertEquals("dropped after the wake + w + V + 15 s", 700_000L, droppedAt)
     }
 
     /**

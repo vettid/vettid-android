@@ -60,8 +60,8 @@ class TransferInSettleFollowUpTest {
 
     /**
      * (Item 10) Our request is recorded with the wait it was actually sent with: a long poll asked for 25 s that went out as
-     * wait=0 (the collection runs) leases from its send, not 25 s later. Sent at 75 s, frozen, woken past the cap (105 s): the
-     * hold goes at 75 + 60 + 15 = 150 s, not 175 s.
+     * wait=0 (the collection runs) leases with no wait added. Sent at the tick of 75 s and frozen 0.1 s later, it leases from
+     * the wake (105.1 s, #308 R2), past the cap (105 s): the hold goes at 105.1 + 0 + 60 + 15 = 180.1 s, not 205.1 s.
      */
     @Test
     fun ourRequestIsRecordedWithTheWaitItWasSentWith() = runTest {
@@ -82,7 +82,7 @@ class TransferInSettleFollowUpTest {
         }
         assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle, sentWait = { 0L }))
         assertEquals("asked for a long poll", listOf(20_000L), asked)
-        assertEquals(listOf(150_000L), finals)
+        assertEquals(listOf(180_100L), finals)
     }
 
     /**
@@ -133,10 +133,11 @@ class TransferInSettleFollowUpTest {
 
     /**
      * (Call C) A cut of a request sent at or before a freeze belongs to the freeze: its lease is within the freeze's, so it
-     * moves nothing and the one extra stays unused. The collector sends at 85 s (wait 25 s), freezes 12 s; the freeze's
-     * lease runs to 170 s, the hold to 185 s. The cut of that request is counted at 120 s, after the wake: it was written
-     * before the freeze, so its lease starts by 110 s, not at the notice (120 s, which would hold to 195 s): no move.
-     * A cut during the last collect at 185 s (lease to 245 s) then still gets the extra: a held re-look at 260 s.
+     * moves nothing and the one extra stays unused. The collector sends at the tick of 85 s (wait 25 s) and freezes 12 s; the
+     * wake is seen at 98 s, and the freeze's lease starts by the wake + w (#308 R2), runs to 183 s, the hold to 198 s. The cut
+     * of that request is counted at 120 s and seen at the hold's look (198 s): it was written before the freeze, so its lease
+     * starts by 110 s, not at the notice (198 s, which would move the hold to 273 s and use the extra). A cut during the last
+     * collect at 198 s (lease to 258 s) then still gets the extra: a held re-look at 273 s.
      */
     @Test
     fun aCutOfARequestSentBeforeAFreezeBelongsToTheFreeze() = runTest {
@@ -166,7 +167,7 @@ class TransferInSettleFollowUpTest {
                 cutLeases = { leases.map { CollectorCut(it.first, clock.now() - it.second, it.third) } },
             ),
         )
-        assertEquals(listOf(185_000L, 260_000L), finals)
+        assertEquals(listOf(198_000L, 273_000L), finals)
     }
 
     /**
@@ -240,7 +241,8 @@ class TransferInSettleFollowUpTest {
     /**
      * (Item 8) Once the extra is used, nothing grants a new hold: a cut noticed right after the extra after the send was
      * taken (the 4th read of the cuts after the wake: before the second hold's first look) does not hold the re-look. The
-     * last collect at 100 s is frozen for 30 s: its lease runs to 160 s, the re-look goes at 175 s, not at the cut's 230 s.
+     * last collect at 100 s is frozen for 30 s: it leases from the wake (130.1 s, #308 R2) to 190.1 s, the re-look goes at
+     * 205.1 s, not at the cut's 230.1 s.
      */
     @Test
     fun afterTheExtraNoNewHoldIsGranted() = runTest {
@@ -268,7 +270,7 @@ class TransferInSettleFollowUpTest {
         }
         assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle, cuts = cuts))
         assertTrue("flipped after the wake", flippedAt >= 130_000)
-        assertEquals(listOf(100_000L, 175_000L), finals)
+        assertEquals(listOf(100_000L, 205_100L), finals)
     }
 
     /**
@@ -441,5 +443,32 @@ class TransferInSettleFollowUpTest {
             ),
         )
         assertEquals(listOf(219_000L), lasts)
+    }
+
+    /**
+     * (#308 R2) A send since the last tick before a freeze may not have left the phone before it froze: its bytes can reach
+     * the relay at the wake, which parks it for its wait. F = the cap = 105 s. The collector's poll (wait 25 s) is written at
+     * the tick of 103 s and the process freezes 0.1 s later for 30 s; the wake is seen at 134 s. The lease starts by the wake
+     * + w = 159 s and runs to 219 s: the hold goes at 234 s, not at 103 + 25 + 60 + 15 = 203 s.
+     */
+    @Test
+    fun aSendAtTheLastTickBeforeAFreezeLeasesFromTheWake() = runTest {
+        val clock = FrozenClock(this)
+        val sends = mutableListOf<Pair<Long, Long>>()
+        val lasts = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 105_000, maxExtraMs = 0, now = clock::now)
+        launch {
+            delay(103_000)
+            sends += clock.now() to 25_000L
+            delay(100)
+            clock.jumpedMs += 30_000
+        }
+        val collect: suspend (Long) -> Unit = { w -> if (w == 0L && clock.now() >= 135_000) lasts += clock.now() }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = settle, collectorSends = { sends.map { (clock.now() - it.first) to it.second } },
+            ),
+        )
+        assertEquals(listOf(234_000L), lasts)
     }
 }
