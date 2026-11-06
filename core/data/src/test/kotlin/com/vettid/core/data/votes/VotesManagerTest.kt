@@ -1291,4 +1291,30 @@ class VotesManagerTest {
         val proof = ops.submitted.single()["row_proof"] as JsonObject
         assertEquals("0", (proof["index"] as JsonPrimitive).content)
     }
+
+    @Test
+    fun aLaterFailedCheckWhoseSubmitIsRefusedHidesTheNumbersOfAPassedVerdict() = runTest {
+        // Recheck 1, R1-1: a first submit passes; the site later serves results that do not add up, and that submit is refused.
+        val (ops, site) = observedScenario(observed())
+        val m = manager(ops, site)
+        m.refresh()
+        val key = "$CONN/$PID"
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue(key).verdict)
+        val bad = observed(tally = """{"abstain":0,"no":1,"yes":0}""")
+        site.answers["p/$PID/results.json"] = ok(bad.results)
+        site.answers["p/$PID/rows.json"] = ok(bad.rowsJson)
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        val h = m.hints.value.getValue(key)
+        assertEquals(ObserverVerdict.PASSED, h.verdict)
+        assertTrue(h.observerFailed)
+        val verified = VoteWire.summary(obj("""{"proposal_id":"$PID","connection_id":"$CONN","state":"closed","ballot":{"state":"recorded"},"check":{"state":"verified"}}"""))!!
+        assertFalse(VoteRules.showNumbers(verified, h.verdict, h.observerFailed))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = h.observerFailed))
+    }
 }

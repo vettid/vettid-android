@@ -300,23 +300,32 @@ class VoteRulesTest {
         // Numbers: only under verified or unconfirmed, and never with a failed verdict.
         val failed = ObserverVerdict.FAILED
         val passed = ObserverVerdict.PASSED
-        assertTrue(VoteRules.showNumbers(verified, passed))
-        assertTrue(VoteRules.showNumbers(unconfirmed, passed))
-        assertFalse(VoteRules.showNumbers(verified, failed))
-        assertFalse(VoteRules.showNumbers(unconfirmed, failed))
+        assertTrue(VoteRules.showNumbers(verified, passed, observerFailed = false))
+        assertTrue(VoteRules.showNumbers(unconfirmed, passed, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(verified, failed, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(unconfirmed, failed, observerFailed = false))
         for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
-            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), passed))
+            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), passed, observerFailed = false))
         }
-        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), passed))
+        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), passed, observerFailed = false))
+    }
+
+    @Test
+    fun numbersAreHiddenWheneverTheFlagIsSetEvenWithAPassedVerdict() {
+        // Recheck 1, R1-1: a first submit passed; a later Check again failed the observer and its submit was refused.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        val h = VoteHint(observerFailed = true, verdict = ObserverVerdict.PASSED)
+        assertFalse(VoteRules.showNumbers(verified, h.verdict, h.observerFailed))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = h.observerFailed))
     }
 
     @Test
     fun noVerdictInMemoryMeansNoNumbers() {
         // After a lock or a restart the hints are gone: until a check has run again, no number is shown.
         val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
-        assertFalse(VoteRules.showNumbers(verified, VoteHint().verdict))
-        assertFalse(VoteRules.showNumbers(verified, null))
-        assertTrue(VoteRules.showNumbers(verified, ObserverVerdict.PASSED))
+        assertFalse(VoteRules.showNumbers(verified, VoteHint().verdict, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(verified, null, observerFailed = false))
+        assertTrue(VoteRules.showNumbers(verified, ObserverVerdict.PASSED, observerFailed = false))
     }
 
     @Test
@@ -325,7 +334,7 @@ class VoteRulesTest {
         val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
         val after = VoteHint(observerFailed = false, verdict = ObserverVerdict.FAILED)
         assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = after.observerFailed))
-        assertFalse(VoteRules.showNumbers(verified, after.verdict))
+        assertFalse(VoteRules.showNumbers(verified, after.verdict, after.observerFailed))
     }
 
     @Test
