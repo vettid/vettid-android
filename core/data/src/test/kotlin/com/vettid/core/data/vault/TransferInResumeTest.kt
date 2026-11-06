@@ -426,6 +426,87 @@ class TransferInResumeTest {
     }
 
     /**
+     * A freeze inside the final send itself: the window runs to the cap (195 s), the final `wait=0` collect goes out, and the
+     * collector's request is out since s (~195 s) when the process freezes and wakes (~226 s) past the cap but before s + V.
+     * The end cannot move, yet one more final collect is due, after s + V + 5 s: it gathers the message.
+     */
+    @Test
+    fun aFreezeInsideTheFinalSendEarnsOneMoreFinalCollect() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        var outSince: Long? = null
+        var finalCollected = false
+        var froze = false
+        val settle = TransferInResume.Settle(windowMs = 100_000, now = clock::now) // F = 100 s, the cap 195 s
+        launch {
+            delay(60_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+        }
+        val round: suspend () -> Unit = {
+            if (finalCollected && !froze) {
+                froze = true
+                outSince = clock.now() // the collector's request goes out, at the end of the final send
+                delay(1_500)
+                clock.jumpedMs += 30_000 // frozen: wakes past the cap, before s + V
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (clock.now() >= 195_000) finalCollected = true
+            val s = outSince
+            if (s != null && clock.now() >= s + 60_000) isPaired = true else delay(w.coerceAtMost(2_000))
+        }
+        val age: () -> Long? = { outSince?.let { clock.now() - it } }
+        assertTrue(
+            TransferInResume.atDeadline(
+                { isPaired }, collect, { drops++ }, settle = settle, awaitRound = round, cuts = { cutCount }, collectorAge = age,
+            ),
+        )
+        assertEquals(0, drops)
+        assertTrue("not before s + V + 5 s: ${clock.now()} vs ${outSince!! + 65_000}", clock.now() >= outSince!! + 65_000)
+    }
+
+    /**
+     * A request sent less than a tick before the freeze (after the last tick's sample) is still the one whose lease the final
+     * collect waits for.
+     */
+    @Test
+    fun aRequestSentJustBeforeTheFreezeIsTheOneTheFinalCollectWaitsFor() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        var outSince: Long? = null
+        val settle = TransferInResume.Settle(windowMs = 100_000, now = clock::now)
+        launch {
+            delay(60_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+            delay(30_500)
+            outSince = clock.now() // between two ticks: the last sample (at 190 s) did not see it
+            delay(100)
+            clock.jumpedMs += 30_000
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            val s = outSince
+            if (s != null && clock.now() >= s + 60_000) isPaired = true else delay(w.coerceAtMost(2_000))
+        }
+        val age: () -> Long? = { outSince?.let { clock.now() - it } }
+        assertTrue(
+            TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, cuts = { cutCount }, collectorAge = age),
+        )
+        assertEquals(0, drops)
+    }
+
+    /**
      * Cuts at 60 s and 110 s (F + 20 s, F = 90 s): the second leases until 170 s, past F + V (150 s) but before the cap
      * F + V + 35 s (185 s). It is gathered; a cap of F + V would have dropped the transfer first.
      */

@@ -175,7 +175,13 @@ internal object TransferInResume {
      * **Waking at or past the cap.** A request sent at s leases until s + V. After a freeze that wakes at or past the cap,
      * the final `wait=0` collect goes at `max(now, s + V + 5 s)`, s being the send time of the latest request that was out
      * when the freeze began ([collectorAge] for the collector's, ours too), or at once when none was; then the drop (not
-     * when paired, not when the end moved past now: it cannot pass the cap). At most cap + V + 5 s in all.
+     * when paired, not when the end moved past now: it cannot pass the cap). A freeze inside the final send itself that
+     * wakes at or past the cap earns one more final collect the same way. The bound is not a fixed figure: s is the send
+     * time of a request out when a freeze began, and a step or the final send can still be sending after the cap (a round
+     * wait is up to 55 s, a request of ours up to wait + 30 s, a pause up to 8 s): the last step ends within 173 s of the
+     * cap, the final send within 140 s more, and a freeze beginning then waits until s + V + 5 s and sends once more
+     * (140 s): at most about cap + 313 s + V + 5 s + 140 s for one undisturbed sequence (a clamp would risk dropping with
+     * the lease alive, so there is none); a further real freeze starts another.
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
@@ -209,10 +215,13 @@ internal object TransferInResume {
                         // The window's end: one final wait=0 collect (after a freeze past the cap, not before the lease of the
                         // request that was out has run out). A cut or a freeze during it extends the end (left() > 0 again)
                         // and the loop goes on, instead of dropping with a message that may be leased.
+                        out.startFinal()
                         out.awaitFinalNotBefore()
                         out.send(0L)
                         out.look()
-                        if (out.left() <= 0) break
+                        // A freeze inside the final send that woke at or past the cap needs one more final collect, after
+                        // the lease of the request that was out: the end cannot move, so it is a flag.
+                        if (out.left() <= 0 && !out.finalAgain()) break
                     }
                 }
             } finally {
@@ -248,6 +257,9 @@ internal object TransferInResume {
 
         /** After a freeze past the cap: the final collect goes not before this (window clock). */
         @Volatile private var finalNotBefore = 0L
+
+        /** A freeze that woke at or past the cap was seen since the final send began: one more final collect is due. */
+        @Volatile private var finalAgain = false
         private var failures = 0
         private var seenCuts = cuts()
 
@@ -259,6 +271,13 @@ internal object TransferInResume {
             delay(ms)
             look()
         }
+
+        /** A final send begins: a freeze seen before it is the one it already waits for; only a new one asks for another. */
+        fun startFinal() {
+            finalAgain = false
+        }
+
+        fun finalAgain(): Boolean = finalAgain
 
         /** After a freeze past the cap: waits until the lease of the request that was out has run out. */
         suspend fun awaitFinalNotBefore() {
@@ -292,13 +311,21 @@ internal object TransferInResume {
             val n = settle.now()
             val gap = n - lastTick
             val before = outSince
+            val froze = lastTick + settle.heartbeatMs
             lastTick = n
+            val theirs = collectorAge()?.let { n - it }
+            val latest = listOfNotNull(theirs, ourOutSince).maxOrNull()
             if (gap > settle.freezeMarginMs) {
                 mayHoldLease()
-                if (n >= cap) finalNotBefore = before?.let { maxOf(n, it + settle.visibilityMs + settle.handlingMs) } ?: n
+                if (n >= cap) {
+                    // s: the latest request out when the freeze began: the last sample, or one sent since (not after the
+                    // freeze could have begun, a tick later at the latest).
+                    val s = listOfNotNull(before, latest?.takeIf { it <= froze }).maxOrNull()
+                    finalNotBefore = s?.let { maxOf(n, it + settle.visibilityMs + settle.handlingMs) } ?: n
+                    finalAgain = true
+                }
             }
-            val theirs = collectorAge()?.let { n - it }
-            outSince = listOfNotNull(theirs, ourOutSince).maxOrNull()
+            outSince = latest
         }
 
         /** Looks for a freeze and for a cut collector request (it was stopped or restarted with a request out). */
