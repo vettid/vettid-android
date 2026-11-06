@@ -58,6 +58,12 @@ data class FeedNames(
     val approvals: Map<String, Approval> = emptyMap(),
     /** Vote titles from the Votes list in memory, by [VoteTitles.key] (cleaned, one line); the second line of a vote item. */
     val votes: Map<String, String> = emptyMap(),
+    /**
+     * The votes of the list in memory whose check is `gave_up`, by [VoteTitles.key]: their `vote.result` item is the give-up
+     * one (VAULT-MESSAGING 0.86.4 §10.19.6 step 4; the item itself carries no check state). A vote not in the list reads as
+     * a result.
+     */
+    val votesGaveUp: Set<String> = emptySet(),
     /** The devices and agents of `device.list` (memory), by id: their own, self-asserted names (cleaned, not yet isolated). */
     val devices: Map<String, String> = emptyMap(),
     /** The name the pairing this phone holds gave itself (`device.pair.pending`, AA2); null when none is held. */
@@ -66,6 +72,11 @@ data class FeedNames(
     val pairingPendingId: String? = null,
 ) {
     companion object {
+        /** [votesGaveUp] from the Votes list in memory: the keys of the votes whose check is `gave_up`. */
+        fun votesGaveUp(list: List<com.vettid.core.data.votes.VoteSummary>): Set<String> =
+            list.filter { it.check?.state == com.vettid.core.data.votes.CheckState.GAVE_UP }
+                .mapTo(HashSet()) { VoteTitles.key(it.connectionId, it.proposalId) }
+
         /** Names for [devices]: the list's own names; this phone's entry too; an empty name is left out. */
         fun deviceNames(list: List<com.vettid.core.data.devices.DeviceInfo>): Map<String, String> =
             list.filter { it.name.isNotEmpty() }.associate { it.id to it.name }
@@ -388,7 +399,8 @@ object FeedKinds {
             "recovery.generation_closed" -> FeedText(R.string.data_feed_recovery_rollback)
             "vote.open" -> FeedText(R.string.data_feed_vote_open)
             "vote.closing" -> FeedText(R.string.data_feed_vote_closing)
-            "vote.result" -> FeedText(R.string.data_feed_vote_result)
+            "vote.result" ->
+                FeedText(if (voteGaveUp(item, names)) R.string.data_feed_vote_result_gave_up else R.string.data_feed_vote_result)
             "vote.problem" -> FeedText(R.string.data_feed_vote_problem)
             "identity.rotation_failed" -> FeedText(R.string.data_feed_rotation_failed)
             "identity.rotate_conflict" -> FeedText(R.string.data_feed_rotate_conflict, listOf(who))
@@ -471,7 +483,9 @@ object FeedKinds {
     }
 
     /** The detail sheet's own line under the title (AA6): what an agent's use of a secret did, as History says it; null for other kinds. */
-    fun sheetDetail(item: FeedItem): FeedText? = when (item.kind) {
+    fun sheetDetail(item: FeedItem, names: FeedNames = FeedNames()): FeedText? = when (item.kind) {
+        // (0.83.6) The give-up item asks nothing of the member (owner decision a, 2026-11-06, thread 01M6RH58PE19ZBEHX3JK5ZW06A).
+        "vote.result" -> if (voteGaveUp(item, names)) FeedText(R.string.data_feed_vote_result_gave_up_detail) else null
         "leash.item.run" -> FeedText(R.string.data_feed_leash_item_run_detail)
         "leash.item.proxy" -> FeedText(R.string.data_feed_leash_item_proxy_detail)
         "leash.item.read" -> FeedText(R.string.data_feed_leash_item_read_detail)
@@ -497,6 +511,10 @@ object FeedKinds {
     }
 
     private val VOTE_NAMED = setOf("vote.open", "vote.closing", "vote.result")
+
+    /** A `vote.result` item whose vote the list in memory has with its check `gave_up` (§10.19.6 step 4). */
+    private fun voteGaveUp(item: FeedItem, names: FeedNames): Boolean =
+        item.kind == "vote.result" && VoteTitles.key(item.connectionId, item.ref) in names.votesGaveUp
 
     /**
      * A vote item's second line (ANDROID-PLAN 0.1.102 "Votes"): "<service>: <proposal title>", the title from the Votes list in

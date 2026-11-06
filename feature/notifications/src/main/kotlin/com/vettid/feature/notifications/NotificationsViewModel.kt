@@ -157,6 +157,7 @@ class NotificationsViewModel @Inject constructor(
                         v.mapNotNull { x ->
                             AccountNames.isolateOrNull(x.title)?.let { t -> VoteTitles.key(x.connectionId, x.proposalId) to t }
                         }.toMap(),
+                        votesGaveUp = FeedNames.votesGaveUp(v),
                     )
                 },
                 devices.devices,

@@ -48,6 +48,7 @@ class VaultNotifySource(
         votes = vault.votes.votes.value.mapNotNull { v ->
             AccountNames.isolateOrNull(v.title)?.let { VoteTitles.key(v.connectionId, v.proposalId) to it }
         }.toMap(),
+        votesGaveUp = FeedNames.votesGaveUp(vault.votes.votes.value),
         devices = FeedNames.deviceNames(vault.devices.devices.value),
         pairingName = FeedNames.pairingName(vault.pairing.state.value),
         pairingPendingId = FeedNames.pairingPendingId(vault.pairing.state.value),

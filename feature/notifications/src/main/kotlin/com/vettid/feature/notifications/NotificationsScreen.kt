@@ -662,7 +662,7 @@ fun DetailSheetContent(item: FeedItem, names: FeedNames, gone: Boolean, onOpenIt
             Spacer(Modifier.height(Spacing.xs))
             Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_second_line"))
         }
-        FeedKinds.sheetDetail(item)?.let { line ->
+        FeedKinds.sheetDetail(item, names)?.let { line ->
             Spacer(Modifier.height(Spacing.xs))
             Text(line.text(), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("feed_sheet_detail"))
         }
