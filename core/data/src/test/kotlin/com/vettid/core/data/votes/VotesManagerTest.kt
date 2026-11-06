@@ -2380,4 +2380,69 @@ class VotesManagerTest {
         clock = day0.plus(Duration.ofDays(10))
         assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
     }
+
+    // Item 4: the edges of the cap.
+
+    /** A store holding one record: first re-check at [first], the last rows download at [rows], the last attempt at [at]. */
+    private fun storeWith(first: Instant, rows: Instant?, at: Instant) = MemoryResultsAttemptStore().apply {
+        save(listOf(ResultsAttempt("$CONN/$PID", at.toEpochMilli(), firstRecheckMs = first.toEpochMilli(), lastRowsMs = rows?.toEpochMilli())))
+    }
+
+    private suspend fun TestScope.dueOnMobile(store: ResultsAttemptStore, net: Boolean? = false): Pair<ResultsOutcome, Site> {
+        val (ops, site) = wifiScenario()
+        val m = manager(ops, site, attempts = store, unmetered = { net })
+        m.refresh()
+        return m.checkDue(CONN, PID) to site
+    }
+
+    @Test
+    fun theSevenDayWindowAndTheWeeklyCapAtTheirBoundaries() = runTest {
+        val day0 = clock
+        val ms = Duration.ofMillis(1)
+        val week = Duration.ofDays(7)
+        // The window: last download day 3; just before day 7 the daily rule alone (downloads), at day 7 the cap (deferred).
+        clock = day0.plus(week).minus(ms)
+        assertTrue(dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(3)))).first is ResultsOutcome.Submitted)
+        clock = day0.plus(week)
+        assertEquals(ResultsOutcome.Deferred, dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(3)))).first)
+        // The cap: last download day 3; just before day 10 deferred, at day 10 it downloads.
+        clock = day0.plus(Duration.ofDays(10)).minus(ms)
+        assertEquals(ResultsOutcome.Deferred, dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(8)))).first)
+        clock = day0.plus(Duration.ofDays(10))
+        assertTrue(dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(8)))).first is ResultsOutcome.Submitted)
+    }
+
+    @Test
+    fun noRowsDownloadYetAfterTheSevenDaysDownloads() = runTest {
+        val day0 = clock
+        clock = day0.plus(Duration.ofDays(8))
+        val (out, site) = dueOnMobile(storeWith(day0, rows = null, at = day0.plus(Duration.ofDays(6))))
+        assertTrue(out is ResultsOutcome.Submitted)
+        assertEquals(1, site.rowsReads())
+    }
+
+    @Test
+    fun aDeferredAttemptKeepsTheLastHashesAndReadsNothingMoreThatDay() = runTest {
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        clock = day0.plus(Duration.ofDays(3))
+        m.checkDue(CONN, PID)
+        val before = store.load().single()
+        // Day 8: a changed bundle on the site, the download deferred: the record keeps the last hashes (so the change is
+        // still seen as one when the rows can be had), only its time moves.
+        site.answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"z"}""")
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        val after = store.load().single()
+        assertEquals(before.copy(atMs = clock.toEpochMilli()), after)
+        // The same day: no site read at all.
+        val reads = site.reads.size
+        clock = clock.plus(Duration.ofHours(5))
+        assertEquals(ResultsOutcome.Unchanged, m.checkDue(CONN, PID))
+        assertEquals(reads, site.reads.size)
+    }
 }
