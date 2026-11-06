@@ -2355,4 +2355,29 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
         assertEquals(4, site.rowsReads())
     }
+
+    @Test
+    fun theSevenDaysStartAgainWhenTheCheckIsPendingAgain() = runTest {
+        // Item 3: gave_up (first re-check day 0), pending on day 5, gave_up again on day 6: the 7 days run from day 6, so
+        // day 10 on mobile (last download day 6) still downloads.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        assertEquals(day0.toEpochMilli(), store.load().single().firstRecheckMs)
+        ops.list = listing(closedWithPendingCheck())
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(5))
+        m.checkDue(CONN, PID)
+        assertNull(store.load().single().firstRecheckMs)
+        ops.list = listing(gaveUp())
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(6))
+        m.checkDue(CONN, PID)
+        assertEquals(clock.toEpochMilli(), store.load().single().firstRecheckMs)
+        clock = day0.plus(Duration.ofDays(10))
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+    }
 }

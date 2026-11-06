@@ -814,6 +814,7 @@ class VotesManager(
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
             val trace = Trace()
+            trace.checkState = votesFlow.value.firstOrNull { it.key == key }?.check?.state
             var out: ResultsOutcome? = null
             var cancelled = false
             try {
@@ -860,6 +861,9 @@ class VotesManager(
 
         /** The check was `gave_up` when this attempt ran: it is a re-check (#314 item 1, the 7 days run from the first). */
         var gaveUp = false
+
+        /** The check's state in the list when the attempt began (null when the list does not have the vote; #319 item 3). */
+        var checkState: CheckState? = null
 
         /** rows.json's bytes were received (read, cut at its cap, or cut off partway): the last rows download (#314, #319). */
         var rowsSpent = false
@@ -1227,7 +1231,7 @@ class VotesManager(
         val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
         // A Check again that ended Unchanged (nothing sent) keeps the last attempt's time, so it does not defer the daily
         // re-check (#314 item 3); the daily re-check's own Unchanged is its attempt of the day.
-        val keepTime = !due && (out == ResultsOutcome.Unchanged || out == ResultsOutcome.Deferred)
+        val keepTime = !due && out == ResultsOutcome.Unchanged
         val at = now().toEpochMilli()
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
         val entry = ResultsAttempt(
@@ -1245,12 +1249,17 @@ class VotesManager(
 
     /** The record after an attempt, from the [last] one (#314 items 1 and 3). */
     private fun nextAttempt(last: ResultsAttempt?, entry: ResultsAttempt, trace: Trace, keepTime: Boolean, at: Long): ResultsAttempt {
-        val first = last?.firstRecheckMs ?: at.takeIf { trace.gaveUp }
+        // The 7 days run from the first re-check of this give-up: a check back in `pending` starts them again (#319 item 3).
+        val first = when (trace.checkState) {
+            CheckState.GAVE_UP -> last?.firstRecheckMs ?: at
+            CheckState.PENDING -> null
+            else -> last?.firstRecheckMs
+        }
         val rowsAt = if (trace.rowsSpent) at else last?.lastRowsMs
         return when {
-            // A deferred download keeps what the last attempt knew (the skip's facts and hashes); only its time moves, and not
-            // for the member's Check again.
-            trace.deferred && last != null -> last.copy(atMs = if (keepTime) last.atMs else at)
+            // A deferred download (the daily re-check only: a Check again is never deferred) keeps what the last attempt
+            // knew (the skip's facts and hashes); only its time moves.
+            trace.deferred && last != null -> last.copy(atMs = at)
             keepTime && last != null -> entry.copy(atMs = last.atMs, firstRecheckMs = first, lastRowsMs = rowsAt)
             else -> entry.copy(firstRecheckMs = first, lastRowsMs = rowsAt)
         }
