@@ -176,9 +176,13 @@ class VotesManagerTest {
         /** Runs before the read's bytes are reported (a wipe while the download is still arriving). */
         var beforeReceived: (() -> Unit)? = null
 
+        /** The chunks a read reports its bytes in (a download arriving in pieces). */
+        var chunks = 1
+
         override suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
             val answer = get(path, maxBytes)
             beforeReceived?.invoke()
+            repeat(chunks - 1) { received(1) }
             partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
             return answer
         }
@@ -2618,5 +2622,28 @@ class VotesManagerTest {
         m.refresh()
         assertEquals("held: the cut download counted", ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
         assertEquals(1, site.rowsReads())
+    }
+
+    @Test
+    fun theRechecksStampIsWrittenOncePerDownload() = runTest {
+        // Fable (cosmetic): a download in many chunks writes its stamp once, not at every chunk.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        var saves = 0
+        val stamps = object : RecheckStampStore {
+            private val inner = MemoryRecheckStampStore()
+
+            override fun load() = inner.load()
+
+            override fun save(stamps: List<RecheckStamp>) {
+                saves++
+                inner.save(stamps)
+            }
+        }
+        site.chunks = 50
+        val m = manager(ops, site, unmetered = { false }, stamps = stamps)
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(1, saves)
     }
 }
