@@ -26,7 +26,7 @@ class Ed25519StrictTest {
     @Test
     fun everySharedVectorHasItsVerdict() {
         val cases = v.o.array("ed25519").map { it.asObject() }
-        assertEquals(12, cases.size)
+        assertEquals(24, cases.size)
         for (c in cases) {
             val got = Ed25519.verifyStrict(Bytes.unhex(c.string("key")), label, Bytes.unhex(c.string("msg")), Bytes.unhex(c.string("sig")))
             assertEquals(c.string("case"), c.bool("valid"), got)
