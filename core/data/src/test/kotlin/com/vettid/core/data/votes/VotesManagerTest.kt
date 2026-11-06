@@ -179,6 +179,9 @@ class VotesManagerTest {
         /** Runs after the read's bytes are reported (a lock once some bytes were spent). */
         var afterReceived: (() -> Unit)? = null
 
+        /** The read is cancelled right after its bytes are reported: it never returns (a cut mid-read). */
+        var cancelAfterReceived = false
+
         /** The chunks a read reports its bytes in (a download arriving in pieces). */
         var chunks = 1
 
@@ -188,6 +191,7 @@ class VotesManagerTest {
             repeat(chunks - 1) { received(1) }
             partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
             afterReceived?.invoke()
+            if (cancelAfterReceived) throw kotlinx.coroutines.CancellationException("cut off mid-read")
             return answer
         }
     }
@@ -2731,7 +2735,13 @@ class VotesManagerTest {
         ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
         fun resultsReads() = site.reads.count { it == "p/$PID/results.json" }
         sealed.readsUnavailable = true
+        org.robolectric.shadows.ShadowLog.clear()
         assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
+        // Logged once, by class names only (#324: how the phone reports it).
+        assertEquals(
+            listOf("vote-attempts not read: java.security.ProviderException; unavailable"),
+            org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg },
+        )
         // A KeyStoreException at the key (wrapped by the file store with the decrypt failures) is "unavailable" too.
         val keyStoreDown = com.vettid.core.data.KeystoreFileStore(f, "vote-attempts") { throw java.security.KeyStoreException("busy") }
         assertTrue(runCatching { KeystoreResultsAttemptStore(keyStoreDown).load() }.exceptionOrNull() is StoreUnavailable)
@@ -2752,10 +2762,17 @@ class VotesManagerTest {
 
     @Test
     fun aCorruptRecheckFileCountsAsEmptyAndTheNextStampReplacesIt() = runTest {
-        for (blob in corruptBlobs()) {
+        val causes = listOf("com.vettid.core.data.KeystoreFileStore\$Malformed", "javax.crypto.AEADBadTagException")
+        for ((blob, cause) in corruptBlobs().zip(causes)) {
             val f = java.io.File(dir.newFolder(), "vote-rechecks.bin").apply { writeBytes(blob) }
             val store = KeystoreRecheckStampStore(SealedFile(f, "vote-rechecks").store)
+            org.robolectric.shadows.ShadowLog.clear()
             assertTrue(store.load().isEmpty())
+            // Logged once, by class names down to the root cause (#324: whether KeyMint reports a tag failure this way).
+            assertEquals(
+                listOf("vote-rechecks not read: com.vettid.core.keystore.KeystoreException <- $cause; corrupt"),
+                org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg },
+            )
             val (ops, site) = observedScenario(observed())
             ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
             val m = manager(ops, site, unmetered = { false }, stamps = store)
@@ -2815,8 +2832,8 @@ class VotesManagerTest {
 
     @Test
     fun aDailyReCheckCutOffAfterRowsBytesStillCountsTowardTheWeeklyCap() = runTest {
-        // #322 (shared with iOS #224): day 8 on mobile, the last download day 0; the daily re-check is cut off by a lock after
-        // part of rows.json arrived. The attempt is recorded (rows spent, nothing answered), so day 9 is deferred.
+        // #322 (shared with iOS #224): day 8 on mobile, the last download day 0; the daily re-check is cancelled mid-read after
+        // part of rows.json arrived (the read never returns). The attempt is recorded (rows spent, nothing answered), so day 9 is deferred.
         val (ops, site) = wifiScenario()
         val store = MemoryResultsAttemptStore()
         val m = manager(ops, site, attempts = store, unmetered = { false })
@@ -2826,16 +2843,16 @@ class VotesManagerTest {
         val rows = site.answers.getValue("p/$PID/rows.json")
         site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
         site.partial["p/$PID/rows.json"] = 1_000_000
-        site.afterReceived = { m.clear() }
+        site.cancelAfterReceived = true
         clock = day0.plus(Duration.ofDays(8))
-        assertEquals(ResultsOutcome.Voided, m.checkDue(CONN, PID))
+        assertTrue(runCatching { m.checkDue(CONN, PID) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
         val kept = store.load().single()
         assertEquals(clock.toEpochMilli(), kept.lastRowsMs)
         assertEquals(clock.toEpochMilli(), kept.atMs)
         assertFalse("nothing answered: the next run skips nothing", kept.answered || kept.sentRow || kept.rowsFetched)
         site.answers["p/$PID/rows.json"] = rows
         site.partial.clear()
-        site.afterReceived = null
+        site.cancelAfterReceived = false
         m.refresh()
         clock = day0.plus(Duration.ofDays(9))
         assertEquals("the partial download counted", ResultsOutcome.Deferred, m.checkDue(CONN, PID))
@@ -2849,9 +2866,9 @@ class VotesManagerTest {
         m2.checkDue(CONN, PID)
         val before = store2.load()
         site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
-        site2.afterReceived = { m2.clear() }
+        site2.cancelAfterReceived = true
         clock = day0.plus(Duration.ofDays(8))
-        assertEquals(ResultsOutcome.Voided, m2.checkDue(CONN, PID))
+        assertTrue(runCatching { m2.checkDue(CONN, PID) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
         assertEquals(before, store2.load())
     }
 }

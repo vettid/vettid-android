@@ -482,7 +482,11 @@ The A2 exit test:
   (`KeystoreFileStore.isCorrupt`: malformed, or an AES-GCM tag failure; or JSON that does not parse) loads as empty and the
   next write replaces it; any other failure (a `KeyStoreException`, a `ProviderException`, a key not usable now, the file
   not read) throws `StoreUnavailable`: `VotesManager` then neither caches it nor writes over it, and the next access
-  reads the file again. Meanwhile it **waits**, as iOS #222 does: the automatic daily re-check of a `gave_up` record is not
+  reads the file again. Each failed read is logged once (`Log.w`, tag `VotesManager`: the file's name, the class names of
+  the exception and its causes down to the root, and corrupt or unavailable; no message text, bytes or key; #324). The
+  device check of how KeyMint reports a damaged file is `VotesKeystoreProbeTest` (`core/data/src/androidTest`, real
+  AndroidKeyStore, test alias `vettid.test.votes.v1`, logs under `VotesKeystoreProbe`): `ANDROID_SERIAL=<serial>
+  ./gradlew :core:data:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.vettid.core.data.votes.VotesKeystoreProbeTest`. Meanwhile it **waits**, as iOS #222 does: the automatic daily re-check of a `gave_up` record is not
   due (`dailyDue`: no fetch, no submit), and the recheck on open downloads no rows.json on a metered or unknown network
   (`recheckRowsWait`: the not-rechecked line), only on Wi-Fi; a Check again runs as always, reading the store as empty,
   and its attempt and stamp are dropped. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,

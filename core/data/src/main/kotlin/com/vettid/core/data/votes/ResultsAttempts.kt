@@ -89,7 +89,8 @@ class MemoryResultsAttemptStore : ResultsAttemptStore {
  * app). A corrupt or undecryptable file reads as empty; one the Keystore cannot open now throws [StoreUnavailable] ([readKept], #322).
  */
 class KeystoreResultsAttemptStore(private val file: DeviceStateStore) : ResultsAttemptStore {
-    override fun load(): List<ResultsAttempt> = readKept(file) { json.decodeFromString(ListSerializer(ResultsAttempt.serializer()), it) }
+    override fun load(): List<ResultsAttempt> =
+        readKept(file, "vote-attempts") { json.decodeFromString(ListSerializer(ResultsAttempt.serializer()), it) }
 
     override fun save(attempts: List<ResultsAttempt>) {
         if (attempts.isEmpty()) {
@@ -136,7 +137,8 @@ class MemoryRecheckStampStore : RecheckStampStore {
 
 /** In a Keystore-encrypted file in the no-backup directory (erased with it at a wipe), read as [KeystoreResultsAttemptStore]. */
 class KeystoreRecheckStampStore(private val file: DeviceStateStore) : RecheckStampStore {
-    override fun load(): List<RecheckStamp> = readKept(file) { json.decodeFromString(ListSerializer(RecheckStamp.serializer()), it) }
+    override fun load(): List<RecheckStamp> =
+        readKept(file, "vote-rechecks") { json.decodeFromString(ListSerializer(RecheckStamp.serializer()), it) }
 
     override fun save(stamps: List<RecheckStamp>) {
         if (stamps.isEmpty()) {
@@ -159,18 +161,34 @@ class StoreUnavailable(cause: Throwable) : Exception("kept store not readable no
 
 /**
  * [file]'s list, by [decode]: empty for no file, or one that is corrupt or undecryptable ([KeystoreFileStore.isCorrupt], or
- * not the list's JSON), which the next save replaces; [StoreUnavailable] for any other failure to read it.
+ * not the list's JSON), which the next save replaces; [StoreUnavailable] for any other failure to read it. A failed read is
+ * logged once ([logNotRead]).
  */
-internal fun <T> readKept(file: DeviceStateStore, decode: (String) -> List<T>): List<T> {
+internal fun <T> readKept(file: DeviceStateStore, name: String, decode: (String) -> List<T>): List<T> {
     val bytes = try {
         file.load()
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-        if (KeystoreFileStore.isCorrupt(e)) return emptyList()
+        val corrupt = KeystoreFileStore.isCorrupt(e)
+        logNotRead(name, e, corrupt)
+        if (corrupt) return emptyList()
         throw StoreUnavailable(e)
     }
     return try {
         bytes?.let { decode(it.decodeToString()) }.orEmpty()
-    } catch (_: IllegalArgumentException) {
+    } catch (e: IllegalArgumentException) {
+        logNotRead(name, e, corrupt = true)
         emptyList() // kotlinx.serialization's SerializationException is one: the key worked, the data does not
     }
 }
+
+/**
+ * A kept file not read (#322; for the device check of how KeyMint reports a damaged file): its name, the class names of
+ * the failure and its causes down to the root, and how it was classed. No message text, no bytes, nothing of a key.
+ */
+private fun logNotRead(name: String, e: Throwable, corrupt: Boolean) {
+    val chain = generateSequence(e) { it.cause?.takeIf { c -> c !== it } }.take(MAX_CAUSES).joinToString(" <- ") { it.javaClass.name }
+    android.util.Log.w("VotesManager", "$name not read: $chain; ${if (corrupt) "corrupt" else "unavailable"}")
+}
+
+/** Causes listed at most (a cycle or a very deep chain stops there). */
+private const val MAX_CAUSES = 8
