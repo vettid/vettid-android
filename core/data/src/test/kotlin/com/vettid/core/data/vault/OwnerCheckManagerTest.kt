@@ -1275,6 +1275,29 @@ class OwnerCheckManagerTest {
         assertFalse("the relay value of a read that spans the clear is dropped", m.relayRefused.value)
     }
 
+    /**
+     * Lead's review of #301: the `identity.rotation_failed` ids seen are forgotten at a lock, as on iOS, so the vault's
+     * update of the same item at a later unlock reads the status again.
+     */
+    @Test
+    fun theSameRotationFailedItemAfterALockReadsTheStatusAgain() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        val item = FeedItem("r1", 1, "identity.rotation_failed", "2026-11-05T10:00:00Z", "active", "high", ref = "recovery")
+        val r0 = ops.reads
+        m.onFeed(listOf(item))
+        settle { ops.reads > r0 }
+        assertEquals(r0 + 1, ops.reads)
+        m.onLockedHere()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        val r1 = ops.reads
+        val launched = coroutineContext.job.children.count()
+        m.onFeed(listOf(item.copy(seq = 2)))
+        assertEquals("the same item after a lock is new again", launched + 1, coroutineContext.job.children.count())
+        settle { ops.reads > r1 }
+        assertEquals(r1 + 1, ops.reads)
+    }
+
     /** The re-read is cancelled by a lock. */
     @Test
     fun theRelayRereadIsCancelledAtLock() = runTest {

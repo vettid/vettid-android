@@ -115,14 +115,21 @@ class OwnerCheckManager(
      */
     private val relayEpoch = java.util.concurrent.atomic.AtomicInteger()
 
-    /** Feed items of `identity.rotation_failed` already acted on (memory only). */
+    /**
+     * Feed items of `identity.rotation_failed` already acted on (memory only); forgotten at every lock, sign-out and wipe
+     * ([clearRelay]), as vettid-ios #221: a later unlock's update of the same item (the vault audits it at most once per
+     * unlock, §3.4) reads the status again.
+     */
     private val rotationFailedSeen = HashSet<String>()
 
     /** The one re-read after a status found the relay refused, and whether it was made since the last lock; cancelled at lock. */
     private var relayRecheck: kotlinx.coroutines.Job? = null
     private var relayRechecked = false
 
-    /** Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled. */
+    /**
+     * Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled,
+     * and the `identity.rotation_failed` items seen are forgotten.
+     */
     private fun clearRelay() {
         relayEpoch.incrementAndGet()
         synchronized(relayLock) {
@@ -131,6 +138,7 @@ class OwnerCheckManager(
             relayRecheck = null
             relayRechecked = false
         }
+        synchronized(rotationFailedSeen) { rotationFailedSeen.clear() }
     }
 
     /**
@@ -736,7 +744,6 @@ class OwnerCheckManager(
         keepCount = false
         view.value = null
         clearRelay()
-        synchronized(rotationFailedSeen) { rotationFailedSeen.clear() }
         markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
