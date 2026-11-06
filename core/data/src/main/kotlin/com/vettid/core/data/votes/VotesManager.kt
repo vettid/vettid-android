@@ -1115,7 +1115,10 @@ class VotesManager(
     private suspend fun recordAttempt(key: String, epoch: Int, trace: Trace, out: ResultsOutcome?) {
         val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
-        val entry = ResultsAttempt(key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide)
+        val entry = ResultsAttempt(
+            key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide,
+            answered = out is ResultsOutcome.Submitted,
+        )
         withAttempts(epoch) { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
     }
 

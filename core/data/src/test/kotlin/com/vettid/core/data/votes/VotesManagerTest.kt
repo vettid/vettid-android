@@ -1880,4 +1880,27 @@ class VotesManagerTest {
         m.checkResults(CONN, PID)
         assertTrue(store.load().isEmpty())
     }
+
+    @Test
+    fun anAttemptThatSentNothingIsNotSkippedOnceVoteRowsAppears() = runTest {
+        // Review 1, M2: without `vote_rows` a row the app cannot use sends nothing; after the vault's update the next
+        // re-check must send `rows_unavailable`, not end as Unchanged.
+        val o = observed()
+        val (ops, site) = observedScenario(o)
+        ops.list = listing(gaveUp())
+        site.answers["p/$PID/rows.json"] = ok(o.rowsJson.replace(Base64s.encodeStd(o.tags[2]), Base64s.encodeStd(tagOf(9))))
+        val store = MemoryResultsAttemptStore()
+        val before = manager(ops, site, attempts = store)
+        before.refresh()
+        assertEquals(ResultsOutcome.Problem, before.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+        assertFalse(store.load().single().answered)
+        // The vault now lists `vote_rows` (a new release; a new process): same results.json.
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"rows_unavailable"}}""")
+        val after = manager(ops, site, attempts = store, voteRows = true)
+        after.refresh()
+        assertTrue(after.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertRowsUnavailable(ops.submitted.single())
+        assertTrue(store.load().single().answered)
+    }
 }

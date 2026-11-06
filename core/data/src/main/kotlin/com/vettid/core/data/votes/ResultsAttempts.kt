@@ -25,12 +25,17 @@ data class ResultsAttempt(
     val rowsFetched: Boolean = false,
     /** The vault left the check for a reason of its own side (`trust_root`, `service_list`, `clock`). */
     val vaultSide: Boolean = false,
+    /**
+     * The attempt was submitted and the vault answered it (review 1, M2). Only then does "the same results get the same
+     * answer" hold: an attempt that sent nothing (no `vote_rows` then, a row the app could not use) is never skipped.
+     */
+    val answered: Boolean = false,
 ) {
     /**
      * Whether a `gave_up` re-check that read results.json of [sha256] skips rows.json and sends nothing (0.84.1 §10.19.6): the
-     * same results as this attempt, which had rows.json and did not end on the vault's side.
+     * same results as this attempt, which had rows.json, was answered by the vault and did not end on the vault's side.
      */
-    fun skipsRows(sha256: String?): Boolean = sha256 != null && sha256 == resultsSha256 && rowsFetched && !vaultSide
+    fun skipsRows(sha256: String?): Boolean = answered && sha256 != null && sha256 == resultsSha256 && rowsFetched && !vaultSide
 
     override fun toString() = "ResultsAttempt"
 }
