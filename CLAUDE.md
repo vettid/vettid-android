@@ -464,7 +464,9 @@ The A2 exit test:
   an attempt that failed (no answer) counts as rows not had. The entry goes when the check is final or the vote leaves
   a whole list. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
-  the observer's check alone, nothing submitted or stored; its verdict sets `VoteHint.verdict`, and a site that cannot be
+  the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
+  read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
+  verdict sets `VoteHint.verdict`, and a site that cannot be
   reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). **The give-up feed item**
   (owner decision a, 2026-11-06, thread 01M6RH58PE19ZBEHX3JK5ZW06A): a `vote.result` item carries no check state, so the app
   looks the vote up in the list in memory (`FeedNames.votesGaveUp`, from `vote.list`'s `gave_up` checks): then its title is

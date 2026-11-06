@@ -1793,4 +1793,42 @@ class VotesManagerTest {
         assertFalse(VoteRules.showNumbers(s, h.verdict, h.observerFailed))
         assertTrue(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(s, notRechecked = h.notRechecked))
     }
+
+    @Test
+    fun aRecheckOnOpenIsTimeBoxedLikeTheCheck() = runTest {
+        // Lead review M1 on the recheck: an observer that runs out of time is a failed verdict; nothing is submitted.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        var observeSteps = 0
+        val m = manager(ops, site, observeLimit = Duration.ofMillis(100)) {
+            if (it.endsWith(":observe") && ++observeSteps == 2) Thread.sleep(600)
+        }
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = false), m.recheck(CONN, PID))
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue("$CONN/$PID").verdict)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun aLockCancelsARecheckInFlightWhichIsVoided() = runTest {
+        // Lead review L2 on the recheck: it runs as a check in flight that clear() cancels; nothing it found is written.
+        val (ops, site) = observedScenario(observed(n = 1024))
+        ops.list = listing(verifiedVote())
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var m: VotesManager? = null
+        var lockedAt = -1
+        m = manager(ops, site) {
+            steps += it.substringAfterLast(':')
+            if (it.endsWith(":observe") && lockedAt < 0) {
+                lockedAt = steps.size
+                m!!.clear()
+            }
+        }
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.recheck(CONN, PID))
+        assertEquals("$steps", lockedAt, steps.size)
+        m.refresh()
+        assertNull(m.hints.value["$CONN/$PID"])
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+    }
 }

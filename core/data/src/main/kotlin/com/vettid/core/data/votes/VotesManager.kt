@@ -1135,6 +1135,7 @@ class VotesManager(
             try {
                 val published = VoteRows.read(doc, rows, tag) { step("read") }
                 published.ownRow(tag) { step("row") }
+                step("observe")
                 !observerFailsInTime(published, proposalId, detail) { step("observe") }
             } catch (_: ResultsProblem) {
                 false
