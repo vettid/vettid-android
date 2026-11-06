@@ -12,13 +12,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.lang.management.ManagementFactory
+import java.lang.reflect.Modifier
+import java.util.IdentityHashMap
 
 /**
  * [RowsReader]: rows.json read strictly without keeping its text (review 1, finding 2). The same rows as the strict JSON
  * parser reads, the strictness of VAULT-MESSAGING §5.3 (it need not be JCS), and the memory a capped file costs.
  */
 class RowsReaderTest {
+    private companion object {
+        val JDK = listOf("java.", "javax.", "jdk.", "sun.", "com.sun.")
+    }
+
     private val v = VectorDoc.load("vote.json")
     private val rowsText = v.sub("documents").str("rows")
 
@@ -119,12 +124,60 @@ class RowsReaderTest {
         return sb.append(foot).toString().toByteArray(Charsets.US_ASCII)
     }
 
-    private fun allocatedBy(block: () -> Unit): Long {
-        val mx = ManagementFactory.getThreadMXBean() as com.sun.management.ThreadMXBean
-        val id = Thread.currentThread().id
-        val before = mx.getThreadAllocatedBytes(id)
-        block()
-        return mx.getThreadAllocatedBytes(id) - before
+    /**
+     * The bytes an object graph holds in arrays and strings, walked by reflection from [root] and past [skip]: what the
+     * reader keeps, counted the same on every run (issue #316: heap figures depend on the GC and on the machine). A JDK type
+     * it does not know stops the walk, so that nothing is held where the count cannot see it.
+     */
+    @Suppress("CyclomaticComplexMethod")
+    private fun heldBytes(root: Any, vararg skip: Any): Long {
+        val seen = IdentityHashMap<Any, Unit>()
+        for (s in skip) seen[s] = Unit
+        val stack = ArrayDeque<Any>().apply { add(root) }
+        var total = 0L
+        while (stack.isNotEmpty()) {
+            val o = stack.removeLast()
+            if (seen.put(o, Unit) != null) continue
+            when (o) {
+                is ByteArray -> total += o.size
+                is IntArray -> total += o.size * 4L
+                is LongArray -> total += o.size * 8L
+                is CharArray -> total += o.size * 2L
+                is Array<*> -> o.filterNotNullTo(stack)
+                is CharSequence -> total += o.length
+                is Collection<*> -> o.filterNotNullTo(stack)
+                is Map<*, *> -> {
+                    o.keys.filterNotNullTo(stack)
+                    o.values.filterNotNullTo(stack)
+                }
+                is Number, is Boolean, is Char -> Unit
+                else -> fieldsOf(o, stack)
+            }
+        }
+        return total
+    }
+
+    /** The objects [o]'s own fields refer to, for [heldBytes]: only for the project's classes. */
+    private fun fieldsOf(o: Any, into: MutableCollection<Any>) {
+        val name = o.javaClass.name
+        assertFalse("the walk does not know $name", JDK.any { name.startsWith(it) })
+        var c: Class<*>? = o.javaClass
+        while (c != null && c != Any::class.java) {
+            for (f in c.declaredFields) {
+                if (Modifier.isStatic(f.modifiers) || f.type.isPrimitive) continue
+                f.isAccessible = true
+                f.get(o)?.let { into.add(it) }
+            }
+            c = c.superclass
+        }
+    }
+
+    /** [bytes] read by a reader that is then walked: what the reader holds when done (its input aside), and the table. */
+    private fun readHeld(bytes: ByteArray, n: Int): Triple<RowsTable, Long, Long> {
+        val checkpoint = {}
+        val reader = RowsReader(bytes, n, null, checkpoint)
+        val t = reader.read()
+        return Triple(t, heldBytes(reader, bytes, checkpoint), heldBytes(t))
     }
 
     @Test
@@ -133,19 +186,22 @@ class RowsReaderTest {
         val bytes = padded(n, VoteRows.ROWS_CAP_MAX)
         assertTrue("near the cap: ${bytes.size}", bytes.size > VoteRows.ROWS_CAP_MAX * 9 / 10 && bytes.size <= VoteRows.ROWS_CAP_MAX)
         val plain = padded(n, 0)
-        RowsReader(plain, n) {}.read() // warm up
-        var t: RowsTable? = null
-        val paddedAlloc = allocatedBy { t = RowsReader(bytes, n) {}.read() }
-        val plainAlloc = allocatedBy { RowsReader(plain, n) {}.read() }
-        assertEquals(n, t!!.count)
-        // What stays: about 180 bytes a row (tag, leaf hash, vk, choice, sig, offsets), never the text.
-        assertTrue("retained ${t!!.retainedBytes()}", t!!.retainedBytes() <= n * 200L)
-        // The padding (most of the file) is read without being copied: it costs a small part of its own size, where a
-        // parser that keeps text would copy it several times over.
-        val paddingBytes = bytes.size - plain.size
-        assertTrue("padding cost ${paddedAlloc - plainAlloc} for $paddingBytes", paddedAlloc - plainAlloc < paddingBytes / 10)
+        val (t, readerHeld, tableHeld) = readHeld(bytes, n)
+        val (_, plainReaderHeld, plainTableHeld) = readHeld(plain, n)
+        assertEquals(n, t.count)
+        // What stays: tag, leaf hash, offsets, vk, choice and sig, 179 bytes a row, within the documented 208 (and a
+        // proposal_id of at most 64 bytes); never the text.
+        assertEquals(t.retainedBytes() + "01JBQZ0000000000000000000A".length, tableHeld)
+        assertTrue("retained $tableHeld", tableHeld <= n * 208L + 64)
+        // The padding (most of the file) is not kept, by the table or by the reader's own buffers: they hold exactly
+        // what they hold for the same rows without it.
+        assertEquals(plainTableHeld, tableHeld)
+        assertEquals(plainReaderHeld, readerHeld)
+        // The reader's working set: the per-row arrays (tag, leaf hash, offsets), a data buffer at most twice the kept
+        // ballots or its first 64 KiB, and one string's scratch.
+        assertTrue("reader $readerHeld", readerHeld <= n * (32 + 32 + 16 + 2 * 99L) + (1 shl 16) + 87_380)
         // The padding was not a member the protocol has.
-        assertFalse(t!!.membersExact)
+        assertFalse(t.membersExact)
     }
 
     @Test
