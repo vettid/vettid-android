@@ -475,7 +475,8 @@ The A2 exit test:
   does not touch them. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
   before the fallback to `rows_unavailable` (L3). **Wi-Fi only after a week** (#314 item 1, owner decision a, thread
   01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`; a check back in `pending` starts
-  them again, #319 item 3) the
+  them again, #319 item 3; the `vote.list` summary carries no give-up time, only `check.due_at`, which a `gave_up` check
+  does not have, so a new give-up is seen only through that state, #321 L2) the
   daily rule alone; after them the small fetches (results.json, sig, bundle) stay daily, rows.json is downloaded on an
   unmetered network (`NetworkMeter`: `NET_CAPABILITY_NOT_METERED`; unknown counts as metered; the `unmetered` seam) by
   the daily rule, and on a metered one only when the last rows download (`ResultsAttempt.lastRowsMs`) is at least 7 days
