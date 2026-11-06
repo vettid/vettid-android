@@ -381,10 +381,23 @@ class VaultDevice private constructor(
      */
     val collectLastSendAgeMs: Long? get() = collectLastSendElapsedMs?.let { cfg.elapsedMs() - it }
 
-    private val collectSends = ArrayDeque<Long>()
+    private val collectSends = ArrayDeque<Pair<Long, Long>>()
 
-    /** How long ago each of the collection's latest requests (the last 16) went out, oldest first; kept after they ended. */
-    val collectSendAgesMs: List<Long> get() = synchronized(collectSends) { collectSends.map { cfg.elapsedMs() - it } }
+    private fun noteSend(waitMs: Long) {
+        val at = cfg.elapsedMs()
+        synchronized(collectSends) {
+            collectSends.addLast(at to waitMs)
+            if (collectSends.size > MAX_COLLECT_SENDS) collectSends.removeFirst()
+        }
+    }
+
+    /**
+     * Each of the latest requests this device sent to its mailbox (the last 16, oldest first; the collection's rounds, the
+     * retries inside the client's own retries, and the settlement's collects' retries): how long ago it went out and the
+     * long-poll wait it carried (ms). A long poll's lease starts when the relay returns, up to that wait after the send.
+     */
+    val collectSendsMs: List<Pair<Long, Long>>
+        get() = synchronized(collectSends) { collectSends.map { (cfg.elapsedMs() - it.first) to it.second } }
 
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
@@ -528,17 +541,14 @@ class VaultDevice private constructor(
                     onRequest = { out ->
                         collectRequestSince = if (out) System.nanoTime() else null
                         if (out) {
-                            val at = cfg.elapsedMs()
-                            collectLastSendElapsedMs = at
-                            synchronized(collectSends) {
-                                collectSends.addLast(at)
-                                if (collectSends.size > MAX_COLLECT_SENDS) collectSends.removeFirst()
-                            }
+                            collectLastSendElapsedMs = cfg.elapsedMs()
+                            noteSend(cfg.pollWait.toMillis())
                         }
                         if (!out) roundsEnded.incrementAndGet()
                     },
                     onReached = ::noteReached,
                     onLost = { cuts.incrementAndGet() }, // a request lost to an I/O error may have been handed a message
+                    onRetrySent = { noteSend(cfg.pollWait.toMillis()) },
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -1166,7 +1176,9 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
-        val msgs = own.collect(wait, Int.MAX_VALUE, onLostAttempt = { cuts.incrementAndGet() })
+        val msgs = own.collect(
+            wait, Int.MAX_VALUE, onLostAttempt = { cuts.incrementAndGet() }, onRetrySent = { noteSend(wait.toMillis()) },
+        )
         for (m in msgs) {
             try {
                 handle(m)

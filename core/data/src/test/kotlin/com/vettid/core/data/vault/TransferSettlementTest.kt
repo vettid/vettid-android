@@ -39,7 +39,7 @@ class TransferSettlementTest {
         override var collecting = false
         override var collectorCuts = 0L
         override var collectorLastSendAgeMs: Long? = null
-        override var collectorSendAgesMs: List<Long> = emptyList()
+        override var collectorSendsMs: List<Pair<Long, Long>> = emptyList()
         var visibility: Long? = 60
         var rejected = false
         var pairedAtMs: Long? = null

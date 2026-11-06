@@ -1,6 +1,7 @@
 package com.vettid.core.relay
 
 import com.vettid.core.crypto.Ed25519PrivateKey
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -31,9 +32,11 @@ class MailboxCollectorLostTest {
     @After
     fun stop() = server.close()
 
+    private var retrySends = 0
+
     private fun collector(): MailboxCollector {
         val client = RelayClient(server.url("/").toString(), Ed25519PrivateKey.generate(), OkHttpClient(), sleep = {})
-        return MailboxCollector(client, wait = Duration.ZERO, sleep = {}, onLost = { lost++ })
+        return MailboxCollector(client, wait = Duration.ZERO, sleep = {}, onLost = { lost++ }, onRetrySent = { retrySends++ })
     }
 
     private fun empty() = MockResponse.Builder().code(200).body("""{"messages":[]}""").build()
@@ -96,6 +99,33 @@ class MailboxCollectorLostTest {
         server.enqueue(status(403, """{"code":"token_revoked","message":""}"""))
         val r = runCatching { collector().run {} }
         assertTrue(r.exceptionOrNull() is RelayException)
+        assertEquals(2, lost)
+    }
+
+    /** A retry inside the client's own retries is a send of its own: one lost attempt, one retry send. */
+    @Test
+    fun aRetryInsideTheClientIsASendOfItsOwn() = runBlocking<Unit> {
+        server.enqueue(dropped())
+        server.enqueue(empty())
+        assertEquals(0, collector().pollOnce {})
+        assertEquals(1, retrySends)
+    }
+
+    /**
+     * A lost attempt, then the next attempt is parked at the relay (handed a message) and cut by a cancellation: the cut is
+     * counted too, whatever was lost before in the same round (2 cuts).
+     */
+    @Test
+    fun aCancellationAfterALostAttemptInTheSameRoundIsCounted() = runBlocking<Unit> {
+        server.enqueue(dropped())
+        server.enqueue(
+            MockResponse.Builder().code(200).body("""{"messages":[]}""").headersDelay(30, java.util.concurrent.TimeUnit.SECONDS).build(),
+        )
+        val job = launch(kotlinx.coroutines.Dispatchers.IO) { collector().run {} }
+        while (server.requestCount < 2) kotlinx.coroutines.delay(10)
+        kotlinx.coroutines.delay(100)
+        job.cancel()
+        job.join()
         assertEquals(2, lost)
     }
 }

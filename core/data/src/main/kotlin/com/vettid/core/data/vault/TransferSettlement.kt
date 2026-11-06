@@ -31,8 +31,8 @@ internal interface SettleDevice {
     /** How long ago the collection's latest request went out (ms), kept after it ended; null before any. */
     val collectorLastSendAgeMs: Long?
 
-    /** How long ago each of the collection's latest requests went out (ms): a short history, kept after they ended. */
-    val collectorSendAgesMs: List<Long>
+    /** How long ago each of the device's latest requests went out (ms) and the long-poll wait it carried; kept after they ended. */
+    val collectorSendsMs: List<Pair<Long, Long>>
 
     /** The relay's advertised `visibility_timeout_seconds`; may throw. */
     suspend fun relayVisibilitySeconds(): Long?
@@ -117,7 +117,7 @@ internal suspend fun settleTransfer(
         awaitRound = { d.awaitCollectorRound() },
         cuts = { d.collectorCuts },
         collectorAge = { d.collectorLastSendAgeMs },
-        collectorSends = { d.collectorSendAgesMs },
+        collectorSends = { d.collectorSendsMs },
     )
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
     // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.

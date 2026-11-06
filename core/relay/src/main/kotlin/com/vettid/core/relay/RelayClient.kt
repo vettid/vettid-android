@@ -181,6 +181,8 @@ class RelayClient(
          * to it; the retry then finds the mailbox empty and the loss is invisible to the caller (a collect).
          */
         val onLostAttempt: (() -> Unit)? = null,
+        /** Called when a RETRY attempt of [execute] (not the first) goes out: its send time is a send of its own. */
+        val onRetrySent: (() -> Unit)? = null,
     )
 
     private fun backoffMillis(attempt: Int): Long {
@@ -199,6 +201,7 @@ class RelayClient(
                     backoffMillis(i)
                 }
                 sleep(wait)
+                c.onRetrySent?.invoke()
             }
             try {
                 return once(c, read)
@@ -317,9 +320,11 @@ class RelayClient(
         wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S),
         max: Int = DEFAULT_MAX,
         onLostAttempt: (() -> Unit)? = null,
+        onRetrySent: (() -> Unit)? = null,
     ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
-        val o = json(Call("GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt)) ?: return emptyList()
+        val call = Call("GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent)
+        val o = json(call) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }
     }
 

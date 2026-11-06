@@ -547,9 +547,37 @@ class TransferInSettleFreezeTest {
             ours += clock.now()
             if (sends.isNotEmpty() && clock.now() >= sends[0] + 60_000) isPaired = true
         }
-        val ages: () -> List<Long> = { sends.map { clock.now() - it } }
+        val ages: () -> List<Pair<Long, Long>> = { sends.map { (clock.now() - it) to 0L } }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = ages))
         assertEquals(0, drops)
         assertTrue("held for A's lease: ${clock.now()} ours=$ours A=${sends[0]}", clock.now() >= sends[0] + 65_000)
+    }
+
+    /**
+     * (round 4) A long poll's lease starts when the relay returns, up to its wait after the send. The collector's request goes
+     * out at 103.5 s with a 25 s wait, the process freezes and wakes past the cap (105 s). The message is handed to it at
+     * 128.5 s (A + wait) and leased until A + 25 + 60 s = 188.5 s: the hold runs to A + wait + V + 5 s.
+     */
+    @Test
+    fun aLongPollsLeaseCountsItsWait() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        var sentAt: Long? = null
+        val settle = TransferInResume.Settle(windowMs = 105_000, maxExtraMs = 0, now = clock::now) // F = the cap = 105 s
+        launch {
+            delay(103_500)
+            sentAt = clock.now()
+            delay(100)
+            clock.jumpedMs += 30_000
+        }
+        val collect: suspend (Long) -> Unit = {
+            val a = sentAt
+            if (a != null && clock.now() >= a + 25_000 + 60_000) isPaired = true
+        }
+        val sends: () -> List<Pair<Long, Long>> = { listOfNotNull(sentAt?.let { (clock.now() - it) to 25_000L }) }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = sends))
+        assertEquals(0, drops)
+        assertTrue("held to A + w + V + 5 s: ${clock.now()}", clock.now() >= sentAt!! + 25_000 + 65_000)
     }
 }

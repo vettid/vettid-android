@@ -1667,10 +1667,10 @@ class VaultDeviceTest {
             serveMailbox = true
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             d.start(scope)
-            while (d.collectSendAgesMs.size < 3) kotlinx.coroutines.delay(20)
+            while (d.collectSendsMs.size < 3) kotlinx.coroutines.delay(20)
             elapsed += 1_000
-            assertEquals("oldest first", d.collectSendAgesMs.sorted().reversed(), d.collectSendAgesMs)
-            assertTrue(d.collectSendAgesMs.all { it >= 1_000 })
+            assertEquals("oldest first", d.collectSendsMs.map { it.first }.sorted().reversed(), d.collectSendsMs.map { it.first })
+            assertTrue(d.collectSendsMs.all { it.first >= 1_000 && it.second > 0 })
             scope.cancel()
             serveMailbox = false
         }
