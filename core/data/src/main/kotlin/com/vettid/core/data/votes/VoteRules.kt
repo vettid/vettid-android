@@ -292,11 +292,12 @@ object VoteRules {
 
     /**
      * Whether the results' numbers (the choice counts, the turnout, the quorum line and the unhandled line) are shown
-     * (ANDROID-PLAN 0.1.117): only under a `verified` or `unconfirmed` check, and never while the last verdict of the app's
-     * observer check ([verdict], set only by a submit the vault answered) is a failure. An attempt that submits nothing
-     * clears the "don't add up" line but not the verdict.
+     * (ANDROID-PLAN 0.1.117): only under a `verified` or `unconfirmed` check, and only while the last verdict of the app's
+     * observer check ([verdict], set only by a submit the vault answered) passed. An attempt that submits nothing clears the
+     * "don't add up" line but not the verdict. No verdict in memory (after a lock or a restart, before a check has run
+     * again) is no numbers (review 1, finding 6).
      */
-    fun showNumbers(s: VoteSummary, verdict: ObserverVerdict?): Boolean = judged(s) && verdict != ObserverVerdict.FAILED
+    fun showNumbers(s: VoteSummary, verdict: ObserverVerdict?): Boolean = judged(s) && verdict == ObserverVerdict.PASSED
 
     /** The reason a cast is not offered (screen 2: the reason is written where the button would be). */
     @Suppress("ReturnCount")

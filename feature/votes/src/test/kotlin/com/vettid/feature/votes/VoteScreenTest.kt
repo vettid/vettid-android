@@ -205,7 +205,8 @@ class VoteScreenTest {
     @Test
     fun aVerifiedCheckSaysTheResultsIncludeTheVoteAndShowsTheTally() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
-        show(state(s, detail(s, choiceId = "yes", tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L), counts = VoteCounts(120, 84, 0, 3))))
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        show(state(s, detail(s, choiceId = "yes", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(verdict = ObserverVerdict.PASSED)))
         shown("The published results include your vote.").assertIsDisplayed()
         shown("Results").assertIsDisplayed()
         shown("Yes: 52").assertIsDisplayed()
@@ -240,6 +241,16 @@ class VoteScreenTest {
             // The member's own choice, abstain, in the app's own word.
             shown("Your choice: Abstain").assertIsDisplayed()
         }
+    }
+
+    @Test
+    fun noNumberIsShownWithoutAnObserverVerdictInMemory() {
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
+        show(state(s, detail(s, choiceId = "yes", tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L), counts = VoteCounts(120, 84, 0, 3))))
+        shown("The published results include your vote.").assertIsDisplayed()
+        assertEquals(0, shownAll("Results").fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("Yes: 52").fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("84 of 120", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test

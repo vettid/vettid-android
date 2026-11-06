@@ -311,6 +311,15 @@ class VoteRulesTest {
     }
 
     @Test
+    fun noVerdictInMemoryMeansNoNumbers() {
+        // After a lock or a restart the hints are gone: until a check has run again, no number is shown.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        assertFalse(VoteRules.showNumbers(verified, VoteHint().verdict))
+        assertFalse(VoteRules.showNumbers(verified, null))
+        assertTrue(VoteRules.showNumbers(verified, ObserverVerdict.PASSED))
+    }
+
+    @Test
     fun anAttemptThatSubmitsNothingClearsTheLineButTheLastVerdictKeepsTheNumbersHidden() {
         // The reviewer's case: a verified check whose results did not add up, then a Check again that submitted nothing.
         val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
