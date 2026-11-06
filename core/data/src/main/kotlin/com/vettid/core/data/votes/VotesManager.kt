@@ -792,9 +792,12 @@ class VotesManager(
                 throw e
             } finally {
                 // Kept for the daily re-check, whatever the attempt came to (a failure too: then rows.json is fetched again
-                // next time, since a lost submission may be the cause). Not after a lock or clear (R1-2), nor a cancellation.
-                if (!cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }) {
-                    withContext(NonCancellable) { recordAttempt(key, epoch, trace, out) }
+                // next time, since a lost submission may be the cause). One cancelled or voided by a lock after it downloaded
+                // rows.json still counts toward the daily limit (review 1, L1): only its time and hashes, as rows not had.
+                // Never after a wipe: the store's epoch drops the write (M1).
+                val counted = !cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }
+                if (counted || trace.rowsDownloaded) {
+                    withContext(NonCancellable) { recordAttempt(key, epoch, trace, if (counted) out else null) }
                 }
             }
         }
@@ -823,6 +826,9 @@ class VotesManager(
         var resultsSha256: String? = null
         var sigSha256: String? = null
         var bundleSha256: String? = null
+
+        /** rows.json's bytes were downloaded (review 1, L1: such an attempt counts toward the daily limit, whatever follows). */
+        var rowsDownloaded = false
 
         /** An `Unchanged` re-check keeps the last attempt's "answered" (it is the same submission). */
         var answered = false
@@ -907,6 +913,7 @@ class VotesManager(
         }
         if (rowsCap == null && !outOfRange) return@run fail(key, ResultsOutcome.Problem, gen = gen)
         val rows = rowsCap?.let { fetch("rows.json", it) }
+        if (rows != null) trace.rowsDownloaded = true
         // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
         val rowsOver = tooLarge
         if (rowsOver && !rowsOk) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)

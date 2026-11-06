@@ -1926,4 +1926,41 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
         assertEquals(3, ops.submitted.size)
     }
+
+    @Test
+    fun anAttemptVoidedByALockAfterTheRowsDownloadStillCountsTowardTheDailyLimit() = runTest {
+        // Review 1, L1: a lock during the observer's step, after rows.json was downloaded; the next unlock within the day
+        // does not download it again.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        val store = MemoryResultsAttemptStore()
+        var locks = 0
+        var m: VotesManager? = null
+        m = manager(ops, site, attempts = store) { if (it.endsWith(":observe") && locks++ == 0) m!!.clear() }
+        m.syncOnce()
+        assertTrue(ops.submitted.isEmpty())
+        val kept = store.load().single()
+        assertFalse("counted as rows not had: refetched when the day is over", kept.rowsFetched)
+        assertFalse(kept.answered)
+        assertEquals(clock.toEpochMilli(), kept.atMs)
+        fun rowsReads() = site.reads.count { it == "p/$PID/rows.json" }
+        assertEquals(1, rowsReads())
+        clock = clock.plus(Duration.ofHours(2))
+        m.syncOnce()
+        assertEquals("within the day: no second download", 1, rowsReads())
+        clock = clock.plus(Duration.ofDays(1))
+        m.syncOnce()
+        assertEquals(2, rowsReads())
+        // A wipe in the same place leaves nothing (M1).
+        val store2 = MemoryResultsAttemptStore()
+        var m2: VotesManager? = null
+        m2 = manager(ops, site, attempts = store2) {
+            if (it.endsWith(":observe")) {
+                m2!!.clear()
+                m2!!.forgetStored()
+            }
+        }
+        m2.syncOnce()
+        assertTrue(store2.load().isEmpty())
+    }
 }
