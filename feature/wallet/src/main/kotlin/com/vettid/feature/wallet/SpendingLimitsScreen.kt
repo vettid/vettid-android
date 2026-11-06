@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -324,6 +325,8 @@ private fun ConfirmRaise(state: SpendingLimitsUiState, actions: SpendingLimitsAc
             label = stringResource(R.string.wallet_pin_label),
             isPin = true,
             error = kind?.takeIf { it == FailureKind.BAD_PIN }?.let { stringResource(it.messageRes()) },
+            // Next goes to the password below.
+            imeAction = ImeAction.Next,
             enabled = state.idle,
             modifier = Modifier.fillMaxWidth().testTag("wallet_limits_pin"),
         )

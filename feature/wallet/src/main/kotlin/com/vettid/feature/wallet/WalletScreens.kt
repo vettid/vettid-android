@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
@@ -264,6 +265,8 @@ private fun PasswordStep(state: BackupUiState, actions: BackupActions, modifier:
                 label = stringResource(R.string.wallet_pin_label),
                 isPin = true,
                 error = state.error?.takeIf { it == FailureKind.BAD_PIN }?.let { stringResource(it.messageRes()) },
+                // Next goes to the password below.
+                imeAction = ImeAction.Next,
                 modifier = Modifier.fillMaxWidth().testTag("wallet_pin"),
             )
         }

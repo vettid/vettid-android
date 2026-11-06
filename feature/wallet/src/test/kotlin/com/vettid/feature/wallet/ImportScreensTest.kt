@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
@@ -18,6 +19,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import com.vettid.core.chain.Network
@@ -154,6 +156,15 @@ class ImportScreensTest {
         assertEquals(1, shown)
         state = state.copy(error = FailureKind.BAD_PIN)
         rule.onNodeWithTag("secret_field_error", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun nextOnACappedWalletsPinMovesToThePassword() {
+        var shown = 0
+        rule.setContent { BackupScreen(BackupUiState(BackupStep.PASSWORD, capped = true, pin = "123456"), BackupActions(onReveal = { shown++ })) }
+        rule.onNodeWithTag("wallet_pin").performImeAction()
+        rule.onNodeWithTag("wallet_password").assertIsFocused()
+        assertEquals(0, shown)
     }
 
     @Test
