@@ -105,6 +105,14 @@ class FakeVotes : VotesRepository {
         return checkResultsAnswer()
     }
 
+    /** What [recheck] answers. */
+    var recheckOutcome: ResultsOutcome = ResultsOutcome.Rechecked(passed = true)
+
+    override suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome {
+        call("recheck:$connectionId/$proposalId")
+        return recheckOutcome
+    }
+
     override suspend fun diagnoseGaveUp(connectionId: String, proposalId: String) {
         calls += "diagnose:$connectionId/$proposalId"
     }

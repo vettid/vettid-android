@@ -184,6 +184,8 @@ class VotesManagerTest {
         window: Window = Window(),
         compute: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
         observeLimit: Duration = Duration.ofSeconds(60),
+        voteRows: Boolean = false,
+        attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -205,6 +207,9 @@ class VotesManagerTest {
         compute = compute,
         computeStep = computeStep,
         observeLimit = observeLimit,
+        voteRows = { voteRows },
+        attempts = attempts,
+        io = Dispatchers.Default,
     )
 
     @Test
@@ -1359,8 +1364,8 @@ class VotesManagerTest {
     }
 
     /** Observed results around rows given as (tag, ballot JSON or null), in the order given. */
-    private fun observedRows(rows: List<Pair<ByteArray, Triple<ByteArray, String, ByteArray>?>>): Observed {
-        val o = observed()
+    private fun observedRows(rows: List<Pair<ByteArray, Triple<ByteArray, String, ByteArray>?>>, n: Int = 3): Observed {
+        val o = observed(n = n)
         fun lp(x: ByteArray) = Bytes.concat(byteArrayOf((x.size shr 8).toByte(), x.size.toByte()), x)
         val rowsJson = """{"proposal_id":"$PID","rows":[""" + rows.joinToString(",") { (tag, b) ->
             val ballot = b?.let { (vk, choice, sig) ->
@@ -1452,5 +1457,319 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
         m.refresh()
         assertNull(m.hints.value["$CONN/$PID"])
+    }
+
+    // ---- VAULT-MESSAGING 0.83.6 (and 0.83.3, 0.84.1): pad, other_rows, rows_unavailable, the daily re-check ----
+
+    private fun JsonObject.str(k: String) = (this[k] as JsonPrimitive).content
+
+    private val yesBallot = Triple(ByteArray(32) { 3 }, "yes", ByteArray(64) { 4 })
+
+    @Test
+    fun theCastRequestHasOneSizeForEveryChoiceIdOf1To32Bytes() {
+        // §10.19.5, §10.19.8: `vote.cast{connection_id, proposal_id, choice_id, pad}`; pad = "0" x (32 - UTF-8 bytes).
+        val sizes = (1..32).map { n -> com.vettid.core.vault.voteCastBody(CONN, PID, "a".repeat(n)).toString().toByteArray().size }
+        assertEquals(1, sizes.distinct().size)
+        val body = com.vettid.core.vault.voteCastBody(CONN, PID, "yes")
+        // The §16 vector's `vote.cast` body (418 bytes) has `pad` of 29 zeros for "yes": the same rule.
+        assertEquals("0".repeat(29), body.str("pad"))
+        assertEquals("yes", body.str("choice_id"))
+        assertEquals("", com.vettid.core.vault.voteCastBody(CONN, PID, "x".repeat(33)).str("pad"))
+    }
+
+    @Test
+    fun theSubmittedRowsBallotCarriesItsPad() = runTest {
+        val tags = observed().tags
+        val (ops, site) = observedScenario(observedRows(listOf(tags[0] to null, tags[1] to yesBallot, tags[2] to null)))
+        val m = manager(ops, site)
+        m.refresh()
+        m.checkResults(CONN, PID)
+        val ballot = (ops.submitted.single()["row"] as JsonObject)["ballot"] as JsonObject
+        assertEquals("0".repeat(29), ballot.str("pad"))
+        assertEquals(setOf("vk", "choice_id", "ballot_sig", "pad"), ballot.keys)
+    }
+
+    @Test
+    fun aVoteGetWithAPadOfAnyFormReadsAsOneWithout() {
+        // §10.19.5: a receiver does not check `pad`'s type, value or length and does not require it (an exception to §5.3).
+        val base = """{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","choice_id":"yes""""
+        val plain = VoteWire.detail(obj("$base}"))!!
+        for (pad in listOf(""""0000"""", "5", "null", """{"x":1}""", """"zz"""", "[]")) {
+            val d = VoteWire.detail(obj("""$base,"pad":$pad,"service_ballot":{"choice_id":"no","pad":$pad}}"""))!!
+            assertEquals(pad, plain.choiceId, d.choiceId)
+            assertEquals(pad, "no", d.serviceBallotChoiceId)
+            assertEquals(pad, plain.summary, d.summary)
+        }
+    }
+
+    @Test
+    fun otherRowsUnderTheMembersTagGoAsOtherRowsWithTheirProofs() = runTest {
+        val o = observed()
+        val tags = o.tags
+        // The member's tag (tags[1]) twice: the first is `row`, the second goes in `other_rows` (§10.19.6 step 1).
+        val rows = listOf(tags[1] to yesBallot, tags[0] to null, tags[1] to null)
+        val (ops, site) = observedScenario(observedRows(rows))
+        val m = manager(ops, site, voteRows = true)
+        m.refresh()
+        m.checkResults(CONN, PID)
+        val b = ops.submitted.single()
+        assertEquals("0", (b["row_proof"] as JsonObject).str("index"))
+        val others = b["other_rows"] as JsonArray
+        assertEquals(1, others.size)
+        val e = others[0] as JsonObject
+        assertEquals("""{"ballot":null}""", e["row"].toString())
+        val proof = e["proof"] as JsonObject
+        assertEquals("2", proof.str("index"))
+        assertEquals("3", proof.str("tree_size"))
+        fun lp(x: ByteArray) = Bytes.concat(byteArrayOf((x.size shr 8).toByte(), x.size.toByte()), x)
+        val leaves = rows.map { (t, bl) -> bl?.let { (vk, c, sg) -> Bytes.concat(t, lp(vk), lp(c.toByteArray()), lp(sg)) } ?: t }
+        val path = (proof["path"] as JsonArray).map { Base64s.decodeStd((it as JsonPrimitive).content) }
+        assertTrue("the proof verifies to rows_root", VoteMerkle.verify(VoteMerkle.root(leaves), tags[1], 2L, 3L, path))
+        assertNull(b["rows_unavailable"])
+    }
+
+    @Test
+    fun atMostFourOtherRowsAreSentAndNoneToAVaultWithoutVoteRows() = runTest {
+        val tags = observed(n = 7).tags
+        val rows = List(6) { tags[1] to null } + listOf(tags[0] to null)
+        val (ops, site) = observedScenario(observedRows(rows, n = 7))
+        manager(ops, site, voteRows = true).let { it.refresh(); it.checkResults(CONN, PID) }
+        val others = ops.submitted.single()["other_rows"] as JsonArray
+        assertEquals(listOf("1", "2", "3", "4"), others.map { ((it as JsonObject)["proof"] as JsonObject).str("index") })
+        // Older vaults (no `vote_rows`): neither member is sent (ANDROID-PLAN "Older vaults").
+        val (ops2, site2) = observedScenario(observedRows(rows, n = 7))
+        manager(ops2, site2).let { it.refresh(); it.checkResults(CONN, PID) }
+        assertNull(ops2.submitted.single()["other_rows"])
+    }
+
+    private fun assertRowsUnavailable(b: JsonObject) {
+        assertEquals("true", b.str("rows_unavailable"))
+        for (k in listOf("row", "row_proof", "other_rows")) assertNull(k, b[k])
+        for (k in listOf("results", "results_sig", "bundle")) assertTrue(k, b[k] != null)
+    }
+
+    @Test
+    fun aRowThatCannotBeHadIsSubmittedAsRowsUnavailable() = runTest {
+        // §10.19.6 step 1 / ANDROID-PLAN: a root that does not match, rows that cannot be read within the bounds (here: over
+        // the cap), no leaf for the member, and an own choice_id the vault would refuse.
+        val o = observed()
+        val cases = mapOf<String, (Site) -> Unit>(
+            "root" to { s -> s.answers["p/$PID/rows.json"] = ok(o.rowsJson.replace(Base64s.encodeStd(o.tags[2]), Base64s.encodeStd(tagOf(9)))) },
+            "cap" to { s -> s.answers["p/$PID/rows.json"] = SiteAnswer.TooLarge },
+            "unreadable" to { s -> s.answers["p/$PID/rows.json"] = ok("""{"proposal_id":"$PID","rows":[[[[[1]]]]]}""") },
+        )
+        for ((name, change) in cases) {
+            val (ops, site) = observedScenario(o)
+            change(site)
+            val m = manager(ops, site, voteRows = true)
+            m.refresh()
+            assertTrue(name, m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+            assertRowsUnavailable(ops.submitted.single())
+        }
+        // No leaf for the member: its tag is not in rows.json.
+        val (ops, site) = observedScenario(o)
+        ops.detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(tagOf(9))}"}""")
+        manager(ops, site, voteRows = true).let { it.refresh(); it.checkResults(CONN, PID) }
+        assertRowsUnavailable(ops.submitted.single())
+        // An own choice_id the vault would refuse (0.81.6 "Choice ids in results", with `vote_rows`).
+        val tags = o.tags
+        val bad = Triple(ByteArray(32) { 3 }, "Bad_Id", ByteArray(64) { 4 })
+        val (ops2, site2) = observedScenario(observedRows(listOf(tags[0] to null, tags[1] to bad, tags[2] to null)))
+        manager(ops2, site2, voteRows = true).let { it.refresh(); it.checkResults(CONN, PID) }
+        assertRowsUnavailable(ops2.submitted.single())
+    }
+
+    @Test
+    fun withoutVoteRowsARowThatCannotBeHadSendsNothing() = runTest {
+        val (ops, site) = observedScenario(observed())
+        site.answers["p/$PID/rows.json"] = SiteAnswer.TooLarge
+        val m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun rowsJsonNotThereOrNotReachableIsNotRowsUnavailable() = runTest {
+        // Not among what makes the row "cannot be had": the next attempt tries again, nothing is sent.
+        for (answer in listOf(SiteAnswer.Absent, SiteAnswer.Unreachable)) {
+            val (ops, site) = observedScenario(observed())
+            site.answers["p/$PID/rows.json"] = answer
+            val m = manager(ops, site, voteRows = true)
+            m.refresh()
+            assertFalse(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+            assertTrue(ops.submitted.isEmpty())
+        }
+    }
+
+    @Test
+    fun eligibleOutsideItsRangeIsSubmittedAsRowsUnavailableForTheVaultToJudge() = runTest {
+        // §10.19.4 step 2 (1 to 100,000) and §10.19.6 steps 1 and 3: rows.json cannot be bounded, the results are judged.
+        for (eligible in listOf("0", "100001", "9007199254740991")) {
+            val o = observed()
+            val (ops, site) = observedScenario(o)
+            site.answers["p/$PID/results.json"] = ok(o.results.replace(""""eligible":3,"removed"""", """"eligible":$eligible,"removed""""))
+            val m = manager(ops, site, voteRows = true)
+            m.refresh()
+            assertTrue(eligible, m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+            assertRowsUnavailable(ops.submitted.single())
+            assertFalse("rows.json is not downloaded", site.reads.contains("p/$PID/rows.json"))
+        }
+        // An eligible that does not read at all is results the vault cannot parse: nothing is sent.
+        val o = observed()
+        val (ops, site) = observedScenario(o)
+        site.answers["p/$PID/results.json"] = ok(o.results.replace(""""eligible":3,"removed"""", """"eligible":"3","removed""""))
+        val m = manager(ops, site, voteRows = true)
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+        // Without `vote_rows`, as before: nothing is sent.
+        val (ops2, site2) = observedScenario(o)
+        site2.answers["p/$PID/results.json"] = ok(o.results.replace(""""eligible":3,"removed"""", """"eligible":100001,"removed""""))
+        manager(ops2, site2).let { it.refresh(); assertEquals(ResultsOutcome.Problem, it.checkResults(CONN, PID)) }
+        assertTrue(ops2.submitted.isEmpty())
+    }
+
+    private fun gaveUp(reason: String = "") =
+        summary(state = "closed", extra = ""","ballot":{"state":"recorded"},"check":{"state":"gave_up"$reason}""")
+
+    @Test
+    fun aGaveUpCheckRunsAgainAtMostOnceADayAcrossARestart() = runTest {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val store = MemoryResultsAttemptStore()
+        manager(ops, site, attempts = store).syncOnce()
+        assertEquals(1, ops.submitted.size)
+        fun resultsReads() = site.reads.count { it == "p/$PID/results.json" }
+        assertEquals(1, resultsReads())
+        clock = clock.plus(Duration.ofHours(23))
+        // A new process (the store is what survives): still within the day, nothing is fetched.
+        manager(ops, site, attempts = store).syncOnce()
+        assertEquals(1, resultsReads())
+        clock = clock.plus(Duration.ofHours(1))
+        manager(ops, site, attempts = store).syncOnce()
+        assertEquals(2, resultsReads())
+        // A clock set back does not hold the re-check up.
+        clock = clock.minus(Duration.ofDays(3))
+        manager(ops, site, attempts = store).syncOnce()
+        assertEquals(3, resultsReads())
+    }
+
+    @Test
+    fun aReCheckWithTheSameResultsDoesNotDownloadRowsAgainAndSendsNothing() = runTest {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"rows_unavailable"}}""")
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        fun rowsReads() = site.reads.count { it == "p/$PID/rows.json" }
+        assertEquals(1, rowsReads())
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(1, rowsReads())
+        assertEquals(1, ops.submitted.size)
+        // Changed results: rows.json is fetched again and the row submitted.
+        val changed = observed().results.replace(""""unhandled":0""", """"unhandled":1""")
+        site.answers["p/$PID/results.json"] = ok(changed)
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(2, rowsReads())
+        // Nothing of a choice, a row or a proof is kept: only a time, a hash and three facts.
+        val kept = store.load().single()
+        assertEquals("$CONN/$PID", kept.key)
+        assertEquals(Bytes.hex(Bytes.sha256(changed.toByteArray())), kept.resultsSha256)
+    }
+
+    @Test
+    fun rowsAreFetchedAgainAfterAVaultSideReasonOrRowsNotHad() = runTest {
+        // §10.19.6 (0.84.1): after a failure on the vault's side, or rows.json not fetched last time, rows.json is fetched again.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"clock"}}""")
+        val m = manager(ops, site)
+        m.refresh()
+        m.checkResults(CONN, PID)
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(2, ops.submitted.size)
+        val (ops2, site2) = observedScenario(observed())
+        ops2.list = listing(gaveUp())
+        val rows = site2.answers.getValue("p/$PID/rows.json")
+        site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        val m2 = manager(ops2, site2)
+        m2.refresh()
+        assertEquals(ResultsOutcome.SiteUnreachable, m2.checkResults(CONN, PID))
+        site2.answers["p/$PID/rows.json"] = rows
+        assertTrue(m2.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        // A submission whose answer was lost: rows.json is fetched again too.
+        val (ops3, site3) = observedScenario(observed())
+        ops3.list = listing(gaveUp())
+        ops3.refuse["submit"] = "internal"
+        val store3 = MemoryResultsAttemptStore()
+        val m3 = manager(ops3, site3, attempts = store3)
+        m3.refresh()
+        assertTrue(runCatching { m3.checkResults(CONN, PID) }.exceptionOrNull() is VaultFailure)
+        assertFalse("a failed attempt counts as rows not had", store3.load().single().rowsFetched)
+        ops3.refuse.clear()
+        assertTrue(m3.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(2, site3.reads.count { it == "p/$PID/rows.json" })
+    }
+
+    @Test
+    fun theKeptAttemptGoesWhenTheCheckIsFinalOrTheVoteLeavesTheList() = runTest {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store)
+        m.refresh()
+        m.checkResults(CONN, PID)
+        assertEquals(1, store.load().size)
+        ops.list = listing()
+        m.refresh()
+        assertTrue(store.load().isEmpty())
+        ops.list = listing(gaveUp())
+        m.refresh()
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"verified"}}""")
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertTrue("a final check keeps nothing", store.load().isEmpty())
+    }
+
+    private fun verifiedVote() = summary(state = "closed", extra = ""","ballot":{"state":"recorded"},"check":{"state":"verified"}""")
+
+    @Test
+    fun theRecheckOnOpenSetsAVerdictAndNeverSubmits() = runTest {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        val m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
+        assertTrue(ops.submitted.isEmpty())
+        assertFalse(site.reads.any { it.endsWith(".sig") || it.endsWith("sigstore.json") })
+        // Results that do not add up: a failed verdict and the line.
+        val bad = observed(tally = """{"abstain":0,"no":1,"yes":0}""")
+        site.answers["p/$PID/results.json"] = ok(bad.results)
+        assertEquals(ResultsOutcome.Rechecked(passed = false), m.recheck(CONN, PID))
+        val h = m.hints.value.getValue("$CONN/$PID")
+        assertEquals(ObserverVerdict.FAILED, h.verdict)
+        assertTrue(h.observerFailed)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun aRecheckThatCannotReachTheSiteSaysSoAndShowsNoNumber() = runTest {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        site.answers["p/$PID/results.json"] = SiteAnswer.Unreachable
+        val m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        val h = m.hints.value.getValue("$CONN/$PID")
+        assertTrue(h.notRechecked)
+        assertNull(h.verdict)
+        val s = m.votes.value.single()
+        assertFalse(VoteRules.showNumbers(s, h.verdict, h.observerFailed))
+        assertTrue(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(s, notRechecked = h.notRechecked))
     }
 }

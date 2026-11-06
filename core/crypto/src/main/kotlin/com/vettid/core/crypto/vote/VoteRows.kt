@@ -59,6 +59,17 @@ class PublishedResults internal constructor(
         return OwnRow(ballot, found.toLong(), rows.count.toLong(), path)
     }
 
+    /**
+     * The other rows under the member's tag, after the first (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, `other_rows`): at most
+     * four, in the order of rows.json, each with its proof to `rows_root`, its ballot as published. Only for the tag the
+     * rows were read for ([VoteRows.read]'s `ownTag`); empty otherwise. Throws [ResultsProblem] (`rows`) when a proof cannot
+     * be made.
+     */
+    fun otherRows(checkpoint: () -> Unit = {}): List<OwnRow> = rows.ownExtras.map { (index, ballot) ->
+        val path = VoteMerkle.proofOfHashes(rows.leafHashes, rows.count, index, checkpoint) ?: throw ResultsProblem("rows")
+        OwnRow(ballot?.let { OwnBallot(it.first, it.second, it.third) }, index.toLong(), rows.count.toLong(), path)
+    }
+
     /** The bytes held for the rows (for the memory bound: review 1, finding 2). */
     fun retainedRowBytes(): Long = rows.retainedBytes()
 
@@ -188,6 +199,20 @@ object VoteRows {
         rowsCap(StrictJson.parseObject(resultsBytes).obj("counts").uint("eligible", 1, MAX_ROWS.toLong()))
     } catch (_: CryptoException) {
         null
+    }
+
+    /**
+     * Whether the `counts.eligible` of [resultsBytes] is an integer (up to 2^53 − 1) outside 1 to [MAX_ROWS]
+     * (VAULT-MESSAGING 0.86.4 §10.19.4 step 2: a proposal's `eligible` is 1 to 100,000, and §10.19.6 step 2: the results'
+     * `counts.eligible` must equal it). The results then read, but their rows.json cannot be bounded, so the member's row
+     * cannot be had (§10.19.6 step 1, `rows_unavailable`) while the vault still judges the results themselves (step 3:
+     * a wrong `counts.eligible` is a contradiction under the service's signature). False when it does not read at all.
+     */
+    fun eligibleOutOfRange(resultsBytes: ByteArray): Boolean = try {
+        val e = StrictJson.parseObject(resultsBytes).obj("counts").uint("eligible", 0, StrictJson.MAX_SAFE_INTEGER)
+        e < 1 || e > MAX_ROWS
+    } catch (_: CryptoException) {
+        false
     }
 
     private const val ROW_BYTES = 512L

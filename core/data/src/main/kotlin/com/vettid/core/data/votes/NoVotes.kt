@@ -48,6 +48,8 @@ object NoVotes : VotesRepository {
 
     override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome = ResultsOutcome.SiteUnreachable
 
+    override suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome = ResultsOutcome.SiteUnreachable
+
     override suspend fun diagnoseGaveUp(connectionId: String, proposalId: String) = Unit
 
     override fun acknowledgeDropped(connectionIds: List<String>) = Unit

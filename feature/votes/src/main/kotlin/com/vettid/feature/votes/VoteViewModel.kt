@@ -124,6 +124,10 @@ class VoteViewModel @Inject constructor(
     /** The evidence the vault gave, until the member saves it or leaves; only in memory. */
     private var proof: String? = null
     private var loadJob: Job? = null
+    private var recheckJob: Job? = null
+
+    /** The screen is at least STARTED: the recheck on open runs only then, and leaving or the background cancels it. */
+    private var visible = false
     private var lastSummary: VoteSummary? = null
 
     val uiState: StateFlow<VoteUiState> =
@@ -145,6 +149,7 @@ class VoteViewModel @Inject constructor(
                 val now = list.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
                 if (now != null && lastSummary != null && now != lastSummary) loadDetail()
                 if (now != null) lastSummary = now
+                maybeRecheck()
                 if (now?.check?.state == com.vettid.core.data.votes.CheckState.GAVE_UP) repo.diagnoseGaveUp(connectionId, proposalId)
             }
         }
@@ -174,6 +179,35 @@ class VoteViewModel @Inject constructor(
             loadDetail()
             // The vote's own documents are fetched when its screen opens, so that the vault can compare it with the public copy.
             runCatching { repo.siteCheck(connectionId, proposalId) }
+        }
+    }
+
+    /** From the screen's lifecycle (ON_START / ON_STOP): a recheck runs while it is shown, and again on a return. */
+    fun setVisible(shown: Boolean) {
+        visible = shown
+        if (shown) {
+            maybeRecheck()
+        } else {
+            recheckJob?.cancel()
+            recheckJob = null
+        }
+    }
+
+    /**
+     * The recheck on open (ANDROID-PLAN 0.1.121): a `verified` or `unconfirmed` vote with no verdict in memory has its
+     * published results checked again by the observer, nothing submitted. Leaving the screen, the background or a lock
+     * cancels it (a lock voids it in the repository); it runs again on return while there is still no verdict.
+     */
+    private fun maybeRecheck() {
+        if (!visible || recheckJob?.isActive == true) return
+        val s = repo.votes.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId } ?: return
+        if (!VoteRules.recheckOnOpen(s, repo.hints.value[s.key]?.verdict)) return
+        recheckJob = viewModelScope.launch {
+            try {
+                repo.recheck(connectionId, proposalId)
+            } catch (_: VaultFailure) {
+                // The vote could not be read: nothing is shown as checked; the next return tries again.
+            }
         }
     }
 

@@ -442,8 +442,29 @@ The A2 exit test:
   answered sets `VoteHint.verdict` (`ObserverVerdict`), which nothing else changes. With a `verified` or `unconfirmed` check and
   the flag, the screen shows the state, then `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`);
   numbers show only with a `PASSED` verdict (`VoteRules.showNumbers`), so none after a failed verdict, and none with no verdict
-  in memory (after a lock or a restart, until a check runs again); it is not the results-problem text. Not built yet (the
-  0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open, and submitting when `counts.eligible` does not read.
+  in memory (after a lock or a restart, until a check runs again); it is not the results-problem text.
+  **0.83.6 (and 0.83.3, 0.84.1):** every `choice_id` the app sends carries `pad` (`VotePad`: ASCII `0` × (32 − its UTF-8
+  bytes), empty from 32): `vote.cast` (`voteCastBody`, one size for ids of 1 to 32 bytes) and each submitted `row.ballot`;
+  `pad` is never read or checked anywhere (§5.3 exception). With the release capability `vote_rows`
+  (`Capabilities.VOTE_ROWS`, `ReleasePath.voteRows`; without it the app keeps 0.83.2's behaviour): further rows under the
+  member's tag go as `other_rows` (at most 4, kept as published by `RowsReader.ownExtras`, `PublishedResults.otherRows`
+  with their proofs), and when the member's row cannot be had (rows.json over its cap, deeper than 4, a row that cannot be
+  made a leaf, `counts.eligible` rows not reaching `rows_root`, no row for the tag, an own `choice_id` the vault would
+  refuse, extra rows too large to send, or a `counts.eligible` that is an integer outside 1 to 100,000) the app submits
+  `rows_unavailable: true` with the results, signature and bundle and no row. A rows.json that is absent (404) or cannot
+  be reached is not "cannot be had": it is tried again. `pending` or `gave_up` with reason `rows_unavailable` shows the
+  results-problem text. **A `gave_up` check is not final** (owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK):
+  `submitDue` runs it again whenever the app opens, at most once a day per record, keyed off the state; the last attempt
+  per vote is kept on disk (`ResultsAttempt` in `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir, wiped
+  with it): the time, the SHA-256 of the `results.json` read, whether rows.json was had, and whether the vault's answer was
+  on its side (`trust_root`, `service_list`, `clock`); **never a choice, row or proof**. With the same results.json, rows
+  had and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends nothing (`ResultsOutcome.Unchanged`);
+  an attempt that failed (no answer) counts as rows not had. The entry goes when the check is final or the vote leaves
+  a whole list. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
+  `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
+  the observer's check alone, nothing submitted or stored; its verdict sets `VoteHint.verdict`, and a site that cannot be
+  reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). Not built: the text of
+  the `gave_up` `vote.result` feed item (no approved string; the feed still says "Vote results are out").
   Every vote signature the app checks goes through
   `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
   byte table (`strictPoint`), then `S < L` and the cofactorless equation are Tink's pure-Java `subtle.Ed25519Verify`
@@ -457,7 +478,8 @@ The A2 exit test:
   `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
   stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
-  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`, `vote.results_dont_add_up`.
+  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`, `vote.results_dont_add_up`,
+  `vote.results_not_rechecked`, `vote.rows_unavailable`.
 
 - Wallet (ANDROID-PLAN §4 "Wallet", W1; VAULT-MESSAGING §10.18): **not in production builds**, laid out like calls. `:core:chain` (bitcoin-kmp
   behind the module, PSBT, the Esplora client, `ChainServers`: the chain server per network in `chain-servers.bin`, block 0 checked

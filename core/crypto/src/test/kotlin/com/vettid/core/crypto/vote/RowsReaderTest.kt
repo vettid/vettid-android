@@ -172,4 +172,23 @@ class RowsReaderTest {
         assertEquals(7, t.ownIndex)
         assertEquals(200, t.ownBallot!!.first.size)
     }
+
+    @Test
+    fun theNextFourRowsUnderTheOwnTagAreKeptAsPublishedForOtherRows() {
+        // VAULT-MESSAGING 0.86.4 §10.19.6 step 1: further rows under the member's tag go as `other_rows` (at most 4), kept
+        // whatever their lengths, so that the vault can make their leaves.
+        val own = ByteArray(32) { 1 }
+        val other = ByteArray(32) { 2 }
+        fun row(tag: ByteArray, vk: Int?) =
+            """{"ballot":${vk?.let { """{"ballot_sig":"${Base64s.encodeStd(ByteArray(64) { 4 })}","choice_id":"yes","vk":"${Base64s.encodeStd(ByteArray(it) { 3 })}"}""" } ?: "null"},"record_tag":"${Base64s.encodeStd(tag)}"}"""
+        val rows = listOf(row(other, null), row(own, 32), row(own, 33), row(own, null)) + List(4) { row(own, 32) }
+        val text = """{"proposal_id":"P","rows":[${rows.joinToString(",")}],"v":1}"""
+        val t = RowsReader(text.toByteArray(), rows.size, own) {}.read()
+        assertEquals(1, t.ownIndex)
+        assertEquals(listOf(2, 3, 4, 5), t.ownExtras.map { it.first })
+        assertEquals(33, t.ownExtras[0].second!!.first.size)
+        assertEquals(null, t.ownExtras[1].second)
+        // Without an own tag nothing is kept.
+        assertTrue(RowsReader(text.toByteArray(), rows.size) {}.read().ownExtras.isEmpty())
+    }
 }

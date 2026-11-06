@@ -2,10 +2,12 @@ package com.vettid.core.data.votes
 
 import androidx.annotation.VisibleForTesting
 import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.ClaimBlob
 import com.vettid.core.crypto.vote.OwnRow
 import com.vettid.core.crypto.vote.PublishedResults
 import com.vettid.core.crypto.vote.ResultsProblem
+import com.vettid.core.crypto.vote.VotePad
 import com.vettid.core.crypto.vote.VoteRows
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.FailureKind
@@ -82,6 +84,11 @@ data class VoteHint(
     val verdict: ObserverVerdict? = null,
     /** When the app first saw the vote missing from the public site. */
     val notListedSince: Instant? = null,
+    /**
+     * The recheck on opening a `verified` or `unconfirmed` vote with no verdict in memory ([VotesRepository.recheck];
+     * ANDROID-PLAN 0.1.121 "Recheck on open") could not reach the site: `vote_results_not_rechecked`, and no number.
+     */
+    val notRechecked: Boolean = false,
 ) {
     /** `vote_not_listed_late`: missing from the site for [LATE_AFTER] or more. */
     fun notListedLate(now: Instant): Boolean = notListedSince?.let { Duration.between(it, now) >= LATE_AFTER } == true
@@ -110,6 +117,16 @@ sealed interface ResultsOutcome {
 
     /** The vault was locked (or cleared) during the check: nothing of it was kept or sent (recheck 1, R1-2). Shows nothing. */
     data object Voided : ResultsOutcome
+
+    /**
+     * A `gave_up` check run again whose `results.json` is the one of the last attempt, which had `rows.json` and did not end
+     * on the vault's side (VAULT-MESSAGING 0.86.4 §10.19.6): `rows.json` is not downloaded again and nothing is sent, since
+     * the same results, row and proof get the same answer. Shows nothing new.
+     */
+    data object Unchanged : ResultsOutcome
+
+    /** The recheck on open ran the observer's check again (nothing submitted): [passed] is its verdict. */
+    data class Rechecked(val passed: Boolean) : ResultsOutcome
 }
 
 /**
@@ -165,6 +182,13 @@ interface VotesRepository {
 
     /** The results of a closed vote, fetched and handed to the vault (the member's **Check again**, and the retry). */
     suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome
+
+    /**
+     * The recheck on opening a `verified` or `unconfirmed` vote that has no verdict in memory (ANDROID-PLAN 0.1.121 "Recheck
+     * on open", owner decision of 2026-11-02): the published results are fetched and the observer's check runs again. It
+     * never submits and stores nothing on disk; a site that cannot be reached sets [VoteHint.notRechecked].
+     */
+    suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome
 
     /** For a `gave_up` check the app has no reason for: looks at the site once and remembers which of two things. */
     suspend fun diagnoseGaveUp(connectionId: String, proposalId: String)
@@ -262,6 +286,15 @@ class VotesManager(
      * submitted, so results the observer cannot finish in time cannot stop the submit.
      */
     private val observeLimit: Duration = OBSERVE_LIMIT,
+    /**
+     * Whether the vault lists the release capability `vote_rows` (VAULT-MESSAGING 0.86.4 §11.10.9, §10.19.6 step 3): only
+     * then are `other_rows` and `rows_unavailable` sent; without it the app keeps 0.83.2's behaviour (ANDROID-PLAN "Older vaults").
+     */
+    private val voteRows: () -> Boolean = { false },
+    /** The last attempt at each vote's results (no choice, row or proof): the daily re-check of a `gave_up` one survives a restart. */
+    private val attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
+    /** Where [attempts] is read and written. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : VotesRepository {
     private val lock = Any()
     private val votesFlow = MutableStateFlow<List<VoteSummary>>(emptyList())
@@ -383,6 +416,8 @@ class VotesManager(
                     loadState.value = ListLoad.LOADED
                     hintsFlow.value = hintsFor(shown, hintsFlow.value)
                 }
+                // The kept attempts go with their record: a vote no longer listed, or whose check is final. Only from a whole list.
+                if (after == null) forgetAttempts { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
             } catch (e: VaultFailure) {
                 synchronized(lock) {
                     if (gen == generation) {
@@ -716,12 +751,17 @@ class VotesManager(
 
     // ---- The results ----
 
-    /** The checks that are due: closed, `pending`, and not before the vault's `due_at`. */
+    /**
+     * The checks that are due: closed, `pending`, and not before the vault's `due_at`; and (VAULT-MESSAGING 0.86.4 §10.19.6,
+     * owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK) closed and `gave_up`, which is not final: run again whenever the app
+     * opens, as a `pending` one, but at most once a day per record, keyed off the state (a `gave_up` check has no `due_at`).
+     */
     private suspend fun submitDue() {
         val at = now()
         for (v in votesFlow.value) {
             val c = v.check ?: continue
-            val due = v.state == VoteState.CLOSED && c.state == CheckState.PENDING && !(c.dueAt != null && c.dueAt.isAfter(at))
+            val pending = c.state == CheckState.PENDING && !(c.dueAt != null && c.dueAt.isAfter(at))
+            val due = v.state == VoteState.CLOSED && (pending || c.state == CheckState.GAVE_UP && dailyDue(v.key, at))
             // One vote's failure does not stop the others; a cancellation does (it is not caught).
             if (due) {
                 try {
@@ -735,34 +775,76 @@ class VotesManager(
         }
     }
 
-    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
     override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
         return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
-            // Its own job, so that a lock (clear) can cancel the check and not the caller (lead review L2).
-            coroutineScope {
-                val gen = synchronized(lock) { generation }
-                val check = async { checkResultsLocked(key, connectionId, proposalId, gen) }
-                if (!synchronized(lock) { (gen == generation).also { if (it) checks += check } }) check.cancel()
-                try {
-                    check.await()
-                } catch (e: CancellationException) {
-                    // The caller's own cancellation (leaving the screen, the sync stopped) goes on; a check that a lock or
-                    // clear cancelled is void, as one that runs to its end after it (R1-2).
-                    if (!isActive || synchronized(lock) { gen == generation }) throw e
-                    ResultsOutcome.Voided
-                } finally {
-                    synchronized(lock) { checks -= check }
+            val gen = synchronized(lock) { generation }
+            val trace = Trace()
+            var out: ResultsOutcome? = null
+            var cancelled = false
+            try {
+                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, trace) }.also { out = it }
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            } finally {
+                // Kept for the daily re-check, whatever the attempt came to (a failure too: then rows.json is fetched again
+                // next time, since a lost submission may be the cause). Not after a lock or clear (R1-2), nor a cancellation.
+                if (!cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }) {
+                    withContext(NonCancellable) { recordAttempt(key, trace, out) }
                 }
             }
         }
     }
 
+    /**
+     * Runs [block] as its own job, so that a lock ([clear]) can cancel the check and not the caller (lead review L2). The
+     * caller's own cancellation (leaving the screen, the sync stopped) goes on; a check that a lock or clear cancelled is
+     * void ([ResultsOutcome.Voided]), as one that runs to its end after it (R1-2).
+     */
+    private suspend fun asCheck(gen: Int, block: suspend () -> ResultsOutcome): ResultsOutcome = coroutineScope {
+        val check = async { block() }
+        if (!synchronized(lock) { (gen == generation).also { if (it) checks += check } }) check.cancel()
+        try {
+            check.await()
+        } catch (e: CancellationException) {
+            if (!isActive || synchronized(lock) { gen == generation }) throw e
+            ResultsOutcome.Voided
+        } finally {
+            synchronized(lock) { checks -= check }
+        }
+    }
+
+    /** What one attempt saw, for [ResultsAttempt]. */
+    private class Trace {
+        var resultsSha256: String? = null
+        var rowsFetched = false
+        var vaultSide = false
+    }
+
+    /** The rows a submission carries (§10.19.8): the member's row and up to four more under its tag, or `rows_unavailable`. */
+    private class Examined(val own: OwnRow?, val others: List<OwnRow>, val observerFailed: Boolean) {
+        val unavailable: Boolean get() = own == null
+
+        companion object {
+            /** The member's row cannot be had (§10.19.6 step 1): the observer's check cannot pass either. */
+            val UNAVAILABLE = Examined(null, emptyList(), observerFailed = true)
+        }
+    }
+
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
-    private suspend fun checkResultsLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
+    private suspend fun checkResultsLocked(
+        key: String,
+        connectionId: String,
+        proposalId: String,
+        gen: Int,
+        trace: Trace,
+    ): ResultsOutcome = run {
         // A lock (or any clear) during the check voids it: its hints are not written and nothing is submitted (R1-2), and
         // [clear] cancels it (L2).
         if (!site.configured) return@run ResultsOutcome.SiteUnreachable
+        // `other_rows` and `rows_unavailable` only to a vault that lists `vote_rows` (§10.19.6 step 3, "Version gating").
+        val rowsOk = voteRows()
         val detail = get(connectionId, proposalId)
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
             ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
@@ -784,122 +866,288 @@ class VotesManager(
         val doc = fetch("results.json", RESULTS_MAX)
         if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
         if (doc == null) return@run unavailable(key, siteDown, gen)
+        trace.resultsSha256 = Bytes.hex(Bytes.sha256(doc))
+        // A `gave_up` check run again (0.84.1 §10.19.6): with the same results.json as the last attempt, which had rows.json
+        // and did not end on the vault's side, rows.json is not downloaded again and nothing is sent.
+        if (votesFlow.value.firstOrNull { it.key == key }?.check?.state == CheckState.GAVE_UP) {
+            val last = attemptOf(key)
+            if (last != null && last.resultsSha256 == trace.resultsSha256 && last.rowsFetched && !last.vaultSide) {
+                trace.rowsFetched = true
+                return@run ResultsOutcome.Unchanged
+            }
+        }
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
-        // The download cap of rows.json follows counts.eligible (§10.19.6 step 1); results whose counts do not read are a problem.
-        // Reading it parses results.json (up to 192 KiB), so it runs where the rest of the reading does (lead review L1).
-        val rowsCap = withContext(compute) {
-            computeStep("$key:cap")
-            VoteRows.rowsCap(doc)
-        } ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
-        val rows = fetch("rows.json", rowsCap)
         if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
-        if (sig == null || bundleBytes == null || rows == null) {
-            return@run unavailable(key, siteDown, gen)
-        }
+        if (sig == null || bundleBytes == null) return@run unavailable(key, siteDown, gen)
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
         if (!VoteSync.submittable(doc, sig)) return@run fail(key, ResultsOutcome.Problem, gen = gen)
         val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH)
             ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
+        // The download cap of rows.json follows counts.eligible (§10.19.6 step 1); results whose counts do not read are a
+        // problem. An integer outside 1 to 100,000 cannot bound rows.json: with `vote_rows` the row cannot be had and the
+        // vault judges the results themselves (a wrong counts.eligible is a contradiction, step 3).
+        // Reading it parses results.json (up to 192 KiB), so it runs where the rest of the reading does (lead review L1).
+        val (rowsCap, outOfRange) = withContext(compute) {
+            computeStep("$key:cap")
+            val cap = VoteRows.rowsCap(doc)
+            cap to (cap == null && rowsOk && VoteRows.eligibleOutOfRange(doc))
+        }
+        if (rowsCap == null && !outOfRange) return@run fail(key, ResultsOutcome.Problem, gen = gen)
+        val rows = rowsCap?.let { fetch("rows.json", it) }
+        // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
+        val rowsOver = tooLarge
+        if (rowsOver && !rowsOk) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
+        if (rowsCap != null && rows == null && !rowsOver) return@run unavailable(key, siteDown, gen)
+        trace.rowsFetched = true
         // The heavy part (up to 51 MB: the hash, the reading, the trees, the proof, the signatures) in one block off the
         // main thread. The observer's verdict is only shown, never a reason not to submit (0.83.2).
-        val examined = withContext(compute) {
-            // Every 256 rows and tree nodes: a cancellation (leaving the screen ends its viewModelScope; a lock cancels the
-            // sync job and every check in flight, Check again included) stops the work there. Whatever still returns after a
-            // lock is voided by the generation check below.
+        val examined = if (rows == null) {
+            Examined.UNAVAILABLE
+        } else {
+            withContext(compute) {
+                // Every 256 rows and tree nodes: a cancellation (leaving the screen ends its viewModelScope; a lock cancels the
+                // sync job and every check in flight, Check again included) stops the work there. Whatever still returns after
+                // a lock is voided by the generation check below.
+                val ctx = coroutineContext
+                fun step(stage: String) {
+                    computeStep("$key:$stage")
+                    ctx.ensureActive()
+                }
+                // What stops the submit of a row (§10.19.6 step 1): with `vote_rows` the row cannot be had and
+                // `rows_unavailable` is sent; without it nothing is (0.83.2). Results that do not read are never sent.
+                fun cannotHave(p: ResultsProblem): Examined? = if (rowsOk && p.reason != "results") Examined.UNAVAILABLE else null
+                step("read")
+                val published = try {
+                    VoteRows.read(doc, rows, tag) { step("read") }
+                } catch (p: ResultsProblem) {
+                    return@withContext cannotHave(p)
+                }
+                step("row")
+                val own = try {
+                    published.ownRow(tag) { step("row") }
+                } catch (p: ResultsProblem) {
+                    return@withContext cannotHave(p)
+                }
+                // Another row under the member's tag (§10.19.6 step 1): the first four with their proofs, as `other_rows`.
+                val others = if (!rowsOk) {
+                    emptyList()
+                } else {
+                    try {
+                        published.otherRows { step("row") }
+                    } catch (p: ResultsProblem) {
+                        return@withContext cannotHave(p)
+                    }
+                }
+                step("observe")
+                Examined(own, others, observerFailsInTime(published, proposalId, detail) { step("observe") })
+            } ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
+        }
+        val ballot = examined.own?.ballot
+        // (0.81.6) A choice id the vault would refuse (and with it the whole submission): with `vote_rows`, `rows_unavailable`;
+        // without it the site's problem, not submitted.
+        val chosen = if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) {
+            if (!rowsOk) return@run fail(key, ResultsOutcome.Problem, gen = gen)
+            Examined.UNAVAILABLE
+        } else {
+            examined
+        }
+        var body = submitBody(connectionId, proposalId, doc, sig, bundle, chosen)
+        var sent = chosen
+        when (VoteSync.inline(VoteSync.encoded(body))) {
+            VoteSync.Inline.FITS -> Unit
+            // Over the request limit: the vault could never take it. Extra rows too large to send leave the row not had.
+            VoteSync.Inline.TOO_LARGE -> {
+                if (!rowsOk || sent.unavailable) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
+                sent = Examined.UNAVAILABLE
+                body = submitBody(connectionId, proposalId, doc, sig, bundle, sent)
+                if (VoteSync.inline(VoteSync.encoded(body)) != VoteSync.Inline.FITS) {
+                    return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
+                }
+            }
+            // Any other failure is a problem, not a size.
+            VoteSync.Inline.OTHER -> return@run fail(key, ResultsOutcome.Problem, gen = gen)
+        }
+        if (synchronized(lock) { gen != generation }) return@run ResultsOutcome.Voided
+        // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
+        hint(key, gen) { it.copy(observerFailed = sent.observerFailed) }
+        val answer = vaultGuard { ops().submit(body) }
+        val check = answer["check"] as? JsonObject
+        val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
+        val reason = check?.let { c -> VaultJson.str(c, "reason") }
+        trace.vaultSide = reason in VAULT_SIDE
+        // The vault alone judges; a submission it leaves pending (reason input) is the problem the screens say.
+        val input = state == CheckState.PENDING && reason == "input"
+        val verdict = if (sent.observerFailed) ObserverVerdict.FAILED else ObserverVerdict.PASSED
+        hint(key, gen) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false, verdict = verdict, notRechecked = false) }
+        refreshQuietly()
+        ResultsOutcome.Submitted(state)
+    }
+
+    /**
+     * The body of `vote.results.submit` (VAULT-MESSAGING 0.86.4 §10.19.8): the results as served, and either the member's
+     * row with its proof (and `other_rows` when there are more under its tag), or `rows_unavailable: true` and no row.
+     * Every ballot carries `pad` (§10.19.5).
+     */
+    private fun submitBody(
+        connectionId: String,
+        proposalId: String,
+        doc: ByteArray,
+        sig: ByteArray,
+        bundle: JsonObject,
+        rows: Examined,
+    ): JsonObject = buildJsonObject {
+        put("connection_id", connectionId)
+        put("proposal_id", proposalId)
+        put("results", Base64s.encodeStd(doc))
+        put("results_sig", Base64s.encodeStd(sig))
+        put("bundle", bundle)
+        val own = rows.own
+        if (own == null) {
+            put("rows_unavailable", true)
+            return@buildJsonObject
+        }
+        put("row", rowJson(own))
+        put("row_proof", proofJson(own))
+        if (rows.others.isNotEmpty()) {
+            put(
+                "other_rows",
+                JsonArray(
+                    rows.others.map { r ->
+                        buildJsonObject {
+                            put("row", rowJson(r))
+                            put("proof", proofJson(r))
+                        }
+                    },
+                ),
+            )
+        }
+    }
+
+    private fun rowJson(r: OwnRow): JsonObject = buildJsonObject {
+        val ballot = r.ballot
+        if (ballot == null) {
+            put("ballot", JsonNull)
+        } else {
+            put(
+                "ballot",
+                buildJsonObject {
+                    // Canonical base64 decodes and encodes back to the same text: these are the site's bytes.
+                    put("vk", Base64s.encodeStd(ballot.vk))
+                    put("choice_id", ballot.choice)
+                    put("ballot_sig", Base64s.encodeStd(ballot.ballotSig))
+                    put("pad", VotePad.of(ballot.choiceId))
+                },
+            )
+        }
+    }
+
+    private fun proofJson(r: OwnRow): JsonObject = buildJsonObject {
+        put("index", r.index)
+        put("tree_size", r.treeSize)
+        put("path", JsonArray(r.path.map { JsonPrimitive(Base64s.encodeStd(it)) }))
+    }
+
+    // ---- The kept attempts (no choice, row or proof) ----
+
+    @Volatile
+    private var attemptsHeld: List<ResultsAttempt>? = null
+    private val attemptsLock = Mutex()
+
+    private suspend fun <T> withAttempts(block: (List<ResultsAttempt>) -> Pair<List<ResultsAttempt>?, T>): T =
+        attemptsLock.withLock {
+            withContext(io) {
+                val held = attemptsHeld ?: runCatching { attempts.load() }.getOrDefault(emptyList()).also { attemptsHeld = it }
+                val (next, out) = block(held)
+                if (next != null && next != held) {
+                    attemptsHeld = next
+                    // A store that cannot be written keeps the memory copy: the daily limit then holds until a restart.
+                    runCatching { attempts.save(next) }
+                }
+                out
+            }
+        }
+
+    private suspend fun attemptOf(key: String): ResultsAttempt? = withAttempts { list -> null to list.firstOrNull { it.key == key } }
+
+    /** A `gave_up` check is run again at most once a day per record (§10.19.6); a clock set back does not hold it up. */
+    private suspend fun dailyDue(key: String, at: Instant): Boolean {
+        val last = attemptOf(key) ?: return true
+        val since = at.toEpochMilli() - last.atMs
+        return since < 0 || since >= RECHECK_EVERY.toMillis()
+    }
+
+    private suspend fun recordAttempt(key: String, trace: Trace, out: ResultsOutcome?) {
+        val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
+        // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
+        val entry = ResultsAttempt(key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide)
+        withAttempts { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
+    }
+
+    private suspend fun forgetAttempts(gone: (ResultsAttempt) -> Boolean) {
+        withAttempts { list -> list.filterNot(gone) to Unit }
+    }
+
+    private fun finalCheck(state: CheckState?): Boolean =
+        state == CheckState.VERIFIED || state == CheckState.UNCONFIRMED || state == CheckState.FAILED
+
+    override suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome {
+        val key = VoteKeys.of(connectionId, proposalId)
+        return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
+            // A child job as a results check is (lead review L2): a lock cancels it and it is void.
+            val gen = synchronized(lock) { generation }
+            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen) }
+        }
+    }
+
+    /** The observer's check alone, on the published results as they are now; nothing is submitted or kept on disk. */
+    @Suppress("ReturnCount")
+    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
+        if (!site.configured) return@run notRechecked(key, gen)
+        val detail = get(connectionId, proposalId)
+        val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
+            ?: return@run rechecked(key, passed = false, gen)
+        val doc = when (val a = site.get("p/$proposalId/results.json", RESULTS_MAX)) {
+            is SiteAnswer.Found -> a.bytes
+            SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
+            SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
+        }
+        val cap = withContext(compute) {
+            computeStep("$key:cap")
+            VoteRows.rowsCap(doc)
+        } ?: return@run rechecked(key, passed = false, gen)
+        val rows = when (val a = site.get("p/$proposalId/rows.json", cap)) {
+            is SiteAnswer.Found -> a.bytes
+            SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
+            SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
+        }
+        val passed = withContext(compute) {
             val ctx = coroutineContext
             fun step(stage: String) {
                 computeStep("$key:$stage")
                 ctx.ensureActive()
             }
-            step("read")
-            val published = try {
-                VoteRows.read(doc, rows, tag) { step("read") }
-            } catch (_: ResultsProblem) {
-                return@withContext null
-            }
-            step("row")
-            val own = try {
+            try {
+                val published = VoteRows.read(doc, rows, tag) { step("read") }
                 published.ownRow(tag) { step("row") }
+                !observerFailsInTime(published, proposalId, detail) { step("observe") }
             } catch (_: ResultsProblem) {
-                return@withContext null
+                false
             }
-            step("observe")
-            // Time-boxed (lead review M1): a check that runs out of time is an observer failure like any other and the row is
-            // still submitted. Only the observer's own scope is cancelled at the limit; a cancellation of the check itself
-            // passes through withTimeoutOrNull as before.
-            // The box scales with the rows (Opus recheck 3, M1-a): a fixed 60 s could time out an honest 100,000-row vote on a
-            // slow phone and show "don't add up". counts.eligible also capped the download of rows.json (rowsCap).
-            val eligible = try {
-                published.counts().eligible
-            } catch (_: ResultsProblem) {
-                0L
-            }
-            val failed = withTimeoutOrNull(observeLimitFor(eligible, observeLimit).toMillis()) {
-                val inner = coroutineContext
-                observerFails(published, proposalId, detail) {
-                    step("observe")
-                    inner.ensureActive()
-                }
-            } ?: true
-            Examined(own, failed)
-        } ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
-        val own = examined.own
-        val ballot = own.ballot
-        // (0.81.6) A choice id the vault would refuse (and with it the whole submission) is the site's problem: not submitted.
-        if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) return@run fail(key, ResultsOutcome.Problem, gen = gen)
-        val body = buildJsonObject {
-            put("connection_id", connectionId)
-            put("proposal_id", proposalId)
-            put("results", Base64s.encodeStd(doc))
-            put("results_sig", Base64s.encodeStd(sig))
-            put("bundle", bundle)
-            put(
-                "row",
-                buildJsonObject {
-                    if (ballot == null) {
-                        put("ballot", JsonNull)
-                    } else {
-                        put(
-                            "ballot",
-                            buildJsonObject {
-                                // Canonical base64 decodes and encodes back to the same text: these are the site's bytes.
-                                put("vk", Base64s.encodeStd(ballot.vk))
-                                put("choice_id", ballot.choice)
-                                put("ballot_sig", Base64s.encodeStd(ballot.ballotSig))
-                            },
-                        )
-                    }
-                },
-            )
-            put(
-                "row_proof",
-                buildJsonObject {
-                    put("index", own.index)
-                    put("tree_size", own.treeSize)
-                    put("path", JsonArray(own.path.map { JsonPrimitive(Base64s.encodeStd(it)) }))
-                },
-            )
         }
-        // Over the request limit: the vault could never take it.
-        when (VoteSync.inline(VoteSync.encoded(body))) {
-            VoteSync.Inline.FITS -> Unit
-            // Over the request limit: the vault could never take it. Any other failure is a problem, not a size.
-            VoteSync.Inline.TOO_LARGE -> return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
-            VoteSync.Inline.OTHER -> return@run fail(key, ResultsOutcome.Problem, gen = gen)
-        }
-        if (synchronized(lock) { gen != generation }) return@run ResultsOutcome.Voided
-        // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
-        hint(key, gen) { it.copy(observerFailed = examined.observerFailed) }
-        val answer = vaultGuard { ops().submit(body) }
-        val check = answer["check"] as? JsonObject
-        val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
-        // The vault alone judges; a submission it leaves pending (reason input) is the problem the screens say.
-        val input = state == CheckState.PENDING && check?.let { c -> VaultJson.str(c, "reason") } == "input"
-        val verdict = if (examined.observerFailed) ObserverVerdict.FAILED else ObserverVerdict.PASSED
-        hint(key, gen) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false, verdict = verdict) }
-        refreshQuietly()
-        ResultsOutcome.Submitted(state)
+        rechecked(key, passed, gen)
+    }
+
+    private fun rechecked(key: String, passed: Boolean, gen: Int): ResultsOutcome {
+        if (synchronized(lock) { gen != generation }) return ResultsOutcome.Voided
+        val verdict = if (passed) ObserverVerdict.PASSED else ObserverVerdict.FAILED
+        hint(key, gen) { it.copy(verdict = verdict, observerFailed = !passed, notRechecked = false) }
+        return ResultsOutcome.Rechecked(passed)
+    }
+
+    private fun notRechecked(key: String, gen: Int): ResultsOutcome {
+        hint(key, gen) { it.copy(notRechecked = true) }
+        return ResultsOutcome.SiteUnreachable
     }
 
     /**
@@ -921,8 +1169,32 @@ class VotesManager(
         true
     }
 
-    /** The member's row and whether the observer's check failed. */
-    private class Examined(val own: OwnRow, val observerFailed: Boolean)
+
+    /**
+     * [observerFails] time-boxed (lead review M1): a check that runs out of time is an observer failure like any other and the
+     * row is still submitted. Only the observer's own scope is cancelled at the limit; a cancellation of the check itself
+     * passes through withTimeoutOrNull as before. The box scales with the rows (Opus recheck 3, M1-a): a fixed 60 s could time
+     * out an honest 100,000-row vote on a slow phone and show "don't add up". counts.eligible also capped rows.json (rowsCap).
+     */
+    private suspend fun observerFailsInTime(
+        published: PublishedResults,
+        proposalId: String,
+        detail: VoteDetail,
+        checkpoint: () -> Unit,
+    ): Boolean {
+        val eligible = try {
+            published.counts().eligible
+        } catch (_: ResultsProblem) {
+            0L
+        }
+        return withTimeoutOrNull(observeLimitFor(eligible, observeLimit).toMillis()) {
+            val inner = coroutineContext
+            observerFails(published, proposalId, detail) {
+                checkpoint()
+                inner.ensureActive()
+            }
+        } ?: true
+    }
 
     /** The site could not be reached, or had no results (yet): which of the two is what a `gave_up` check will say. */
     private fun unavailable(key: String, siteDown: Boolean, gen: Int? = null): ResultsOutcome =
@@ -994,5 +1266,11 @@ class VotesManager(
         const val INDEX_MAX = 8L shl 20
         const val UPLOAD_TRIES = 2
         const val UPLOAD_WAIT_MS = 5_000L
+
+        /** A `gave_up` check runs again at most once a day per record (VAULT-MESSAGING 0.86.4 §10.19.6). */
+        val RECHECK_EVERY: Duration = Duration.ofDays(1)
+
+        /** The reasons of a check left on the vault's side: rows.json is fetched again after them (§10.19.6). */
+        val VAULT_SIDE = setOf("trust_root", "service_list", "clock")
     }
 }

@@ -1,5 +1,6 @@
 package com.vettid.core.vault
 
+import com.vettid.core.crypto.vote.VotePad
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -34,18 +35,22 @@ suspend fun VaultApi.voteList(
 suspend fun VaultApi.voteGet(connectionId: String, proposalId: String): JsonObject = device.op("vote.get", pair(connectionId, proposalId))
 
 /**
- * `vote.cast{connection_id, proposal_id, choice_id}`: `{proposal_id, ballot: {state}}`. A repeat is safe (a second tap or a
- * timeout); `credential_locked` means the unlock window is closed (open it and send again).
+ * `vote.cast{connection_id, proposal_id, choice_id, pad}`: `{proposal_id, ballot: {state}}`. A repeat is safe (a second tap
+ * or a timeout); `credential_locked` means the unlock window is closed (open it and send again).
  */
 suspend fun VaultApi.voteCast(connectionId: String, proposalId: String, choiceId: String): JsonObject =
-    device.op(
-        "vote.cast",
-        buildJsonObject {
-            put("connection_id", connectionId)
-            put("proposal_id", proposalId)
-            put("choice_id", choiceId)
-        },
-    )
+    device.op("vote.cast", voteCastBody(connectionId, proposalId, choiceId))
+
+/**
+ * The body of `vote.cast` (VAULT-MESSAGING 0.86.4 §10.19.8): with `pad` (§10.19.5, [VotePad]), so that its size is the same
+ * for every `choice_id` of 1 to 32 bytes.
+ */
+fun voteCastBody(connectionId: String, proposalId: String, choiceId: String): JsonObject = buildJsonObject {
+    put("connection_id", connectionId)
+    put("proposal_id", proposalId)
+    put("choice_id", choiceId)
+    put("pad", VotePad.of(choiceId))
+}
 
 /** `vote.check{connection_id, proposal_id}`: asks the service `vote.status` now; `{}`. */
 suspend fun VaultApi.voteCheck(connectionId: String, proposalId: String) {
@@ -105,7 +110,10 @@ suspend fun VaultApi.voteSiteSyncBlob(blobId: String, keyB64: String, sha256B64:
         },
     )
 
-/** `vote.results.submit{connection_id, proposal_id, results, results_sig, bundle, row, row_proof}` (§10.19.6) as built by the caller. */
+/**
+ * `vote.results.submit{connection_id, proposal_id, results, results_sig, bundle, row, row_proof, other_rows?}` or with
+ * `rows_unavailable: true` instead of the rows (§10.19.6, §10.19.8) as built by the caller.
+ */
 suspend fun VaultApi.voteResultsSubmit(body: JsonObject): JsonObject = device.op("vote.results.submit", body)
 
 private fun pair(connectionId: String, proposalId: String) = buildJsonObject {

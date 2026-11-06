@@ -101,6 +101,13 @@ internal object VotesCatalog {
         "vote.results_dont_add_up" to {
             Vote(closed, detail(closed, "abstain", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = com.vettid.core.data.votes.VoteHint(observerFailed = true, verdict = com.vettid.core.data.votes.ObserverVerdict.FAILED))
         },
+        "vote.results_not_rechecked" to {
+            Vote(closed, detail(closed, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = com.vettid.core.data.votes.VoteHint(notRechecked = true))
+        },
+        "vote.rows_unavailable" to {
+            val s = closed.copy(check = VoteCheck(CheckState.GAVE_UP, "rows_unavailable"))
+            Vote(s, detail(s, "yes"))
+        },
         "vote.conflict_after_verified" to {
             val s = closed.copy(conflictEvidence = true)
             Vote(s, detail(s, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = passed)

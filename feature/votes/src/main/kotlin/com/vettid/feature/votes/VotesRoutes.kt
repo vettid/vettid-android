@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -76,6 +78,8 @@ fun NavGraphBuilder.votesDestination(chrome: ShellChrome, host: VotesHost) {
     composable<VoteRoute> {
         val vm: VoteViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         VoteScreen(
             state,
             VoteActions(

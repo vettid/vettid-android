@@ -115,6 +115,17 @@ class VoteTextsTest {
     }
 
     @Test
+    fun theNotRecheckedLineIsTheOwnersText() {
+        // ANDROID-PLAN 0.1.121 table, approved by the owner 2026-11-03.
+        assertEquals(
+            "VettID could not check the published results of this vote again just now, so their numbers are not shown. " +
+                "It will try again when you open this vote.",
+            r.getString(R.string.vote_results_not_rechecked),
+        )
+        assertEquals(r.getString(R.string.vote_results_not_rechecked), VoteTexts.text(r, VoteNote.RESULTS_NOT_RECHECKED, "Example", ""))
+    }
+
+    @Test
     fun theReservedAbstainIsAlwaysTheAppsOwnWord() {
         assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", "Skip this one"))
         assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", null))

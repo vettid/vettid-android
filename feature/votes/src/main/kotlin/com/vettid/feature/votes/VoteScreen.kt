@@ -244,6 +244,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             notListedLate = state.hint.notListedLate(now),
             resultsTooLarge = state.hint.resultsTooLarge,
             observerFailed = state.hint.observerFailed,
+            notRechecked = state.hint.notRechecked,
         )
         val time = s.opensAt?.let { Times.full(it) }.orEmpty()
         Column(
