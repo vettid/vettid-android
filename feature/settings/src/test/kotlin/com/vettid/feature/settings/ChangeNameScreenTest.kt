@@ -1,12 +1,14 @@
 package com.vettid.feature.settings
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performImeAction
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
@@ -122,5 +124,26 @@ class ChangeNameScreenTest {
         rule.onNodeWithTag("change_name_sent_hidden").assertIsDisplayed()
         rule.onNodeWithText("Name change requested").assertDoesNotExist()
         rule.onNodeWithText("Ada King", substring = true).assertDoesNotExist()
+    }
+
+    /**
+     * Next on the first name moves to the last name (it did nothing: an empty handler replaced the keyboard's own move); Done
+     * on the last name still continues, once.
+     */
+    @Test
+    fun nextOnTheFirstNameMovesToTheLastNameAndDoneOnTheLastContinues() {
+        var next = 0
+        rule.setContent {
+            ChangeNameContent(
+                ChangeNameUiState(account = account, first = "Ada", last = "King"),
+                ChangeNameActions(onNext = { next++ }),
+                now,
+            )
+        }
+        rule.onNodeWithTag("name_first").performImeAction()
+        rule.onNodeWithTag("name_last").assertIsFocused()
+        assertEquals(0, next)
+        rule.onNodeWithTag("name_last").performImeAction()
+        assertEquals(1, next)
     }
 }

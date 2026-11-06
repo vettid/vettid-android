@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Badge
@@ -33,8 +34,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -361,7 +364,7 @@ private fun NamesStep(state: ChangeNameUiState, actions: ChangeNameActions, now:
             }
             NameField(
                 state.first, actions.onFirst, stringResource(R.string.settings_name_first),
-                if (state.checked) nameError(state.firstCheck) else null, ImeAction.Next, {}, "name_first",
+                if (state.checked) nameError(state.firstCheck) else null, ImeAction.Next, null, "name_first",
             )
             NameField(
                 state.last, actions.onLast, stringResource(R.string.settings_name_last),
@@ -385,9 +388,10 @@ private fun NameField(
     label: String,
     error: String?,
     ime: ImeAction,
-    onIme: () -> Unit,
+    onIme: (() -> Unit)?,
     tag: String,
 ) {
+    val focus = LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
@@ -396,7 +400,15 @@ private fun NameField(
         isError = error != null,
         singleLine = true,
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ime),
-        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onAny = { onIme() }),
+        // Without a handler, Next goes to the field below (an empty one would do nothing).
+        keyboardActions = KeyboardActions(
+            onAny = {
+                when {
+                    onIme != null -> onIme()
+                    ime == ImeAction.Next -> focus.moveFocus(FocusDirection.Down)
+                }
+            },
+        ),
         modifier = Modifier.fillMaxWidth().testTag(tag),
     )
 }
