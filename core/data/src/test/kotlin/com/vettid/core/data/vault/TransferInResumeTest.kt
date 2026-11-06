@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -145,7 +146,7 @@ class TransferInResumeTest {
         assertEquals(25_000L, waits[0])
         assertTrue(starts[1] >= 25_000L + 30_000L)
         assertTrue("an abandoned request may hold a lease: the window moved out", droppedAt > TransferInResume.SETTLE_WINDOW_MS)
-        assertTrue(droppedAt <= TransferInResume.SETTLE_WINDOW_MS + TransferInResume.SETTLE_MAX_EXTRA_MS + 25_000L + 30_000L)
+        assertEquals(400_000L, droppedAt)
     }
 
     @Test
@@ -279,15 +280,16 @@ class TransferInResumeTest {
     /** (review of #302, 5) Abandoned requests move the end out by at most the clamped visibility timeout. */
     @Test
     fun theExtensionIsCappedAtTheVisibilityTimeout() = runTest {
-        assertEquals(60_000L, TransferInResume.SETTLE_MAX_EXTRA_MS)
+        assertEquals(95_000L, TransferInResume.SETTLE_MAX_EXTRA_MS)
         assertEquals(60_000L, TransferInResume.visibilityMs(null))
         assertEquals(300_000L, TransferInResume.visibilityMs(3_600))
         assertEquals(0L, TransferInResume.visibilityMs(0))
         var droppedAt = -1L
         val settle = TransferInResume.Settle(maxExtraMs = 10_000, now = { testScheduler.currentTime })
         TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = settle)
-        // First end 90 s, at most 10 s more; the last request started before 100 s and is bounded by wait + 30 s.
-        assertTrue("dropped at $droppedAt", droppedAt <= 100_000 + 25_000 + 30_000)
+        // The END stays within first end 90 s + 10 s; the abandoned requests' leases (up to a visibility timeout past their
+        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 301 s here.
+        assertEquals(301_000L, droppedAt)
     }
 
     /**
@@ -387,7 +389,9 @@ class TransferInResumeTest {
         TransferInResume.atDeadline({ false }, { at += t; throw IOException("down") }, {}, settle = timing())
         val gaps = at.zipWithNext { a, b -> b - a }
         assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), gaps.take(4))
-        assertTrue(gaps.all { it <= 8_000L })
+        // the last gap is the held final collect (a lost attempt may hold a lease); the others are the backoff
+        // after the 1, 2, 4 s backoff: 8 s steps to the cap, then the held last collect (V + 5 s later) and the one extra (V + 5 s)
+        assertEquals(List(21) { 8_000L } + listOf(65_000L, 65_000L), gaps.drop(4))
     }
 
     @Test

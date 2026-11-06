@@ -109,6 +109,13 @@ class VaultDeviceTest {
     @Volatile
     private var batchSize = 1
 
+    /** When set, a collect (GET) is answered with a dropped connection (a lost response, an I/O error). */
+    @Volatile
+    private var dropCollect = false
+
+    /** When set, only the next collect (GET) is dropped; the one after it is served (a lost response, then the retry). */
+    private val dropNextCollect = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** When set, acks (DELETE) are refused with 403. */
     @Volatile
     private var refuseAck = false
@@ -190,6 +197,10 @@ class VaultDeviceTest {
                         refused.incrementAndGet()
                         MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
                     }
+                    path == "/v1/mailbox" && request.method == "GET" && dropNextCollect.compareAndSet(true, false) ->
+                        MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
+                    path == "/v1/mailbox" && request.method == "GET" && dropCollect ->
+                        MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
                     path == "/v1/mailbox" && request.method == "GET" && refuseCollect != null ->
                         MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && serveMailbox -> {
@@ -1470,6 +1481,197 @@ class VaultDeviceTest {
             assertEquals("dev-2", d.deviceId)
             refuseAck = false
             batchSize = 1
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The collector's in-flight request cut by a stop (a reconnect, a restart) is counted ([VaultDevice.collectorCuts]) for the
+     * transfer's settlement window; a stop with no request out is not.
+     */
+    @Test
+    fun stoppingTheCollectionWithARequestOutIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.stop() // nothing running
+            assertEquals(0L, d.collectorCuts)
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the collection's request is out, holding it
+            assertNotNull(d.collectRequestSince)
+            d.stop()
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10) // counted by the cancelled round
+            kotlinx.coroutines.delay(300)
+            assertEquals("exactly once", 1L, d.collectorCuts)
+            leaseGate!!.countDown()
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The collector's request that fails with an I/O error that is not a relay status (a lost response) may have been handed
+     * a message and is counted as a cut; a request answered with a relay status is not.
+     */
+    @Test
+    fun aCollectorRequestLostToAnIoErrorIsACutAStatusIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            // A status (403): terminal for the collector, nothing handed out: no cut.
+            refuseCollect = RelayException.TOKEN_REVOKED
+            d.start(scope)
+            while (d.collecting) kotlinx.coroutines.delay(10)
+            assertEquals("a relay status is not a cut", 0L, d.collectorCuts)
+            refuseCollect = null
+            // A lost response: a cut.
+            dropCollect = true
+            d.start(scope)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
+            assertTrue(d.collectorCuts >= 1L)
+            dropCollect = false
+            d.stop()
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * A batch [m1, m2] whose first ack is refused with a relay status aborts the rest of the batch: m2 (possibly the
+     * device.paired) stays leased and unhandled, so the collector's request counts as lost. (A status on the request itself,
+     * before any message, does not: see the test above.)
+     */
+    @Test
+    fun aRefusedAckMidBatchLeavesTheRestLeasedAndIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            batchSize = 2
+            refuseAck = true
+            queued.add(v.seal("test.noop", "{}"))
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (d.collecting) kotlinx.coroutines.delay(10) // the refused ack ends the collection
+            assertEquals(1L, d.collectorCuts)
+            refuseAck = false
+            batchSize = 1
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The collection's job cancelled (its scope ended, not [VaultDevice.stop]) with a request out is a cut too: counted
+     * where the round is cancelled.
+     */
+    @Test
+    fun theCollectionsScopeEndingWithARequestOutIsACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the request is out, holding the message
+            assertNotNull(d.collectRequestSince)
+            scope.cancel() // not stop()
+            leaseGate!!.countDown()
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10) // counted when the cancelled round unwinds
+            assertEquals(1L, d.collectorCuts)
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * Exactly one collect response is lost; the client's own retry gets `[]` and the round succeeds (the message it carried is
+     * leased to the lost request). The loss is counted all the same, and the collection goes on.
+     */
+    @Test
+    fun aLostCollectResponseHiddenByTheRetryIsStillACut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            dropNextCollect.set(true)
+            d.start(scope)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
+            assertTrue(d.collectorCuts >= 1L)
+            assertTrue("the retry succeeded: still collecting", d.collecting)
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * The age of the collection's in-flight request is on the elapsed clock (which runs through a suspend), not on
+     * `System.nanoTime()` (which does not): after a deep sleep the request still reads as old, so the settlement keeps waiting
+     * for its lease.
+     */
+    @Test
+    fun theCollectorRequestsAgeCountsAcrossASuspend() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the request is out
+            assertNotNull(d.collectRequestSince)
+            val before = elapsed
+            elapsed += 60_000 // a deep sleep: the elapsed clock jumps, nanoTime barely moves
+            val age = d.collectLastSendAgeMs
+            assertTrue("age counts the suspend: $age", age != null && age >= 60_000)
+            elapsed = before
+            leaseGate!!.countDown()
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /** (R2) The collection keeps a short history of its send times, not only the latest: rounds that ended stay in it. */
+    @Test
+    fun theCollectorKeepsAHistoryOfItsSendTimes() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (d.collectSendsMs.size < 3) kotlinx.coroutines.delay(20)
+            elapsed += 1_000
+            assertEquals("oldest first", d.collectSendsMs.map { it.first }.sorted().reversed(), d.collectSendsMs.map { it.first })
+            assertTrue(d.collectSendsMs.all { it.first >= 1_000 && it.second > 0 })
+            scope.cancel()
             serveMailbox = false
         }
     }

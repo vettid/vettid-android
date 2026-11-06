@@ -25,6 +25,15 @@ internal interface SettleDevice {
     /** Whether the device's own collection is running (it long-polls already). */
     val collecting: Boolean
 
+    /** How many times the collection's in-flight request was cut (stopped or restarted with a request out). */
+    val collectorCuts: Long
+
+    /** How long ago the collection's latest request went out (ms), kept after it ended; null before any. */
+    val collectorLastSendAgeMs: Long?
+
+    /** How long ago each of the device's latest requests went out (ms) and the long-poll wait it carried; kept after they ended. */
+    val collectorSendsMs: List<Pair<Long, Long>>
+
     /** The relay's advertised `visibility_timeout_seconds`; may throw. */
     suspend fun relayVisibilitySeconds(): Long?
 
@@ -88,7 +97,11 @@ internal suspend fun settleTransfer(
     serial: TransferInResume.Serial,
     now: () -> Instant = Instant::now,
     timing: (visibilitySeconds: Long?) -> TransferInResume.Settle = {
-        TransferInResume.Settle(windowMs = TransferInResume.windowMs(it), maxExtraMs = TransferInResume.visibilityMs(it))
+        TransferInResume.Settle(
+            windowMs = TransferInResume.windowMs(it),
+            visibilityMs = TransferInResume.visibilityMs(it),
+            maxExtraMs = TransferInResume.visibilityMs(it) + TransferInResume.CAP_MARGIN_MS,
+        )
     },
 ): Settled {
     val visibility = readVisibility(d)
@@ -102,6 +115,9 @@ internal suspend fun settleTransfer(
         alive = run::alive,
         settle = settle,
         awaitRound = { d.awaitCollectorRound() },
+        cuts = { d.collectorCuts },
+        collectorAge = { d.collectorLastSendAgeMs },
+        collectorSends = { d.collectorSendsMs },
     )
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
     // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.

@@ -360,6 +360,45 @@ class VaultDevice private constructor(
     var collectRequestSince: Long? = null
         private set
 
+    private val cuts = java.util.concurrent.atomic.AtomicLong()
+
+    /**
+     * How many times the collection's in-flight relay request was cut, by [stop] (a restart, a reconnect, a lock) or by
+     * the collection's scope ending with a request out, or lost (an I/O error, a status on an ack with messages behind it;
+     * see `MailboxCollector`'s `onLost`). A cut request may have been handed a message that then stays
+     * leased for a visibility timeout (RELAY-PROTOCOL §6.3).
+     */
+    val collectorCuts: Long get() = cuts.get()
+
+    /** When the collection's latest request went out, on [DeviceConfig.elapsedMs] (through sleep); kept after it ended. */
+    @Volatile
+    private var collectLastSendElapsedMs: Long? = null
+
+    /**
+     * How long ago the collection's latest request went out (ms), kept after it ended; null before any. On the elapsed clock,
+     * not `System.nanoTime()` (which does not advance in a suspend): after a deep sleep the age still counts it. A request
+     * that ended just before a freeze or on the wake still has a lease running.
+     */
+    val collectLastSendAgeMs: Long? get() = collectLastSendElapsedMs?.let { cfg.elapsedMs() - it }
+
+    private val collectSends = ArrayDeque<Pair<Long, Long>>()
+
+    private fun noteSend(waitMs: Long) {
+        val at = cfg.elapsedMs()
+        synchronized(collectSends) {
+            collectSends.addLast(at to waitMs)
+            if (collectSends.size > MAX_COLLECT_SENDS) collectSends.removeFirst()
+        }
+    }
+
+    /**
+     * Each of the latest requests this device sent to its mailbox (the last 16, oldest first; the collection's rounds, the
+     * retries inside the client's own retries, and the settlement's collects' retries): how long ago it went out and the
+     * long-poll wait it carried (ms). A long poll's lease starts when the relay returns, up to that wait after the send.
+     */
+    val collectSendsMs: List<Pair<Long, Long>>
+        get() = synchronized(collectSends) { collectSends.map { (cfg.elapsedMs() - it.first) to it.second } }
+
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
@@ -501,9 +540,15 @@ class VaultDevice private constructor(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
                         collectRequestSince = if (out) System.nanoTime() else null
+                        if (out) {
+                            collectLastSendElapsedMs = cfg.elapsedMs()
+                            noteSend(cfg.pollWait.toMillis())
+                        }
                         if (!out) roundsEnded.incrementAndGet()
                     },
                     onReached = ::noteReached,
+                    onLost = { cuts.incrementAndGet() }, // a request lost to an I/O error may have been handed a message
+                    onRetrySent = { noteSend(cfg.pollWait.toMillis()) },
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -511,7 +556,7 @@ class VaultDevice private constructor(
                 collectorEnd.value = e.code
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: RuntimeException) {
+            } catch (e: Exception) {
                 // Anything else that ends it (a message the handler did not expect) is reported the same way, so
                 // that the collection is started again rather than silently gone.
                 collectorEnd.value = e.javaClass.simpleName.ifEmpty { "error" }
@@ -574,6 +619,7 @@ class VaultDevice private constructor(
     @Synchronized
     fun stop() {
         collectScope = null
+        // A request that is out at the relay is cut by this; the cancelled round counts it (once) as lost.
         collector?.cancel()
         collector = null
         collectRequestSince = null
@@ -1130,7 +1176,9 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
-        val msgs = own.collect(wait, Int.MAX_VALUE)
+        val msgs = own.collect(
+            wait, Int.MAX_VALUE, onLostAttempt = { cuts.incrementAndGet() }, onRetrySent = { noteSend(wait.toMillis()) },
+        )
         for (m in msgs) {
             try {
                 handle(m)
@@ -2182,6 +2230,7 @@ class VaultDevice private constructor(
         private const val OPEN_TOKEN_MINUTES = 10L
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L
+        private const val MAX_COLLECT_SENDS = 16
         private val SEEN_RETENTION: Duration = Duration.ofDays(16)
 
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
