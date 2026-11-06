@@ -479,8 +479,9 @@ The A2 exit test:
   unmetered network (`NetworkMeter`: `NET_CAPABILITY_NOT_METERED`; unknown counts as metered; the `unmetered` seam) by
   the daily rule, and on a metered one only when the last rows download (`ResultsAttempt.lastRowsMs`) is at least 7 days
   old (`METERED_ROWS_EVERY`): a weekly cap, not a block. A deferred download ends as `ResultsOutcome.Deferred`: nothing
-  sent, no new text, the vote's own state line; it keeps the last attempt's record (only its time moves, and not for a
-  Check again, which the same cap applies to). Both times are wiped with the attempts. Erratum due (the lead writes it):
+  sent, no new text, the vote's own state line; it keeps the last attempt's record (only its time moves). The member's **Check again is not held by the network cap** (the lead's call on #317 Q2: they asked, so
+  rows.json is downloaded on any network); it still follows the unchanged-results skip, its time rule is unchanged
+  (an `Unchanged` one keeps the last attempt's time, #314 item 3), and its download moves `lastRowsMs` (data was spent, so the weekly mobile cap counts from it). Both times are wiped with the attempts. Erratum due (the lead writes it):
   ANDROID-PLAN §4 "Votes" ("A `gave_up` check run again") and VAULT-MESSAGING §10.19.6 ("at most once a day per record")
   gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):

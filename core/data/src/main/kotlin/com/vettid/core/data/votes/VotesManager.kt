@@ -810,7 +810,7 @@ class VotesManager(
             var out: ResultsOutcome? = null
             var cancelled = false
             try {
-                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, trace) }.also { out = it }
+                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, trace, due) }.also { out = it }
             } catch (e: CancellationException) {
                 cancelled = true
                 throw e
@@ -889,6 +889,8 @@ class VotesManager(
         proposalId: String,
         gen: Int,
         trace: Trace,
+        /** The automatic re-check ([checkDue]); false for the member's Check again, which the network cap does not hold. */
+        due: Boolean,
     ): ResultsOutcome = run {
         // A lock (or any clear) during the check voids it: its hints are not written and nothing is submitted (R1-2), and
         // [clear] cancels it (L2).
@@ -954,7 +956,10 @@ class VotesManager(
         // A `gave_up` record past the 7 days from its first re-check downloads rows.json (up to 51 MB) on a metered network
         // at most weekly (#314 item 1, owner decision a): otherwise nothing more is done now and nothing is sent, as when
         // nothing is sent; the vote's own state line says where it stands. The daily rule still governs the small fetches.
-        if (rowsCap != null && gaveUpNow && rowsDeferred(attemptOf(key), now())) {
+        // The member's own Check again is not held by it (the lead's call on #317 Q2: they asked, so any network); its
+        // download still counts as the last one for the weekly cap.
+        val capped = due && gaveUpNow && rowsDeferred(attemptOf(key), now())
+        if (rowsCap != null && capped) {
             trace.deferred = true
             return@run ResultsOutcome.Deferred
         }

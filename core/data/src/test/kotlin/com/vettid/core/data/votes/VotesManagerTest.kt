@@ -2185,12 +2185,6 @@ class VotesManagerTest {
         net = null
         clock = day(9.0)
         assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
-        // The member's Check again on mobile data: the same cap; its time does not defer the daily re-check.
-        net = false
-        clock = day(9.5)
-        assertEquals(ResultsOutcome.Deferred, m.checkResults(CONN, PID))
-        assertEquals(day(9.0).toEpochMilli(), store.load().single().atMs)
-        assertEquals(2, site.rowsReads())
         // Day 10 on mobile, last download day 3: a week since, downloads.
         clock = day(10.0)
         assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
@@ -2240,5 +2234,40 @@ class VotesManagerTest {
         assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
         assertEquals(3, site.rowsReads())
         assertEquals(clock.toEpochMilli(), store.load().single().firstRecheckMs)
+    }
+
+    @Test
+    fun theMembersCheckAgainIsNotHeldByTheNetworkCap() = runTest {
+        // The lead's call on #317 Q2: Check again downloads on any network; the automatic daily re-check keeps the cap.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        var net: Boolean? = false
+        val m = manager(ops, site, attempts = store, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        fun day(d: Double) = day0.plusSeconds((d * 86_400).toLong())
+        m.checkDue(CONN, PID)
+        clock = day(3.0)
+        m.checkDue(CONN, PID) // the last download: day 3
+        assertEquals(2, site.rowsReads())
+        // Day 9 on mobile, inside the cap: the daily re-check is deferred...
+        clock = day(9.0)
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        // ...and Check again downloads and submits; its download moves the weekly cap.
+        clock = day(9.5)
+        val sent = ops.submitted.size
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, site.rowsReads())
+        assertEquals(sent + 1, ops.submitted.size)
+        assertEquals(day(9.5).toEpochMilli(), store.load().single().lastRowsMs)
+        // Day 10.5 on mobile: the cap now counts from the manual download (day 9.5), deferred.
+        clock = day(10.5)
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        // Check again on an unknown network downloads too.
+        net = null
+        clock = day(11.0)
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(4, site.rowsReads())
     }
 }
