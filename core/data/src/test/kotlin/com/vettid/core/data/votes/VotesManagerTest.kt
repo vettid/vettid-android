@@ -187,6 +187,7 @@ class VotesManagerTest {
         observeLimit: Duration = Duration.ofSeconds(60),
         voteRows: Boolean = false,
         attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
+        unmetered: () -> Boolean? = { null },
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -211,6 +212,7 @@ class VotesManagerTest {
         voteRows = { voteRows },
         attempts = attempts,
         io = Dispatchers.Default,
+        unmetered = unmetered,
     )
 
     @Test
@@ -2089,5 +2091,183 @@ class VotesManagerTest {
         assertTrue(m2.checkDue(CONN, PID) is ResultsOutcome.Submitted)
         assertEquals("1", (ops2.submitted.last()["row_proof"] as JsonObject).str("index"))
         assertEquals(2, site2.reads.count { it == "p/$PID/rows.json" })
+    }
+
+    // ---- #314 (the lead's blind review of #312) ----
+
+    @Test
+    fun aRecheckThatCouldCheckNothingSaysNotRecheckedNotDontAddUp() = runTest {
+        // Item 2: a missing record_tag, results.json over the limit and a cap that does not read check nothing: the
+        // not-rechecked line and no number, never "don't add up".
+        val cases = mapOf<String, (Ops, Site) -> Unit>(
+            "no tag" to { ops, _ -> ops.detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed"}""") },
+            "too large" to { _, site -> site.answers["p/$PID/results.json"] = SiteAnswer.TooLarge },
+            "no cap" to { _, site ->
+                site.answers["p/$PID/results.json"] = ok(observed().results.replace(""""eligible":3,"removed"""", """"eligible":"3","removed""""))
+            },
+        )
+        for ((name, change) in cases) {
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(verifiedVote())
+            change(ops, site)
+            val m = manager(ops, site)
+            m.refresh()
+            assertEquals(name, ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+            val h = m.hints.value.getValue("$CONN/$PID")
+            assertTrue(name, h.notRechecked)
+            assertNull(name, h.verdict)
+            assertFalse(name, h.observerFailed)
+            val s = m.votes.value.single()
+            assertTrue(name, VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(s, observerFailed = h.observerFailed, notRechecked = h.notRechecked))
+            assertFalse(name, VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(s, observerFailed = h.observerFailed, notRechecked = h.notRechecked))
+            assertFalse(name, VoteRules.showNumbers(s, h.verdict, h.observerFailed))
+        }
+    }
+
+    @Test
+    fun aCheckAgainThatEndsUnchangedDoesNotDeferTheDailyReCheck() = runTest {
+        // Item 3: an attempt on day 0, Check again ending Unchanged on day 0.9; the daily re-check is still due on day 1.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store)
+        m.refresh()
+        val day0 = clock
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        clock = day0.plus(Duration.ofMinutes(24 * 54)) // 0.9 of a day
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(day0.toEpochMilli(), store.load().single().atMs)
+        clock = day0.plus(Duration.ofDays(1))
+        val reads = site.reads.count { it == "p/$PID/results.json" }
+        m.checkDue(CONN, PID)
+        assertEquals("due on day 1", reads + 1, site.reads.count { it == "p/$PID/results.json" })
+        // The daily re-check's own Unchanged is its attempt of the day: stamped.
+        assertEquals(clock.toEpochMilli(), store.load().single().atMs)
+    }
+
+    // ---- #314 item 1 (owner decision a, thread 01M6RS33MQVX7KZMSJE0VBFYBR): Wi-Fi only after a week ----
+
+    /** A `gave_up` vote whose every attempt ends on the vault's side (no skip): each allowed attempt downloads rows.json. */
+    private fun wifiScenario(): Pair<Ops, Site> {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"clock"}}""")
+        return ops to site
+    }
+
+    private fun Site.rowsReads() = reads.count { it == "p/$PID/rows.json" }
+
+    @Test
+    fun rowsJsonOnAMeteredNetworkIsWeeklyAfterTheFirstSevenDays() = runTest {
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        var net: Boolean? = false // mobile data
+        val m = manager(ops, site, attempts = store, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        fun day(d: Double) = day0.plusSeconds((d * 86_400).toLong())
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted) // the first re-check: day 0
+        assertEquals(day0.toEpochMilli(), store.load().single().firstRecheckMs)
+        // Day 3 on mobile: within the 7 days, downloads.
+        clock = day(3.0)
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(2, site.rowsReads())
+        assertEquals(day(3.0).toEpochMilli(), store.load().single().lastRowsMs)
+        // Day 8 on mobile, last download day 3: deferred (the small fetches still run, nothing is sent).
+        clock = day(8.0)
+        val resultsReads = site.reads.count { it == "p/$PID/results.json" }
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        assertEquals(resultsReads + 1, site.reads.count { it == "p/$PID/results.json" })
+        assertEquals(2, ops.submitted.size)
+        // Day 9, the network unknown: counted as metered, deferred.
+        net = null
+        clock = day(9.0)
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        // Day 10 on mobile, last download day 3: a week since, downloads.
+        clock = day(10.0)
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, site.rowsReads())
+        assertEquals(day0.toEpochMilli(), store.load().single().firstRecheckMs)
+        assertEquals(day(10.0).toEpochMilli(), store.load().single().lastRowsMs)
+    }
+
+    @Test
+    fun rowsJsonOnWifiFollowsTheDailyRuleAfterTheSevenDays() = runTest {
+        val (ops, site) = wifiScenario()
+        var net: Boolean? = false
+        val m = manager(ops, site, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        clock = day0.plus(Duration.ofDays(3))
+        m.checkDue(CONN, PID)
+        // Day 8 on Wi-Fi: downloads (the last download was day 3).
+        net = true
+        clock = day0.plus(Duration.ofDays(8))
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, site.rowsReads())
+        // Still daily on Wi-Fi: day 9 again.
+        clock = day0.plus(Duration.ofDays(9))
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(4, site.rowsReads())
+    }
+
+    @Test
+    fun theWipeClearsTheFirstReCheckAndTheLastRowsDownload() = runTest {
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        clock = day0.plus(Duration.ofDays(3))
+        m.checkDue(CONN, PID)
+        assertTrue(store.load().single().firstRecheckMs != null && store.load().single().lastRowsMs != null)
+        m.clear()
+        m.forgetStored()
+        assertTrue(store.load().isEmpty())
+        // A new enrollment, day 8 on mobile: a first re-check again, so it downloads.
+        clock = day0.plus(Duration.ofDays(8))
+        m.refresh()
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, site.rowsReads())
+        assertEquals(clock.toEpochMilli(), store.load().single().firstRecheckMs)
+    }
+
+    @Test
+    fun theMembersCheckAgainIsNotHeldByTheNetworkCap() = runTest {
+        // The lead's call on #317 Q2: Check again downloads on any network; the automatic daily re-check keeps the cap.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        var net: Boolean? = false
+        val m = manager(ops, site, attempts = store, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        fun day(d: Double) = day0.plusSeconds((d * 86_400).toLong())
+        m.checkDue(CONN, PID)
+        clock = day(3.0)
+        m.checkDue(CONN, PID) // the last download: day 3
+        assertEquals(2, site.rowsReads())
+        // Day 9 on mobile, inside the cap: the daily re-check is deferred...
+        clock = day(9.0)
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        // ...and Check again downloads and submits; its download moves the weekly cap.
+        clock = day(9.5)
+        val sent = ops.submitted.size
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, site.rowsReads())
+        assertEquals(sent + 1, ops.submitted.size)
+        assertEquals(day(9.5).toEpochMilli(), store.load().single().lastRowsMs)
+        // Day 10.5 on mobile: the cap now counts from the manual download (day 9.5), deferred.
+        clock = day(10.5)
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        // Check again on an unknown network downloads too.
+        net = null
+        clock = day(11.0)
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(4, site.rowsReads())
     }
 }

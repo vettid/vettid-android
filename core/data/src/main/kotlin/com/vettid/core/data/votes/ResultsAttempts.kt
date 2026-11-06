@@ -42,6 +42,14 @@ data class ResultsAttempt(
      */
     val sigSha256: String? = null,
     val bundleSha256: String? = null,
+    /**
+     * When this record's `gave_up` check was first run again (epoch ms; #314 item 1, owner decision a, thread
+     * 01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from it rows.json is downloaded by the daily rule on any network; after them
+     * on an unmetered one, and at most weekly on a metered one. Null before the first re-check.
+     */
+    val firstRecheckMs: Long? = null,
+    /** When rows.json was last downloaded for this record (epoch ms; the weekly cap on a metered network); null for never. */
+    val lastRowsMs: Long? = null,
 ) {
     /**
      * Whether a `gave_up` re-check that read results.json, its signature and its bundle of these hashes skips rows.json and
