@@ -417,18 +417,28 @@ The A2 exit test:
   the lists, the entries and each results submit as separate stages, so one bad item stops nothing else; the member's row and its
   Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
-  `VoteRows.read` parses the two documents once; `PublishedResults.observe` is the rest of the observer's check (BALLOT-PROTOCOL
-  §8.4, VAULT-MESSAGING 0.86.4 §10.19.6 step 1: the tags number the proposal's `eligible` and reach its `record_root`, each
-  `choice_id` is the proposal's, the tally and `counts.ballots` recompute, each `ballot_sig` verifies) and is **not yet called
-  by `checkResults`** (the spec's "don't add up" path needs the approved `vote_results_dont_add_up` string). Every vote signature
-  the app checks goes through `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: Bouncy Castle's own verify is
-  cofactored and takes an `R` of small order, so the small-order and `y < p` rules are a table and a mixed-order point is
-  decided by `Ed25519Exact`, cofactorless). A real choice whose label reads "Abstain" (ANDROID-PLAN 0.1.117 matching) is shown
-  by its id (`VoteWire.readsAbstain`); the reserved `abstain` keeps its label until `vote_choice_abstain` is added.
+  `VoteRows.read` parses the two documents once (rows.json at most `VoteRows.rowsCap(counts.eligible)` = 512 × eligible + 4,096,
+  never over 51,204,096 bytes, the download capped the same way, and nested at most 4 deep); `PublishedResults.observe` is the
+  rest of the observer's check (BALLOT-PROTOCOL §8.4, VAULT-MESSAGING 0.86.4 §10.19.6 step 1: the tags number the proposal's
+  `eligible` and reach its `record_root`, each `choice_id` is the proposal's, the tally and `counts.ballots` recompute, each
+  `ballot_sig` verifies, and what is only reported: the documents naming another proposal, rows.json not exactly `{v: 1,
+  proposal_id, rows}`). `checkResults` runs it on `Dispatchers.Default` with the vault's own `tally` and `counts` (`vote.get`,
+  when it holds them) compared too, and **still submits** whenever the four vault-checked inputs hold (0.83.2): a failure only
+  sets `VoteHint.observerFailed` (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing
+  clears it). With a `verified` or `unconfirmed` check and the flag, the screen shows the state, then
+  `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`), and no number (`VoteRules.showNumbers`:
+  numbers only under `verified`/`unconfirmed` and without the flag); it is not the results-problem text. Not built yet (the
+  0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open. Every vote signature the app checks goes through
+  `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: Bouncy Castle's own verify is cofactored and takes an `R` of
+  small order, so the small-order and `y < p` rules are a table and a mixed-order point is decided by `Ed25519Exact`,
+  cofactorless). The reserved `abstain` choice is always "Abstain" (`vote_choice_abstain`, `VoteTexts.choiceLabel`) wherever a
+  choice label appears (the choices, the confirm sheet, the member's own choice, the restore question, the Results rows), and a
+  real choice whose label reads "Abstain" (ANDROID-PLAN 0.1.117 matching) is shown by its id (`VoteWire.readsAbstain`). Both
+  strings are owner-approved (ANDROID-PLAN 0.1.116 table, owner decision a, 2026-11-02).
   `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
   stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
-  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`.
+  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`, `vote.results_dont_add_up`.
 
 - Wallet (ANDROID-PLAN §4 "Wallet", W1; VAULT-MESSAGING §10.18): **not in production builds**, laid out like calls. `:core:chain` (bitcoin-kmp
   behind the module, PSBT, the Esplora client, `ChainServers`: the chain server per network in `chain-servers.bin`, block 0 checked
