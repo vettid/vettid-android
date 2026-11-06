@@ -1,0 +1,1 @@
+First listing of the rewritten VettID app (2.0.0-a2), a test version. Connections, messages, approvals, the vault's items and sharing, location sharing with a map, presence, votes, devices and agents, History, the app lock and the daily check. No Google software: notifications come through the on-phone service. Calls and the Bitcoin wallet are not included.
