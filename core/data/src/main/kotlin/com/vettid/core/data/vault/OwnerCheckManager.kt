@@ -111,8 +111,9 @@ class OwnerCheckManager(
     /** Feed items of `identity.rotation_failed` already acted on (memory only). */
     private val rotationFailedSeen = HashSet<String>()
 
-    /** The one re-read after an unlock found the relay refused; cancelled at lock. */
+    /** The one re-read after a status found the relay refused, and whether it was made since the last lock; cancelled at lock. */
     private var relayRecheck: kotlinx.coroutines.Job? = null
+    private var relayRechecked = false
 
     /** Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled. */
     private fun clearRelay() {
@@ -121,17 +122,46 @@ class OwnerCheckManager(
             relayFlow.value = false
             relayRecheck?.cancel()
             relayRecheck = null
+            relayRechecked = false
         }
     }
 
     /**
-     * (0.84.0) The vault tries the relay once per unlock, after the unlock's own `vault.status`: when that read found the
-     * relay refused, read once more a minute later (divided by the vault's time scale), only while the vault is open.
+     * (0.84.0) A `vault.status` read about to be sent, for [noteRelay]: its number and the count of locks, unlocks and wipes
+     * when it began. Every status read of the open vault takes one (the owner check's here, the Settings overview's in
+     * `VaultManager.overview`), as vettid-ios #221 hears every status.
+     */
+    class StatusStamp internal constructor(internal val seq: Long, internal val epoch: Int)
+
+    /** Takes the stamp of a `vault.status` read about to be sent. */
+    fun beginStatusRead(): StatusStamp {
+        val e = epoch.get()
+        return StatusStamp(readSeq.incrementAndGet(), e)
+    }
+
+    /**
+     * (0.84.0) The answer of the read [stamp] began: `relay` absent (or any value but `"refused"`) takes the notice away. The
+     * latest answer decides: applied under the lock only if no lock, unlock or wipe came since the read began and no newer
+     * read was applied already. A status that says refused schedules the one re-read of this unlock.
+     */
+    fun noteRelay(stamp: StatusStamp, refused: Boolean) {
+        synchronized(relayLock) {
+            if (epoch.get() != stamp.epoch || stamp.seq <= relayAppliedSeq) return
+            relayAppliedSeq = stamp.seq
+            relayFlow.value = refused
+            if (refused) scheduleRelayRecheck()
+        }
+    }
+
+    /**
+     * (0.84.0) The vault tries the relay once per unlock, after the unlock's own `vault.status`: when a status found the
+     * relay refused, read once more a minute later (divided by the vault's time scale), once until the next lock and only
+     * while the vault is open (vettid-ios #221's rule).
      */
     private fun scheduleRelayRecheck() {
         synchronized(relayLock) {
-            if (!relayFlow.value) return
-            relayRecheck?.cancel()
+            if (!relayFlow.value || relayRechecked) return
+            relayRechecked = true
             val wait = TimeScales.divideMs(RELAY_RECHECK_MS, lastTimeScale)
             relayRecheck = scope.launch {
                 kotlinx.coroutines.delay(wait)
@@ -358,10 +388,7 @@ class OwnerCheckManager(
             epoch.incrementAndGet()
         }
         endIdleLocked()
-        scope.launch {
-            runCatching { refreshOwnerCheck() }
-            if (afterUnlock) scheduleRelayRecheck()
-        }
+        scope.launch { runCatching { refreshOwnerCheck() } }
     }
 
     /** The vault is open again: it no longer is locked by itself. */
@@ -391,7 +418,6 @@ class OwnerCheckManager(
         } catch (_: VaultFailure) {
             null
         }
-        scheduleRelayRecheck()
         if (v == null || !v.gated(now())) return
         val r = check(pin, password, null)
         unlockOutcome.value = r
@@ -451,20 +477,12 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val epochAtStart = epoch.get()
-        val seq = readSeq.incrementAndGet()
+        val stamp = beginStatusRead()
         val read = vaultGuard(resend = true) { ops().statusRead() }
         val (st0, recovery, timeScale) = read
-        // The latest answer decides (0.84.0): `relay` absent takes the notice away. Applied under the lock only if no lock,
-        // unlock or wipe came since the read began and no newer read was applied already.
-        synchronized(relayLock) {
-            if (epoch.get() == epochAtStart && seq > relayAppliedSeq) {
-                relayAppliedSeq = seq
-                relayFlow.value = read.relayRefused
-            }
-        }
         runCatching { onTimeScale(timeScale, since) }
         lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
+        noteRelay(stamp, read.relayRefused) // (0.84.0) after the time scale, which the one re-read divides by
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
@@ -806,7 +824,7 @@ class OwnerCheckManager(
         private const val STATUS_ACTIVE = "active"
         private const val KIND_ROTATION_FAILED = "identity.rotation_failed"
 
-        /** (0.84.0) How long after an unlock that found the relay refused the status is read once more (before the time scale). */
+        /** (0.84.0) How long after a status that found the relay refused it is read once more (before the time scale). */
         private const val RELAY_RECHECK_MS = 60_000L
         private const val PRIORITY_URGENT = "urgent"
         private const val STATUS_AFTER_FAILURE_MS = 5_000L

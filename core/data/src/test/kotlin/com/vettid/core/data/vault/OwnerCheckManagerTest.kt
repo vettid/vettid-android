@@ -1049,10 +1049,14 @@ class OwnerCheckManagerTest {
         m.refreshOwnerCheck()
         assertFalse(m.relayRefused.value)
         ops.relayRefused = true
+        val before = ops.reads
         val item = FeedItem("r1", 1, "identity.rotation_failed", "2026-11-05T10:00:00Z", "active", "high", ref = "recovery")
         m.onFeed(listOf(item))
         settle { m.relayRefused.value }
         assertTrue(m.relayRefused.value)
+        // The status that found it refused also schedules the one re-read of this unlock (60 s): let it run first.
+        settle { ops.reads >= before + 2 }
+        assertEquals(before + 2, ops.reads)
         val reads = ops.reads
         // The same item again (the feed list changed for another reason) does not read again; a read item is not new.
         m.onFeed(listOf(item, FeedItem("m1", 2, "message.received", "2026-11-05T10:01:00Z", "active")))
@@ -1085,6 +1089,75 @@ class OwnerCheckManagerTest {
         // Once only: it was not refused any more, so nothing is scheduled.
         advanceTimeBy(300_000)
         assertEquals(reads + 1, ops.reads)
+    }
+
+    /**
+     * (As vettid-ios #221) Any status that finds the relay refused schedules the one re-read, not only the unlock's: here a
+     * later read (a return to the foreground) finds it. Once until the next lock: a second refused status schedules nothing
+     * more, and after a lock the next refused status schedules it again.
+     */
+    @Test
+    fun aLaterStatusThatFindsTheRelayRefusedReadsAgainOnceUntilTheNextLock() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertFalse(m.relayRefused.value)
+        val quiet = ops.reads
+        advanceTimeBy(300_000)
+        advanceUntilIdle()
+        assertEquals("nothing is scheduled while the relay is not refused", quiet, ops.reads)
+
+        ops.relayRefused = true
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        val reads = ops.reads
+        advanceTimeBy(30_000)
+        // A second refused status (applied without suspending: under runTest a read that waits on IO lets the virtual clock
+        // run to the scheduled re-read) schedules no second re-read.
+        m.noteRelay(m.beginStatusRead(), refused = true)
+        assertEquals(reads, ops.reads)
+        advanceTimeBy(31_000)
+        settle { ops.reads >= reads + 1 }
+        assertEquals("the one re-read, 60 s after the first refused status", reads + 1, ops.reads)
+        advanceTimeBy(600_000)
+        advanceUntilIdle()
+        assertEquals("once only", reads + 1, ops.reads)
+
+        m.onLockedHere()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertTrue(m.relayRefused.value)
+        val after = ops.reads
+        advanceTimeBy(59_000)
+        assertEquals(after, ops.reads)
+        advanceTimeBy(2_000)
+        settle { ops.reads > after }
+        assertEquals("a lock lets the next unlock re-read again", after + 1, ops.reads)
+    }
+
+    /**
+     * (As vettid-ios #221) Every status read of the open vault decides, not only the owner check's: the Settings overview's
+     * read (`VaultManager.overview`) goes through [OwnerCheckManager.beginStatusRead] and [OwnerCheckManager.noteRelay]
+     * under the same ordering: a lock since it began, or a newer read applied, drops it.
+     */
+    @Test
+    fun aStatusReadElsewhereDecidesUnderTheSameOrdering() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.noteRelay(m.beginStatusRead(), refused = true)
+        assertTrue("an overview read shows the notice", m.relayRefused.value)
+        m.noteRelay(m.beginStatusRead(), refused = false)
+        assertFalse("and takes it away", m.relayRefused.value)
+
+        val older = m.beginStatusRead()
+        ops.relayRefused = false
+        m.refreshOwnerCheck() // a newer owner-check read, applied first
+        m.noteRelay(older, refused = true)
+        assertFalse("an older read does not overwrite a newer one", m.relayRefused.value)
+
+        val beforeLock = m.beginStatusRead()
+        m.onLockedHere()
+        m.noteRelay(beforeLock, refused = true)
+        assertFalse("a read that began before a lock is dropped", m.relayRefused.value)
     }
 
     /** The re-read is cancelled by a lock. */
