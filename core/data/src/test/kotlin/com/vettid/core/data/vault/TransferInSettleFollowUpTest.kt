@@ -510,7 +510,7 @@ class TransferInSettleFollowUpTest {
     }
 
     /**
-     * (Recheck 4, B1′) After an extra taken before the cap with no lease hold honoured yet, the look after a freeze in the
+     * (Recheck 4, B1′) After an extra taken before the cap with no lease hold honored yet, the look after a freeze in the
      * last send gets the free first lease hold. F = 90 s, the cap 185 s. The last look at 90 s is rate limited (`retry_after`
      * 1 s): the extra re-collects at 91 s. Its round writes the collector's poll at 94.5 s (wait 25 s) and the app freezes at
      * 94.9 s until 195 s: the poll may reach the relay at the wake, so the lease runs to 195 + 25 + 60 = 280 s. The look is
