@@ -5,6 +5,7 @@ package com.vettid.core.data.presence
 
 import org.robolectric.RuntimeEnvironment
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -38,6 +39,17 @@ class PresenceTextTest {
         assertEquals("Available · last seen 2 Nov", line(PresenceReading.Known(PresenceState.AVAILABLE, Instant.parse("2026-11-02T23:00:00Z"))))
         assertEquals("Busy · last seen 9 Mar", line(PresenceReading.Known(PresenceState.BUSY, Instant.parse("2026-03-09T10:00:00Z"))))
         assertEquals("Away · last seen 31 Dec 2025", line(PresenceReading.Known(PresenceState.AWAY, Instant.parse("2025-12-31T10:00:00Z"))))
+    }
+
+    @Test
+    fun aCalendarExtensionLocaleNeverThrows() {
+        // A locale like zh-u-ca-chinese can give pattern letters java.time refuses: the date falls back, the line is said.
+        val app = RuntimeEnvironment.getApplication()
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(java.util.Locale.forLanguageTag("zh-u-ca-chinese"))
+        val zh = app.createConfigurationContext(c).resources
+        val t = PresenceText.line(zh, PresenceReading.Known(PresenceState.AVAILABLE, Instant.parse("2026-11-02T23:00:00Z")), now, zone)
+        assertTrue(t, !t.isNullOrBlank())
     }
 
     @Test

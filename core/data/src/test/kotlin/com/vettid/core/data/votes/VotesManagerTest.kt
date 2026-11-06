@@ -169,6 +169,23 @@ class VotesManagerTest {
             }
             return answers[path] ?: SiteAnswer.Absent
         }
+
+        /** Bytes a read receives before its answer (a download cut off partway: `Unreachable` after some bytes). */
+        val partial = mutableMapOf<String, Long>()
+
+        /** Runs before the read's bytes are reported (a wipe while the download is still arriving). */
+        var beforeReceived: (() -> Unit)? = null
+
+        /** The chunks a read reports its bytes in (a download arriving in pieces). */
+        var chunks = 1
+
+        override suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
+            val answer = get(path, maxBytes)
+            beforeReceived?.invoke()
+            repeat(chunks - 1) { received(1) }
+            partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
+            return answer
+        }
     }
 
     private class Window {
@@ -188,6 +205,7 @@ class VotesManagerTest {
         voteRows: Boolean = false,
         attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
         unmetered: () -> Boolean? = { null },
+        stamps: RecheckStampStore = MemoryRecheckStampStore(),
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -213,6 +231,7 @@ class VotesManagerTest {
         attempts = attempts,
         io = Dispatchers.Default,
         unmetered = unmetered,
+        stamps = stamps,
     )
 
     @Test
@@ -1761,11 +1780,17 @@ class VotesManagerTest {
 
     private fun verifiedVote() = summary(state = "closed", extra = ""","ballot":{"state":"recorded"},"check":{"state":"verified"}""")
 
+    /** A verified vote that closed at [closes] (RFC 3339), or with no `closes_at` when null. */
+    private fun verifiedVoteClosing(closes: Instant?): String {
+        val v = verifiedVote()
+        return if (closes == null) v.replace(""","closes_at":"2026-11-06T17:00:00.000Z"""", "") else v.replace("2026-11-06T17:00:00.000Z", closes.toString())
+    }
+
     @Test
     fun theRecheckOnOpenSetsAVerdictAndNeverSubmits() = runTest {
         val (ops, site) = observedScenario(observed())
         ops.list = listing(verifiedVote())
-        val m = manager(ops, site)
+        val m = manager(ops, site, unmetered = { true })
         m.refresh()
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
         assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
@@ -1821,7 +1846,7 @@ class VotesManagerTest {
         val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
         var m: VotesManager? = null
         var lockedAt = -1
-        m = manager(ops, site) {
+        m = manager(ops, site, unmetered = { true }) {
             steps += it.substringAfterLast(':')
             if (it.endsWith(":observe") && lockedAt < 0) {
                 lockedAt = steps.size
@@ -2269,5 +2294,371 @@ class VotesManagerTest {
         clock = day(11.0)
         assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
         assertEquals(4, site.rowsReads())
+    }
+
+    // ---- #319 ----
+
+    @Test
+    fun aRowsDownloadCutOffPartwayCountsTowardTheWeeklyCap() = runTest {
+        // Item 1: day 8 on mobile, the last whole download on day 0; a download that drops after some bytes on day 8 counts,
+        // so day 9 is deferred (no daily retry of up to 51 MB on mobile data).
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        val rows = site.answers.getValue("p/$PID/rows.json")
+        site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site.partial["p/$PID/rows.json"] = 1_000_000
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.checkDue(CONN, PID))
+        assertEquals(clock.toEpochMilli(), store.load().single().lastRowsMs)
+        site.answers["p/$PID/rows.json"] = rows
+        site.partial.clear()
+        clock = day0.plus(Duration.ofDays(9))
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        // A drop before any byte arrived does not count.
+        val (ops2, site2) = wifiScenario()
+        val store2 = MemoryResultsAttemptStore()
+        val m2 = manager(ops2, site2, attempts = store2, unmetered = { false })
+        m2.refresh()
+        clock = day0
+        m2.checkDue(CONN, PID)
+        site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        clock = day0.plus(Duration.ofDays(8))
+        m2.checkDue(CONN, PID)
+        assertEquals(day0.toEpochMilli(), store2.load().single().lastRowsMs)
+    }
+
+    @Test
+    fun theRecheckOnOpenDownloadsRowsAtMostWeeklyOnMobileData() = runTest {
+        // Item 2: the verdict is memory only, so every open after a lock rechecks; on mobile data rows.json at most weekly.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z"))) // closed weeks ago: the weekly rule
+        var net: Boolean? = false
+        val m = manager(ops, site, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        // A lock (the verdict forgotten), the next open on mobile data the same week: not rechecked, no download, no number.
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(3))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        assertTrue(m.hints.value.getValue("$CONN/$PID").notRechecked)
+        // On Wi-Fi it downloads; and on mobile again (or an unknown network) a week after the last download.
+        net = true
+        m.clear()
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        net = null
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(10))
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(3, site.rowsReads())
+        // Never submitted.
+        assertTrue(ops.submitted.isEmpty())
+        // A wipe forgets it.
+        m.clear()
+        m.forgetStored()
+        m.refresh()
+        net = false
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(4, site.rowsReads())
+    }
+
+    @Test
+    fun theSevenDaysStartAgainWhenTheCheckIsPendingAgain() = runTest {
+        // Item 3: gave_up (first re-check day 0), pending on day 5, gave_up again on day 6: the 7 days run from day 6, so
+        // day 10 on mobile (last download day 6) still downloads.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        assertEquals(day0.toEpochMilli(), store.load().single().firstRecheckMs)
+        ops.list = listing(closedWithPendingCheck())
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(5))
+        m.checkDue(CONN, PID)
+        assertNull(store.load().single().firstRecheckMs)
+        ops.list = listing(gaveUp())
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(6))
+        m.checkDue(CONN, PID)
+        assertEquals(clock.toEpochMilli(), store.load().single().firstRecheckMs)
+        clock = day0.plus(Duration.ofDays(10))
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+    }
+
+    // Item 4: the edges of the cap.
+
+    /** A store holding one record: first re-check at [first], the last rows download at [rows], the last attempt at [at]. */
+    private fun storeWith(first: Instant, rows: Instant?, at: Instant) = MemoryResultsAttemptStore().apply {
+        save(listOf(ResultsAttempt("$CONN/$PID", at.toEpochMilli(), firstRecheckMs = first.toEpochMilli(), lastRowsMs = rows?.toEpochMilli())))
+    }
+
+    private suspend fun TestScope.dueOnMobile(store: ResultsAttemptStore, net: Boolean? = false): Pair<ResultsOutcome, Site> {
+        val (ops, site) = wifiScenario()
+        val m = manager(ops, site, attempts = store, unmetered = { net })
+        m.refresh()
+        return m.checkDue(CONN, PID) to site
+    }
+
+    @Test
+    fun theSevenDayWindowAndTheWeeklyCapAtTheirBoundaries() = runTest {
+        val day0 = clock
+        val ms = Duration.ofMillis(1)
+        val week = Duration.ofDays(7)
+        // The window: last download day 3; just before day 7 the daily rule alone (downloads), at day 7 the cap (deferred).
+        clock = day0.plus(week).minus(ms)
+        assertTrue(dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(3)))).first is ResultsOutcome.Submitted)
+        clock = day0.plus(week)
+        assertEquals(ResultsOutcome.Deferred, dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(3)))).first)
+        // The cap: last download day 3; just before day 10 deferred, at day 10 it downloads.
+        clock = day0.plus(Duration.ofDays(10)).minus(ms)
+        assertEquals(ResultsOutcome.Deferred, dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(8)))).first)
+        clock = day0.plus(Duration.ofDays(10))
+        assertTrue(dueOnMobile(storeWith(day0, day0.plus(Duration.ofDays(3)), day0.plus(Duration.ofDays(8)))).first is ResultsOutcome.Submitted)
+    }
+
+    @Test
+    fun noRowsDownloadYetAfterTheSevenDaysDownloads() = runTest {
+        val day0 = clock
+        clock = day0.plus(Duration.ofDays(8))
+        val (out, site) = dueOnMobile(storeWith(day0, rows = null, at = day0.plus(Duration.ofDays(6))))
+        assertTrue(out is ResultsOutcome.Submitted)
+        assertEquals(1, site.rowsReads())
+    }
+
+    @Test
+    fun aDeferredAttemptKeepsTheLastHashesAndReadsNothingMoreThatDay() = runTest {
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        clock = day0.plus(Duration.ofDays(3))
+        m.checkDue(CONN, PID)
+        val before = store.load().single()
+        // Day 8: a changed bundle on the site, the download deferred: the record keeps the last hashes (so the change is
+        // still seen as one when the rows can be had), only its time moves.
+        site.answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"z"}""")
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        val after = store.load().single()
+        assertEquals(before.copy(atMs = clock.toEpochMilli()), after)
+        // The same day: no site read at all.
+        val reads = site.reads.size
+        clock = clock.plus(Duration.ofHours(5))
+        assertEquals(ResultsOutcome.Unchanged, m.checkDue(CONN, PID))
+        assertEquals(reads, site.reads.size)
+    }
+
+    @Test
+    fun aRowsChunkArrivingAfterAWipeStampsNothing() = runTest {
+        // Review of #319, L1: the recheck's download callback after forgetStored() puts no key back in memory. Shown through
+        // the weekly cap: had the chunk stamped, the next recheck on mobile data would be held.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        val m = manager(ops, site, unmetered = { false })
+        site.beforeReceived = { m.forgetStored() } // a wipe's store reset while the bytes are on their way (the job still runs)
+        m.refresh()
+        m.recheck(CONN, PID)
+        site.beforeReceived = null
+        m.clear()
+        m.refresh()
+        assertEquals("not held: nothing was stamped", ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+    }
+
+    @Test
+    fun theRechecksWeeklyCapAtItsBoundary() = runTest {
+        // The recheck's own cap (recheckRowsWait) on mobile data: 1 ms before 7 days held, at 7 days it downloads.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z"))) // closed weeks ago: the weekly rule
+        val m = manager(ops, site, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.recheck(CONN, PID)
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(7)).minus(Duration.ofMillis(1))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(7))
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+    }
+
+    // ---- #319 item 2, the lead's call (a): the recheck on open, daily for 7 days after the close, weekly after ----
+
+    private suspend fun TestScope.recheckManager(closes: Instant?, net: () -> Boolean?): Pair<VotesManager, Site> {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(closes))
+        val m = manager(ops, site, unmetered = net)
+        m.refresh()
+        return m to site
+    }
+
+    /** An open after a lock: the verdict forgotten, the recheck runs again. */
+    private suspend fun VotesManager.reopen(): ResultsOutcome {
+        clear()
+        refresh()
+        return recheck(CONN, PID)
+    }
+
+    private val checked = ResultsOutcome.Rechecked(passed = true)
+    private val held = ResultsOutcome.SiteUnreachable
+
+    @Test
+    fun theRecheckOnMeteredDataIsDailyForSevenDaysAfterTheCloseThenWeekly() = runTest {
+        val closes = clock
+        val ms = Duration.ofMillis(1)
+        fun at(d: Duration) = closes.plus(d)
+        val (m, site) = recheckManager(closes) { false }
+        assertEquals(checked, m.recheck(CONN, PID)) // day 0
+        clock = at(Duration.ofHours(1))
+        assertEquals(held, m.reopen()) // the same day
+        clock = at(Duration.ofDays(1).minus(ms))
+        assertEquals(held, m.reopen())
+        clock = at(Duration.ofDays(1))
+        assertEquals(checked, m.reopen()) // 24 h later
+        assertEquals(2, site.rowsReads())
+        // At the close + 7 days: last download day 5; 1 ms before, the daily rule (downloads); exactly at, the weekly (held).
+        for ((boundary, expected) in listOf(at(Duration.ofDays(7)).minus(ms) to checked, at(Duration.ofDays(7)) to held)) {
+            clock = at(Duration.ofDays(5))
+            val (m2, _) = recheckManager(closes) { false }
+            assertEquals(checked, m2.recheck(CONN, PID))
+            clock = boundary
+            assertEquals("$boundary", expected, m2.reopen())
+        }
+        // Then weekly: last download at the close + 8 days; 1 ms before 7 days since held, exactly at downloads.
+        clock = at(Duration.ofDays(8))
+        val (m3, site3) = recheckManager(closes) { false }
+        assertEquals(checked, m3.recheck(CONN, PID))
+        clock = at(Duration.ofDays(15)).minus(ms)
+        assertEquals(held, m3.reopen())
+        clock = at(Duration.ofDays(15))
+        assertEquals(checked, m3.reopen())
+        assertEquals(2, site3.rowsReads())
+    }
+
+    @Test
+    fun theRecheckOnWifiIsNeverCappedInEitherPeriod() = runTest {
+        val closes = clock
+        val (m, site) = recheckManager(closes) { true }
+        assertEquals(checked, m.recheck(CONN, PID))
+        assertEquals(checked, m.reopen())
+        clock = closes.plus(Duration.ofDays(9))
+        assertEquals(checked, m.reopen())
+        assertEquals(checked, m.reopen())
+        assertEquals(4, site.rowsReads())
+    }
+
+    @Test
+    fun aVoteWithNoCloseKnownUsesTheWeeklyRule() = runTest {
+        val day0 = clock
+        val (m, site) = recheckManager(null) { false }
+        assertEquals(checked, m.recheck(CONN, PID))
+        clock = day0.plus(Duration.ofDays(1))
+        assertEquals(held, m.reopen())
+        clock = day0.plus(Duration.ofDays(7))
+        assertEquals(checked, m.reopen())
+        assertEquals(2, site.rowsReads())
+    }
+
+    // ---- The lead's review of #321 ----
+
+    @Test
+    fun theRechecksCapSurvivesARestartAndGoesWithTheVoteOrAWipe() = runTest {
+        // M1: a new manager over the same store (a cold start) keeps the cap; a vote no longer listed and a wipe drop it.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val stamps = MemoryRecheckStampStore()
+        val first = manager(ops, site, unmetered = { false }, stamps = stamps)
+        first.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), first.recheck(CONN, PID))
+        assertEquals(listOf("$CONN/$PID"), stamps.load().map { it.key })
+        clock = clock.plus(Duration.ofDays(1))
+        val restarted = manager(ops, site, unmetered = { false }, stamps = stamps)
+        restarted.refresh()
+        assertEquals("held after the restart", ResultsOutcome.SiteUnreachable, restarted.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        // Pruned with the list.
+        ops.list = listing()
+        restarted.refresh()
+        assertTrue(stamps.load().isEmpty())
+        // Wiped.
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        restarted.clear()
+        restarted.refresh()
+        restarted.recheck(CONN, PID)
+        assertEquals(1, stamps.load().size)
+        restarted.clear()
+        restarted.forgetStored()
+        assertTrue(stamps.load().isEmpty())
+    }
+
+    @Test
+    fun aLockDuringTheRechecksDownloadStillCountsTheBytes() = runTest {
+        // L1: a lock (clear: the recheck's job is cancelled) while the bytes arrive; they were spent, so the cap counts them.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val m = manager(ops, site, unmetered = { false })
+        site.beforeReceived = { m.clear() }
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.recheck(CONN, PID))
+        site.beforeReceived = null
+        m.refresh()
+        assertEquals("held: the cut download counted", ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+    }
+
+    @Test
+    fun theRechecksStampIsWrittenOncePerDownload() = runTest {
+        // Fable (cosmetic): a download in many chunks writes its stamp once, not at every chunk.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        var saves = 0
+        val stamps = object : RecheckStampStore {
+            private val inner = MemoryRecheckStampStore()
+
+            override fun load() = inner.load()
+
+            override fun save(stamps: List<RecheckStamp>) {
+                saves++
+                inner.save(stamps)
+            }
+        }
+        site.chunks = 50
+        val m = manager(ops, site, unmetered = { false }, stamps = stamps)
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(1, saves)
+    }
+
+    @Test
+    fun aCheckAgainDownloadCountsForTheRecheckOnOpen() = runTest {
+        // L3: a manual Check again's rows download stamps the recheck's cap: an open right after on mobile data is held.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val m = manager(ops, site, unmetered = { false })
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, site.rowsReads())
+        m.clear()
+        m.refresh()
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
     }
 }

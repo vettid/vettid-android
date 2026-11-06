@@ -302,6 +302,8 @@ class VotesManager(
     private val attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
     /** Where [attempts] is read and written. */
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** The recheck's last rows downloads (#321 M1): encrypted beside the attempts, under the same epoch, wiped with them. */
+    private val stamps: RecheckStampStore = MemoryRecheckStampStore(),
     /**
      * Whether the phone's network is unmetered now (Wi-Fi; [NetworkMeter]): true, false, or null when it cannot be told,
      * which counts as metered (#314 item 1).
@@ -328,6 +330,13 @@ class VotesManager(
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
+
+    /**
+     * When the recheck on open last downloaded rows.json for a vote (epoch ms, by [VoteKeys.of]; #319 item 2), as [stamps]
+     * keeps it (the lead's review of #321, M1: a cold start must not reset the cap). Read lazily under [attemptsSync]; not
+     * cleared by a lock (that is when the recheck runs again); a wipe ([forgetStored]) clears it. No choice, no verdict.
+     */
+    private var recheckRowsAt: MutableMap<String, Long>? = null
 
     /** The results checks in flight (under [lock]): [clear] cancels them (lead review L2). */
     private val checks = HashSet<Job>()
@@ -430,7 +439,10 @@ class VotesManager(
                     hintsFlow.value = hintsFor(shown, hintsFlow.value)
                 }
                 // The kept attempts go with their record: a vote no longer listed, or whose check is final. Only from a whole list.
-                if (after == null) forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
+                if (after == null) {
+                    forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
+                    forgetRecheckStamps(epoch, shown.mapTo(HashSet()) { it.key })
+                }
             } catch (e: VaultFailure) {
                 synchronized(lock) {
                     if (gen == generation) {
@@ -807,10 +819,11 @@ class VotesManager(
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
             val trace = Trace()
+            trace.checkState = votesFlow.value.firstOrNull { it.key == key }?.check?.state
             var out: ResultsOutcome? = null
             var cancelled = false
             try {
-                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, trace, due) }.also { out = it }
+                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, epoch, trace, due) }.also { out = it }
             } catch (e: CancellationException) {
                 cancelled = true
                 throw e
@@ -854,7 +867,10 @@ class VotesManager(
         /** The check was `gave_up` when this attempt ran: it is a re-check (#314 item 1, the 7 days run from the first). */
         var gaveUp = false
 
-        /** rows.json was fetched with a body (read, or cut at its cap): the time of the last rows download (#314 item 1). */
+        /** The check's state in the list when the attempt began (null when the list does not have the vote; #319 item 3). */
+        var checkState: CheckState? = null
+
+        /** rows.json's bytes were received (read, cut at its cap, or cut off partway): the last rows download (#314, #319). */
         var rowsSpent = false
 
         /** The rows.json download was deferred on a metered network (#314 item 1): the last attempt's record is kept. */
@@ -888,6 +904,7 @@ class VotesManager(
         connectionId: String,
         proposalId: String,
         gen: Int,
+        epoch: Int,
         trace: Trace,
         /** The automatic re-check ([checkDue]); false for the member's Check again, which the network cap does not hold. */
         due: Boolean,
@@ -963,9 +980,33 @@ class VotesManager(
             trace.deferred = true
             return@run ResultsOutcome.Deferred
         }
-        val rows = rowsCap?.let { fetch("rows.json", it) }
+        // Any bytes of rows.json received count toward the weekly cap, also of a download cut off partway (#319 item 1).
+        var rowsBytes = false
+        // The download counts for the recheck on open too (#321 L3: the two paths do not add up); once, at the first bytes,
+        // under the store epoch the attempt began in.
+        val rowsAt = now().toEpochMilli()
+        val rows = rowsCap?.let { cap ->
+            val stamp = { n: Long ->
+                if (n > 0 && !rowsBytes) {
+                    rowsBytes = true
+                    stampRecheckRows(key, rowsAt, epoch)
+                }
+            }
+            when (val a = site.getCounted("p/$proposalId/rows.json", cap, stamp)) {
+                is SiteAnswer.Found -> a.bytes
+                SiteAnswer.Absent -> null
+                SiteAnswer.TooLarge -> {
+                    tooLarge = true
+                    null
+                }
+                SiteAnswer.Unreachable -> {
+                    siteDown = true
+                    null
+                }
+            }
+        }
         if (rows != null) trace.rowsDownloaded = true
-        if (rows != null || tooLarge) trace.rowsSpent = true
+        if (rows != null || tooLarge || rowsBytes) trace.rowsSpent = true
         // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
         val rowsOver = tooLarge
         if (rowsOver && !rowsOk) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
@@ -1186,6 +1227,9 @@ class VotesManager(
     fun forgetStored() {
         synchronized(attemptsSync) {
             storeEpoch++
+            // Under the same lock as [stampRecheckRows]' test: a chunk still arriving after this stamps nothing.
+            recheckRowsAt = HashMap()
+            runCatching { stamps.save(emptyList()) }
             attemptsHeld = emptyList()
             runCatching { attempts.save(emptyList()) }
         }
@@ -1204,7 +1248,7 @@ class VotesManager(
         val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
         // A Check again that ended Unchanged (nothing sent) keeps the last attempt's time, so it does not defer the daily
         // re-check (#314 item 3); the daily re-check's own Unchanged is its attempt of the day.
-        val keepTime = !due && (out == ResultsOutcome.Unchanged || out == ResultsOutcome.Deferred)
+        val keepTime = !due && out == ResultsOutcome.Unchanged
         val at = now().toEpochMilli()
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
         val entry = ResultsAttempt(
@@ -1222,12 +1266,17 @@ class VotesManager(
 
     /** The record after an attempt, from the [last] one (#314 items 1 and 3). */
     private fun nextAttempt(last: ResultsAttempt?, entry: ResultsAttempt, trace: Trace, keepTime: Boolean, at: Long): ResultsAttempt {
-        val first = last?.firstRecheckMs ?: at.takeIf { trace.gaveUp }
+        // The 7 days run from the first re-check of this give-up: a check back in `pending` starts them again (#319 item 3).
+        val first = when (trace.checkState) {
+            CheckState.GAVE_UP -> last?.firstRecheckMs ?: at
+            CheckState.PENDING -> null
+            else -> last?.firstRecheckMs
+        }
         val rowsAt = if (trace.rowsSpent) at else last?.lastRowsMs
         return when {
-            // A deferred download keeps what the last attempt knew (the skip's facts and hashes); only its time moves, and not
-            // for the member's Check again.
-            trace.deferred && last != null -> last.copy(atMs = if (keepTime) last.atMs else at)
+            // A deferred download (the daily re-check only: a Check again is never deferred) keeps what the last attempt
+            // knew (the skip's facts and hashes); only its time moves.
+            trace.deferred && last != null -> last.copy(atMs = at)
             keepTime && last != null -> entry.copy(atMs = last.atMs, firstRecheckMs = first, lastRowsMs = rowsAt)
             else -> entry.copy(firstRecheckMs = first, lastRowsMs = rowsAt)
         }
@@ -1260,13 +1309,14 @@ class VotesManager(
             hintsFlow.value[key]?.verdict?.let { return@withLock ResultsOutcome.Rechecked(it == ObserverVerdict.PASSED) }
             // A child job as a results check is (lead review L2): a lock cancels it and it is void.
             val gen = synchronized(lock) { generation }
-            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen) }
+            val epoch = storeEpochNow()
+            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen, epoch) }
         }
     }
 
     /** The observer's check alone, on the published results as they are now; nothing is submitted or kept on disk. */
-    @Suppress("ReturnCount")
-    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one early return per reason it could not check
+    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int, epoch: Int): ResultsOutcome = run {
         if (!site.configured) return@run notRechecked(key, gen)
         val detail = get(connectionId, proposalId)
         // Nothing checked (no tag to look for, results.json over the limit, a cap that does not read): not a failed observer
@@ -1281,7 +1331,22 @@ class VotesManager(
             computeStep("$key:cap")
             VoteRows.rowsCap(doc)
         } ?: return@run notRechecked(key, gen)
-        val rows = when (val a = site.get("p/$proposalId/rows.json", cap)) {
+        // On a metered (or unknown) network, rows.json at most weekly per vote for the recheck (#319 item 2): without it every
+        // open after a lock would download it again (the verdict is memory only and a lock forgets it). Until then the
+        // existing not-rechecked line, and no number.
+        val at = now().toEpochMilli()
+        if (withContext(io) { recheckRowsWait(key, at) }) return@run notRechecked(key, gen)
+        // The callback runs in the site client's blocking read, which a lock does not interrupt: bytes received count whatever
+        // the job's state (#321 L1: a lock partway still spent them); only a wipe since the recheck began drops the stamp
+        // (the epoch, review of #319 L1).
+        // Stamped once per download, at its first bytes (not under the lock at every chunk).
+        var stamped = false
+        val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n ->
+            if (n > 0 && !stamped) {
+                stamped = true
+                stampRecheckRows(key, at, epoch)
+            }
+        }) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
             SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
@@ -1302,6 +1367,53 @@ class VotesManager(
             }
         }
         rechecked(key, passed, gen)
+    }
+
+    /** [recheckRowsAt], read from [stamps] the first time (under [attemptsSync]). */
+    private fun recheckStampsLocked(): MutableMap<String, Long> = recheckRowsAt
+        ?: runCatching { stamps.load() }.getOrDefault(emptyList()).associateTo(HashMap()) { it.key to it.atMs }.also { recheckRowsAt = it }
+
+    private fun saveStampsLocked(map: Map<String, Long>) {
+        runCatching { stamps.save(map.map { (k, v) -> RecheckStamp(k, v) }) }
+    }
+
+    /** The recheck's last rows download for [key], if any. */
+    private fun recheckStampOf(key: String): Long? = synchronized(attemptsSync) { recheckStampsLocked()[key] }
+
+    /** [recheckRowsAt] for [key], kept on disk, only while the store's epoch is still [epoch] (no wipe since the recheck began). */
+    private fun stampRecheckRows(key: String, at: Long, epoch: Int) {
+        synchronized(attemptsSync) {
+            if (epoch != storeEpoch) return
+            val map = recheckStampsLocked()
+            map[key] = at
+            saveStampsLocked(map)
+        }
+    }
+
+    /** The recheck stamps of votes no longer listed go, with the attempts' pruning (#321 M1). */
+    private suspend fun forgetRecheckStamps(epoch: Int, listed: Set<String>) {
+        withContext(io) {
+            synchronized(attemptsSync) {
+                if (epoch != storeEpoch) return@synchronized
+                val map = recheckStampsLocked()
+                if (map.keys.retainAll(listed)) saveStampsLocked(map)
+            }
+        }
+    }
+
+    /**
+     * The recheck's rows.json waits (#319 item 2, the lead's (a)): on a network not known unmetered, downloaded for [key] less
+     * than a day ago while within 7 days of the vote's close (as extended), or less than a week ago after (or with no close
+     * known).
+     */
+    private fun recheckRowsWait(key: String, at: Long): Boolean {
+        val lastRows = recheckStampOf(key) ?: return false
+        // The lead's call on #319 item 2 (a): for 7 days after the vote's close (as extended) at most daily, then weekly; a vote
+        // without a known close, weekly. Wi-Fi is never capped.
+        val closesAt = votesFlow.value.firstOrNull { it.key == key }?.closesAt?.toEpochMilli()
+        val early = closesAt != null && at < closesAt + RECHECK_DAILY_FOR.toMillis()
+        val every = if (early) RECHECK_EARLY_EVERY else METERED_ROWS_EVERY
+        return at - lastRows in 0 until every.toMillis() && unmetered() != true
     }
 
     private fun rechecked(key: String, passed: Boolean, gen: Int): ResultsOutcome {
@@ -1438,6 +1550,12 @@ class VotesManager(
 
         /** From the first re-check of a `gave_up` record, rows.json on any network for this long (#314 item 1). */
         val WIFI_ONLY_AFTER: Duration = Duration.ofDays(7)
+
+        /** The recheck on open on a metered network: daily for this long after the vote's close (#319 item 2, the lead's (a)). */
+        val RECHECK_DAILY_FOR: Duration = Duration.ofDays(7)
+
+        /** ...at most this often then; weekly ([METERED_ROWS_EVERY]) after. */
+        val RECHECK_EARLY_EVERY: Duration = Duration.ofDays(1)
 
         /** After that, on a metered network, rows.json at most this often (#314 item 1: a weekly cap, not a block). */
         val METERED_ROWS_EVERY: Duration = Duration.ofDays(7)

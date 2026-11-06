@@ -291,6 +291,13 @@ interface OwnerCheckRepository {
     val presenceUnrecorded: StateFlow<Boolean> get() = NOT_SET
 
     /**
+     * (VAULT-MESSAGING 0.84.0 §3.4, §10.2) The latest `vault.status` has `relay: "refused"`: the vault could not move to its
+     * new relay address and may not receive messages until its keys are replaced. True while the field is present in the
+     * newest status; false when a later status lacks it (or has an unknown value) and at lock, sign-out and wipe.
+     */
+    val relayRefused: StateFlow<Boolean> get() = NOT_SET
+
+    /**
      * (Release R, ANDROID-PLAN "Other screens") An unlock that cancelled a recovery sent its owner check and that check
      * did not pass: the owner-check screen is to be shown at once, so that the member's presence is recorded.
      */

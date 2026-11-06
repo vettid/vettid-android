@@ -501,6 +501,8 @@ fun UrgentBanner(
     modifier: Modifier = Modifier,
     statusBarPadding: Boolean = true,
     onDismiss: (() -> Unit)? = null,
+    /** How a screen reader announces it when it appears; a lasting notice that comes back after every unlock uses Polite. */
+    liveRegion: LiveRegionMode = LiveRegionMode.Assertive,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.error, contentColor = colors.onError, modifier = modifier.fillMaxWidth()) {
@@ -508,7 +510,7 @@ fun UrgentBanner(
             Modifier
                 .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
                 .padding(start = Spacing.l, end = Spacing.s, top = Spacing.s, bottom = Spacing.s)
-                .semantics { liveRegion = LiveRegionMode.Assertive },
+                .semantics { this.liveRegion = liveRegion },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Outlined.ErrorOutline, contentDescription = null)

@@ -7,16 +7,26 @@ import java.time.ZoneId
 import java.util.Date
 
 /**
- * "until 15:30": a share's end as the member's phone writes a time (12 or 24 hours as set), with the day first when it is not
- * today ("2 Nov, 15:30"), since a share can last 7 days.
+ * "until 15:30": a share's end as the member's phone writes a time (12 or 24 hours as set), with the day too when it is not
+ * today, since a share can last 7 days. The date and the time are one pattern from the locale's own skeleton, so their order and
+ * separators follow the region ("Nov 8, 3:30 PM" in the US, "8 Nov, 15:30" in the UK; owner decision 2026-11-05).
  */
 object ShareTime {
     fun format(context: Context, at: Instant, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
-        val time = DateFormat.getTimeFormat(context).also { it.timeZone = java.util.TimeZone.getTimeZone(zone) }.format(Date.from(at))
-        if (at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()) return time
-        val pattern = DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
-        val day = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
-            .also { it.timeZone = java.util.TimeZone.getTimeZone(zone) }.format(Date.from(at))
-        return "$day, $time"
+        val locale = context.resources.configuration.locales[0] ?: java.util.Locale.getDefault()
+        val tz = java.util.TimeZone.getTimeZone(zone)
+        if (at.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()) {
+            return DateFormat.getTimeFormat(context).also { it.timeZone = tz }.format(Date.from(at))
+        }
+        val skeleton = if (DateFormat.is24HourFormat(context)) "MMMdHHmm" else "MMMdhmma"
+        // A locale with a calendar extension can yield pattern letters SimpleDateFormat refuses, and this text is also the
+        // location service's notification: then the locale's own medium date and short time, never a throw.
+        return runCatching {
+            java.text.SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale)
+                .also { it.timeZone = tz }.format(Date.from(at))
+        }.getOrElse {
+            java.time.format.DateTimeFormatter.ofLocalizedDateTime(java.time.format.FormatStyle.MEDIUM, java.time.format.FormatStyle.SHORT)
+                .withLocale(locale).withZone(zone).format(at)
+        }
     }
 }

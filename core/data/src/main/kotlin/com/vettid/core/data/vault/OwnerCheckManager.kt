@@ -46,8 +46,16 @@ interface OwnerCheckOps {
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
 }
 
-/** One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent). */
-data class StatusRead(val ownerCheck: OwnerCheckStatus?, val recovery: RecoveryStatus?, val timeScale: Long? = null)
+/**
+ * One `vault.status` read for the owner check: [ownerCheck], [recovery], and [timeScale] (null when absent);
+ * [relayRefused] (0.84.0): `relay` is `"refused"`.
+ */
+data class StatusRead(
+    val ownerCheck: OwnerCheckStatus?,
+    val recovery: RecoveryStatus?,
+    val timeScale: Long? = null,
+    val relayRefused: Boolean = false,
+)
 
 /**
  * The app's side of the daily owner check (VAULT-MESSAGING 0.13.0 §3.6): follows the vault's deadline and hold,
@@ -94,6 +102,95 @@ class OwnerCheckManager(
     private val presenceFlow = MutableStateFlow(saved?.presenceUnrecorded == true)
     private val checkAfterCancelFlow = MutableStateFlow(false)
 
+    /** (0.84.0) The latest `vault.status` had `relay: "refused"`; memory only, so that a restart shows nothing until a read. */
+    private val relayFlow = MutableStateFlow(false)
+    private val relayLock = Any()
+    private val readSeq = java.util.concurrent.atomic.AtomicLong()
+    private var relayAppliedSeq = 0L
+
+    /**
+     * (0.84.0) Counts the clears of the relay notice ([clearRelay]: every lock, sign-out, wipe and unlock attempt) that a
+     * status read must not span; the relay's own, as vettid-ios #221's `relayEpoch`, so that clearing the notice never
+     * moves the shared [epoch] a probe or an unlock's count depends on.
+     */
+    private val relayEpoch = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Feed items of `identity.rotation_failed` already acted on (memory only); forgotten at every lock, sign-out and wipe
+     * ([clearRelay]), as vettid-ios #221: a later unlock's update of the same item (the vault audits it at most once per
+     * unlock, §3.4) reads the status again.
+     */
+    private val rotationFailedSeen = HashSet<String>()
+
+    /** The one re-read after a status found the relay refused, and whether it was made since the last lock; cancelled at lock. */
+    private var relayRecheck: kotlinx.coroutines.Job? = null
+    private var relayRechecked = false
+
+    /**
+     * Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled,
+     * and the `identity.rotation_failed` items seen are forgotten.
+     */
+    private fun clearRelay() {
+        relayEpoch.incrementAndGet()
+        synchronized(relayLock) {
+            relayFlow.value = false
+            relayRecheck?.cancel()
+            relayRecheck = null
+            relayRechecked = false
+        }
+        synchronized(rotationFailedSeen) { rotationFailedSeen.clear() }
+    }
+
+    /**
+     * (0.84.0) A `vault.status` read about to be sent, for [noteRelay]: its number and the count of relay clears
+     * ([relayEpoch]) when it began. Every status read of the open vault takes one (the owner check's here, the Settings
+     * overview's in `VaultManager.overview`), as vettid-ios #221 hears every status.
+     */
+    class StatusStamp internal constructor(internal val seq: Long, internal val epoch: Int)
+
+    /** Takes the stamp of a `vault.status` read about to be sent. */
+    fun beginStatusRead(): StatusStamp {
+        val e = relayEpoch.get()
+        return StatusStamp(readSeq.incrementAndGet(), e)
+    }
+
+    /**
+     * (0.84.0) The answer of the read [stamp] began: `relay` absent (or any value but `"refused"`) takes the notice away. The
+     * latest answer decides: applied under the lock only if no relay clear (a lock, sign-out, wipe or unlock attempt) came
+     * since the read began and no newer read was applied already. A status that says refused schedules the one re-read of
+     * this unlock.
+     *
+     * Why the epoch and not a phase check, as iOS's `phase == .unlocked`: this manager has no phase of its own, and every
+     * way the open vault closes reaches [clearRelay] before anything else can read (the lock signals here, and
+     * [unlockStarting] for a lock it never heard of), so a read that spans a close is dropped by [relayEpoch]. The one
+     * reader that has the phase, the Settings overview, also checks it before applying (`RelayReads.read`).
+     */
+    fun noteRelay(stamp: StatusStamp, refused: Boolean) {
+        synchronized(relayLock) {
+            if (relayEpoch.get() != stamp.epoch || stamp.seq <= relayAppliedSeq) return
+            relayAppliedSeq = stamp.seq
+            relayFlow.value = refused
+            if (refused) scheduleRelayRecheck()
+        }
+    }
+
+    /**
+     * (0.84.0) The vault tries the relay once per unlock, after the unlock's own `vault.status`: when a status found the
+     * relay refused, read once more a minute later (divided by the vault's time scale), once until the next lock and only
+     * while the vault is open (vettid-ios #221's rule).
+     */
+    private fun scheduleRelayRecheck() {
+        synchronized(relayLock) {
+            if (!relayFlow.value || relayRechecked) return
+            relayRechecked = true
+            val wait = TimeScales.divideMs(RELAY_RECHECK_MS, lastTimeScale)
+            relayRecheck = scope.launch {
+                kotlinx.coroutines.delay(wait)
+                if (!locked.value) runCatching { refreshOwnerCheck() }
+            }
+        }
+    }
+
     /** (Release L) The vault locked itself; kept on the phone until it opens again. */
     private val idleFlow = MutableStateFlow(saved?.takeIf { it.idleLocked }?.let { IdleLocked(it.idleAfter) })
 
@@ -130,6 +227,7 @@ class OwnerCheckManager(
     override val unlockCheckOutcome: StateFlow<OwnerCheckOutcome?> = unlockOutcome.asStateFlow()
     override val notices: StateFlow<List<OwnerCheckNotice>> = noticeFlow.asStateFlow()
     override val presenceUnrecorded: StateFlow<Boolean> = presenceFlow.asStateFlow()
+    override val relayRefused: StateFlow<Boolean> = relayFlow.asStateFlow()
     override val checkAfterCancel: StateFlow<Boolean> = checkAfterCancelFlow.asStateFlow()
     override val idleLocked: StateFlow<IdleLocked?> = idleFlow.asStateFlow()
     override val idleLockSetting: StateFlow<IdleLockSetting?> = idleSettingFlow.asStateFlow()
@@ -145,6 +243,7 @@ class OwnerCheckManager(
         if (m.type == "vault.locking") {
             unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
             epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
+            clearRelay() // a locked app shows no vault notice (0.84.0); the next `vault.status` after an unlock says again
             if (VaultJson.str(m.body, "reason") != REASON_OWNER_CHECK) lockedOther = true
         }
         when (m.type) {
@@ -188,6 +287,8 @@ class OwnerCheckManager(
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
         causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true
+        // Also bumps the relay epoch, so a status read that began before this lock does not bring the notice back.
+        clearRelay() // a lock found by a probe or by ten failed checks
     }
 
     /** Nothing says the vault is locked (an unlock, a passed check, a forgotten state). */
@@ -352,6 +453,16 @@ class OwnerCheckManager(
         keepCount = false
     }
 
+    /**
+     * (0.84.0) An unlock attempt starts: the relay notice and its one re-read begin again, whatever lock came before, also
+     * one this manager never heard of (`VaultManager.refresh` finding the vault locked through the member API after the
+     * `vault.locking` expired). Not part of [beginUnlock]: `openAfterUnlock`'s `finally` calls that too, after the unlock's
+     * own read applied, and would wipe it.
+     */
+    fun unlockStarting() {
+        clearRelay()
+    }
+
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
     @Volatile
     private var unlockPin: String? = null
@@ -397,9 +508,12 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
-        val (st0, recovery, timeScale) = vaultGuard(resend = true) { ops().statusRead() }
+        val stamp = beginStatusRead()
+        val read = vaultGuard(resend = true) { ops().statusRead() }
+        val (st0, recovery, timeScale) = read
         runCatching { onTimeScale(timeScale, since) }
         lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
+        noteRelay(stamp, read.relayRefused) // (0.84.0) after the time scale, which the one re-read divides by
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
@@ -518,6 +632,7 @@ class OwnerCheckManager(
     override fun onLockedHere() {
         unlockPin = null
         epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
+        clearRelay()
         lockedHere = true
         lockedOther = true
         view.value?.let { set(it) }
@@ -580,6 +695,10 @@ class OwnerCheckManager(
      */
     fun onFeed(items: List<FeedItem>) {
         noticeFlow.value = items.mapNotNull { notice(it) }.sortedByDescending { it.at }
+        // (0.84.0) The vault tries the relay once per unlock, after the unlock's read: a new rotation_failed says it did.
+        val fresh = items.filter { it.kind == KIND_ROTATION_FAILED && it.status == STATUS_ACTIVE }
+            .count { synchronized(rotationFailedSeen) { rotationFailedSeen.add(it.itemId) } }
+        if (fresh > 0) scope.launch { runCatching { refreshOwnerCheck() } }
     }
 
     private fun notice(item: FeedItem): OwnerCheckNotice? {
@@ -624,6 +743,7 @@ class OwnerCheckManager(
         estimate = 0
         keepCount = false
         view.value = null
+        clearRelay()
         markOpen()
         unlockOutcome.value = null
         noticeFlow.value = emptyList()
@@ -732,6 +852,10 @@ class OwnerCheckManager(
         private const val CODE_BACKOFF = "backoff"
         private const val STATE_LOCKED = "locked"
         private const val STATUS_ACTIVE = "active"
+        private const val KIND_ROTATION_FAILED = "identity.rotation_failed"
+
+        /** (0.84.0) How long after a status that found the relay refused it is read once more (before the time scale). */
+        private const val RELAY_RECHECK_MS = 60_000L
         private const val PRIORITY_URGENT = "urgent"
         private const val STATUS_AFTER_FAILURE_MS = 5_000L
         private const val HOLD_OFF_MARGIN_MIN = 10L
