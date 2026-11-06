@@ -206,8 +206,9 @@ internal object TransferInResume {
      * `retry_after` longer than the request's bound (wait + 30 s) ends it as an abandoned request first, a cut held to
      * max(now, s + w) + V + 15 s. Once the extra is used at or after the cap, nothing raises a hold past what was due when it
      * was taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze
-     * during the last send (the app in the background) earns one more `wait=0` look, at once and held for nothing, so the
-     * drop never follows only a look made before the freeze. Then the drop (not when
+     * during the last send (the app in the background) earns one more `wait=0` look: at once when the extra was taken at
+     * or after the cap, or, after one taken before it (no ceiling), held until the freeze's lease ends + 15 s, within the
+     * bound. So the drop never follows only a look made before the freeze. Then the drop (not when
      * paired, not when the end moved past now).
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
@@ -254,7 +255,8 @@ internal object TransferInResume {
                         // run out (max(now, s + w + V + 15 s), however and whenever the cut or freeze was noticed). A cut or a
                         // freeze during the hold moves it. One that is noticed during the send itself, with a lease
                         // beyond its start, or a refused last collect, earns ONE more held final collect in all; a freeze
-                        // during the last send after that earns one more look, held for nothing; then the drop.
+                        // during the last send after that earns one more look (at once, or held to the freeze's
+                        // lease + 15 s after an extra taken before the cap); then the drop.
                         out.awaitHold()
                         val sentAt = settle.now()
                         out.send(0L)
@@ -380,7 +382,8 @@ internal object TransferInResume {
          * signature, after the client's own retries: nothing was looked at; held for its `retry_after`, at most V, and sent as a
          * new request, signed afresh), earns the one extra, if
          * still unused. Once it is used, a freeze during the last send (the app was in the background) earns one more look,
-         * at once and held for nothing, so the drop never follows a look made before the freeze.
+         * at once (or, after an extra taken before the cap, held to the freeze's lease + 15 s), so the drop never follows a
+         * look made before the freeze.
          */
         fun againAfterLastSend(sentAt: Long): Boolean {
             val n = settle.now()
