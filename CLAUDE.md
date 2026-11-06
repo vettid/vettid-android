@@ -417,18 +417,25 @@ The A2 exit test:
   the lists, the entries and each results submit as separate stages, so one bad item stops nothing else; the member's row and its
   Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
-  `VoteRows.read` parses the two documents once (rows.json at most `VoteRows.rowsCap(counts.eligible)` = 512 × eligible + 4,096,
-  never over 51,204,096 bytes, the download capped the same way, and nested at most 4 deep); `PublishedResults.observe` is the
-  rest of the observer's check (BALLOT-PROTOCOL §8.4, VAULT-MESSAGING 0.86.4 §10.19.6 step 1: the tags number the proposal's
-  `eligible` and reach its `record_root`, each `choice_id` is the proposal's, the tally and `counts.ballots` recompute, each
-  `ballot_sig` verifies, and what is only reported: the documents naming another proposal, rows.json not exactly `{v: 1,
-  proposal_id, rows}`). `checkResults` runs it on `Dispatchers.Default` with the vault's own `tally` and `counts` (`vote.get`,
-  when it holds them) compared too, and **still submits** whenever the four vault-checked inputs hold (0.83.2): a failure only
-  sets `VoteHint.observerFailed` (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing
-  clears it). With a `verified` or `unconfirmed` check and the flag, the screen shows the state, then
-  `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`), and no number (`VoteRules.showNumbers`:
-  numbers only under `verified`/`unconfirmed` and without the flag); it is not the results-problem text. Not built yet (the
-  0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open. Every vote signature the app checks goes through
+  `VoteRows.read` reads `results.json` and `rows.json` (`RowsReader`: strict JSON, nested at most 4 deep, **no text kept**, only
+  each row's decoded tag, `vk`, `choice_id`, `ballot_sig` and leaf hash, about 180 bytes a row; rows.json at most
+  `VoteRows.rowsCap(counts.eligible)` = 512 × eligible + 4,096, never over 51,204,096 bytes, the download capped the same way).
+  **Only what VAULT-MESSAGING 0.86.4 §10.19.6 step 1 names stops the submit of a row**: the cap, the depth, a row that cannot
+  be made into a leaf, and what the vault's check of the row needs (`counts.eligible` rows reaching `rows_root`; the member's
+  row, the first under its tag; a valid own `choice_id`). `PublishedResults.observe` is the rest of the observer's check
+  (BALLOT-PROTOCOL §8.4) and also reports the `rows_hash`, the tag order and duplicates, the field lengths, members other than
+  §8.5's (`pad` is not allowed in rows.json), the documents naming another proposal and rows.json not exactly `{v: 1,
+  proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default),
+  with `ensureActive()` every 256 rows and tree nodes, under a lock per vote (one vote's long check holds up no other), and
+  compares the vault's own `tally` and `counts` (`vote.get`, when it holds them) too; any exception in the observer's work is an
+  observer failure. It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`
+  (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing clears it), and a submit the vault
+  answered sets `VoteHint.verdict` (`ObserverVerdict`), which nothing else changes. With a `verified` or `unconfirmed` check and
+  the flag, the screen shows the state, then `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`);
+  numbers show only with a `PASSED` verdict (`VoteRules.showNumbers`), so none after a failed verdict, and none with no verdict
+  in memory (after a lock or a restart, until a check runs again); it is not the results-problem text. Not built yet (the
+  0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open, and submitting when `counts.eligible` does not read.
+  Every vote signature the app checks goes through
   `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: Bouncy Castle's own verify is cofactored and takes an `R` of
   small order, so the small-order and `y < p` rules are a table and a mixed-order point is decided by `Ed25519Exact`,
   cofactorless). The reserved `abstain` choice is always "Abstain" (`vote_choice_abstain`, `VoteTexts.choiceLabel`) wherever a
