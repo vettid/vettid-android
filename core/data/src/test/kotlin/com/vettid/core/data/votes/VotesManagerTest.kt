@@ -1590,16 +1590,37 @@ class VotesManagerTest {
     }
 
     @Test
-    fun rowsJsonNotThereOrNotReachableIsNotRowsUnavailable() = runTest {
-        // Not among what makes the row "cannot be had": the next attempt tries again, nothing is sent.
-        for (answer in listOf(SiteAnswer.Absent, SiteAnswer.Unreachable)) {
-            val (ops, site) = observedScenario(observed())
-            site.answers["p/$PID/rows.json"] = answer
-            val m = manager(ops, site, voteRows = true)
-            m.refresh()
-            assertFalse(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
-            assertTrue(ops.submitted.isEmpty())
-        }
+    fun rowsJsonNotReachableIsTriedAgainNotRowsUnavailable() = runTest {
+        // The lead's call (2026-11-06): no answer, a timeout or a 5xx (all `Unreachable`) is retried; nothing is sent.
+        val (ops, site) = observedScenario(observed())
+        site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        val m = manager(ops, site, voteRows = true)
+        m.refresh()
+        assertEquals(ResultsOutcome.SiteUnreachable, m.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun aDefinite404ForRowsJsonBesideTheSignedResultsIsRowsUnavailable() = runTest {
+        // The lead's call (2026-11-06): a 404 for rows.json while the signed results.json is there, with `vote_rows`.
+        val (ops, site) = observedScenario(observed())
+        site.answers.remove("p/$PID/rows.json") // the fake site answers 404 (Absent)
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"rows_unavailable"}}""")
+        val m = manager(ops, site, voteRows = true)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertRowsUnavailable(ops.submitted.single())
+        // A 404 is not "rows had": the next re-check fetches rows.json again (it may have been published since).
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(2, site.reads.count { it == "p/$PID/rows.json" })
+        // Without `vote_rows`, as before: nothing is sent.
+        val (ops2, site2) = observedScenario(observed())
+        site2.answers.remove("p/$PID/rows.json")
+        val m2 = manager(ops2, site2)
+        m2.refresh()
+        assertEquals(ResultsOutcome.NotPublished, m2.checkResults(CONN, PID))
+        assertTrue(ops2.submitted.isEmpty())
     }
 
     @Test

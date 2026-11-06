@@ -898,8 +898,13 @@ class VotesManager(
         // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
         val rowsOver = tooLarge
         if (rowsOver && !rowsOk) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
-        if (rowsCap != null && rows == null && !rowsOver) return@run unavailable(key, siteDown, gen)
-        trace.rowsFetched = true
+        // A definite 404 for rows.json beside the signed results (the lead's call, 2026-11-06): with `vote_rows` the member's
+        // row cannot be had. No answer, a timeout or a 5xx is tried again at the next attempt.
+        val rowsMissing = rowsCap != null && rows == null && !rowsOver
+        val rowsAbsent = rowsMissing && !siteDown
+        if (rowsMissing && !(rowsAbsent && rowsOk)) return@run unavailable(key, siteDown, gen)
+        // rows.json had (a 404 is fetched again at the next attempt: it may yet be published).
+        trace.rowsFetched = !rowsAbsent
         // The heavy part (up to 51 MB: the hash, the reading, the trees, the proof, the signatures) in one block off the
         // main thread. The observer's verdict is only shown, never a reason not to submit (0.83.2).
         val examined = if (rows == null) {
