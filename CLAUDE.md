@@ -426,7 +426,10 @@ The A2 exit test:
   (BALLOT-PROTOCOL §8.4) and also reports the `rows_hash`, the tag order and duplicates, the field lengths, members other than
   §8.5's (`pad` is not allowed in rows.json), the documents naming another proposal and rows.json not exactly `{v: 1,
   proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default),
-  with `ensureActive()` every 256 rows and tree nodes, under a lock per vote (one vote's long check holds up no other), and
+  with `ensureActive()` every 256 rows and tree nodes (a cancellation stops it there: leaving the screen ends its
+  `viewModelScope`, a lock cancels the sync job and so the due checks; a lock does **not** cancel a Check again still running,
+  which runs to its end, but a `generation` taken at its start voids it: no hint is written and nothing is submitted after a
+  lock or clear, `ResultsOutcome.Voided`), under a lock per vote (one vote's long check holds up no other), and
   compares the vault's own `tally` and `counts` (`vote.get`, when it holds them) too; any exception in the observer's work is an
   observer failure. It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`
   (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing clears it), and a submit the vault

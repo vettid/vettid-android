@@ -1317,4 +1317,36 @@ class VotesManagerTest {
         assertFalse(VoteRules.showNumbers(verified, h.verdict, h.observerFailed))
         assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = h.observerFailed))
     }
+
+    @Test
+    fun aLockDuringACheckVoidsItsLineItsFlagAndItsSubmit() = runTest {
+        // Recheck 1, R1-2: Check again on results that do not add up, the member locks mid-check, then unlocks.
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        var m: VotesManager? = null
+        var locked = false
+        m = manager(ops, site) {
+            if (it.endsWith(":observe") && !locked) {
+                locked = true
+                m!!.clear()
+            }
+        }
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+        m.refresh() // the unlock
+        assertNull(m.hints.value["$CONN/$PID"])
+    }
+
+    @Test
+    fun aLockDuringACheckThatFailsLeavesNoProblemBehind() = runTest {
+        val o = observed()
+        // A tag the rows do not have: the check ends as a problem, but the lock came first.
+        val (ops, site) = observedScenario(Observed(o.rowsJson, o.results, listOf(o.tags[0], ByteArray(32) { 9 }, o.tags[2])))
+        var m: VotesManager? = null
+        m = manager(ops, site) { if (it.endsWith(":read")) m!!.clear() }
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        m.refresh()
+        assertNull(m.hints.value["$CONN/$PID"])
+    }
 }
