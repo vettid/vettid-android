@@ -432,6 +432,16 @@ class OwnerCheckManager(
         keepCount = false
     }
 
+    /**
+     * (0.84.0) An unlock attempt starts: the relay notice and its one re-read begin again, whatever lock came before, also
+     * one this manager never heard of (`VaultManager.refresh` finding the vault locked through the member API after the
+     * `vault.locking` expired). Not part of [beginUnlock]: `openAfterUnlock`'s `finally` calls that too, after the unlock's
+     * own read applied, and would wipe it.
+     */
+    fun unlockStarting() {
+        clearRelay()
+    }
+
     /** The PIN the unlock just had accepted, kept only for the password-only retry of a check that failed on the password. */
     @Volatile
     private var unlockPin: String? = null

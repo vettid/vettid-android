@@ -1160,6 +1160,35 @@ class OwnerCheckManagerTest {
         assertFalse("a read that began before a lock is dropped", m.relayRefused.value)
     }
 
+    /**
+     * Review of #301, F1: a lock the manager never hears of (`VaultManager.refresh` finds the vault locked through the member
+     * API after the `vault.locking` expired) leaves the re-read spent; the next unlock attempt ([OwnerCheckManager.unlockStarting])
+     * begins the relay state again, so that unlock's refused read schedules its own re-read.
+     */
+    @Test
+    fun aNewUnlockAttemptRereadsAgainAfterALockTheManagerMissed() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.unlockStarting()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        val first = ops.reads
+        advanceTimeBy(61_000)
+        settle { ops.reads > first }
+        assertEquals("the first unlock's re-read", first + 1, ops.reads)
+        // The vault locks itself; this manager is told nothing. The next unlock attempt starts.
+        m.unlockStarting()
+        assertFalse("nothing of the earlier unlock is shown", m.relayRefused.value)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertTrue(m.relayRefused.value)
+        val second = ops.reads
+        advanceTimeBy(59_000)
+        assertEquals(second, ops.reads)
+        advanceTimeBy(2_000)
+        settle { ops.reads > second }
+        assertEquals("the second unlock's own re-read", second + 1, ops.reads)
+    }
+
     /** The re-read is cancelled by a lock. */
     @Test
     fun theRelayRereadIsCancelledAtLock() = runTest {
