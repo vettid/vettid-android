@@ -1189,6 +1189,28 @@ class OwnerCheckManagerTest {
         assertEquals("the second unlock's own re-read", second + 1, ops.reads)
     }
 
+    /**
+     * Review of #301, F3: the Settings overview's status read ([RelayReads.read]) decides the notice, stamped before it is
+     * sent (a lock during the read drops its answer), and a read that got no answer applies nothing.
+     */
+    @Test
+    fun theOverviewsReadDecidesStampedBeforeItIsSent() = runTest {
+        val m = manager(Ops())
+        val refused = com.vettid.core.vault.VaultStatusInfo("v", relay = JsonPrimitive("refused"))
+        val absent = com.vettid.core.vault.VaultStatusInfo("v")
+        assertEquals(refused, RelayReads.read(m) { refused })
+        assertTrue("an overview read shows the notice", m.relayRefused.value)
+        assertNull(RelayReads.read(m) { null })
+        assertTrue("no answer changes nothing", m.relayRefused.value)
+        RelayReads.read(m) { absent }
+        assertFalse("and one without `relay` takes it away", m.relayRefused.value)
+        RelayReads.read(m) {
+            m.onLockedHere() // the member locks while the overview's read is out
+            refused
+        }
+        assertFalse("an answer to a read sent before the lock is dropped", m.relayRefused.value)
+    }
+
     /** The re-read is cancelled by a lock. */
     @Test
     fun theRelayRereadIsCancelledAtLock() = runTest {

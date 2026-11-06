@@ -2784,19 +2784,18 @@ class VaultManager(
         val s = session()
         val st = vaultStatus(s)
         val open = phaseFlow.value is AppPhase.Unlocked
-        // (VAULT-MESSAGING 0.84.0) Every status read of the open vault decides the relay notice, this one too (stamped
-        // before it is sent, so a lock or a newer read since drops it).
-        val stamp = if (open) ownerCheck.beginStatusRead() else null
+        // (VAULT-MESSAGING 0.84.0) Every status read of the open vault decides the relay notice, this one too ([RelayReads]).
         val vs = if (open) {
-            try {
-                s.openApi.status()
-            } catch (_: IOException) {
-                null
+            RelayReads.read(ownerCheck) {
+                try {
+                    s.openApi.status()
+                } catch (_: IOException) {
+                    null
+                }
             }
         } else {
             null
         }
-        if (vs != null && stamp != null) ownerCheck.noteRelay(stamp, vs.relayRefused)
         noteStatusTimeScale(vs?.timeScale, rec)
         // "Installed from" (ANDROID-PLAN §7): from the app's own device.list entry; no line when it cannot be read.
         val signer = if (open) {
