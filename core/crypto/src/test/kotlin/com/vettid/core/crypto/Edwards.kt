@@ -5,7 +5,7 @@ import java.security.MessageDigest
 
 /**
  * Test-only edwards25519 arithmetic (RFC 8032 §5.1, extended coordinates over BigInteger), independent of Bouncy Castle and
- * of [Ed25519Exact]: it makes the signatures the strict rules are about (an `R` of small order, a key with a small-order
+ * of Tink: it makes the signatures the strict rules are about (an `R` of small order, a key with a small-order
  * part) from a seed, so that no such value is written into a test as a literal.
  */
 object Edwards {

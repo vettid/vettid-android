@@ -1,6 +1,8 @@
 package com.vettid.core.crypto
 
+import com.google.crypto.tink.subtle.Ed25519Verify as TinkEd25519Verify
 import org.bouncycastle.math.ec.rfc8032.Ed25519 as BcEd25519
+import java.security.GeneralSecurityException
 
 /**
  * Ed25519 (RFC 8032) for identity keys, relay keys and the credential key.
@@ -31,20 +33,28 @@ object Ed25519 {
      * 3. `S < L`;
      * 4. `[S]B = R + [k]A`, **cofactorless**.
      *
-     * Bouncy Castle's [verifyRaw] does step 3, refuses an `A` of small order or that does not decode, and checks the
-     * equation **cofactored** (it accepts an `R` of small order, and a key with a small-order part whose equation holds
-     * only times 8). Steps 1 and 2 are a table here, as in vettid-vault `vms/votewire/verify.go`. Step 4: when `A` and `R`
-     * are both of order L the cofactored equation is the cofactorless one; otherwise (a mixed-order point, which no honest
-     * signer makes) [Ed25519Exact] decides it.
+     * Steps 1 and 2 are a table here ([strictPoint]), as in vettid-vault `vms/votewire/verify.go`. Steps 3 and 4 are
+     * Tink's pure-Java Ed25519 verify ([cofactorless], owner decision a, #310): it refuses `S >= L`, computes
+     * `R' = [S]B - [k]A` without the factor 8 (`k = SHA-512(R || A || M) mod L`) and compares the encoding of `R'` with the
+     * bytes of `R`. Tink alone takes what steps 1 and 2 refuse: an `A` of small order, and an `A` whose `y` is p or more
+     * (read mod p); the table refuses both before Tink is called. (An `R` that is not canonical never equals Tink's
+     * encoding of `R'`; one of small order whose equation holds would.)
      */
     fun verifyStrict(publicKey: ByteArray, label: String, msg: ByteArray, sig: ByteArray): Boolean {
         if (publicKey.size != Suite.ED25519_PUBLIC_SIZE || sig.size != Suite.ED25519_SIGNATURE_SIZE) return false
-        val r = sig.copyOf(Suite.ED25519_PUBLIC_SIZE)
-        if (!strictPoint(publicKey) || !strictPoint(r)) return false
-        val m = Bytes.concat(label.toByteArray(Charsets.US_ASCII), msg)
-        if (!verifyRaw(publicKey, m, sig)) return false
-        if (BcEd25519.validatePublicKeyFull(publicKey, 0) && BcEd25519.validatePublicKeyFull(r, 0)) return true
-        return Ed25519Exact.cofactorless(publicKey, m, sig)
+        if (!strictPoint(publicKey) || !strictPoint(sig.copyOf(Suite.ED25519_PUBLIC_SIZE))) return false
+        return cofactorless(publicKey, Bytes.concat(label.toByteArray(Charsets.US_ASCII), msg), sig)
+    }
+
+    /**
+     * Steps 3 and 4 of BALLOT-PROTOCOL §2: Tink's `subtle.Ed25519Verify` (its constructor is always the pure-Java code,
+     * never a JCE provider), `S < L` and `[S]B - [k]A` encoded equal to `R`. Sizes are the caller's.
+     */
+    internal fun cofactorless(publicKey: ByteArray, m: ByteArray, sig: ByteArray): Boolean = try {
+        TinkEd25519Verify(publicKey).verify(sig, m)
+        true
+    } catch (_: GeneralSecurityException) {
+        false
     }
 
     /** Steps 1 and 2 of BALLOT-PROTOCOL §2 for a 32-byte point encoding: `y` below p and not the `y` of a small-order point. */

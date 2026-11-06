@@ -444,9 +444,12 @@ The A2 exit test:
   in memory (after a lock or a restart, until a check runs again); it is not the results-problem text. Not built yet (the
   0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open, and submitting when `counts.eligible` does not read.
   Every vote signature the app checks goes through
-  `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: Bouncy Castle's own verify is cofactored and takes an `R` of
-  small order, so the small-order and `y < p` rules are a table and a mixed-order point is decided by `Ed25519Exact`,
-  cofactorless). The reserved `abstain` choice is always "Abstain" (`vote_choice_abstain`, `VoteTexts.choiceLabel`) wherever a
+  `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
+  byte table (`strictPoint`), then `S < L` and the cofactorless equation are Tink's pure-Java `subtle.Ed25519Verify`
+  (`com.google.crypto.tink:tink-android`, pinned in `libs.versions.toml`, used by `:core:crypto` for this alone; owner
+  decision a, #310), which recomputes `R` and compares encodings. Tink alone takes an `A` of small order or with `y >= p`
+  (read mod p), and an `R` of small order whose equation holds: the table refuses them first. Bouncy Castle stays for every
+  other signature (`verify`, `verifyRaw`, signing), not for votes). The reserved `abstain` choice is always "Abstain" (`vote_choice_abstain`, `VoteTexts.choiceLabel`) wherever a
   choice label appears (the choices, the confirm sheet, the member's own choice, the restore question, the Results rows), and a
   real choice whose label reads "Abstain" (ANDROID-PLAN 0.1.117 matching) is shown by its id (`VoteWire.readsAbstain`). Both
   strings are owner-approved (ANDROID-PLAN 0.1.116 table, owner decision a, 2026-11-02).

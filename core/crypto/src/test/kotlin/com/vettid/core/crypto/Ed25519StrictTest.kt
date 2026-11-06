@@ -9,9 +9,10 @@ import java.math.BigInteger
 
 /**
  * [Ed25519.verifyStrict]: the four Ed25519 rules of BALLOT-PROTOCOL §2, against the shared `ed25519` vectors of `vote.json`
- * (BALLOT-PROTOCOL §11 item 4, verified with the ballot label as vettid-vault's `vms/votewire` does) and against the two
- * cases Bouncy Castle's own (cofactored) check accepts and §2 refuses: an `R` of small order, and a key with a small-order
- * part whose equation holds only times 8.
+ * (BALLOT-PROTOCOL §11 item 4, verified with the ballot label as vettid-vault's `vms/votewire` does), against the two
+ * cases Bouncy Castle's own (cofactored) check accepts and §2 refuses (an `R` of small order, and a key with a small-order
+ * part whose equation holds only times 8), and against the keys Tink's (cofactorless) check accepts and §2 refuses (one of
+ * small order, one whose `y` is not below p).
  */
 class Ed25519StrictTest {
     private val v = VectorDoc.load("vote.json")
@@ -38,18 +39,19 @@ class Ed25519StrictTest {
         val sig = Edwards.sign(a, pub, lm, BigInteger.valueOf(12345))
         assertTrue(Ed25519.verifyRaw(pub, lm, sig))
         assertTrue(Ed25519.verifyStrict(pub, label, m, sig))
-        // The exact path alone agrees on an ordinary signature, and refuses it changed.
-        assertTrue(Ed25519Exact.cofactorless(pub, lm, sig))
-        assertFalse(Ed25519Exact.cofactorless(pub, lm + 1, sig))
-        assertFalse(Ed25519Exact.cofactorless(pub, lm, sig.copyOf().also { it[40] = (it[40] + 1).toByte() }))
+        // Tink's cofactorless check alone agrees on an ordinary signature, and refuses it changed.
+        assertTrue(Ed25519.cofactorless(pub, lm, sig))
+        assertFalse(Ed25519.cofactorless(pub, lm + 1, sig))
+        assertFalse(Ed25519.cofactorless(pub, lm, sig.copyOf().also { it[40] = (it[40] + 1).toByte() }))
     }
 
     @Test
     fun theIdentityAsRIsRefused() {
-        // R = the identity, S = k·a: [S]B = R + [k]A holds without the factor 8, and Bouncy Castle accepts it. Both the table
-        // and the exact path (x = 0 does not map) refuse it; aSmallOrderRWithAMixedKeyIsRefusedByTheTableAlone pins the table.
+        // R = the identity, S = k·a: [S]B = R + [k]A holds without the factor 8, so Bouncy Castle and Tink both accept it;
+        // only the table refuses it.
         val sig = Edwards.sign(a, pub, lm, BigInteger.ZERO, Edwards.IDENTITY)
         assertTrue("the library alone accepts it", Ed25519.verifyRaw(pub, lm, sig))
+        assertTrue("Tink alone accepts it", Ed25519.cofactorless(pub, lm, sig))
         assertFalse(Ed25519.verifyStrict(pub, label, m, sig))
         assertFalse(Ed25519.strictPoint(sig.copyOf(32)))
     }
@@ -99,7 +101,7 @@ class Ed25519StrictTest {
         val sig = found!!
         val lmf = label.toByteArray(Charsets.US_ASCII) + msg
         assertTrue("the library alone accepts it", Ed25519.verifyRaw(mixed, lmf, sig))
-        assertTrue("the equation holds without the factor 8", Ed25519Exact.cofactorless(mixed, lmf, sig))
+        assertTrue("the equation holds without the factor 8", Ed25519.cofactorless(mixed, lmf, sig))
         assertFalse(Ed25519.verifyStrict(mixed, label, msg, sig))
     }
 
@@ -136,14 +138,36 @@ class Ed25519StrictTest {
     @Test
     fun aMixedOrderRWithAPrimeOrderKeyIsRefused() {
         // R' = [r]B + T (T of order 8), S = r + k·a with k over R': cofactored the equation holds (Bouncy Castle accepts),
-        // cofactorless it is off by T, so only the exact path refuses it.
+        // cofactorless it is off by T, so only Tink's cofactorless check refuses it.
         val t8 = Edwards.decode(Bytes.unhex(order8Key()))!!
         val r = BigInteger.valueOf(4242)
         val rPoint = Edwards.add(Edwards.mul(r, Edwards.BASE), t8)
         val sig = Edwards.sign(a, pub, lm, r, rPoint)
         assertTrue("R itself is not of small order", Ed25519.strictPoint(sig.copyOf(32)))
         assertTrue("the library (cofactored) accepts it", Ed25519.verifyRaw(pub, lm, sig))
-        assertFalse(Ed25519Exact.cofactorless(pub, lm, sig))
+        assertFalse(Ed25519.cofactorless(pub, lm, sig))
         assertFalse(Ed25519.verifyStrict(pub, label, m, sig))
+    }
+
+    @Test
+    fun aSmallOrderKeyIsRefusedByTheTableAlone() {
+        // A = the identity, R = [r]B, S = r: [S]B = R + [k]A holds for any message without the factor 8, so Tink accepts it.
+        val identity = Edwards.encode(Edwards.IDENTITY)
+        val r = BigInteger.valueOf(9001)
+        val sig = Edwards.encode(Edwards.mul(r, Edwards.BASE)) + Edwards.le(r)
+        assertTrue("Tink alone accepts it", Ed25519.cofactorless(identity, lm, sig))
+        assertFalse(Ed25519.strictPoint(identity))
+        assertFalse(Ed25519.verifyStrict(identity, label, m, sig))
+    }
+
+    @Test
+    fun aKeyWithYNotBelowPIsRefusedThoughTinkReadsItModP() {
+        // y = p + 1 is the identity read mod p (Tink does not refuse y >= p), and it is in no table: only y < p refuses it.
+        val nonCanonical = Edwards.le(Edwards.P.add(BigInteger.ONE))
+        val r = BigInteger.valueOf(9002)
+        val sig = Edwards.encode(Edwards.mul(r, Edwards.BASE)) + Edwards.le(r)
+        assertTrue("Tink alone accepts it", Ed25519.cofactorless(nonCanonical, lm, sig))
+        assertFalse(Ed25519.strictPoint(nonCanonical))
+        assertFalse(Ed25519.verifyStrict(nonCanonical, label, m, sig))
     }
 }
