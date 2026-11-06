@@ -128,4 +128,26 @@ class MailboxCollectorLostTest {
         job.join()
         assertEquals(2, lost)
     }
+
+    /**
+     * (#307 review F1) A send is stamped when an attempt actually starts writing its request (OkHttp's requestHeadersStart),
+     * every attempt: a lost response and its retry are two sends; a relay that cannot be reached (the connect is refused)
+     * never saw a request, so nothing is stamped.
+     */
+    @Test
+    fun aSendIsStampedWhenTheRequestIsWrittenEveryAttempt() = runBlocking<Unit> {
+        var sent = 0
+        server.enqueue(dropped())
+        server.enqueue(empty())
+        val client = RelayClient(server.url("/").toString(), Ed25519PrivateKey.generate(), OkHttpClient(), sleep = {})
+        assertEquals(0, MailboxCollector(client, wait = Duration.ZERO, sleep = {}, onSent = { sent++ }).pollOnce {})
+        assertEquals("the lost attempt and the retry", 2, sent)
+        val gone = server.url("/").toString()
+        server.close()
+        sent = 0
+        val unreachable = RelayClient(gone, Ed25519PrivateKey.generate(), OkHttpClient(), sleep = {})
+        val collector = MailboxCollector(unreachable, wait = Duration.ZERO, sleep = {}, onSent = { sent++ })
+        assertTrue(runCatching { collector.pollOnce {} }.isFailure)
+        assertEquals("nothing was written", 0, sent)
+    }
 }

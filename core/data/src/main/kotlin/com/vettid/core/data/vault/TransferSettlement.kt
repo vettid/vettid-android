@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +34,9 @@ internal interface SettleDevice {
 
     /** How long ago each of the device's latest requests went out (ms) and the long-poll wait it carried; kept after they ended. */
     val collectorSendsMs: List<Pair<Long, Long>>
+
+    /** The device's latest cuts: each one's number (as [collectorCuts] counted it), when its request was written and its wait. */
+    val collectorCutsMs: List<CollectorCut>
 
     /** The relay's advertised `visibility_timeout_seconds`; may throw. */
     suspend fun relayVisibilitySeconds(): Long?
@@ -118,6 +122,8 @@ internal suspend fun settleTransfer(
         cuts = { d.collectorCuts },
         collectorAge = { d.collectorLastSendAgeMs },
         collectorSends = { d.collectorSendsMs },
+        cutLeases = { d.collectorCutsMs },
+        sentWait = run::sentWait,
     )
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
     // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.
@@ -157,9 +163,17 @@ private class SettleRun(
         return sessionIsCurrent() && d.transferInPending?.startedAt == started
     }
 
+    /** The wait the next request goes with, decided once by [sentWait] (wait=0 while the collection runs, it long-polls). */
+    private var nextWaitMs: Long? = null
+
+    /** The wait (ms) our next request is actually sent with, for its lease: 0 while the collection runs, else [waitMs]. */
+    fun sentWait(waitMs: Long): Long = (if (d.collecting) 0L else waitMs).also { nextWaitMs = it }
+
     suspend fun collect(waitMs: Long) {
+        val wait = nextWaitMs ?: if (d.collecting) 0L else waitMs
+        nextWaitMs = null
         try {
-            d.collectOnce(if (d.collecting) Duration.ZERO else Duration.ofMillis(waitMs))
+            d.collectOnce(Duration.ofMillis(wait))
         } catch (e: RelayException) {
             if (e.code == RelayException.MAILBOX_UNKNOWN) mailboxGone = true
             throw e

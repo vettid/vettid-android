@@ -59,6 +59,11 @@ class MailboxCollector(
     private val onLost: () -> Unit = {},
     /** Called when a retry attempt inside the client's own retries goes out (each is a send of its own, with the same wait). */
     private val onRetrySent: () -> Unit = {},
+    /**
+     * Called each time a long-poll attempt actually starts writing its request (OkHttp's `requestHeadersStart`, after any
+     * wait for the network and the connect; every attempt, retries included): the send time its lease starts from.
+     */
+    private val onSent: () -> Unit = {},
 ) {
     enum class Mode { LONG_POLL, WEBSOCKET }
 
@@ -136,7 +141,7 @@ class MailboxCollector(
         onBatch: () -> Unit,
     ): Int {
         // Every attempt that is lost (the transport retries hide it from the round) is a cut too.
-        val msgs = client.collect(wait, onLostAttempt = onAttemptLost, onRetrySent = onRetrySent)
+        val msgs = client.collect(wait, onLostAttempt = onAttemptLost, onRetrySent = onRetrySent, onSent = onSent)
         if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)
