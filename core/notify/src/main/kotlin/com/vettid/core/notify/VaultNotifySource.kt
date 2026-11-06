@@ -40,6 +40,14 @@ class VaultNotifySource(
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
     override val alarm: StateFlow<CredentialAlarm?> = vault.alarm
 
+    /** The votes list read afresh (review 1, M3); false when it could not be read (locked, held, no answer). */
+    override suspend fun refreshVotes(): Boolean = try {
+        vault.votes.refresh()
+        true
+    } catch (_: com.vettid.core.data.vault.VaultFailure) {
+        false
+    }
+
     override fun names(): FeedNames = FeedNames(
         connections = vault.social.connections.value.associateBy { it.id },
         items = vault.items.items.value.associate { it.itemId to it.name },
