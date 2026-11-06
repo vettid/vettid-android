@@ -450,10 +450,12 @@ The A2 exit test:
   member's tag go as `other_rows` (at most 4, kept as published by `RowsReader.ownExtras`, `PublishedResults.otherRows`
   with their proofs), and when the member's row cannot be had (rows.json over its cap, deeper than 4, a row that cannot be
   made a leaf, `counts.eligible` rows not reaching `rows_root`, no row for the tag, an own `choice_id` the vault would
-  refuse, extra rows too large to send, or a `counts.eligible` that is an integer outside 1 to 100,000) the app submits
-  `rows_unavailable: true` with the results, signature and bundle and no row. A rows.json that is absent (404) or cannot
-  be reached is not "cannot be had": it is tried again. `pending` or `gave_up` with reason `rows_unavailable` shows the
-  results-problem text. **A `gave_up` check is not final** (owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK):
+  refuse, a `counts.eligible` that is an integer outside 1 to 100,000, or a definite 404 for rows.json while the signed
+  results.json is there) the app submits `rows_unavailable: true` with the results, signature and bundle and no row. Extra
+  rows too large for the request also fall back to `rows_unavailable` (the lead, 2026-11-06: the record then stays in the
+  problem set). A rows.json that cannot be reached (no answer, a timeout, a 5xx) is tried again, not `rows_unavailable`; a
+  404 counts as rows not had, so the next re-check fetches it again. `pending` or `gave_up` with reason `rows_unavailable`
+  shows the results-problem text. **A `gave_up` check is not final** (owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK):
   `submitDue` runs it again whenever the app opens, at most once a day per record, keyed off the state; the last attempt
   per vote is kept on disk (`ResultsAttempt` in `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir, wiped
   with it): the time, the SHA-256 of the `results.json` read, whether rows.json was had, and whether the vault's answer was
@@ -463,8 +465,14 @@ The A2 exit test:
   a whole list. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone, nothing submitted or stored; its verdict sets `VoteHint.verdict`, and a site that cannot be
-  reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). Not built: the text of
-  the `gave_up` `vote.result` feed item (no approved string; the feed still says "Vote results are out").
+  reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). **The give-up feed item**
+  (owner decision a, 2026-11-06, thread 01M6RH58PE19ZBEHX3JK5ZW06A): a `vote.result` item carries no check state, so the app
+  looks the vote up in the list in memory (`FeedNames.votesGaveUp`, from `vote.list`'s `gave_up` checks): then its title is
+  "Vote results not checked yet" (`data_feed_vote_result_gave_up`), the second line "<service>: <vote title>" as for every
+  vote item, and the sheet's detail "VettID couldn't check the published results of this vote yet. It will check them again
+  by itself when it can. You don't need to do anything." (`data_feed_vote_result_gave_up_detail`); a vote the list does not
+  have (or under the app lock's cover, no names) reads as a result, "Vote results are out". The lookup is the current
+  state: once the check is final an older give-up item reads as a result. Catalog: `notifications.sheet_vote_gave_up`.
   Every vote signature the app checks goes through
   `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
   byte table (`strictPoint`), then `S < L` and the cofactorless equation are Tink's pure-Java `subtle.Ed25519Verify`
