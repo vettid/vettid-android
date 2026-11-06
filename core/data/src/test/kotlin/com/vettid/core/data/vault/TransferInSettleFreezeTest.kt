@@ -17,6 +17,11 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TransferInSettleFreezeTest {
+    private companion object {
+        const val EXPECTED_OFFLINE_DROP = 220_000L
+        const val EXPECTED_CUTS_DROP = 239_000L
+    }
+
     // --- the collector's own request cut, or a process freeze, during the window ---
 
     /** A monotonic clock with a jump: virtual time plus what a freeze took. */
@@ -215,7 +220,7 @@ class TransferInSettleFreezeTest {
             TransferInResume.atDeadline({ false }, collect, { drops++ }, settle = settle, awaitRound = round, cuts = { cutCount }),
         )
         assertEquals(1, drops)
-        assertTrue("at most one extra: $finalCollects", finalCollects in 1..2)
+        assertEquals("one final collect and one extra", 2, finalCollects)
     }
 
     /**
@@ -355,7 +360,7 @@ class TransferInSettleFreezeTest {
         )
         assertEquals(1, drops)
         // The end stays at the cap (110 s); a cut's lease past it is waited for by the held last collect (one extra at most).
-        assertTrue("held for the last cut's lease, then dropped, bounded: $droppedAt", droppedAt in 110_000..260_000)
+        assertEquals("held for the last cut's lease, then dropped", EXPECTED_CUTS_DROP, droppedAt)
     }
 
     /** No cut and no freeze: the window behaves as before (dropped exactly at its end). */
@@ -472,5 +477,79 @@ class TransferInSettleFreezeTest {
         assertEquals(0, drops)
         assertEquals("one final collect, after the new lease: $finalTimes", 1, finalTimes.size)
         assertTrue(finalTimes[0] >= 215_000) // the notice is at the look after the first hold (163 s): 163 + 60 + 5
+    }
+
+    /** (R1) A second move of the hold is ignored: cuts at 98, 150 and 200 s; the hold moves once (to 228 s), then the drop. */
+    @Test
+    fun aSecondMoveOfTheHoldIsIgnored() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var drops = 0
+        var droppedAt = -1L
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        launch {
+            delay(98_000)
+            cutCount++
+            delay(52_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, {}, { drops++; droppedAt = clock.now() }, settle = settle, cuts = { cutCount },
+            ),
+        )
+        assertEquals(1, drops)
+        assertEquals("one move of the hold, then the drop", 228_000L, droppedAt)
+    }
+
+    /**
+     * (R1) The collector fails every 30 s through the hold (offline: every failed attempt is a cut): the settlement still drops
+     * at a bounded time, EXPECTED below, however long it fails.
+     */
+    @Test
+    fun aCollectorFailingEvery30SecondsCannotKeepTheHoldGoing() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var droppedAt = -1L
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        backgroundScope.launch {
+            while (true) {
+                delay(30_000)
+                cutCount++
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, {}, { droppedAt = clock.now() }, settle = settle, cuts = { cutCount }))
+        assertEquals(EXPECTED_OFFLINE_DROP, droppedAt)
+    }
+
+    /**
+     * (R2) The collector sends in the last second before a freeze, after the last tick; on the wake its round ends and a new one
+     * goes out before the first tick. Both sends are in the device's history: s is the first, the hold waits for ITS lease.
+     */
+    @Test
+    fun aRoundRestartedOnTheWakeDoesNotHideTheSendBeforeTheFreeze() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        val sends = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 105_000, maxExtraMs = 0, now = clock::now) // F = the cap = 105 s
+        launch {
+            delay(103_500)
+            sends += clock.now() // A: just before the freeze, after the last tick
+            delay(100)
+            clock.jumpedMs += 30_000 // frozen; the wake
+            sends += clock.now() // B: the new round, before any tick
+        }
+        val ours = mutableListOf<Long>()
+        val collect: suspend (Long) -> Unit = {
+            ours += clock.now()
+            if (sends.isNotEmpty() && clock.now() >= sends[0] + 60_000) isPaired = true
+        }
+        val ages: () -> List<Long> = { sends.map { clock.now() - it } }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = ages))
+        assertEquals(0, drops)
+        assertTrue("held for A's lease: ${clock.now()} ours=$ours A=${sends[0]}", clock.now() >= sends[0] + 65_000)
     }
 }

@@ -381,6 +381,11 @@ class VaultDevice private constructor(
      */
     val collectLastSendAgeMs: Long? get() = collectLastSendElapsedMs?.let { cfg.elapsedMs() - it }
 
+    private val collectSends = ArrayDeque<Long>()
+
+    /** How long ago each of the collection's latest requests (the last 16) went out, oldest first; kept after they ended. */
+    val collectSendAgesMs: List<Long> get() = synchronized(collectSends) { collectSends.map { cfg.elapsedMs() - it } }
+
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
@@ -522,7 +527,14 @@ class VaultDevice private constructor(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
                         collectRequestSince = if (out) System.nanoTime() else null
-                        if (out) collectLastSendElapsedMs = cfg.elapsedMs()
+                        if (out) {
+                            val at = cfg.elapsedMs()
+                            collectLastSendElapsedMs = at
+                            synchronized(collectSends) {
+                                collectSends.addLast(at)
+                                if (collectSends.size > MAX_COLLECT_SENDS) collectSends.removeFirst()
+                            }
+                        }
                         if (!out) roundsEnded.incrementAndGet()
                     },
                     onReached = ::noteReached,
@@ -2206,6 +2218,7 @@ class VaultDevice private constructor(
         private const val OPEN_TOKEN_MINUTES = 10L
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L
+        private const val MAX_COLLECT_SENDS = 16
         private val SEEN_RETENTION: Duration = Duration.ofDays(16)
 
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */

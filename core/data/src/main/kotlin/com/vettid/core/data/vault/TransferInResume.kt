@@ -177,9 +177,16 @@ internal object TransferInResume {
      * **The last collect.** A lease taken by a cut or a freeze (s + V for a freeze, s being the send time of the latest request
      * sent at or before it began, ours or the collector's, kept after the request ended via [collectorAge]; the notice time
      * + V for a cut) that runs past the cap is recorded however and whenever it was noticed (before the cap or after).
-     * The final `wait=0` collect then goes at `max(now, s + V + 5 s)` for the latest of them; a cut or freeze noticed during
-     * the hold moves it. One noticed during the send itself, with a lease beyond its start, earns ONE more held final
-     * collect in all (a second is never given), then the drop (not when paired, not when the end moved past now).
+     * The final `wait=0` collect then goes at `max(now, latest lease end + 5 s)`. The settlement has ONE extra in all: either
+     * the hold target moves once (a cut or freeze noticed during the hold; a later move is ignored, since a collector
+     * failing offline would otherwise move it at every failure for ever), or, after the final send, a lease noticed during it
+     * that outlives its start earns one more held final collect. Then the drop (not when paired, not when the end moved
+     * past now).
+     *
+     * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
+     * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 5 s more; the
+     * final send takes at most 140 s (55 + 30 + 55); the extra (a hold move, or a second held collect after the first send) is
+     * at most V + 5 s more, and a second final send 140 s: at most cap + 2V + 438 s in all, 2V + 438 s = 558 s at the default V.
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
@@ -197,9 +204,10 @@ internal object TransferInResume {
         awaitRound: suspend () -> Unit = {},
         cuts: () -> Long = { 0L },
         collectorAge: () -> Long? = { null },
+        collectorSends: () -> List<Long> = { emptyList() },
     ): Boolean {
         if (paired()) return true
-        val out = Requests(settle, collect, awaitRound, cuts, collectorAge)
+        val out = Requests(settle, collect, awaitRound, cuts, collectorAge, collectorSends)
         // The heartbeat lives only as long as the window: cancelled when the loop ends, however it ends.
         coroutineScope {
             val beat = launch { out.heartbeat() }
@@ -218,7 +226,7 @@ internal object TransferInResume {
                         val sentAt = settle.now()
                         out.send(0L)
                         out.look()
-                        if (out.left() <= 0 && !out.takeExtra(sentAt)) break
+                        if (out.left() <= 0 && !out.takeExtraAfterSend(sentAt)) break
                     }
                 }
             } finally {
@@ -238,6 +246,7 @@ internal object TransferInResume {
         private val round: suspend () -> Unit,
         private val cuts: () -> Long,
         private val collectorAge: () -> Long?,
+        private val collectorSends: () -> List<Long>,
     ) {
         private val firstEnd = settle.now() + settle.windowMs
         private val cap = firstEnd + settle.maxExtraMs
@@ -270,25 +279,36 @@ internal object TransferInResume {
         }
 
         /**
-         * Before the last collect: waits until every lease that runs past the cap has run out (+ the handling margin). A cut
-         * or a freeze noticed while waiting moves the target, so the wait is taken again.
+         * Before the last collect: waits until every lease that runs past the cap has run out (+ the handling margin). The
+         * target may move ONCE (a cut or freeze noticed during the wait, which uses up the one extra of the settlement); a
+         * later move is ignored, so the hold, and the pin, cannot go on for ever (a collector failing offline moves it at every
+         * failure).
          */
         suspend fun awaitHold() {
+            look()
+            var target = holdTarget()
             while (true) {
+                val w = target - settle.now()
+                if (w > 0) delay(w)
                 look()
-                val w = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.handlingMs - settle.now()
-                if (w <= 0) return
-                delay(w)
+                val moved = holdTarget()
+                if (moved <= target || !takeExtra()) return
+                target = moved
             }
         }
 
-        /** After the last collect: a lease noticed during it that outlives its start earns the one extra, once. */
+        private fun holdTarget(): Long = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.handlingMs
+
+        /** The one extra of the settlement: a move of the hold target, or another held final collect after the send. */
         @Synchronized
-        fun takeExtra(sentAt: Long): Boolean {
-            if (extraUsed || maxLeaseEnd == 0L || maxLeaseEnd + settle.handlingMs <= sentAt) return false
+        private fun takeExtra(): Boolean {
+            if (extraUsed) return false
             extraUsed = true
             return true
         }
+
+        /** After the last collect: a lease noticed during it that outlives its start earns the one extra, if still unused. */
+        fun takeExtraAfterSend(sentAt: Long): Boolean = holdTarget() > sentAt && takeExtra()
 
         /** A cut or a freeze: the message may be leased for a visibility timeout from [from]. The end never passes the cap. */
         @Synchronized
@@ -319,13 +339,15 @@ internal object TransferInResume {
             val before = sampledSend
             val froze = lastTick + settle.heartbeatMs
             lastTick = n
-            val collectors = collectorAge()?.let { n - it }
-            val latest = listOfNotNull(collectors, ourSends.lastOrNull()).maxOrNull()
+            // The collector's send times: the latest, and the device's short history (a round that ended on the wake and a new
+            // one sent before the first tick must not hide the send before the freeze).
+            val collectors = (listOfNotNull(collectorAge()) + collectorSends()).map { n - it }
+            val latest = (collectors + listOfNotNull(ourSends.lastOrNull())).maxOrNull()
             if (gap > settle.freezeMarginMs) {
                 // s: the latest send at or before the freeze began: the last tick's sample, or a later send up to a tick after
                 // it, or one older than the margin before the wake (per source: a restart right after the wake does not hide
                 // the send before the freeze).
-                val eligible = (ourSends.toList() + listOfNotNull(collectors)).filter { it <= froze || it <= n - settle.freezeMarginMs }
+                val eligible = (ourSends.toList() + collectors).filter { it <= froze || it <= n - settle.freezeMarginMs }
                 val s = (eligible + listOfNotNull(before)).maxOrNull()
                 if (s != null) mayHoldLease(s) // the lease of the request that was out
                 endAt = minOf(maxOf(endAt, n + settle.visibilityMs), cap)
@@ -432,8 +454,9 @@ internal object TransferInResume {
             awaitRound: suspend () -> Unit = {},
             cuts: () -> Long = { 0L },
             collectorAge: () -> Long? = { null },
+            collectorSends: () -> List<Long> = { emptyList() },
         ): Boolean = lock.withLock {
-            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts, collectorAge) else paired()
+            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts, collectorAge, collectorSends) else paired()
         }
     }
 }

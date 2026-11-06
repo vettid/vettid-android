@@ -1656,6 +1656,26 @@ class VaultDeviceTest {
         }
     }
 
+    /** (R2) The collection keeps a short history of its send times, not only the latest: rounds that ended stay in it. */
+    @Test
+    fun theCollectorKeepsAHistoryOfItsSendTimes() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (d.collectSendAgesMs.size < 3) kotlinx.coroutines.delay(20)
+            elapsed += 1_000
+            assertEquals("oldest first", d.collectSendAgesMs.sorted().reversed(), d.collectSendAgesMs)
+            assertTrue(d.collectSendAgesMs.all { it >= 1_000 })
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
     @Test
     fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {

@@ -87,4 +87,15 @@ class MailboxCollectorLostTest {
         assertTrue(r.exceptionOrNull() is RelayException)
         assertEquals(3, lost)
     }
+
+    /** A lost attempt, then a successful collect of a message whose ack is refused: the ack's loss is a new loss, counted too. */
+    @Test
+    fun aRefusedAckAfterALostAttemptIsCountedToo() = runBlocking<Unit> {
+        server.enqueue(dropped())
+        server.enqueue(MockResponse.Builder().code(200).body("""{"messages":[{"msg_id":"m1","payload":""}]}""").build())
+        server.enqueue(status(403, """{"code":"token_revoked","message":""}"""))
+        val r = runCatching { collector().run {} }
+        assertTrue(r.exceptionOrNull() is RelayException)
+        assertEquals(2, lost)
+    }
 }

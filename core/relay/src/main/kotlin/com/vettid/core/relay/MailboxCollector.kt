@@ -102,7 +102,7 @@ class MailboxCollector(
             if (useSocket) {
                 stream(handle, { got = true }) { onReached(started) }
             } else {
-                pollRound(handle, attemptLost) { got = true }
+                pollRound(handle, attemptLost, { counted = false }) { got = true }
                 onReached(started)
             }
         } catch (e: CancellationException) {
@@ -124,15 +124,17 @@ class MailboxCollector(
     }
 
     /** One long-poll round: collects, handles and acks each message. Returns how many arrived. */
-    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle, onLost) {}
+    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle, onLost, {}) {}
 
     private suspend fun pollRound(
         handle: suspend (RelayMessage) -> Unit,
         onAttemptLost: () -> Unit,
+        onCollected: () -> Unit,
         onBatch: () -> Unit,
     ): Int {
         // Every attempt that is lost (the transport retries hide it from the round) is a cut too.
         val msgs = client.collect(wait, onLostAttempt = onAttemptLost)
+        onCollected() // a later loss in this round (a refused ack) is a new loss
         if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)
