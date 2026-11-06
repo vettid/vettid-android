@@ -473,7 +473,16 @@ The A2 exit test:
   when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
   after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
   does not touch them. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
-  before the fallback to `rows_unavailable` (L3). **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
+  before the fallback to `rows_unavailable` (L3). **Wi-Fi only after a week** (#314 item 1, owner decision a, thread
+  01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`) the
+  daily rule alone; after them the small fetches (results.json, sig, bundle) stay daily, rows.json is downloaded on an
+  unmetered network (`NetworkMeter`: `NET_CAPABILITY_NOT_METERED`; unknown counts as metered; the `unmetered` seam) by
+  the daily rule, and on a metered one only when the last rows download (`ResultsAttempt.lastRowsMs`) is at least 7 days
+  old (`METERED_ROWS_EVERY`): a weekly cap, not a block. A deferred download ends as `ResultsOutcome.Deferred`: nothing
+  sent, no new text, the vote's own state line; it keeps the last attempt's record (only its time moves, and not for a
+  Check again, which the same cap applies to). Both times are wiped with the attempts. Erratum due (the lead writes it):
+  ANDROID-PLAN §4 "Votes" ("A `gave_up` check run again") and VAULT-MESSAGING §10.19.6 ("at most once a day per record")
+  gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its

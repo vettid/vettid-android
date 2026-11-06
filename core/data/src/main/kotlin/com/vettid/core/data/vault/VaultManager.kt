@@ -1029,6 +1029,7 @@ class VaultManager(
         unlockTtl = { status().unlockTtlSeconds },
         voteRows = { ReleasePath.voteRows(local.capabilities) },
         attempts = KeystoreResultsAttemptStore(KeystoreFileStore(File(app.noBackupFilesDir, VOTE_ATTEMPTS_FILE), "vote-attempts")),
+        unmetered = { com.vettid.core.data.votes.NetworkMeter.unmetered(app) },
     )
 
     /**
