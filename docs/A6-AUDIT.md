@@ -1198,6 +1198,6 @@ No `values-xx` folder, no `localeConfig`. The app is close to ready; the full li
 **Locale-sensitive formatting**
 - Wire: `relay/RelayAuth.kt:74` (R2), the only one.
 - Display with a fixed shape: `"%d:%02d"` at `onboarding/UnlockScreen.kt:56`, `settings/ProfileScreens.kt:490`, `settings/TransferOutScreen.kt:60`; `"%.1f"` at `settings/PhotoCaptureScreens.kt:215`.
-- A fixed date pattern: `notifications/NotificationsViewModel.kt:62` ("EEE d MMM"), wrong order for en-US, ja, zh.
+- A fixed date pattern: `notifications/NotificationsViewModel.kt:62` ("EEE d MMM"), wrong order for en-US, ja, zh. **Fixed 2026-11-05** (owner decision: dates follow the region): locale skeletons `EEEMMMd` / `EEEMMMdyyyy`, and `ShareTime` likewise.
 - Sorting by `lowercase()` instead of a `Collator` at seven sites (`data/items/Items.kt:179`, `connections/ConnectionsViewModels.kt:80,580-581`, and others).
 - Dates shown to the member use localized styles with the system time zone; deadlines are computed from instants.

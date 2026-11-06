@@ -72,6 +72,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -365,7 +366,10 @@ private fun LoadFailed(onRetry: () -> Unit) {
     }
 }
 
-/** Needs attention ([day] null), Today, Yesterday, then the date ("Mon 5 Oct"; with the year when not this year's). */
+/**
+ * Needs attention ([day] null), Today, Yesterday, then the date in the configuration locale's order ("Mon, Oct 5" in the US,
+ * "Mon 5 Oct" in the UK; with the year when not this year's).
+ */
 @Composable
 private fun SectionHeader(day: LocalDate?) {
     val today = LocalDate.now(ZoneId.systemDefault())
@@ -374,7 +378,7 @@ private fun SectionHeader(day: LocalDate?) {
         day == today -> stringResource(R.string.notifications_today)
         day == today.minusDays(1) -> stringResource(R.string.notifications_yesterday)
         day == LocalDate.MIN -> stringResource(R.string.notifications_undated)
-        else -> FeedSections.dayTitle(day, today)
+        else -> FeedSections.dayTitle(day, today, LocalLocale.current.platformLocale)
     }
     Text(
         text,

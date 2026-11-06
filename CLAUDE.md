@@ -474,20 +474,33 @@ The A2 exit test:
   after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
   does not touch them. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
   before the fallback to `rows_unavailable` (L3). **Wi-Fi only after a week** (#314 item 1, owner decision a, thread
-  01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`) the
+  01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`; a check back in `pending` starts
+  them again, #319 item 3; the `vote.list` summary carries no give-up time, only `check.due_at`, which a `gave_up` check
+  does not have, so a new give-up is seen only through that state, #321 L2) the
   daily rule alone; after them the small fetches (results.json, sig, bundle) stay daily, rows.json is downloaded on an
   unmetered network (`NetworkMeter`: `NET_CAPABILITY_NOT_METERED`; unknown counts as metered; the `unmetered` seam) by
   the daily rule, and on a metered one only when the last rows download (`ResultsAttempt.lastRowsMs`) is at least 7 days
-  old (`METERED_ROWS_EVERY`): a weekly cap, not a block. A deferred download ends as `ResultsOutcome.Deferred`: nothing
+  old (`METERED_ROWS_EVERY`): a weekly cap, not a block; any rows bytes received count, also of a download cut off
+  partway (`VoteSite.getCounted`, #319 item 1). A deferred download ends as `ResultsOutcome.Deferred`: nothing
   sent, no new text, the vote's own state line; it keeps the last attempt's record (only its time moves). The member's **Check again is not held by the network cap** (the lead's call on #317 Q2: they asked, so
   rows.json is downloaded on any network); it still follows the unchanged-results skip, its time rule is unchanged
   (an `Unchanged` one keeps the last attempt's time, #314 item 3), and its download moves `lastRowsMs` (data was spent, so the weekly mobile cap counts from it). Both times are wiped with the attempts. Erratum due (the lead writes it):
   ANDROID-PLAN §4 "Votes" ("A `gave_up` check run again") and VAULT-MESSAGING §10.19.6 ("at most once a day per record")
-  gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
+  gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download, and ANDROID-PLAN's "Recheck on open"
+  gains its own rule (#319 item 2, the lead's call (a)): on metered or unknown networks rows.json at most daily per vote
+  for 7 days after `closes_at`, then weekly; Wi-Fi never capped; behind the cap `vote_results_not_rechecked`. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
-  verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4), and a
+  verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4); on a
+  metered or unknown network it downloads rows.json at most once a day per vote for 7 days after the vote's `closes_at`
+  (as extended), then at most weekly, and weekly when the close is not known (`recheckRowsWait`, `recheckRowsAt`: kept on
+  disk in `vote-rechecks.bin` (`RecheckStamp`: a key and a time; `KeystoreRecheckStampStore`, no-backup dir; #321 M1, so a
+  cold start does not reset the cap), kept across a lock, pruned with the list, cleared by a wipe, a stamp only under the
+  store epoch it began in, once per download at its first bytes and whatever the job's state (a lock partway still spent
+  them, #321 L1); a results check's rows download (Check again, the daily re-check) stamps it too, #321 L3; #319 item 2, the lead's
+  call (a): the verdict is forgotten at every lock, so each open would download again); on Wi-Fi every open downloads;
+  behind the cap the not-rechecked line and no number, and a
   site that cannot be
   reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03), as does a recheck that could
   check nothing (no `record_tag`, results.json over its limit, a `counts.eligible` cap that does not read; #314 item 2):
