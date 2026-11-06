@@ -1831,4 +1831,53 @@ class VotesManagerTest {
         assertNull(m.hints.value["$CONN/$PID"])
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
     }
+
+    // ---- Review 1 ----
+
+    @Test
+    fun aWipeForgetsTheKeptAttemptsAndANewEnrollmentDoesNotBringThemBack() = runTest {
+        // Review 1, M1: an attempt recorded, then a wipe, then a new enrollment in the same process.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store)
+        m.syncOnce()
+        assertEquals(listOf("$CONN/$PID"), store.load().map { it.key })
+        // The wipe (VaultManager: votes.clear(), then votes.forgetStored(), then the files are erased).
+        m.clear()
+        m.forgetStored()
+        assertTrue(store.load().isEmpty())
+        // A new vault with another vote: only its key is written; the old one never comes back.
+        val other = "01JBQZ0000000000000000000F"
+        ops.list = listing(summary(id = other, state = "closed", extra = ""","check":{"state":"gave_up"}"""))
+        ops.detail = obj("""{"proposal_id":"$other","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(observed().tags[1])}"}""")
+        m.syncOnce()
+        assertEquals(listOf("$CONN/$other"), store.load().map { it.key })
+        // The old vote seen again within the day (the same pair in the new vault) is not held back by the wiped attempt.
+        ops.list = listing(gaveUp())
+        ops.detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(observed().tags[1])}"}""")
+        val reads = site.reads.count { it == "p/$PID/results.json" }
+        m.syncOnce()
+        assertEquals(reads + 1, site.reads.count { it == "p/$PID/results.json" })
+        assertEquals(2, ops.submitted.count { (it["proposal_id"] as JsonPrimitive).content == PID })
+    }
+
+    @Test
+    fun aWriteRacingAWipeIsDropped() = runTest {
+        // Review 1, M1: a check in flight when the vault is wiped writes nothing afterwards.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        val store = MemoryResultsAttemptStore()
+        var m: VotesManager? = null
+        m = manager(ops, site, attempts = store) {
+            if (it.endsWith(":observe")) {
+                m!!.clear()
+                m!!.forgetStored()
+            }
+        }
+        m.refresh()
+        m.checkResults(CONN, PID)
+        assertTrue(store.load().isEmpty())
+    }
 }

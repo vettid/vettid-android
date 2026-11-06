@@ -1581,6 +1581,7 @@ class VaultManager(
             steps.step { feed.clear() }
             steps.step { devices.clear() }
             steps.step { votes.clear() }
+            if (forget) steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
             steps.step { presence.clear() }
             steps.step { location.forget() }
             steps.step { ownerCheck.clear() }
@@ -2943,6 +2944,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { deletionWatch.start(marker, readNow = false) }
@@ -2996,6 +2998,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
@@ -4694,6 +4697,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { canary.removeCanaryManifest() }

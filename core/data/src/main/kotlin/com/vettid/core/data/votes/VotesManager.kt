@@ -388,6 +388,7 @@ class VotesManager(
             // A vault without the feature is asked again only after the next unlock (§10.19.8).
             if (availabilityFlow.value == VotesAvailability.UNSUPPORTED) return@withLock
             val gen = synchronized(lock) { generation }
+            val epoch = storeEpochNow()
             if (votesFlow.value.isEmpty()) loadState.value = ListLoad.LOADING
             val acks = synchronized(lock) { pendingAck.toList() }
             try {
@@ -418,7 +419,7 @@ class VotesManager(
                     hintsFlow.value = hintsFor(shown, hintsFlow.value)
                 }
                 // The kept attempts go with their record: a vote no longer listed, or whose check is final. Only from a whole list.
-                if (after == null) forgetAttempts { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
+                if (after == null) forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
             } catch (e: VaultFailure) {
                 synchronized(lock) {
                     if (gen == generation) {
@@ -780,6 +781,7 @@ class VotesManager(
         val key = VoteKeys.of(connectionId, proposalId)
         return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
             val gen = synchronized(lock) { generation }
+            val epoch = storeEpochNow()
             val trace = Trace()
             var out: ResultsOutcome? = null
             var cancelled = false
@@ -792,7 +794,7 @@ class VotesManager(
                 // Kept for the daily re-check, whatever the attempt came to (a failure too: then rows.json is fetched again
                 // next time, since a lost submission may be the cause). Not after a lock or clear (R1-2), nor a cancellation.
                 if (!cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }) {
-                    withContext(NonCancellable) { recordAttempt(key, trace, out) }
+                    withContext(NonCancellable) { recordAttempt(key, epoch, trace, out) }
                 }
             }
         }
@@ -1055,16 +1057,31 @@ class VotesManager(
 
     // ---- The kept attempts (no choice, row or proof) ----
 
-    @Volatile
+    /** The kept attempts as last read or written; [attemptsSync] guards it, [storeEpoch] and every read and write of [attempts]. */
     private var attemptsHeld: List<ResultsAttempt>? = null
-    private val attemptsLock = Mutex()
+    private val attemptsSync = Any()
 
-    private suspend fun <T> withAttempts(block: (List<ResultsAttempt>) -> Pair<List<ResultsAttempt>?, T>): T =
-        attemptsLock.withLock {
-            withContext(io) {
+    /**
+     * Bumped by [forgetStored] (a wipe, a sign-out, a deletion: review 1, M1). A write taken under an older epoch is dropped,
+     * so nothing of a wiped vault comes back to disk or into memory. A lock does not bump it: the kept attempts outlive a
+     * lock and a restart on purpose (the daily limit, review 1 L1).
+     */
+    private var storeEpoch = 0
+
+    /** The [storeEpoch] now, taken where an attempt or a list read starts. */
+    private fun storeEpochNow(): Int = synchronized(attemptsSync) { storeEpoch }
+
+    /**
+     * Reads the kept attempts and, with [block]'s new list, writes them; with [epoch], only while no wipe happened since it
+     * was taken (the test and the write are one step under [attemptsSync], so a write racing [forgetStored] is dropped).
+     */
+    private suspend fun <T> withAttempts(epoch: Int? = null, block: (List<ResultsAttempt>) -> Pair<List<ResultsAttempt>?, T>): T =
+        withContext(io) {
+            synchronized(attemptsSync) {
                 val held = attemptsHeld ?: runCatching { attempts.load() }.getOrDefault(emptyList()).also { attemptsHeld = it }
                 val (next, out) = block(held)
-                if (next != null && next != held) {
+                val current = epoch == null || epoch == storeEpoch
+                if (next != null && next != held && current) {
                     attemptsHeld = next
                     // A store that cannot be written keeps the memory copy: the daily limit then holds until a restart.
                     runCatching { attempts.save(next) }
@@ -1072,6 +1089,19 @@ class VotesManager(
                 out
             }
         }
+
+    /**
+     * The vault's data goes from this phone (a wipe, a sign-out, a deletion; review 1, M1): the kept attempts are forgotten
+     * in memory and on disk, and a write still on its way is dropped. Called after [clear] on those paths, before the
+     * files are erased. Not at a lock.
+     */
+    fun forgetStored() {
+        synchronized(attemptsSync) {
+            storeEpoch++
+            attemptsHeld = emptyList()
+            runCatching { attempts.save(emptyList()) }
+        }
+    }
 
     private suspend fun attemptOf(key: String): ResultsAttempt? = withAttempts { list -> null to list.firstOrNull { it.key == key } }
 
@@ -1082,15 +1112,15 @@ class VotesManager(
         return since < 0 || since >= RECHECK_EVERY.toMillis()
     }
 
-    private suspend fun recordAttempt(key: String, trace: Trace, out: ResultsOutcome?) {
+    private suspend fun recordAttempt(key: String, epoch: Int, trace: Trace, out: ResultsOutcome?) {
         val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
         val entry = ResultsAttempt(key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide)
-        withAttempts { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
+        withAttempts(epoch) { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
     }
 
-    private suspend fun forgetAttempts(gone: (ResultsAttempt) -> Boolean) {
-        withAttempts { list -> list.filterNot(gone) to Unit }
+    private suspend fun forgetAttempts(epoch: Int, gone: (ResultsAttempt) -> Boolean) {
+        withAttempts(epoch) { list -> list.filterNot(gone) to Unit }
     }
 
     private fun finalCheck(state: CheckState?): Boolean =
