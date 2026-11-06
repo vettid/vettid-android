@@ -1245,6 +1245,47 @@ class VotesManagerTest {
     }
 
     @Test
+    fun theObserversTimeBoxScalesWithEligible() {
+        // Opus recheck 3, M1-a: max(60 s, counts.eligible x 3 ms), 300 s at the 100,000-row cap and never more.
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(0))
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(20_000))
+        assertEquals(Duration.ofMillis(60_003), VotesManager.observeLimitFor(20_001))
+        assertEquals(Duration.ofSeconds(150), VotesManager.observeLimitFor(50_000))
+        assertEquals(Duration.ofSeconds(300), VotesManager.observeLimitFor(100_000))
+        assertEquals(Duration.ofSeconds(300), VotesManager.observeLimitFor(Long.MAX_VALUE))
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(-5))
+        // The floor is the injected limit.
+        assertEquals(Duration.ofMillis(30), VotesManager.observeLimitFor(10, Duration.ofMillis(1)))
+    }
+
+    @Test
+    fun aLargerVoteGetsALongerObserverCheck() = runTest {
+        // The same slow observer as above (600 ms past a 100 ms floor), but 1,024 eligible rows give it 3,072 ms: it passes.
+        val (ops, site) = observedScenario(observed(n = 1024))
+        var observeSteps = 0
+        val m = manager(ops, site, observeLimit = Duration.ofMillis(100)) {
+            if (it.endsWith(":observe") && ++observeSteps == 2) Thread.sleep(600)
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertFalse(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
+    }
+
+    @Test
+    fun aHintWriteWithAStaleGenerationIsDropped() = runTest {
+        // Recheck 1, R1-2: a check's writes carry the generation it started under; a lock or clear since voids them.
+        val m = manager(Ops())
+        val key = "$CONN/$PID"
+        val stale = m.generationNow()
+        m.clear()
+        m.hint(key, stale) { it.copy(observerFailed = true) }
+        assertNull(m.hints.value[key])
+        m.hint(key, m.generationNow()) { it.copy(observerFailed = true) }
+        assertTrue(m.hints.value.getValue(key).observerFailed)
+    }
+
+    @Test
     fun aLockCancelsACheckInFlightWhichStopsAtItsNextStepAndIsVoided() = runTest {
         // Lead review L2: Check again on a large vote, the member locks during the observer's work.
         val (ops, site) = observedScenario(observed(n = 1024))

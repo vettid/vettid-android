@@ -1,5 +1,6 @@
 package com.vettid.core.data.votes
 
+import androidx.annotation.VisibleForTesting
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
 import com.vettid.core.crypto.vote.OwnRow
@@ -256,9 +257,9 @@ class VotesManager(
     /** Called at each step of that work with "<vote key>:<stage>" (tests watch the thread and cancel through it). */
     private val computeStep: (String) -> Unit = {},
     /**
-     * At most this long for the observer's check ([PublishedResults.observe]) per attempt (lead review M1): past it the check
-     * is an observer failure and the row is still submitted, so results that keep every signature on the slow path cannot
-     * stop the submit.
+     * The floor of the observer's time box per attempt (lead review M1): the check ([PublishedResults.observe]) gets
+     * [observeLimitFor] of `counts.eligible`, at least this. Past it the check is an observer failure and the row is still
+     * submitted, so results the observer cannot finish in time cannot stop the submit.
      */
     private val observeLimit: Duration = OBSERVE_LIMIT,
 ) : VotesRepository {
@@ -414,8 +415,13 @@ class VotesManager(
         return out
     }
 
+    /** The [generation] now, as a check takes it at its start (tests: [hint]'s guard). */
+    @VisibleForTesting
+    internal fun generationNow(): Int = synchronized(lock) { generation }
+
     /** Changes [key]'s hint; with [gen], only while no lock or clear happened since it was taken (recheck 1, R1-2). */
-    private fun hint(key: String, gen: Int? = null, change: (VoteHint) -> VoteHint) {
+    @VisibleForTesting
+    internal fun hint(key: String, gen: Int? = null, change: (VoteHint) -> VoteHint) {
         synchronized(lock) {
             if (gen != null && gen != generation) return
             val h = change(hintsFlow.value[key] ?: VoteHint())
@@ -822,7 +828,14 @@ class VotesManager(
             // Time-boxed (lead review M1): a check that runs out of time is an observer failure like any other and the row is
             // still submitted. Only the observer's own scope is cancelled at the limit; a cancellation of the check itself
             // passes through withTimeoutOrNull as before.
-            val failed = withTimeoutOrNull(observeLimit.toMillis()) {
+            // The box scales with the rows (Opus recheck 3, M1-a): a fixed 60 s could time out an honest 100,000-row vote on a
+            // slow phone and show "don't add up". counts.eligible also capped the download of rows.json (rowsCap).
+            val eligible = try {
+                published.counts().eligible
+            } catch (_: ResultsProblem) {
+                0L
+            }
+            val failed = withTimeoutOrNull(observeLimitFor(eligible, observeLimit).toMillis()) {
                 val inner = coroutineContext
                 observerFails(published, proposalId, detail) {
                     step("observe")
@@ -950,10 +963,22 @@ class VotesManager(
         }
     }
 
-    private companion object {
+    internal companion object {
         val SYNC_EVERY: Duration = Duration.ofHours(1)
-        /** The observer's check per attempt (lead review M1). */
+        /** The observer's check per attempt, at the least (lead review M1). */
         val OBSERVE_LIMIT: Duration = Duration.ofSeconds(60)
+
+        /** The observer's time per row of `counts.eligible` (Opus recheck 3, M1-a): 300 s at 100,000 rows. */
+        val OBSERVE_PER_ROW: Duration = Duration.ofMillis(3)
+
+        /**
+         * The observer's time box for a vote of [eligible] rows: `max(floor, eligible x 3 ms)`, with [eligible] taken as at
+         * most [VoteRows.MAX_ROWS] (the rows read never exceed it).
+         */
+        fun observeLimitFor(eligible: Long, floor: Duration = OBSERVE_LIMIT): Duration {
+            val scaled = OBSERVE_PER_ROW.multipliedBy(eligible.coerceIn(0L, VoteRows.MAX_ROWS.toLong()))
+            return if (scaled > floor) scaled else floor
+        }
         const val MAX_PAGES = 5
         const val TAG_LEN = 32
         /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */
