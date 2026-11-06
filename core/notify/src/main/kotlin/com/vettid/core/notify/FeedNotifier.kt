@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 
 private val NO_IDLE: StateFlow<IdleLocked?> = MutableStateFlow(null)
 
@@ -85,6 +87,12 @@ interface NotifySource {
 
     fun names(): FeedNames
 
+    /**
+     * Reads the votes list afresh (review 1, M3): true when the read went through, so that [names]' `votesGaveUp` is the
+     * vault's state after the item arrived. A source without votes has nothing to read.
+     */
+    suspend fun refreshVotes(): Boolean = true
+
     /** A message's text from the app's in-memory cache (shown only with "Names and message text"). */
     suspend fun messageText(connectionId: String, messageId: String): String?
 }
@@ -134,7 +142,7 @@ class FeedNotifier(
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
         // The app lock's cover is up: the public form only, whatever the member's choice of previews (nothing is read).
         val previews = if (source.coveredNow()) NotificationPreviews.NOTHING else settings.value.previews
-        val names = if (source.coveredNow()) FeedNames() else source.names()
+        val names = if (source.coveredNow()) FeedNames() else namesFor(item)
         val text = if (previews == NotificationPreviews.NAMES_AND_TEXT && item.kind == "message.received") {
             val c = item.connectionId
             val m = item.ref
@@ -152,6 +160,27 @@ class FeedNotifier(
             posted[item.itemId] = n.publicForm(quiet = true)
             poster.post(n)
         }
+    }
+
+    /**
+     * The names for [item]. A `vote.result` is the give-up item only by its vote's state in the list (it carries none), and
+     * that list may be older than the item (a re-check's verdict, or the vault giving up on its own clock): the list is
+     * read again first, at most [VOTE_LIST_WAIT_MS]; if that does not go through, the generic "Vote results are out"
+     * (review 1, M3).
+     */
+    private suspend fun namesFor(item: FeedItem): FeedNames {
+        if (item.kind != VOTE_RESULT) return source.names()
+        val fresh = withTimeoutOrNull(VOTE_LIST_WAIT_MS) {
+            try {
+                source.refreshVotes()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                false
+            }
+        } == true
+        val names = source.names()
+        return if (fresh) names else names.copy(votesGaveUp = emptySet())
     }
 
     private fun notifiable(item: FeedItem): Boolean =
@@ -279,6 +308,9 @@ class FeedNotifier(
     }
 
     companion object {
+        /** How long a `vote.result` waits for the votes list read before it is titled generically (M3). */
+        const val VOTE_LIST_WAIT_MS = 3_000L
+        private const val VOTE_RESULT = "vote.result"
         const val TAG_LOCKED = "vault.locked"
         const val TAG_CHECK = "owner_check.due"
         const val TAG_ALARM = "credential.alarm"

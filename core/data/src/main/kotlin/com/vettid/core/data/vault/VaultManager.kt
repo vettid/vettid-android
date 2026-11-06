@@ -39,6 +39,7 @@ import com.vettid.core.data.location.LocationSharing
 import com.vettid.core.data.location.VaultLocationOps
 import com.vettid.core.data.presence.PresenceManager
 import com.vettid.core.data.presence.VaultPresenceOps
+import com.vettid.core.data.votes.KeystoreResultsAttemptStore
 import com.vettid.core.data.votes.OkHttpVoteSite
 import com.vettid.core.data.votes.VaultVoteOps
 import com.vettid.core.data.votes.VotesManager
@@ -1026,6 +1027,8 @@ class VaultManager(
         openWindow = { openUnlockWindow(it) },
         closeWindow = { closeUnlockWindow() },
         unlockTtl = { status().unlockTtlSeconds },
+        voteRows = { ReleasePath.voteRows(local.capabilities) },
+        attempts = KeystoreResultsAttemptStore(KeystoreFileStore(File(app.noBackupFilesDir, VOTE_ATTEMPTS_FILE), "vote-attempts")),
     )
 
     /**
@@ -1578,6 +1581,7 @@ class VaultManager(
             steps.step { feed.clear() }
             steps.step { devices.clear() }
             steps.step { votes.clear() }
+            if (forget) steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
             steps.step { presence.clear() }
             steps.step { location.forget() }
             steps.step { ownerCheck.clear() }
@@ -2940,6 +2944,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { deletionWatch.start(marker, readNow = false) }
@@ -2993,6 +2998,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { deletionWatch.start(marker.watch(), readNow = false) }
@@ -4691,6 +4697,7 @@ class VaultManager(
         steps.step { feed.clear() }
         steps.step { devices.clear() }
         steps.step { votes.clear() }
+        steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { canary.removeCanaryManifest() }
@@ -4902,6 +4909,8 @@ class VaultManager(
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val LOCATION_FILE = "location-shares.bin"
+        /** The last attempt at each vote's results (VAULT-MESSAGING 0.86.4 §10.19.6): no choice, row or proof. */
+        private const val VOTE_ATTEMPTS_FILE = "vote-attempts.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"

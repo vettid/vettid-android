@@ -68,4 +68,38 @@ class FeedVoteItemsTest {
         }
         assertNull(FeedAsks.approvalKey("vote.open", "P1"))
     }
+
+    @Test
+    fun aResultItemWhoseVoteGaveUpHasTheGiveUpTitleAndDetail() {
+        // Owner decision a, 2026-11-06 (thread 01M6RH58PE19ZBEHX3JK5ZW06A): told apart by the list in memory.
+        val key = VoteTitles.key("c1", "P1")
+        val gaveUp = names.copy(votesGaveUp = setOf(key))
+        assertEquals(FeedText(R.string.data_feed_vote_result_gave_up), FeedKinds.title(item("vote.result"), gaveUp))
+        assertEquals(FeedText(R.string.data_feed_vote_result_gave_up_detail), FeedKinds.sheetDetail(item("vote.result"), gaveUp))
+        // The second line is "<service>: <vote title>", as for every vote item.
+        assertEquals(FeedKinds.supporting(item("vote.result"), names), FeedKinds.supporting(item("vote.result"), gaveUp))
+        assertEquals(R.string.data_feed_vote_line, FeedKinds.supporting(item("vote.result"), gaveUp)!!.res)
+        // Not in the list (or not gave_up): the result wording, no detail.
+        assertEquals(FeedText(R.string.data_feed_vote_result), FeedKinds.title(item("vote.result"), names))
+        assertNull(FeedKinds.sheetDetail(item("vote.result"), names))
+        assertEquals(FeedText(R.string.data_feed_vote_result), FeedKinds.title(item("vote.result", ref = "P2"), gaveUp))
+        // Only the result item: another vote kind of the same vote keeps its own title.
+        assertEquals(FeedText(R.string.data_feed_vote_open), FeedKinds.title(item("vote.open"), gaveUp))
+        assertNull(FeedKinds.sheetDetail(item("vote.problem", priority = "high"), gaveUp))
+    }
+
+    @Test
+    fun theGaveUpVotesAreTheListsVotesWhoseCheckGaveUp() {
+        fun v(id: String, state: com.vettid.core.data.votes.CheckState?) = com.vettid.core.data.votes.VoteSummary(
+            proposalId = id, connectionId = "c1", title = "T", state = com.vettid.core.data.votes.VoteState.CLOSED,
+            check = state?.let { com.vettid.core.data.votes.VoteCheck(it) },
+        )
+        val list = listOf(
+            v("P1", com.vettid.core.data.votes.CheckState.GAVE_UP),
+            v("P2", com.vettid.core.data.votes.CheckState.VERIFIED),
+            v("P3", com.vettid.core.data.votes.CheckState.PENDING),
+            v("P4", null),
+        )
+        assertEquals(setOf(VoteTitles.key("c1", "P1")), FeedNames.votesGaveUp(list))
+    }
 }

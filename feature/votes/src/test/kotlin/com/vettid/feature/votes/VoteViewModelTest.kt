@@ -630,4 +630,32 @@ class VoteViewModelTest {
         assertNull(vm.uiState.value.loadError)
         assertEquals("Text", vm.uiState.value.detail?.text)
     }
+
+    @Test
+    fun aJudgedVoteWithNoVerdictIsRecheckedWhileShownAndNotOtherwise() = runTest {
+        // ANDROID-PLAN 0.1.121 "Recheck on open": only while the screen is shown, and only without a verdict in memory.
+        val s = summary(state = VoteState.CLOSED, ballot = VoteBallot(BallotState.RECORDED), check = VoteCheck(CheckState.VERIFIED))
+        publish(s)
+        val vm = vm()
+        advanceUntilIdle()
+        assertFalse("recheck:$CONN/$PID" in votes.calls)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(1, votes.calls.count { it == "recheck:$CONN/$PID" })
+        // A verdict in memory: a return does not recheck again.
+        votes.hints.value = mapOf(s.key to com.vettid.core.data.votes.VoteHint(verdict = com.vettid.core.data.votes.ObserverVerdict.PASSED))
+        vm.setVisible(false)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(1, votes.calls.count { it == "recheck:$CONN/$PID" })
+    }
+
+    @Test
+    fun aVoteNotYetJudgedIsNotRechecked() = runTest {
+        publish(summary(state = VoteState.CLOSED, ballot = VoteBallot(BallotState.RECORDED), check = VoteCheck(CheckState.GAVE_UP)))
+        val vm = vm()
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertFalse(votes.calls.any { it.startsWith("recheck:") })
+    }
 }

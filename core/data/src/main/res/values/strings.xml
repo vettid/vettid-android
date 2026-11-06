@@ -264,6 +264,9 @@
     <string name="data_feed_vote_open">A new vote</string>
     <string name="data_feed_vote_closing">A vote closes soon</string>
     <string name="data_feed_vote_result">Vote results are out</string>
+    <!-- Owner-approved 2026-11-06 (decision a, thread 01M6RH58PE19ZBEHX3JK5ZW06A): the give-up `vote.result` item. -->
+    <string name="data_feed_vote_result_gave_up">Vote results not checked yet</string>
+    <string name="data_feed_vote_result_gave_up_detail">VettID couldn\'t check the published results of this vote yet. It will check them again by itself when it can. You don\'t need to do anything.</string>
     <string name="data_feed_vote_problem">Check your vote</string>
     <string name="data_feed_vote_problem_body">Something about your vote needs your attention.</string>
     <string name="data_feed_vote_line">%1$s: %2$s</string>

@@ -335,6 +335,9 @@ object ReleasePath {
     /** (0.83.0, decision 17) Whether the vault lists `item_ways`: only then may an agent's rule include items automatically. */
     fun itemWays(capabilities: List<String>): Boolean = com.vettid.core.crypto.altchan.Capabilities.ITEM_WAYS in capabilities
 
+    /** (0.83.3) Whether the vault lists `vote_rows`: only then are `other_rows` and `rows_unavailable` sent (§10.19.6 step 3). */
+    fun voteRows(capabilities: List<String>): Boolean = com.vettid.core.crypto.altchan.Capabilities.VOTE_ROWS in capabilities
+
     /** Whether recovery is offered: always for a release before R (its earlier recovery), else only with `recovery_offered`. */
     fun recoveryOffered(capabilities: List<String>): Boolean =
         com.vettid.core.crypto.altchan.Capabilities.RECOVERY_R !in capabilities ||

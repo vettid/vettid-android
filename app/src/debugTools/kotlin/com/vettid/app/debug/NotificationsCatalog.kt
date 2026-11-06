@@ -115,6 +115,15 @@ internal object NotificationsCatalog {
         "notifications.sheet_leash_proxy" to { DetailSheetContent(agentUse("leash.item.proxy", "i-known"), agentSheetNames, gone = false) },
         "notifications.sheet_leash_deleted" to { DetailSheetContent(agentUse("leash.item.run", "i-deleted"), agentSheetNames, gone = false) },
         "notifications.sheet_leash_read" to { DetailSheetContent(agentUse("leash.item.read", "i-known"), agentSheetNames, gone = false) },
+        // The give-up `vote.result` item (owner decision a, 2026-11-06): its vote is `gave_up` in the list in memory.
+        "notifications.sheet_vote_gave_up" to {
+            val key = com.vettid.core.data.feed.VoteTitles.key("c2", "01JBQZ0000000000000000000A")
+            DetailSheetContent(
+                FeedItem("f40", 40, "vote.result", at(30), "active", connectionId = "c2", ref = "01JBQZ0000000000000000000A"),
+                names.copy(votes = mapOf(key to "Adopt the budget"), votesGaveUp = setOf(key)),
+                gone = false,
+            )
+        },
         "shell.bell" to { Bars() },
     )
 }

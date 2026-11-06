@@ -115,6 +115,29 @@ class VoteTextsTest {
     }
 
     @Test
+    fun theNotRecheckedLineIsTheOwnersText() {
+        // ANDROID-PLAN 0.1.121 table, approved by the owner 2026-11-03.
+        assertEquals(
+            "VettID could not check the published results of this vote again just now, so their numbers are not shown. " +
+                "It will try again when you open this vote.",
+            r.getString(R.string.vote_results_not_rechecked),
+        )
+        assertEquals(r.getString(R.string.vote_results_not_rechecked), VoteTexts.text(r, VoteNote.RESULTS_NOT_RECHECKED, "Example", ""))
+    }
+
+    @Test
+    fun theGiveUpFeedItemIsTheOwnersText() {
+        // Owner decision a, 2026-11-06 (thread 01M6RH58PE19ZBEHX3JK5ZW06A), word for word; the second line is data_feed_vote_line.
+        assertEquals("Vote results not checked yet", r.getString(com.vettid.core.data.R.string.data_feed_vote_result_gave_up))
+        assertEquals(
+            "VettID couldn't check the published results of this vote yet. It will check them again by itself when it can. " +
+                "You don't need to do anything.",
+            r.getString(com.vettid.core.data.R.string.data_feed_vote_result_gave_up_detail),
+        )
+        assertEquals("Example: Adopt the budget", r.getString(com.vettid.core.data.R.string.data_feed_vote_line, "Example", "Adopt the budget"))
+    }
+
+    @Test
     fun theReservedAbstainIsAlwaysTheAppsOwnWord() {
         assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", "Skip this one"))
         assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", null))

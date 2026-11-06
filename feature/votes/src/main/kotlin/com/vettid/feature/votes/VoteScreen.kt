@@ -244,6 +244,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             notListedLate = state.hint.notListedLate(now),
             resultsTooLarge = state.hint.resultsTooLarge,
             observerFailed = state.hint.observerFailed,
+            notRechecked = state.hint.notRechecked,
         )
         val time = s.opensAt?.let { Times.full(it) }.orEmpty()
         Column(
@@ -307,6 +308,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                         stringResource(R.string.vote_check_with_service),
                         stringResource(R.string.vote_check_not_published_now),
                     )
+                // Unchanged (the same results as last time: nothing was sent and nobody was contacted) says nothing more: the
+                // vote's own state line already says where it stands (the lead's review of #312, M1).
                 else -> Unit
             }
         }

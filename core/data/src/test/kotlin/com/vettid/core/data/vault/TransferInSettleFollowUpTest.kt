@@ -510,7 +510,7 @@ class TransferInSettleFollowUpTest {
     }
 
     /**
-     * (Recheck 4, B1′) After an extra taken before the cap with no lease hold honoured yet, the look after a freeze in the
+     * (Recheck 4, B1′) After an extra taken before the cap with no lease hold honored yet, the look after a freeze in the
      * last send gets the free first lease hold. F = 90 s, the cap 185 s. The last look at 90 s is rate limited (`retry_after`
      * 1 s): the extra re-collects at 91 s. Its round writes the collector's poll at 94.5 s (wait 25 s) and the app freezes at
      * 94.9 s until 195 s: the poll may reach the relay at the wake, so the lease runs to 195 + 25 + 60 = 280 s. The look is
@@ -587,5 +587,53 @@ class TransferInSettleFollowUpTest {
             ),
         )
         assertEquals(listOf(91_000L, 295_000L), lasts)
+    }
+
+    /**
+     * (#308 follow-up, the lead's gap) A cut during a long last send after an early extra gets the free first lease hold.
+     * F = 90 s, the cap 185 s. The collector's poll written at 0 s (wait 25 s) is cut at 10 s: its lease runs to 85 s, the end
+     * to 100 s. The last collect at 100 s is rate limited (`retry_after` 60 s): the extra, taken before the cap, sets no
+     * ceiling and re-collects at 160 s. The collection's round after it runs to 200 s, and its poll (written at 165 s, wait
+     * 25 s) is cut at 190 s, seen at 200 s: its lease starts by max(190 s, 200 s) and runs to 260 s. The drop no longer
+     * follows at 200 s: one more collect is held to 275 s, and only then the drop.
+     */
+    @Test
+    fun aCutDuringALongSendAfterAnEarlyExtraGetsTheFreeLeaseHold() = runTest {
+        val clock = FrozenClock(this)
+        val cuts = mutableListOf<CollectorCut>() // sentAgoMs holds the send time here; turned into an age when read
+        var refused = false
+        var longRound = false
+        var droppedAt = -1L
+        val lasts = mutableListOf<Long>()
+        launch {
+            delay(10_000)
+            cuts += CollectorCut(1L, 0L, 25_000L)
+            delay(180_000)
+            cuts += CollectorCut(2L, 165_000L, 25_000L) // at 190 s, during the round after the extra's collect
+        }
+        val round: suspend () -> Unit = {
+            if (longRound) {
+                longRound = false
+                delay(40_000) // 160 s to 200 s
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 100_000) {
+                lasts += clock.now()
+                if (!refused) {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 60)
+                }
+                if (lasts.size == 2) longRound = true
+            }
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, { droppedAt = clock.now() }, settle = timingWith(clock), awaitRound = round,
+                cuts = { cuts.size.toLong() }, cutLeases = { cuts.map { it.copy(sentAgoMs = clock.now() - it.sentAgoMs) } },
+            ),
+        )
+        assertEquals(listOf(100_000L, 160_000L, 275_000L), lasts)
+        assertEquals(275_000L, droppedAt)
     }
 }
