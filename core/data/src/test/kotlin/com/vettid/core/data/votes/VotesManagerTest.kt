@@ -20,6 +20,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -1011,12 +1016,12 @@ class VotesManagerTest {
      */
     private class Observed(val rowsJson: String, val results: String, val tags: List<ByteArray>)
 
-    private fun observed(proposalIdInResults: String = PID, tally: String = """{"abstain":0,"no":0,"yes":0}"""): Observed {
-        val tags = (1..3).map(::tagOf)
+    private fun observed(proposalIdInResults: String = PID, tally: String = """{"abstain":0,"no":0,"yes":0}""", n: Int = 3): Observed {
+        val tags = (1..n).map { i -> ByteArray(32) { 7 }.also { it[0] = (i shr 8).toByte(); it[1] = i.toByte() } }
         val rowsJson = """{"proposal_id":"$PID","rows":[${tags.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }}],"v":1}"""
-        val proposal = """{"choices":[{"id":"yes","label":"Yes"},{"id":"no","label":"No"},{"id":"abstain","label":"Abstain"}],"eligible":3,"record_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}"}"""
+        val proposal = """{"choices":[{"id":"yes","label":"Yes"},{"id":"no","label":"No"},{"id":"abstain","label":"Abstain"}],"eligible":$n,"record_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}"}"""
         val hash = Base64s.encodeStd(Bytes.sha256(rowsJson.toByteArray()))
-        val results = """{"counts":{"ballots":0,"eligible":3,"removed":0,"unhandled":0},"extensions":[],"proposal":{"doc":"${Base64s.encodeStd(proposal.toByteArray())}","sig":"AA=="},"proposal_id":"$proposalIdInResults","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}","tally":$tally,"v":1}"""
+        val results = """{"counts":{"ballots":0,"eligible":$n,"removed":0,"unhandled":0},"extensions":[],"proposal":{"doc":"${Base64s.encodeStd(proposal.toByteArray())}","sig":"AA=="},"proposal_id":"$proposalIdInResults","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}","tally":$tally,"v":1}"""
         return Observed(rowsJson, results, tags)
     }
 
@@ -1135,5 +1140,58 @@ class VotesManagerTest {
         } finally {
             pool.shutdown()
         }
+    }
+
+    @Test
+    fun aCancelledCheckStopsAtItsNextStepAndSubmitsNothing() = runTest {
+        val (ops, site) = observedScenario(observed())
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var job: Job? = null
+        val m = manager(ops, site) {
+            steps += it
+            if (steps.size == 1) job!!.cancel()
+        }
+        m.refresh()
+        job = launch(start = CoroutineStart.LAZY) { m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals("$steps", 1, steps.size)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun aLargeVoteChecksForCancellationEvery256Rows() = runTest {
+        val (ops, site) = observedScenario(observed(n = 1024))
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val m = manager(ops, site) { steps += it.substringAfterLast(':') }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        // The reading, the tree and the signature loop each look at least once per 256 rows.
+        assertTrue("$steps", steps.count { it == "read" } >= 1 + 1024 / 256)
+        assertTrue("$steps", steps.count { it == "observe" } >= 1 + 1024 / 256)
+    }
+
+    @Test
+    fun oneVotesLongCheckDoesNotHoldUpAnother() = runTest {
+        val other = "01JBQZ0000000000000000000C"
+        val (ops, site) = observedScenario(observed())
+        for (name in listOf("results.json", "results.json.sig", "results.json.sigstore.json", "rows.json")) {
+            site.answers["p/$other/$name"] = site.answers.getValue("p/$PID/$name")
+        }
+        val gate = CompletableDeferred<Unit>()
+        // The gate is bounded and always opened, so a shared lock makes this fail instead of hanging.
+        val m = manager(ops, site) { if (it.startsWith("$CONN/$PID:")) runBlocking { withTimeoutOrNull(15_000) { gate.await() } } }
+        m.refresh()
+        val first = launch(Dispatchers.Default) { m.checkResults(CONN, PID) }
+        try {
+            // While the first vote's check is held in its work, the other vote's check runs to its end.
+            val second = withContext(Dispatchers.Default) { withTimeoutOrNull(5_000) { m.checkResults(CONN, other) } }
+            assertTrue("the other vote waited for the first", second is ResultsOutcome.Submitted)
+        } finally {
+            gate.complete(Unit)
+            first.join()
+        }
+        assertEquals(2, ops.submitted.size)
     }
 }

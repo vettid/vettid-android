@@ -32,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -251,7 +252,12 @@ class VotesManager(
     private val windowNotClosedFlow = MutableStateFlow<WindowNotClosed?>(null)
     private val reads = Mutex()
     private val syncs = Mutex()
-    private val results = Mutex()
+    /**
+     * One lock per vote (review 1, finding 4): a long check of one vote never holds up another's. The same vote is never
+     * checked twice at once (the screen's Check again and the due checks). Nothing a check touches is shared between votes
+     * but per-key hints, the site client and the vault's calls, which take concurrent use.
+     */
+    private val resultLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
@@ -695,12 +701,17 @@ class VotesManager(
     }
 
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
-    override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome = results.withLock {
+    override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
-        if (!site.configured) return@withLock ResultsOutcome.SiteUnreachable
+        return resultLocks.computeIfAbsent(key) { Mutex() }.withLock { checkResultsLocked(key, connectionId, proposalId) }
+    }
+
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
+    private suspend fun checkResultsLocked(key: String, connectionId: String, proposalId: String): ResultsOutcome = run {
+        if (!site.configured) return@run ResultsOutcome.SiteUnreachable
         val detail = get(connectionId, proposalId)
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
-            ?: return@withLock fail(key, ResultsOutcome.Problem)
+            ?: return@run fail(key, ResultsOutcome.Problem)
         var siteDown = false
         var tooLarge = false
         suspend fun fetch(name: String, max: Long): ByteArray? = when (val a = site.get("p/$proposalId/$name", max)) {
@@ -717,42 +728,48 @@ class VotesManager(
             }
         }
         val doc = fetch("results.json", RESULTS_MAX)
-        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
-        if (doc == null) return@withLock unavailable(key, siteDown)
+        if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true)
+        if (doc == null) return@run unavailable(key, siteDown)
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
         // The download cap of rows.json follows counts.eligible (§10.19.6 step 1); results whose counts do not read are a problem.
-        val rowsCap = VoteRows.rowsCap(doc) ?: return@withLock fail(key, ResultsOutcome.Problem)
+        val rowsCap = VoteRows.rowsCap(doc) ?: return@run fail(key, ResultsOutcome.Problem)
         val rows = fetch("rows.json", rowsCap)
-        if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
+        if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true)
         if (sig == null || bundleBytes == null || rows == null) {
-            return@withLock unavailable(key, siteDown)
+            return@run unavailable(key, siteDown)
         }
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
-        if (!VoteSync.submittable(doc, sig)) return@withLock fail(key, ResultsOutcome.Problem)
-        val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH) ?: return@withLock fail(key, ResultsOutcome.Problem)
+        if (!VoteSync.submittable(doc, sig)) return@run fail(key, ResultsOutcome.Problem)
+        val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH) ?: return@run fail(key, ResultsOutcome.Problem)
         // The heavy part (up to 51 MB: the hash, the reading, the trees, the proof, the signatures) in one block off the
         // main thread. The observer's verdict is only shown, never a reason not to submit (0.83.2).
         val examined = withContext(compute) {
-            computeStep("$key:read")
+            // Every 256 rows and tree nodes: a lock, leaving the screen or the background stops the work at once.
+            val ctx = coroutineContext
+            fun step(stage: String) {
+                computeStep("$key:$stage")
+                ctx.ensureActive()
+            }
+            step("read")
             val published = try {
-                VoteRows.read(doc, rows) { computeStep("$key:read") }
+                VoteRows.read(doc, rows) { step("read") }
             } catch (_: ResultsProblem) {
                 return@withContext null
             }
-            computeStep("$key:row")
+            step("row")
             val own = try {
-                published.ownRow(tag) { computeStep("$key:row") }
+                published.ownRow(tag) { step("row") }
             } catch (_: ResultsProblem) {
                 return@withContext null
             }
-            computeStep("$key:observe")
-            Examined(own, observerFails(published, proposalId, detail) { computeStep("$key:observe") })
-        } ?: return@withLock fail(key, ResultsOutcome.Problem)
+            step("observe")
+            Examined(own, observerFails(published, proposalId, detail) { step("observe") })
+        } ?: return@run fail(key, ResultsOutcome.Problem)
         val own = examined.own
         val ballot = own.ballot
         // (0.81.6) A choice id the vault would refuse (and with it the whole submission) is the site's problem: not submitted.
-        if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) return@withLock fail(key, ResultsOutcome.Problem)
+        if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) return@run fail(key, ResultsOutcome.Problem)
         val body = buildJsonObject {
             put("connection_id", connectionId)
             put("proposal_id", proposalId)
@@ -790,8 +807,8 @@ class VotesManager(
         when (VoteSync.inline(VoteSync.encoded(body))) {
             VoteSync.Inline.FITS -> Unit
             // Over the request limit: the vault could never take it. Any other failure is a problem, not a size.
-            VoteSync.Inline.TOO_LARGE -> return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
-            VoteSync.Inline.OTHER -> return@withLock fail(key, ResultsOutcome.Problem)
+            VoteSync.Inline.TOO_LARGE -> return@run fail(key, ResultsOutcome.Problem, tooLarge = true)
+            VoteSync.Inline.OTHER -> return@run fail(key, ResultsOutcome.Problem)
         }
         // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
         hint(key) { it.copy(observerFailed = examined.observerFailed) }
