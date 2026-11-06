@@ -74,6 +74,9 @@ class PublishedResults internal constructor(
         if (!rowsHashMatches) throw ResultsProblem("rows_hash")
         if (!sortedOnce) throw ResultsProblem("rows_order")
         if (!lengthsMatch) throw ResultsProblem("ballot_shape")
+        // Every row exactly {record_tag, ballot} and every ballot exactly {vk, choice_id, ballot_sig} (BALLOT-PROTOCOL §8.5:
+        // a verifier refuses unknown fields; `pad` belongs to message bodies, not to rows.json; review 1, finding 8).
+        if (!rows.membersExact) throw ResultsProblem("rows_members")
         val proposalBytes: ByteArray
         val choices: Set<String>
         val recordRoot: ByteArray

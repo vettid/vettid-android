@@ -306,4 +306,20 @@ class VoteObserveTest {
         val fewer = rowsJson(vectorRows.dropLast(1))
         assertEquals("rows_count", reason { VoteRows.read(res, fewer) })
     }
+
+    @Test
+    fun rowsOrBallotsWithMembersTheProtocolDoesNotHaveAreReported() {
+        val rows = String(rowsJson(vectorRows))
+        val changed = listOf(
+            rows.replaceFirst("{\"ballot\":", "{\"x\":0,\"ballot\":"), // a row with another member
+            rows.replaceFirst("\"choice_id\":\"yes\"", "\"choice_id\":\"yes\",\"pad\":\"00000\""), // a ballot with pad
+            rows.replace("{\"ballot\":null,", "{"), // a row without its ballot member (an empty row)
+        )
+        for (c in changed) {
+            val bytes = c.toByteArray()
+            // Still read: each row can be made into a leaf.
+            val p = VoteRows.read(String(resultsJson(vectorRows, bytes)).toByteArray(), bytes)
+            assertEquals(c.take(60), "rows_members", reason { p.observe(PID) })
+        }
+    }
 }
