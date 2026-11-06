@@ -135,6 +135,9 @@ class OwnerCheckGateViewModel @Inject constructor(
 
     fun consumeCheckAfterCancel() = repo.consumeCheckAfterCancel()
 
+    /** (VAULT-MESSAGING 0.84.0) The latest `vault.status` has `relay: "refused"`: the shell's lasting notice. */
+    val relayRefused: StateFlow<Boolean> = repo.relayRefused
+
     /** The app came to the foreground: the vault may have passed its deadline meanwhile. */
     fun onForeground() {
         viewModelScope.launch { runCatching { repo.refreshOwnerCheck() } }

@@ -14,7 +14,9 @@ import com.vettid.core.vault.VaultStateException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -80,7 +82,25 @@ class OwnerCheckManagerTest {
         /** (0.43.0) The status's `time_scale`; null: absent. */
         var timeScale: Long? = null
 
-        override suspend fun statusRead() = statusAndRecovery().let { (o, r) -> StatusRead(o, r, timeScale) }
+        /** (0.84.0) The status's `relay` is `"refused"`. */
+        var relayRefused = false
+
+        private suspend fun statusGated() {
+            reads++
+            statusGate?.await()
+        }
+
+        /** When set, `statusRead` waits for it (a read that is still running when something else happens). */
+        @Volatile var statusGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+        /** How many `statusRead`s were made. */
+        @Volatile var reads = 0
+
+        override suspend fun statusRead(): StatusRead {
+            statusGated()
+            val (o, r) = statusAndRecovery()
+            return StatusRead(o, r, timeScale, relayRefused)
+        }
 
         /** What `settings.get` lists (a vault before L lists no `idle_lock.after_seconds`). */
         var settings: Map<String, JsonElement> = emptyMap()
@@ -123,7 +143,15 @@ class OwnerCheckManagerTest {
         }
     }
 
+    /** Waits (bounded) until [ops] has started [n] `statusRead`s: the async read is then held at its gate. */
+    private fun awaitReads(ops: Ops, n: Int) {
+        val end = System.nanoTime() + AWAIT_NS
+        while (ops.reads < n && System.nanoTime() < end) Thread.sleep(SETTLE_MS)
+        assertTrue("the read did not start", ops.reads >= n)
+    }
+
     private companion object {
+        const val AWAIT_NS = 30_000_000_000L
         const val SETTLE_TRIES = 500
         const val SETTLE_MS = 10L
     }
@@ -898,6 +926,391 @@ class OwnerCheckManagerTest {
         assertEquals(24L, read("""{"vault_id":"x","time_scale":24}""").timeScale)
         val without = read("""{"vault_id":"x"}""")
         assertNull(without.timeScale)
+    }
+
+    /** (0.84.0 §3.4) The lasting notice follows the latest `vault.status`: shown with `relay: "refused"`, gone without it. */
+    @Test
+    fun theRelayNoticeFollowsTheLatestStatus() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        assertFalse(m.relayRefused.value)
+        ops.relayRefused = true
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.refreshOwnerCheck()
+        assertTrue("it lasts while the field is present", m.relayRefused.value)
+        ops.relayRefused = false
+        m.refreshOwnerCheck()
+        assertFalse(m.relayRefused.value)
+    }
+
+    /** A status without an owner check (an older vault) still carries `relay`; it is not kept across a restart. */
+    @Test
+    fun theRelayNoticeIsNotKeptOnThePhone() = runTest {
+        val ops = Ops().apply { status = null }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        assertFalse(manager(Ops()).relayRefused.value)
+    }
+
+    /** A locked app shows no relay notice: any lock (the member's, the vault's own, ten failures) and a wipe clear it. */
+    @Test
+    fun theRelayNoticeIsClearedAtLockAndWipe() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.onLockedHere()
+        assertFalse("the member's lock", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.onEvent(event("vault.locking", """{"reason":"idle"}"""))
+        assertFalse("the vault locked itself", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        m.onEvent(event("vault.locking", """{"reason":"owner_check"}"""))
+        assertFalse("ten failed checks", m.relayRefused.value)
+
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        m.clear()
+        assertFalse("a wipe or sign-out", m.relayRefused.value)
+    }
+
+    /** A read that began before a lock, a vault.locking or a wipe and finishes after it never brings the notice back. */
+    @Test
+    fun aRelayReadThatFinishesAfterALockIsDropped() = runTest {
+        val locks = listOf<Pair<String, (OwnerCheckManager) -> Unit>>(
+            "the member's lock" to { it.onLockedHere() },
+            "vault.locking" to { it.onEvent(event("vault.locking", """{"reason":"update"}""")) },
+            "a wipe" to { it.clear() },
+        )
+        for ((name, lock) in locks) {
+            val ops = Ops().apply {
+                status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+                relayRefused = true
+                statusGate = kotlinx.coroutines.CompletableDeferred()
+            }
+            val m = manager(ops)
+            val late = this.async(Dispatchers.Default) { runCatching { m.refreshOwnerCheck() } }
+            awaitReads(ops, 1)
+            lock(m)
+            ops.statusGate!!.complete(Unit)
+            late.await()
+            assertFalse("$name: the late read must not show the notice", m.relayRefused.value)
+        }
+    }
+
+    /** An older read that finishes after a newer one does not overwrite it. */
+    @Test
+    fun anOlderRelayReadDoesNotOverwriteANewerOne() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            relayRefused = true
+            statusGate = kotlinx.coroutines.CompletableDeferred()
+        }
+        val m = manager(ops)
+        val firstGate = ops.statusGate!!
+        val old = this.async(Dispatchers.Default) { runCatching { m.refreshOwnerCheck() } }
+        awaitReads(ops, 1)
+        ops.statusGate = null
+        ops.relayRefused = false
+        m.refreshOwnerCheck()
+        assertFalse(m.relayRefused.value)
+        // The first read (which began first, and was answered "refused") finishes last.
+        ops.relayRefused = true
+        firstGate.complete(Unit)
+        old.await()
+        assertFalse(m.relayRefused.value)
+    }
+
+    /** A lock found by the probe (the member API says `locked`) clears the notice too. */
+    @Test
+    fun aLockFoundByTheProbeClearsTheRelayNotice() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        ops.failStatus = true
+        memberState = "locked"
+        assertEquals(VaultProbe.LOCKED, m.probeVault(lockCauseKnown = false))
+        assertFalse(m.relayRefused.value)
+    }
+
+    /** M2: the vault's one relay attempt comes after the unlock's read; a new `identity.rotation_failed` says it happened. */
+    @Test
+    fun aNewRotationFailedItemReadsTheStatusOnce() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertFalse(m.relayRefused.value)
+        ops.relayRefused = true
+        val before = ops.reads
+        val item = FeedItem("r1", 1, "identity.rotation_failed", "2026-11-05T10:00:00Z", "active", "high", ref = "recovery")
+        m.onFeed(listOf(item))
+        settle { m.relayRefused.value }
+        assertTrue(m.relayRefused.value)
+        // The status that found it refused also schedules the one re-read of this unlock (60 s): let it run first.
+        settle { ops.reads >= before + 2 }
+        assertEquals(before + 2, ops.reads)
+        val reads = ops.reads
+        // The same item again (the feed list changed for another reason) does not read again; a read item is not new.
+        // Deterministic: a read would be a coroutine launched in this scope by onFeed itself, before anything runs.
+        val launched = coroutineContext.job.children.count()
+        m.onFeed(listOf(item, FeedItem("m1", 2, "message.received", "2026-11-05T10:01:00Z", "active")))
+        assertEquals("no read is launched for an item already seen", launched, coroutineContext.job.children.count())
+        advanceUntilIdle()
+        assertEquals(reads, ops.reads)
+        // A wipe forgets the ids.
+        m.clear()
+        m.onFeed(listOf(item))
+        settle { ops.reads > reads }
+        assertTrue(ops.reads > reads)
+    }
+
+    /** M2: after an unlock's read found the relay refused, the status is read once more a minute later. */
+    @Test
+    fun anUnlockThatFoundTheRelayRefusedReadsAgainAMinuteLater() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertTrue(m.relayRefused.value)
+        val reads = ops.reads
+        ops.relayRefused = false
+        advanceTimeBy(59_000)
+        assertEquals(reads, ops.reads)
+        advanceTimeBy(2_000)
+        settle { !m.relayRefused.value }
+        assertFalse(m.relayRefused.value)
+        assertEquals(reads + 1, ops.reads)
+        // Once only: it was not refused any more, so nothing is scheduled.
+        advanceTimeBy(300_000)
+        assertEquals(reads + 1, ops.reads)
+    }
+
+    /**
+     * (As vettid-ios #221) Any status that finds the relay refused schedules the one re-read, not only the unlock's: here a
+     * later read (a return to the foreground) finds it. Once until the next lock: a second refused status schedules nothing
+     * more, and after a lock the next refused status schedules it again.
+     */
+    @Test
+    fun aLaterStatusThatFindsTheRelayRefusedReadsAgainOnceUntilTheNextLock() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertFalse(m.relayRefused.value)
+        val quiet = ops.reads
+        advanceTimeBy(300_000)
+        advanceUntilIdle()
+        assertEquals("nothing is scheduled while the relay is not refused", quiet, ops.reads)
+
+        ops.relayRefused = true
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        val reads = ops.reads
+        advanceTimeBy(30_000)
+        // A second refused status (applied without suspending: under runTest a read that waits on IO lets the virtual clock
+        // run to the scheduled re-read) schedules no second re-read.
+        m.noteRelay(m.beginStatusRead(), refused = true)
+        assertEquals(reads, ops.reads)
+        advanceTimeBy(31_000)
+        settle { ops.reads >= reads + 1 }
+        assertEquals("the one re-read, 60 s after the first refused status", reads + 1, ops.reads)
+        advanceTimeBy(600_000)
+        advanceUntilIdle()
+        assertEquals("once only", reads + 1, ops.reads)
+
+        m.onLockedHere()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertTrue(m.relayRefused.value)
+        val after = ops.reads
+        advanceTimeBy(59_000)
+        assertEquals(after, ops.reads)
+        advanceTimeBy(2_000)
+        settle { ops.reads > after }
+        assertEquals("a lock lets the next unlock re-read again", after + 1, ops.reads)
+    }
+
+    /**
+     * (As vettid-ios #221) Every status read of the open vault decides, not only the owner check's: the Settings overview's
+     * read (`VaultManager.overview`) goes through [OwnerCheckManager.beginStatusRead] and [OwnerCheckManager.noteRelay]
+     * under the same ordering: a lock since it began, or a newer read applied, drops it.
+     */
+    @Test
+    fun aStatusReadElsewhereDecidesUnderTheSameOrdering() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.noteRelay(m.beginStatusRead(), refused = true)
+        assertTrue("an overview read shows the notice", m.relayRefused.value)
+        m.noteRelay(m.beginStatusRead(), refused = false)
+        assertFalse("and takes it away", m.relayRefused.value)
+
+        val older = m.beginStatusRead()
+        ops.relayRefused = false
+        m.refreshOwnerCheck() // a newer owner-check read, applied first
+        m.noteRelay(older, refused = true)
+        assertFalse("an older read does not overwrite a newer one", m.relayRefused.value)
+
+        val beforeLock = m.beginStatusRead()
+        m.onLockedHere()
+        m.noteRelay(beforeLock, refused = true)
+        assertFalse("a read that began before a lock is dropped", m.relayRefused.value)
+    }
+
+    /**
+     * Review of #301, F1: a lock the manager never hears of (`VaultManager.refresh` finds the vault locked through the member
+     * API after the `vault.locking` expired) leaves the re-read spent; the next unlock attempt ([OwnerCheckManager.unlockStarting])
+     * begins the relay state again, so that unlock's refused read schedules its own re-read.
+     */
+    @Test
+    fun aNewUnlockAttemptRereadsAgainAfterALockTheManagerMissed() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.unlockStarting()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        val first = ops.reads
+        advanceTimeBy(61_000)
+        settle { ops.reads > first }
+        assertEquals("the first unlock's re-read", first + 1, ops.reads)
+        // The vault locks itself; this manager is told nothing. The next unlock attempt starts.
+        m.unlockStarting()
+        assertFalse("nothing of the earlier unlock is shown", m.relayRefused.value)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertTrue(m.relayRefused.value)
+        val second = ops.reads
+        advanceTimeBy(59_000)
+        assertEquals(second, ops.reads)
+        advanceTimeBy(2_000)
+        settle { ops.reads > second }
+        assertEquals("the second unlock's own re-read", second + 1, ops.reads)
+    }
+
+    /**
+     * Review of #301, F3: the Settings overview's status read ([RelayReads.read]) decides the notice, stamped before it is
+     * sent (a lock during the read drops its answer), and a read that got no answer applies nothing.
+     */
+    @Test
+    fun theOverviewsReadDecidesStampedBeforeItIsSent() = runTest {
+        val m = manager(Ops())
+        val refused = com.vettid.core.vault.VaultStatusInfo("v", relay = JsonPrimitive("refused"))
+        val absent = com.vettid.core.vault.VaultStatusInfo("v")
+        assertEquals(refused, RelayReads.read(m, open = { true }) { refused })
+        assertTrue("an overview read shows the notice", m.relayRefused.value)
+        assertNull(RelayReads.read(m, open = { true }) { null })
+        assertTrue("no answer changes nothing", m.relayRefused.value)
+        RelayReads.read(m, open = { true }) { absent }
+        assertFalse("and one without `relay` takes it away", m.relayRefused.value)
+        RelayReads.read(m, open = { true }) {
+            m.onLockedHere() // the member locks while the overview's read is out
+            refused
+        }
+        assertFalse("an answer to a read sent before the lock is dropped", m.relayRefused.value)
+    }
+
+    /**
+     * Review of #301, F2: the overview's answer is applied only while the vault is still open, even when its stamp was
+     * taken after the member's lock cleared the notice and before the lock set the phase.
+     */
+    @Test
+    fun theOverviewsAnswerIsNotAppliedOnceTheVaultIsNoLongerOpen() = runTest {
+        val m = manager(Ops())
+        var open = true
+        RelayReads.read(m, open = { open }) {
+            open = false // the phase became Locked while the read was out; no epoch moved since the stamp
+            com.vettid.core.vault.VaultStatusInfo("v", relay = JsonPrimitive("refused"))
+        }
+        assertFalse(m.relayRefused.value)
+    }
+
+    /**
+     * Review of #301, F4: a successful rotate ([RelayReads.keysReplaced], called by `VaultManager.rotate`) reads the status
+     * again, so the notice goes; a read that fails there is not thrown.
+     */
+    @Test
+    fun replacedKeysReadTheStatusAgain() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        // Let the one re-read that refused status scheduled run first: under runTest, a read that waits on IO lets the
+        // virtual clock run to it, which would count one read more here.
+        val first = ops.reads
+        advanceTimeBy(61_000)
+        settle { ops.reads > first }
+        ops.relayRefused = false
+        val reads = ops.reads
+        RelayReads.keysReplaced(m)
+        assertEquals(reads + 1, ops.reads)
+        assertFalse(m.relayRefused.value)
+        ops.failStatus = true
+        RelayReads.keysReplaced(m) // no exception
+    }
+
+    /**
+     * Lead's review of #301: clearing the relay notice moves only the relay's own epoch. A probe in flight when an unlock
+     * attempt starts ([OwnerCheckManager.unlockStarting]) still returns its answer, not NO_ANSWER (as on master); its relay
+     * value is dropped.
+     */
+    @Test
+    fun aProbeAcrossAnUnlockAttemptIsUnaffectedByTheRelayClear() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            relayRefused = true
+            statusGate = kotlinx.coroutines.CompletableDeferred()
+        }
+        val m = manager(ops)
+        val probe = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        awaitReads(ops, 1)
+        m.unlockStarting()
+        ops.statusGate!!.complete(Unit)
+        assertEquals(VaultProbe.OPEN, probe.await())
+        assertFalse("the relay value of a read that spans the clear is dropped", m.relayRefused.value)
+    }
+
+    /**
+     * Lead's review of #301: the `identity.rotation_failed` ids seen are forgotten at a lock, as on iOS, so the vault's
+     * update of the same item at a later unlock reads the status again.
+     */
+    @Test
+    fun theSameRotationFailedItemAfterALockReadsTheStatusAgain() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        val item = FeedItem("r1", 1, "identity.rotation_failed", "2026-11-05T10:00:00Z", "active", "high", ref = "recovery")
+        val r0 = ops.reads
+        m.onFeed(listOf(item))
+        settle { ops.reads > r0 }
+        assertEquals(r0 + 1, ops.reads)
+        m.onLockedHere()
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        val r1 = ops.reads
+        val launched = coroutineContext.job.children.count()
+        m.onFeed(listOf(item.copy(seq = 2)))
+        assertEquals("the same item after a lock is new again", launched + 1, coroutineContext.job.children.count())
+        settle { ops.reads > r1 }
+        assertEquals(r1 + 1, ops.reads)
+    }
+
+    /** The re-read is cancelled by a lock. */
+    @Test
+    fun theRelayRereadIsCancelledAtLock() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        val reads = ops.reads
+        m.onLockedHere()
+        advanceTimeBy(120_000)
+        advanceUntilIdle()
+        assertEquals(reads, ops.reads)
+        assertFalse(m.relayRefused.value)
     }
 
     // --- Release L (VAULT-MESSAGING 0.29.0 §3.6.8): the idle lock ---

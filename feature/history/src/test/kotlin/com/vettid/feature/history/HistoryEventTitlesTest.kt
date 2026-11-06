@@ -223,7 +223,7 @@ class HistoryEventTitlesTest {
             listOf("If this lasts three days, your vault is no longer protected against a recovery started by someone else."),
             lines("recovery.presence_unrecorded", null),
         )
-        assertEquals(listOf("Your connections still know your old keys. Your vault will try again the next time you unlock it."), lines("identity.rotation_failed", "recovery"))
+        assertEquals(listOf("Your vault couldn't finish updating its keys. It will try again the next time you unlock it."), lines("identity.rotation_failed", "recovery"))
         assertEquals(listOf("Replaced when you moved your vault to a new phone."), lines("identity.rotated", "t-1"))
         assertEquals(emptyList<String>(), lines("identity.rotated", null))
         assertEquals(listOf("This phone's one-time keys were replaced with a fresh set."), lines("credential.utk_resync", null))

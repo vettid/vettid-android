@@ -31,6 +31,7 @@ import com.vettid.feature.history.HistoryScreen
 import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
 import com.vettid.app.ui.ReleaseBannerState
+import com.vettid.app.ui.RelayRefusedNotice
 import com.vettid.app.ui.ReleaseUpdateBanner
 import com.vettid.core.data.vault.EarlierRelease
 import com.vettid.core.data.vault.ReleaseLogEntry
@@ -1004,6 +1005,8 @@ object ScreenCatalog {
                 PendingDeletionBanner(DeletionView(Instant.now().plusSeconds(3 * 3_600L), false, null), false, {}, {})
             }
         },
+        // The lasting notice of a refused relay key (VAULT-MESSAGING 0.84.0 §3.4): not dismissible, "Replace your vault's keys".
+        "shell.relay_refused" to { RelayRefusedNotice(first = true, onReplaceKeys = {}) },
         "shell.owner_check_banners" to {
             Column {
                 OwnerCheckBanners(
