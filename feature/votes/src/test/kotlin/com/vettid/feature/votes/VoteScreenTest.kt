@@ -312,14 +312,16 @@ class VoteScreenTest {
     }
 
     @Test
-    fun aCheckAgainThatEndedUnchangedSaysTheVotesGaveUpLineAgain() {
-        // Review 1, L5: nothing was sent (the same results); the tap is answered with the vote's existing gave_up line.
+    fun aCheckAgainThatEndedUnchangedShowsNothingMore() {
+        // The lead's review of #312, M1: nothing was sent and nobody contacted, so no card or notice; the vote's own state
+        // line (shown once) says where it stands.
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.GAVE_UP), canCast = false)
         val st = state(s, detail(s), hint = VoteHint(gaveUp = com.vettid.core.data.votes.GaveUpWhy.UNPUBLISHED))
         rule.setContent { VoteScreen(st.copy(checkOutcome = com.vettid.core.data.votes.ResultsOutcome.Unchanged), VoteActions(), now = now) }
         val line = "The results of this vote were not published within 7 days, so your vote has not been checked."
-        rule.onNodeWithTag("vote_check_unchanged").assertIsDisplayed()
-        assertEquals(2, shownAll(line).fetchSemanticsNodes().size)
+        assertEquals(1, shownAll(line).fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("Check with the service").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("vote_check_unchanged").assertDoesNotExist()
     }
 
     @Test

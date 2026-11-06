@@ -319,17 +319,6 @@ object VoteRules {
      */
     fun recheckOnOpen(s: VoteSummary, verdict: ObserverVerdict?): Boolean = s.closed && judged(s) && verdict == null
 
-    /**
-     * What a **Check again** that ended unchanged ([ResultsOutcome.Unchanged]: the same results, signature and bundle, so
-     * nothing was sent) says (review 1, L5): the vote's own state line for its check, an existing text; null when it has none.
-     */
-    fun unchangedLine(notes: List<VoteNote>): VoteNote? = notes.firstOrNull { it in UNCHANGED_LINES }
-
-    private val UNCHANGED_LINES = setOf(
-        VoteNote.CHECK_GAVE_UP_SITE, VoteNote.CHECK_GAVE_UP_UNPUBLISHED, VoteNote.CHECK_GAVE_UP, VoteNote.CHECK_RESULTS_PROBLEM,
-        VoteNote.CHECK_RESULTS_TOO_LARGE, VoteNote.CHECKING_CLOCK, VoteNote.CHECKING_TRUST, VoteNote.CHECKING_LIST,
-    )
-
     /** The reason a cast is not offered (screen 2: the reason is written where the button would be). */
     @Suppress("ReturnCount")
     fun cannotCastNote(s: VoteSummary): VoteNote? {

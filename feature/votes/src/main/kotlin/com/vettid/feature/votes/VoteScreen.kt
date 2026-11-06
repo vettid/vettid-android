@@ -308,16 +308,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                         stringResource(R.string.vote_check_with_service),
                         stringResource(R.string.vote_check_not_published_now),
                     )
-                // The same results as last time, so nothing was sent (review 1, L5): the vote's own check line, said again
-                // as the answer to the tap (an existing text).
-                ResultsOutcome.Unchanged -> VoteRules.unchangedLine(notes)?.let { n ->
-                    NoticeCard(
-                        NoticeKind.INFO,
-                        stringResource(R.string.vote_check_with_service),
-                        VoteTexts.text(resources, n, service, time),
-                        Modifier.testTag("vote_check_unchanged"),
-                    )
-                }
+                // Unchanged (the same results as last time: nothing was sent and nobody was contacted) says nothing more: the
+                // vote's own state line already says where it stands (the lead's review of #312, M1).
                 else -> Unit
             }
         }
