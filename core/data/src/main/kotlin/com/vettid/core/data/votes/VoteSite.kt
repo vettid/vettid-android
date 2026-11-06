@@ -33,6 +33,12 @@ interface VoteSite {
 
     suspend fun get(path: String, maxBytes: Long = DEFAULT_MAX): SiteAnswer
 
+    /**
+     * [get], telling [received] the body's bytes as they arrive, also when the answer is then no answer (a download cut off
+     * partway still cost them: #319 item 1, the weekly cap on mobile data counts it).
+     */
+    suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer = get(path, maxBytes)
+
     companion object {
         /** A proposal, its signature and bundle, a results document: far under this. */
         const val DEFAULT_MAX = 1L shl 20
@@ -55,8 +61,10 @@ class OkHttpVoteSite(base: String?, http: OkHttpClient) : VoteSite {
         .callTimeout(CALL_TIMEOUT_S, TimeUnit.SECONDS)
         .build()
 
+    override suspend fun get(path: String, maxBytes: Long): SiteAnswer = getCounted(path, maxBytes) {}
+
     @Suppress("ReturnCount", "TooGenericExceptionCaught", "CyclomaticComplexMethod")
-    override suspend fun get(path: String, maxBytes: Long): SiteAnswer {
+    override suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
         val url = root?.let { "$it/v1/${path.trimStart('/')}" } ?: return SiteAnswer.Unreachable
         return withContext(Dispatchers.IO) {
             try {
@@ -72,7 +80,9 @@ class OkHttpVoteSite(base: String?, http: OkHttpClient) : VoteSite {
                             val bytes = body.source().use { s ->
                                 val buf = okio.Buffer()
                                 while (buf.size <= maxBytes) {
-                                    if (s.read(buf, READ_CHUNK) < 0) break
+                                    val n = s.read(buf, READ_CHUNK)
+                                    if (n < 0) break
+                                    received(n)
                                 }
                                 buf
                             }
