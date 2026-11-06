@@ -176,6 +176,9 @@ class VotesManagerTest {
         /** Runs before the read's bytes are reported (a wipe while the download is still arriving). */
         var beforeReceived: (() -> Unit)? = null
 
+        /** Runs after the read's bytes are reported (a lock once some bytes were spent). */
+        var afterReceived: (() -> Unit)? = null
+
         /** The chunks a read reports its bytes in (a download arriving in pieces). */
         var chunks = 1
 
@@ -184,6 +187,7 @@ class VotesManagerTest {
             beforeReceived?.invoke()
             repeat(chunks - 1) { received(1) }
             partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
+            afterReceived?.invoke()
             return answer
         }
     }
@@ -2807,5 +2811,47 @@ class VotesManagerTest {
         val logged = org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg }
         assertEquals(listOf("could not erase vote-rechecks at the wipe (IOException)"), logged)
         assertTrue("the other store is still erased", attempts.load().isEmpty())
+    }
+
+    @Test
+    fun aDailyReCheckCutOffAfterRowsBytesStillCountsTowardTheWeeklyCap() = runTest {
+        // #322 (shared with iOS #224): day 8 on mobile, the last download day 0; the daily re-check is cut off by a lock after
+        // part of rows.json arrived. The attempt is recorded (rows spent, nothing answered), so day 9 is deferred.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        val rows = site.answers.getValue("p/$PID/rows.json")
+        site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site.partial["p/$PID/rows.json"] = 1_000_000
+        site.afterReceived = { m.clear() }
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.Voided, m.checkDue(CONN, PID))
+        val kept = store.load().single()
+        assertEquals(clock.toEpochMilli(), kept.lastRowsMs)
+        assertEquals(clock.toEpochMilli(), kept.atMs)
+        assertFalse("nothing answered: the next run skips nothing", kept.answered || kept.sentRow || kept.rowsFetched)
+        site.answers["p/$PID/rows.json"] = rows
+        site.partial.clear()
+        site.afterReceived = null
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(9))
+        assertEquals("the partial download counted", ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        // A cut before any rows byte records nothing new.
+        val (ops2, site2) = wifiScenario()
+        val store2 = MemoryResultsAttemptStore()
+        val m2 = manager(ops2, site2, attempts = store2, unmetered = { false })
+        m2.refresh()
+        clock = day0
+        m2.checkDue(CONN, PID)
+        val before = store2.load()
+        site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site2.afterReceived = { m2.clear() }
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.Voided, m2.checkDue(CONN, PID))
+        assertEquals(before, store2.load())
     }
 }

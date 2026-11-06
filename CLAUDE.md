@@ -469,7 +469,11 @@ The A2 exit test:
   `service_list`, `clock`); **never a choice, row or proof**. With the same three hashes, rows had, an answered
   submission of a real row and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends
   nothing (`ResultsOutcome.Unchanged`); an attempt that failed (no answer) counts as rows not had, and one cancelled or
-  voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). The entry goes
+  voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). So does an
+  attempt cut off (a lock, `clear()`, backgrounding, the time box) after **any** rows.json bytes arrived, whole or partway
+  (#322, shared with iOS #224): it is recorded with `lastRowsMs` (the weekly metered cap counts it) and as what it
+  achieved (nothing answered or sent), under the store epoch and only over a readable store; one cut off before any rows
+  byte records nothing. The entry goes
   when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
   after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
   does not touch them. A file it could not delete is logged (`VotesManager` tag, the file's name and the exception type

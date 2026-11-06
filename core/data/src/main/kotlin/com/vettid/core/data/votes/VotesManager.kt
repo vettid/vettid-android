@@ -831,9 +831,13 @@ class VotesManager(
                 // Kept for the daily re-check, whatever the attempt came to (a failure too: then rows.json is fetched again
                 // next time, since a lost submission may be the cause). One cancelled or voided by a lock after it downloaded
                 // rows.json still counts toward the daily limit (review 1, L1): only its time and hashes, as rows not had.
-                // Never after a wipe: the store's epoch drops the write (M1).
+                // So does one cut off (a lock, clear(), backgrounding, the time box) after any rows.json bytes arrived, whole
+                // or partway (#322, shared with iOS #224): its record says what it achieved, rows spent (`lastRowsMs`, so the
+                // weekly metered cap counts them), nothing answered or sent, so the next daily run is due as usual and skips
+                // nothing. One cut off before any rows byte records nothing. Never after a wipe: the store's epoch drops the
+                // write (M1); nor over a store that cannot be read now (#322).
                 val counted = !cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }
-                if (counted || trace.rowsDownloaded) {
+                if (counted || trace.rowsSpent) {
                     withContext(NonCancellable) { recordAttempt(key, epoch, trace, if (counted) out else null, due) }
                 }
             }
@@ -870,14 +874,14 @@ class VotesManager(
         /** The check's state in the list when the attempt began (null when the list does not have the vote; #319 item 3). */
         var checkState: CheckState? = null
 
-        /** rows.json's bytes were received (read, cut at its cap, or cut off partway): the last rows download (#314, #319). */
+        /**
+         * rows.json's bytes were received (read, cut at its cap, or cut off partway): the last rows download (#314, #319). Such
+         * an attempt is recorded whatever follows, a cancellation too (review 1, L1; #322).
+         */
         var rowsSpent = false
 
         /** The rows.json download was deferred on a metered network (#314 item 1): the last attempt's record is kept. */
         var deferred = false
-
-        /** rows.json's bytes were downloaded (review 1, L1: such an attempt counts toward the daily limit, whatever follows). */
-        var rowsDownloaded = false
 
         /** The submission carried the member's real row (not `rows_unavailable`). */
         var sentRow = false
@@ -989,6 +993,7 @@ class VotesManager(
             val stamp = { n: Long ->
                 if (n > 0 && !rowsBytes) {
                     rowsBytes = true
+                    trace.rowsSpent = true // at the first bytes: an attempt cut off after them still records it (#322)
                     stampRecheckRows(key, rowsAt, epoch)
                 }
             }
@@ -1005,7 +1010,6 @@ class VotesManager(
                 }
             }
         }
-        if (rows != null) trace.rowsDownloaded = true
         if (rows != null || tooLarge || rowsBytes) trace.rowsSpent = true
         // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
         val rowsOver = tooLarge
