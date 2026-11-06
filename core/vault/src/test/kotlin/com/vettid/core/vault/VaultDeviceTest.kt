@@ -1708,6 +1708,33 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (Call A) Each cut is described for the settlement: its number (as [VaultDevice.collectorCuts] counts it) and its lease
+     * start, the request's send + its long-poll wait (the relay may still hand it a message up to the wait after the send).
+     * The collector's request sent at 1 s (elapsed clock) is lost: its lease starts by 1 s + 25 s, 25 s ahead at 1 s.
+     */
+    @Test
+    fun aCutIsDescribedByItsRequestsSendPlusWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            elapsed = 1_000
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            dropNextCollect.set(true)
+            d.start(scope)
+            while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
+            val first = d.collectCutLeasesMs.first()
+            assertEquals(1L, first.first)
+            assertEquals("lease start = send + wait, ahead of now", -RelayClient.DEFAULT_WAIT_S * 1_000, first.second)
+            scope.cancel()
+            elapsed = 0
+            serveMailbox = false
+        }
+    }
+
     /** (R2) The collection keeps a short history of its send times, not only the latest: rounds that ended stay in it. */
     @Test
     fun theCollectorKeepsAHistoryOfItsSendTimes() = runBlocking<Unit> {

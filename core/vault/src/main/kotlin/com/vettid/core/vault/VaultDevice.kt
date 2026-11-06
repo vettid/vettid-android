@@ -374,6 +374,28 @@ class VaultDevice private constructor(
      */
     val collectorCuts: Long get() = cuts.get()
 
+    /** The latest cuts: (number, lease start on [DeviceConfig.elapsedMs]); the number is [collectorCuts] after it. */
+    private val cutLeases = ArrayDeque<Pair<Long, Long>>()
+
+    /** A cut of a request sent at [sentElapsedMs] with a long-poll wait of [waitMs]: its lease starts by their sum. */
+    private fun noteCut(sentElapsedMs: Long, waitMs: Long) {
+        synchronized(cutLeases) {
+            // Described before it is counted: whoever sees the new count finds its lease.
+            val n = cuts.get() + 1
+            cutLeases.addLast(n to sentElapsedMs + waitMs)
+            if (cutLeases.size > MAX_COLLECT_SENDS) cutLeases.removeFirst()
+            cuts.set(n)
+        }
+    }
+
+    /**
+     * The latest cuts (the last 16, oldest first): each one's number (as [collectorCuts] counted it) and how long ago its
+     * request's lease started at the latest (ms; the send + the long-poll wait, negative while that is still ahead): a
+     * request cut on our side may still be parked at the relay, and be handed a message, up to its wait after the send.
+     */
+    val collectCutLeasesMs: List<Pair<Long, Long>>
+        get() = synchronized(cutLeases) { cutLeases.map { it.first to (cfg.elapsedMs() - it.second) } }
+
     /** When the collection's latest request went out, on [DeviceConfig.elapsedMs] (through sleep); kept after it ended. */
     @Volatile
     private var collectLastSendElapsedMs: Long? = null
@@ -540,6 +562,8 @@ class VaultDevice private constructor(
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
+        // This collection's latest attempt went out then (elapsed clock): a cut's lease starts by it + the wait.
+        val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val job = scope.launch {
             launch { flushOutbox() }
             try {
@@ -547,6 +571,7 @@ class VaultDevice private constructor(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
                         if (out) {
+                            attemptSent.set(cfg.elapsedMs())
                             collectLastSendElapsedMs = cfg.elapsedMs()
                             noteSend(cfg.pollWait.toMillis()) // a send of an older collection is still a send
                         }
@@ -556,8 +581,12 @@ class VaultDevice private constructor(
                         }
                     },
                     onReached = ::noteReached,
-                    onLost = { cuts.incrementAndGet() }, // a request lost to an I/O error may have been handed a message
-                    onRetrySent = { noteSend(cfg.pollWait.toMillis()) },
+                    // A request lost (an I/O error, cut, a failed batch) may have been handed a message: by its send + wait.
+                    onLost = { noteCut(attemptSent.get(), cfg.pollWait.toMillis()) },
+                    onRetrySent = {
+                        attemptSent.set(cfg.elapsedMs())
+                        noteSend(cfg.pollWait.toMillis())
+                    },
                 ).run { handle(it) }
             } catch (e: RelayException) {
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
@@ -1186,8 +1215,14 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
+        val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
-            wait, Int.MAX_VALUE, onLostAttempt = { cuts.incrementAndGet() }, onRetrySent = { noteSend(wait.toMillis()) },
+            wait, Int.MAX_VALUE,
+            onLostAttempt = { noteCut(attemptSent.get(), wait.toMillis()) },
+            onRetrySent = {
+                attemptSent.set(cfg.elapsedMs())
+                noteSend(wait.toMillis())
+            },
         )
         for (m in msgs) {
             try {
