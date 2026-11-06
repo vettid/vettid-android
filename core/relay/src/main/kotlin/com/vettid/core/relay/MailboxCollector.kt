@@ -94,26 +94,29 @@ class MailboxCollector(
     private suspend fun round(useSocket: Boolean, handle: suspend (RelayMessage) -> Unit) {
         val started = System.nanoTime()
         var got = false
+        // The client's per-attempt callback already counts each lost attempt, the last one included: not counted twice.
+        var counted = false
+        val attemptLost = { counted = true; onLost() }
         onRequest(true)
         try {
             if (useSocket) {
                 stream(handle, { got = true }) { onReached(started) }
             } else {
-                pollRound(handle) { got = true }
+                pollRound(handle, attemptLost) { got = true }
                 onReached(started)
             }
         } catch (e: CancellationException) {
-            onLost() // cut with a request out
+            if (!counted) onLost() // cut with a request out
             throw e
         } catch (e: RelayException) {
             // A status on an ack with messages unhandled behind it, or a 5xx (a proxy can send one after the relay handed
             // messages out). A 4xx that is the relay's own answer on the request itself handed nothing out.
-            if (got || e.status >= SERVER_ERROR) onLost()
+            if (!counted && (got || e.status >= SERVER_ERROR)) onLost()
             throw e
         } catch (e: Exception) {
             // An I/O error, or anything else (a 200 whose body did not parse, a checked failure of the handler): the
             // request was answered or may have been, and what it brought is leased to a request that is gone.
-            onLost()
+            if (!counted) onLost()
             throw e
         } finally {
             onRequest(false)
@@ -121,11 +124,15 @@ class MailboxCollector(
     }
 
     /** One long-poll round: collects, handles and acks each message. Returns how many arrived. */
-    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle) {}
+    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle, onLost) {}
 
-    private suspend fun pollRound(handle: suspend (RelayMessage) -> Unit, onBatch: () -> Unit): Int {
+    private suspend fun pollRound(
+        handle: suspend (RelayMessage) -> Unit,
+        onAttemptLost: () -> Unit,
+        onBatch: () -> Unit,
+    ): Int {
         // Every attempt that is lost (the transport retries hide it from the round) is a cut too.
-        val msgs = client.collect(wait, onLostAttempt = onLost)
+        val msgs = client.collect(wait, onLostAttempt = onAttemptLost)
         if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)

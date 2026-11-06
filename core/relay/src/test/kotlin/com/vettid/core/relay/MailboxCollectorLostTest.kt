@@ -77,4 +77,14 @@ class MailboxCollectorLostTest {
         assertTrue("ended with the parse failure: ${r.exceptionOrNull()}", r.isFailure)
         assertTrue("counted: $lost", lost >= 1)
     }
+
+    /** Three lost attempts of one round are three cuts, not four: the last failed attempt is not counted a second time. */
+    @Test
+    fun theLastLostAttemptIsNotCountedTwice() = runBlocking<Unit> {
+        repeat(3) { server.enqueue(dropped()) }
+        server.enqueue(status(403, """{"code":"token_revoked","message":""}"""))
+        val r = runCatching { collector().run {} }
+        assertTrue(r.exceptionOrNull() is RelayException)
+        assertEquals(3, lost)
+    }
 }

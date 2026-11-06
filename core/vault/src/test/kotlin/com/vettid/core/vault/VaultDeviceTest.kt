@@ -1646,7 +1646,7 @@ class VaultDeviceTest {
             assertNotNull(d.collectRequestSince)
             val before = elapsed
             elapsed += 60_000 // a deep sleep: the elapsed clock jumps, nanoTime barely moves
-            val age = d.collectRequestAgeMs
+            val age = d.collectLastSendAgeMs
             assertTrue("age counts the suspend: $age", age != null && age >= 60_000)
             elapsed = before
             leaseGate!!.countDown()

@@ -370,16 +370,16 @@ class VaultDevice private constructor(
      */
     val collectorCuts: Long get() = cuts.get()
 
-    /** When the collection's in-flight request went out, on [DeviceConfig.elapsedMs] (`elapsedRealtime`: through sleep). */
+    /** When the collection's latest request went out, on [DeviceConfig.elapsedMs] (through sleep); kept after it ended. */
     @Volatile
-    private var collectRequestElapsedMs: Long? = null
+    private var collectLastSendElapsedMs: Long? = null
 
     /**
-     * How long ago the collection's in-flight request went out (ms), null while none is out. On the elapsed clock, not
-     * `System.nanoTime()`: that does not advance in a suspend, so after a deep sleep the age would read a request as
-     * recent when it went out before the sleep and its lease is still running.
+     * How long ago the collection's latest request went out (ms), kept after it ended; null before any. On the elapsed clock,
+     * not `System.nanoTime()` (which does not advance in a suspend): after a deep sleep the age still counts it. A request
+     * that ended just before a freeze or on the wake still has a lease running.
      */
-    val collectRequestAgeMs: Long? get() = collectRequestElapsedMs?.let { cfg.elapsedMs() - it }
+    val collectLastSendAgeMs: Long? get() = collectLastSendElapsedMs?.let { cfg.elapsedMs() - it }
 
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
@@ -522,7 +522,7 @@ class VaultDevice private constructor(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
                         collectRequestSince = if (out) System.nanoTime() else null
-                        collectRequestElapsedMs = if (out) cfg.elapsedMs() else null
+                        if (out) collectLastSendElapsedMs = cfg.elapsedMs()
                         if (!out) roundsEnded.incrementAndGet()
                     },
                     onReached = ::noteReached,
@@ -601,7 +601,6 @@ class VaultDevice private constructor(
         collector?.cancel()
         collector = null
         collectRequestSince = null
-        collectRequestElapsedMs = null
     }
 
     /** One long-poll round (tests and the foreground-service path). */

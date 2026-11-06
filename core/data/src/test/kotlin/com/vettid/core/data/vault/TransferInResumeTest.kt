@@ -146,7 +146,7 @@ class TransferInResumeTest {
         assertEquals(25_000L, waits[0])
         assertTrue(starts[1] >= 25_000L + 30_000L)
         assertTrue("an abandoned request may hold a lease: the window moved out", droppedAt > TransferInResume.SETTLE_WINDOW_MS)
-        assertTrue(droppedAt <= TransferInResume.SETTLE_WINDOW_MS + TransferInResume.SETTLE_MAX_EXTRA_MS + 25_000L + 30_000L)
+        assertTrue("held for the lease, bounded: $droppedAt", droppedAt <= 400_000L)
     }
 
     @Test
@@ -287,8 +287,9 @@ class TransferInResumeTest {
         var droppedAt = -1L
         val settle = TransferInResume.Settle(maxExtraMs = 10_000, now = { testScheduler.currentTime })
         TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = settle)
-        // First end 90 s, at most 10 s more; the last request started before 100 s and is bounded by wait + 30 s.
-        assertTrue("dropped at $droppedAt", droppedAt <= 100_000 + 25_000 + 30_000)
+        // The END stays within first end 90 s + 10 s; the abandoned requests' leases (up to a visibility timeout past their
+        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 301 s here.
+        assertTrue("dropped at $droppedAt", droppedAt >= 100_000 && droppedAt <= 310_000)
     }
 
     /**
@@ -388,7 +389,8 @@ class TransferInResumeTest {
         TransferInResume.atDeadline({ false }, { at += t; throw IOException("down") }, {}, settle = timing())
         val gaps = at.zipWithNext { a, b -> b - a }
         assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), gaps.take(4))
-        assertTrue(gaps.all { it <= 8_000L })
+        // the last gap is the held final collect (a lost attempt may hold a lease); the others are the backoff
+        assertTrue(at.zipWithNext().filter { it.first < 150_000 }.all { it.second - it.first <= 8_000L })
     }
 
     @Test

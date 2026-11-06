@@ -182,11 +182,11 @@ class TransferInSettleFreezeTest {
     }
 
     /**
-     * A freeze inside the final send with nothing out (no request of ours or the collector's at the freeze): no lease can be
-     * stranded, so the settlement ends after that send, with no extra round.
+     * A freeze inside the final send: the latest request sent (its send time is kept after it ended) may still have a lease,
+     * so at most ONE extra held final collect is given, then the drop.
      */
     @Test
-    fun aFreezeInsideTheFinalSendWithNothingOutEndsAfterThatSend() = runTest {
+    fun aFreezeInsideTheFinalSendEarnsAtMostOneExtraCollect() = runTest {
         val clock = FrozenClock(this)
         var cutCount = 0L
         var drops = 0
@@ -215,7 +215,7 @@ class TransferInSettleFreezeTest {
             TransferInResume.atDeadline({ false }, collect, { drops++ }, settle = settle, awaitRound = round, cuts = { cutCount }),
         )
         assertEquals(1, drops)
-        assertEquals("one final collect, no extra round", 1, finalCollects)
+        assertTrue("at most one extra: $finalCollects", finalCollects in 1..2)
     }
 
     /**
@@ -343,7 +343,7 @@ class TransferInSettleFreezeTest {
 
     /** Repeated cuts never extend the window past its first end plus the cap (a fixed point on the window's clock). */
     @Test
-    fun repeatedCutsAndFreezesStayWithinTheCap() = runTest {
+    fun repeatedCutsStayWithinTheCap() = runTest {
         val clock = FrozenClock(this)
         var cutCount = 0L
         var drops = 0
@@ -354,7 +354,8 @@ class TransferInSettleFreezeTest {
             cuts = { cutCount },
         )
         assertEquals(1, drops)
-        assertTrue("dropped at the cap, first end + 20 s: $droppedAt", droppedAt in 110_000..111_000)
+        // The end stays at the cap (110 s); a cut's lease past it is waited for by the held last collect (one extra at most).
+        assertTrue("held for the last cut's lease, then dropped, bounded: $droppedAt", droppedAt in 110_000..260_000)
     }
 
     /** No cut and no freeze: the window behaves as before (dropped exactly at its end). */
@@ -364,5 +365,112 @@ class TransferInSettleFreezeTest {
         var droppedAt = -1L
         TransferInResume.atDeadline({ false }, {}, { droppedAt = clock.now() }, settle = timingWith(clock))
         assertEquals(TransferInResume.SETTLE_WINDOW_MS, droppedAt)
+    }
+
+    /**
+     * (round 3, M1) A request that ends on the wake, before any tick, still counts: its send time is kept. Our request is sent
+     * at ~96 s, the process freezes 0.2 s later and the request returns after the wake (30 s later); the message it was handed
+     * is leased to it until sent + V, past the cap (105 s). The last collect holds for it.
+     */
+    @Test
+    fun aRequestThatEndsOnTheWakeBeforeAnyTickStillSetsTheHold() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        var sentAt: Long? = null
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        val collect: suspend (Long) -> Unit = { w ->
+            val s = sentAt
+            if (s != null && clock.now() >= s + 60_000) {
+                isPaired = true
+            } else if (s == null && clock.now() >= 95_500) {
+                sentAt = clock.now()
+                delay(200)
+                clock.jumpedMs += 30_000 // frozen; the request returns after the wake, before the next tick
+            } else {
+                delay(w.coerceAtMost(500))
+            }
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle))
+        assertEquals(0, drops)
+        assertTrue("held to sent + V + 5 s", clock.now() >= sentAt!! + 65_000)
+    }
+
+    /**
+     * (round 3, M2) A freeze in every final send never earns more than ONE extra held final collect: two in all, then the drop.
+     */
+    @Test
+    fun atMostOneExtraHeldFinalCollectPerSettlement() = runTest {
+        val clock = FrozenClock(this)
+        var drops = 0
+        var finals = 0
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 100_000) {
+                finals++
+                delay(100)
+                clock.jumpedMs += 30_000 // every final send is frozen
+            } else {
+                delay(w.coerceAtMost(500))
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, { drops++ }, settle = settle))
+        assertEquals(1, drops)
+        assertEquals("one final collect and one extra, no more", 2, finals)
+    }
+
+    /**
+     * (round 3, M3) A freeze that wakes BEFORE the cap still holds the last collect: a request out at 150 s, frozen 150 to 170 s,
+     * the end 185 s (the cap), the message leased until 210 s. The last collect goes at 215 s and gathers it.
+     */
+    @Test
+    fun aFreezeThatWakesBeforeTheCapStillHoldsTheLastCollect() = runTest {
+        val clock = FrozenClock(this)
+        var isPaired = false
+        var drops = 0
+        var sentAt: Long? = null
+        val settle = TransferInResume.Settle(windowMs = 185_000, maxExtraMs = 0, now = clock::now) // F = the cap = 185 s
+        launch {
+            delay(150_000)
+            sentAt = clock.now() // the collector's request goes out
+            delay(500)
+            clock.jumpedMs += 20_000 // frozen, wakes at ~170 s
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            val s = sentAt
+            if (s != null && clock.now() >= s + 60_000) isPaired = true else delay(w.coerceAtMost(2_000))
+        }
+        val age: () -> Long? = { sentAt?.let { clock.now() - it } }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorAge = age))
+        assertEquals(0, drops)
+        assertTrue("held to s + V + 5 s: ${clock.now()}", clock.now() >= sentAt!! + 65_000)
+    }
+
+    /**
+     * (iOS point 1) A cut during the hold moves the hold: the last collect goes once, after the new lease. Cuts at 98 s (lease
+     * 158 s, hold 163 s) and 150 s, during the hold (lease 210 s, hold 215 s).
+     */
+    @Test
+    fun aCutDuringTheHoldMovesTheHold() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        val finalTimes = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        launch {
+            delay(98_000)
+            cutCount++
+            delay(52_000)
+            cutCount++
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 105_000) finalTimes += clock.now()
+            if (clock.now() >= 210_000) isPaired = true else delay(w.coerceAtMost(500))
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, cuts = { cutCount }))
+        assertEquals(0, drops)
+        assertEquals("one final collect, after the new lease: $finalTimes", 1, finalTimes.size)
+        assertTrue(finalTimes[0] >= 215_000) // the notice is at the look after the first hold (163 s): 163 + 60 + 5
     }
 }
