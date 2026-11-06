@@ -27,6 +27,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.util.concurrent.CopyOnWriteArrayList
 
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
@@ -43,11 +44,12 @@ class PairingManagerTest {
 
     private inner class Ops : PairingOps {
         var created = obj("""{"pairing_id":"p1","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
-        val calls = mutableListOf<String>()
+        /** Written from the request threads (a reject and a create can be out at once): a list safe to add to and read concurrently. */
+        val calls: MutableList<String> = CopyOnWriteArrayList()
         val refuse = mutableMapOf<String, String>()
         var onApprove: () -> Unit = {}
 
-        val roles = mutableListOf<String>()
+        val roles: MutableList<String> = CopyOnWriteArrayList()
 
         /** An answer per role (else [created]), and a gate that holds the next create (once) until it is completed. */
         val byRole = mutableMapOf<String, JsonObject>()
@@ -703,7 +705,10 @@ class PairingManagerTest {
         // (Idle runs the virtual time; the reject goes out in the manager's own scope, on a real thread: wait for it.)
         advanceUntilIdle()
         pump { ops.calls.contains("reject:pa") }
-        assertEquals(listOf("create", "create", "reject:pa"), ops.calls)
+        // The reject is launched before the desktop's create and both run on the IO dispatcher at once, so either can reach
+        // the vault first: only the agent's create comes first for sure, then the other two, once each, in either order.
+        assertEquals("create", ops.calls.first())
+        assertEquals(listOf("create", "reject:pa"), ops.calls.drop(1).sorted())
     }
 
     @Test
