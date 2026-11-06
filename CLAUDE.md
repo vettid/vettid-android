@@ -456,17 +456,26 @@ The A2 exit test:
   problem set). A rows.json that cannot be reached (no answer, a timeout, a 5xx) is tried again, not `rows_unavailable`; a
   404 counts as rows not had, so the next re-check fetches it again. `pending` or `gave_up` with reason `rows_unavailable`
   shows the results-problem text. **A `gave_up` check is not final** (owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK):
-  `submitDue` runs it again whenever the app opens, at most once a day per record, keyed off the state; the last attempt
-  per vote is kept on disk (`ResultsAttempt` in `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir, wiped
-  with it): the time, the SHA-256 of the `results.json` read, whether rows.json was had, and whether the vault's answer was
-  on its side (`trust_root`, `service_list`, `clock`); **never a choice, row or proof**. With the same results.json, rows
-  had and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends nothing (`ResultsOutcome.Unchanged`);
-  an attempt that failed (no answer) counts as rows not had. The entry goes when the check is final or the vote leaves
-  a whole list. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
+  `submitDue` runs it again whenever the app opens, at most once a day per record, keyed off the state, and looks at the
+  daily limit again under the vote's lock (`checkDue`, review 1 L2); the member's **Check again** is not held by the daily
+  limit but is by the skip below, and an `Unchanged` one shows the vote's own check line again in a notice
+  (`VoteRules.unchangedLine`, an existing text; L5). The last attempt per vote is kept on disk (`ResultsAttempt` in
+  `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir): the time, the SHA-256 of the `results.json`, `.sig`
+  and `.sigstore.json` read (the last two always fetched, small; review 1 M4, the coordinator's call, a step past
+  §10.19.6's literal list), whether rows.json was had, whether the vault answered the submission (M2) and whether its
+  answer was on its side (`trust_root`, `service_list`, `clock`); **never a choice, row or proof**. With the same three
+  hashes, rows had, an answered submission and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends
+  nothing (`ResultsOutcome.Unchanged`); an attempt that failed (no answer) counts as rows not had, and one cancelled or
+  voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). The entry goes
+  when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
+  after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
+  does not touch them. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
+  before the fallback to `rows_unavailable` (L3). **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
-  verdict sets `VoteHint.verdict`, and a site that cannot be
+  verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4), and a
+  site that cannot be
   reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). **The give-up feed item**
   (owner decision a, 2026-11-06, thread 01M6RH58PE19ZBEHX3JK5ZW06A): a `vote.result` item carries no check state, so the app
   looks the vote up in the list in memory (`FeedNames.votesGaveUp`, from `vote.list`'s `gave_up` checks): then its title is
@@ -474,7 +483,10 @@ The A2 exit test:
   vote item, and the sheet's detail "VettID couldn't check the published results of this vote yet. It will check them again
   by itself when it can. You don't need to do anything." (`data_feed_vote_result_gave_up_detail`); a vote the list does not
   have (or under the app lock's cover, no names) reads as a result, "Vote results are out". The lookup is the current
-  state: once the check is final an older give-up item reads as a result. Catalog: `notifications.sheet_vote_gave_up`.
+  state: once the check is final an older give-up item reads as a result. The notification of a `vote.result` is titled
+  only after the votes list is read again (`FeedNotifier`, `NotifySource.refreshVotes`, at most 3 s,
+  `VOTE_LIST_WAIT_MS`); if that read does not go through, the generic "Vote results are out" (review 1 M3). Catalog:
+  `notifications.sheet_vote_gave_up`.
   Every vote signature the app checks goes through
   `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
   byte table (`strictPoint`), then `S < L` and the cofactorless equation are Tink's pure-Java `subtle.Ed25519Verify`
