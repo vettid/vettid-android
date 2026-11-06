@@ -205,15 +205,17 @@ internal object TransferInResume {
      * move it at every failure for ever); or, after the final send, one more held final collect, for a lease noticed during
      * it that outlives its start (past the cap, or within it but ending after the send began), or for a final collect the
      * relay refused (call B: 429, or 401 with a stale signature; any other status is no cut). In production the relay client
-     * itself first retries a 429 or a stale 401 (up to 3 attempts, each signed afresh, honouring `retry_after`): a refusal
+     * itself first retries a 429 or a stale 401 (up to 3 attempts, each signed afresh, honoring `retry_after`): a refusal
      * reaches the window only after those, and is then held for its `retry_after`, at most V, and sent as a new request; a
      * `retry_after` longer than the request's bound (wait + 30 s) ends it as an abandoned request first, a cut held to
      * max(now, s + w) + V + 15 s. Once the extra is used at or after the cap, nothing raises a hold past what was due when it
      * was taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze
      * during the last send (the app in the background) earns one more `wait=0` look, so the drop never follows only a look
-     * made before the freeze: at once and held for nothing when a lease hold was already honoured or the extra was taken at
+     * made before the freeze: at once and held for nothing when a lease hold was already honored or the extra was taken at
      * or after the cap; after an extra taken before the cap with no lease hold yet, held by the free first lease hold (the
-     * freeze's lease + 15 s, no move). Then the drop (not when paired, not when the end moved past now).
+     * freeze's lease + 15 s, no move). A cut during the last send after an extra taken before the cap, with no lease hold
+     * honored yet, gets the same free first lease hold: one more `wait=0` collect at its lease end + 15 s (no extra, no
+     * ceiling; spent once honored). Then the drop (not when paired, not when the end moved past now).
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
      * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 40 s more
@@ -225,7 +227,9 @@ internal object TransferInResume {
      * default V), plus any frozen time, for every V. An extra taken before the cap ends before it, so its `retry_after` hold
      * ends by cap + V; then the free first lease hold (V + 40 s) and the last send (140 s), or the last send and then the
      * free lease hold for a freeze in it (it is spent once), and the look (140 s); or, if a cut moved the end again, ordinary
-     * steps to the cap (148 s) and the same: at most cap + max(2V + 320, V + 468) s, inside the main bound.
+     * steps to the cap (148 s) and the same: at most cap + max(2V + 320, V + 468) s, inside the main bound. With the free
+     * lease hold after the last send for a cut in it, then the look for a freeze in the held collect: the last send 140 s,
+     * the hold V + 40 s, the held collect 140 s and the look 140 s, at most cap + max(2V + 460, V + 608) s, inside it too.
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
@@ -264,7 +268,7 @@ internal object TransferInResume {
                         // freeze during the hold moves it. One that is noticed during the send itself, with a lease
                         // beyond its start, or a refused last collect, earns ONE more held final collect in all; a freeze
                         // during the last send after that earns one more look (at once, or held by the free first lease
-                        // hold after an early extra with none honoured yet); then the drop.
+                        // hold after an early extra with none honored yet); then the drop.
                         out.awaitHold()
                         val sentAt = settle.now()
                         out.send(0L)
@@ -329,7 +333,7 @@ internal object TransferInResume {
         @Volatile private var lastWake = 0L
 
         /** A hold for a lease past the cap has been waited out (the free first lease hold is then spent). */
-        @Volatile private var leaseHoldHonoured = false
+        @Volatile private var leaseHoldHonored = false
 
         /** The one look given after the extra, for a freeze during the last send, has been used. */
         private var lastLookUsed = false
@@ -369,7 +373,7 @@ internal object TransferInResume {
                 target = moved
                 leaseHeld = maxLeaseEnd != 0L
             }
-            if (leaseHeld) leaseHoldHonoured = true
+            if (leaseHeld) leaseHoldHonored = true
         }
 
         private fun holdTarget(): Long = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.holdMarginMs
@@ -396,8 +400,9 @@ internal object TransferInResume {
          * signature, after the client's own retries: nothing was looked at; held for its `retry_after`, at most V, and sent as a
          * new request, signed afresh), earns the one extra, if
          * still unused. Once it is used, a freeze during the last send (the app was in the background) earns one more look,
-         * so the drop never follows a look made before the freeze: at once when a lease hold was honoured or the extra was
-         * taken at or after the cap, else held by the free first lease hold.
+         * so the drop never follows a look made before the freeze: at once when a lease hold was honored or the extra was
+         * taken at or after the cap, else held by the free first lease hold. A lease past the cap noticed during it (a cut)
+         * after an extra taken before the cap, with no lease hold honored yet, also gets the free first lease hold, once.
          */
         fun againAfterLastSend(sentAt: Long): Boolean {
             val n = settle.now()
@@ -409,18 +414,27 @@ internal object TransferInResume {
                     notBefore = due
                     true
                 }
+                freeLeaseHoldDue(n) -> true
                 extraUsed && !lastLookUsed && lastWake > sentAt -> {
                     lastLookUsed = true
-                    // At once, held for nothing, once a lease hold was honoured or the extra was taken at or after the cap
+                    // At once, held for nothing, once a lease hold was honored or the extra was taken at or after the cap
                     // (it set a ceiling). After an extra taken before the cap with no lease hold yet, the look still gets the
                     // free first lease hold (the freeze's lease + 15 s): no move, within the bound.
-                    synchronized(this) { if (leaseHoldHonoured || ceiling != Long.MAX_VALUE) ceiling = minOf(ceiling, n) }
+                    synchronized(this) { if (leaseHoldHonored || ceiling != Long.MAX_VALUE) ceiling = minOf(ceiling, n) }
                     true
                 }
                 else -> false
             }
             return again
         }
+
+        /**
+         * A lease past the cap noticed during the last send (a cut, or a freeze) after an extra taken before the cap, with no
+         * lease hold honored yet: the free first lease hold is still due (no extra, no ceiling; it is spent once the hold is
+         * honored, so this answers true once).
+         */
+        private fun freeLeaseHoldDue(n: Long): Boolean =
+            extraUsed && ceiling == Long.MAX_VALUE && !leaseHoldHonored && holdTarget() > n
 
         /**
          * A cut or a freeze: the message may be leased for a visibility timeout from [leaseStart] (a request's send + its
