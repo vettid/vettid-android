@@ -2351,6 +2351,7 @@ class VaultManager(
         ticket: UnlockNoticeHold.Ticket,
     ): StepOutcome {
         ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
+        ownerCheck.unlockStarting() // (0.84.0) nor the relay notice and its spent re-read, whatever lock came before
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
@@ -2786,11 +2787,14 @@ class VaultManager(
         val s = session()
         val st = vaultStatus(s)
         val open = phaseFlow.value is AppPhase.Unlocked
+        // (VAULT-MESSAGING 0.84.0) Every status read of the open vault decides the relay notice, this one too ([RelayReads]).
         val vs = if (open) {
-            try {
-                s.openApi.status()
-            } catch (_: IOException) {
-                null
+            RelayReads.read(ownerCheck, open = { phaseFlow.value is AppPhase.Unlocked }) {
+                try {
+                    s.openApi.status()
+                } catch (_: IOException) {
+                    null
+                }
             }
         } else {
             null
@@ -3317,6 +3321,8 @@ class VaultManager(
         s.openApi.credentialRotate(password, alarmOpen = alarmFlow.value != null)
         windowFlow.value = null
         refreshAlarm(s)
+        // (VAULT-MESSAGING 0.84.0) The new keys end a refused relay key: read `vault.status` again so that the notice goes.
+        RelayReads.keysReplaced(ownerCheck)
     }
 
     /**
