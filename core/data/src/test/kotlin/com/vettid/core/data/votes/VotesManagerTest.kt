@@ -1981,4 +1981,45 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
         assertEquals(reads + 1, site.reads.count { it == "p/$PID/results.json" })
     }
+
+    @Test
+    fun extraRowsTooLargeForTheRequestAreDroppedLargestFirstBeforeRowsUnavailable() = runTest {
+        // Review 1, L3: four extra rows of about 65 KB do not fit inline (245,760 bytes); three do. The largest goes.
+        val n = 700
+        val tags = observed(n = n).tags
+        fun big(len: Int) = Triple(ByteArray(32) { 3 }, "a".repeat(len), ByteArray(64) { 4 })
+        val extras = listOf(63_000, 65_000, 62_000, 64_000)
+        val rows = listOf(tags[1] to null) + extras.map { tags[1] to big(it) } + listOf(tags[0] to null) + (2 until n - 4).map { tags[it] to null }
+        val (ops, site) = observedScenario(observedRows(rows, n = n))
+        val m = manager(ops, site, voteRows = true)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        val b = ops.submitted.single()
+        assertNull(b["rows_unavailable"])
+        val others = b["other_rows"] as JsonArray
+        // Index 2 held the 65,000-byte one; the others stay in their order.
+        assertEquals(listOf("1", "3", "4"), others.map { ((it as JsonObject)["proof"] as JsonObject).str("index") })
+        // One extra row too large on its own (a choice_id of 65,535 control characters, six bytes each once escaped in the
+        // request): rows_unavailable, as before.
+        val n2 = 1000
+        val o2 = observed(n = n2)
+        val t2 = o2.tags
+        val vk = ByteArray(32) { 3 }
+        val sig = ByteArray(64) { 4 }
+        val choice = ByteArray(65_535) { 1 }
+        fun lp(x: ByteArray) = Bytes.concat(byteArrayOf((x.size shr 8).toByte(), x.size.toByte()), x)
+        val order = listOf(t2[1], t2[1], t2[0]) + (2 until n2 - 1).map { t2[it] }
+        val leaves = order.mapIndexed { i, t -> if (i == 1) Bytes.concat(t, lp(vk), lp(choice), lp(sig)) else t }
+        val escaped = "\\u0001".repeat(choice.size)
+        val hugeBallot = """{"ballot_sig":"${Base64s.encodeStd(sig)}","choice_id":"$escaped","vk":"${Base64s.encodeStd(vk)}"}"""
+        val rowsJson2 = """{"proposal_id":"$PID","rows":[""" + order.mapIndexed { i, t ->
+            """{"ballot":${if (i == 1) hugeBallot else "null"},"record_tag":"${Base64s.encodeStd(t)}"}"""
+        }.joinToString(",") + """],"v":1}"""
+        val results2 = o2.results
+            .replace(Base64s.encodeStd(Bytes.sha256(o2.rowsJson.toByteArray())), Base64s.encodeStd(Bytes.sha256(rowsJson2.toByteArray())))
+            .replace(Base64s.encodeStd(VoteMerkle.root(t2)), Base64s.encodeStd(VoteMerkle.root(leaves)))
+        val (ops2, site2) = observedScenario(Observed(rowsJson2, results2, t2))
+        manager(ops2, site2, voteRows = true).let { it.refresh(); it.checkResults(CONN, PID) }
+        assertRowsUnavailable(ops2.submitted.single())
+    }
 }

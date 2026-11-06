@@ -996,7 +996,10 @@ class VotesManager(
             // Over the request limit: the vault could never take it. Extra rows too large to send leave the row not had.
             VoteSync.Inline.TOO_LARGE -> {
                 if (!rowsOk || sent.unavailable) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
-                sent = Examined.UNAVAILABLE
+                // Fewer extra rows first, the largest dropped first, down to one (review 1, L3): one verifying extra row is
+                // enough for the vault's `row_duplicate`, a signed contradiction stronger than `rows_unavailable`.
+                val fewer = fewerOthers(sent) { submitBody(connectionId, proposalId, doc, sig, bundle, it) }
+                sent = fewer ?: Examined.UNAVAILABLE
                 body = submitBody(connectionId, proposalId, doc, sig, bundle, sent)
                 if (VoteSync.inline(VoteSync.encoded(body)) != VoteSync.Inline.FITS) {
                     return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
@@ -1019,6 +1022,21 @@ class VotesManager(
         hint(key, gen) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false, verdict = verdict, notRechecked = false) }
         refreshQuietly()
         ResultsOutcome.Submitted(state)
+    }
+
+    /**
+     * [rows] with its extra rows dropped one by one, the largest first, until [body] of it fits the request; at least one
+     * extra row is kept (review 1, L3). Null when none fits (or there were none).
+     */
+    private fun fewerOthers(rows: Examined, body: (Examined) -> JsonObject): Examined? {
+        var kept = rows.others
+        while (kept.size > 1) {
+            val largest = kept.maxBy { rowJson(it).toString().length }
+            kept = kept.filterNot { it === largest }
+            val fewer = Examined(rows.own, kept, rows.observerFailed)
+            if (VoteSync.inline(VoteSync.encoded(body(fewer))) == VoteSync.Inline.FITS) return fewer
+        }
+        return null
     }
 
     /**
