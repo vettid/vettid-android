@@ -319,10 +319,15 @@ internal object TransferInResume {
                 mayHoldLease()
                 if (n >= cap) {
                     // s: the latest request out when the freeze began: the last sample, or one sent since (not after the
-                    // freeze could have begun, a tick later at the latest).
-                    val s = listOfNotNull(before, latest?.takeIf { it <= froze }).maxOrNull()
+                    // freeze could have begun, a tick later at the latest; or, as a backstop, any sample older than the
+                    // freeze margin before the wake: nothing sends during a freeze, and a request sent after the wake is
+                    // less than a tick old when it is seen).
+                    val s = listOfNotNull(before, latest?.takeIf { it <= froze || it <= n - settle.freezeMarginMs }).maxOrNull()
                     finalNotBefore = s?.let { maxOf(n, it + settle.visibilityMs + settle.handlingMs) } ?: n
-                    finalAgain = true
+                    // Another final collect only if a request was out: with none out no lease can be stranded, and the rest of
+                    // the final send collects after the wake anyway (a phone that keeps sleeping would otherwise keep the
+                    // settlement, and the pin, going).
+                    finalAgain = s != null
                 }
             }
             outSince = latest

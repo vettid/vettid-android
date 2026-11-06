@@ -1625,6 +1625,37 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * The age of the collection's in-flight request is on the elapsed clock (which runs through a suspend), not on
+     * `System.nanoTime()` (which does not): after a deep sleep the request still reads as old, so the settlement keeps waiting
+     * for its lease.
+     */
+    @Test
+    fun theCollectorRequestsAgeCountsAcrossASuspend() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            queued.add(v.transferPaired(d))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the request is out
+            assertNotNull(d.collectRequestSince)
+            val before = elapsed
+            elapsed += 60_000 // a deep sleep: the elapsed clock jumps, nanoTime barely moves
+            val age = d.collectRequestAgeMs
+            assertTrue("age counts the suspend: $age", age != null && age >= 60_000)
+            elapsed = before
+            leaseGate!!.countDown()
+            scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
     @Test
     fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {
