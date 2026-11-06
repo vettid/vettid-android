@@ -40,6 +40,14 @@ class VaultNotifySource(
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
     override val alarm: StateFlow<CredentialAlarm?> = vault.alarm
 
+    /** The votes list read afresh (review 1, M3); false when it could not be read (locked, held, no answer). */
+    override suspend fun refreshVotes(): Boolean = try {
+        vault.votes.refresh()
+        true
+    } catch (_: com.vettid.core.data.vault.VaultFailure) {
+        false
+    }
+
     override fun names(): FeedNames = FeedNames(
         connections = vault.social.connections.value.associateBy { it.id },
         items = vault.items.items.value.associate { it.itemId to it.name },
@@ -48,6 +56,7 @@ class VaultNotifySource(
         votes = vault.votes.votes.value.mapNotNull { v ->
             AccountNames.isolateOrNull(v.title)?.let { VoteTitles.key(v.connectionId, v.proposalId) to it }
         }.toMap(),
+        votesGaveUp = FeedNames.votesGaveUp(vault.votes.votes.value),
         devices = FeedNames.deviceNames(vault.devices.devices.value),
         pairingName = FeedNames.pairingName(vault.pairing.state.value),
         pairingPendingId = FeedNames.pairingPendingId(vault.pairing.state.value),
@@ -82,6 +91,9 @@ class NotificationOpenInbox(
         data class Item(val itemId: String) : Open
 
         data object Settings : Open
+
+        /** A connection's page (the stalled-location notice). */
+        data class Connection(val connectionId: String) : Open
     }
 
     private val flow = MutableStateFlow<Open?>(null)
@@ -94,5 +106,24 @@ class NotificationOpenInbox(
 
     fun consume() {
         flow.value = null
+    }
+
+    /**
+     * The member locked the vault on this phone, or this phone is wiped: a tap not yet taken is dropped, so it never opens
+     * anything at a later unlock. A lock the phone only learns of (the vault locked itself or elsewhere), a cold start and a
+     * tap made while locked keep it until the unlock: the tap that woke the app may come just before such a lock is seen.
+     */
+    fun vaultClosed() {
+        flow.value = null
+    }
+
+    companion object {
+        private val ID_SHAPE = Regex("[A-Za-z0-9._:-]{1,128}")
+
+        /**
+         * Whether [id] has the shape of a vault id. Another app can send the launcher activity any extra; one that does not have
+         * this shape is not offered.
+         */
+        fun plausibleId(id: String?): Boolean = id != null && ID_SHAPE.matches(id)
     }
 }

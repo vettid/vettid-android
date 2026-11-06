@@ -9,6 +9,7 @@ import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -46,6 +47,7 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
         assertEquals("042817", vm.uiState.value.sas)
         assertTrue(vm.uiState.value.secondsLeft in 590..600)
+        assertFalse("not settling while the old phone can approve", vm.uiState.value.settling)
         vault.transferApproval.complete(Unit)
         advanceTimeBy(1500)
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
@@ -83,6 +85,190 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.REJECTED, vm.uiState.value.step)
         vm.again()
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    private fun TestScope.pastDeadlineVm(): TransferInViewModel {
+        val start = Instant.now()
+        // Started 12 minutes ago: past the 11-minute deadline (the start published the waiting phase).
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(720))
+        return TransferInViewModel(vault, vault).also {
+            it.clock = object : Clock() {
+                override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+                override fun getZone(): ZoneId = ZoneOffset.UTC
+
+                override fun withZone(zone: ZoneId): Clock = this
+            }
+        }
+    }
+
+    /**
+     * (review) A start past the deadline shows the code with the countdown at 0 while the repository's settlement window
+     * runs (about 90 s, in its wait), and the late approval then completes the move.
+     */
+    @Test
+    fun aRestartPastTheDeadlineShowsCompareAtZeroThenDone() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertEquals(0L, vm.uiState.value.secondsLeft)
+        assertTrue("the countdown is over: the screen hides the code and says it is checking", vm.uiState.value.settling)
+        assertTrue("the settlement is the repository's wait", "awaitTransferIn" in vault.calls)
+        advanceTimeBy(60_000) // still settling: nothing decided by the screen
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+    }
+
+    /** (VAULT-MESSAGING 0.85.2) No cancel, Back or new code is acted on while the settlement window runs. */
+    @Test
+    fun nothingCanBeAbandonedOrReStartedDuringTheWindow() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.settling)
+        vm.cancel()
+        vm.confirmCancel()
+        assertTrue("Back is consumed: the screen stays and nothing is abandoned", vm.back())
+        vm.again()
+        vm.submitInput()
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.confirmCancel)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+        assertFalse("no new code was sent", "transferIn" in vault.calls)
+    }
+
+    /** (follow-up to #302) Back while settling is consumed, abandons nothing and keeps the step. */
+    @Test
+    fun backIsConsumedWhileSettling() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.uiState.value.settling)
+        assertTrue(vm.back())
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertTrue(vm.uiState.value.settling)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+    }
+
+    /** (follow-up to #302) Once the settlement ends as TIMED_OUT or SESSION_ENDED, Back leaves the screen again. */
+    @Test
+    fun backLeavesAgainAfterATimedOutSettlement() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.back())
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.TIMED_OUT, vm.uiState.value.step)
+        assertFalse(vm.back())
+    }
+
+    @Test
+    fun backLeavesAgainAfterAnEndedSession() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertTrue(vm.back())
+        vault.transferApproval.completeExceptionally(
+            FakeVault.failure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED),
+        )
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertFalse(vm.back())
+    }
+
+    /** (follow-up to #302) An open cancel dialog is closed when the countdown reaches zero: its confirm would do nothing. */
+    @Test
+    fun theCancelDialogClosesWhenTheWindowStarts() = runTest {
+        val start = Instant.now()
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        val vm = TransferInViewModel(vault, vault)
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        vm.paste()
+        vm.setInput(qr())
+        vm.submitInput()
+        advanceTimeBy(100)
+        vm.cancel()
+        assertTrue(vm.uiState.value.confirmCancel)
+        advanceTimeBy(62_000)
+        assertTrue(vm.uiState.value.settling)
+        assertFalse("the dialog was closed", vm.uiState.value.confirmCancel)
+        vm.confirmCancel()
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+    }
+
+    /**
+     * (the recheck of #302) A session that ended is neither "dropped" nor "finishing": its own step, with a new code or a
+     * recovery; the finishing retry is not offered.
+     */
+    @Test
+    fun anEndedSessionHasItsOwnStepAndNoFinishingRetry() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        vault.transferApproval.completeExceptionally(
+            FakeVault.failure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED),
+        )
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertNull(vm.uiState.value.sas)
+        assertFalse(vm.uiState.value.settling)
+        vm.retryFinish()
+        advanceTimeBy(1500)
+        assertEquals("no finishing retry from here", TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertEquals("no second wait", 1, vault.calls.count { it == "awaitTransferIn" })
+        vm.again()
+        assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    /** Any other RETRY (a failed take-over) is still the finishing step. */
+    @Test
+    fun anotherRetryFailureIsStillTheFinishingStep() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.RETRY, "enroll_not_made"))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.FINISHING_FAILED, vm.uiState.value.step)
+    }
+
+    /** (recheck of 278b0b0a) The countdown, and so `settling`, is from the stored start the repository judges by. */
+    @Test
+    fun theCountdownIsFromTheStoredStartNotFromBeforeTheClaim() = runTest {
+        val start = Instant.now()
+        vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        val vm = TransferInViewModel(vault, vault)
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        vm.paste()
+        vm.setInput(qr())
+        vm.submitInput()
+        advanceTimeBy(100)
+        assertTrue("one minute left of the vault's ten: ${vm.uiState.value.secondsLeft}", vm.uiState.value.secondsLeft in 55..60)
+        advanceTimeBy(62_000)
+        assertTrue(vm.uiState.value.settling)
+    }
+
+    @Test
+    fun aRestartPastTheDeadlineEndsTimedOutWhenTheSettlementDrops() = runTest {
+        val vm = pastDeadlineVm()
+        advanceTimeBy(100)
+        assertEquals(0L, vm.uiState.value.secondsLeft)
+        advanceTimeBy(90_000)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED))
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.TIMED_OUT, vm.uiState.value.step)
     }
 
     /**

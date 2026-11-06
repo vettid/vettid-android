@@ -112,7 +112,8 @@ fun CredentialPasswordContent(
         header = { HeaderGlyph(Icons.Outlined.Lock) },
     ) {
         val error = when {
-            waiting > 0 -> stringResource(R.string.items_password_backoff, waiting)
+            // Said once; the counting text is the supporting line, which is not a live region (A6 audit A28).
+            waiting > 0 -> stringResource(R.string.items_password_backoff_undated)
             prompt.error == FailureKind.BAD_PASSWORD -> stringResource(R.string.items_password_wrong)
             prompt.error == FailureKind.BACKOFF -> stringResource(R.string.items_password_backoff_undated)
             prompt.error != null -> failureText(prompt.error.messageRes(), prompt.error.vaultCode(prompt.errorCode))
@@ -123,6 +124,7 @@ fun CredentialPasswordContent(
             onValueChange = onPassword,
             label = stringResource(R.string.items_password_label),
             error = error,
+            supporting = if (waiting > 0) stringResource(R.string.items_password_backoff, waiting) else null,
             enabled = !prompt.busy,
             imeAction = ImeAction.Done,
             onImeAction = { if (prompt.canSend(Instant.now())) onSubmit() },

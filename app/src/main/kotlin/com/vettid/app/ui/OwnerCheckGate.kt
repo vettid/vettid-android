@@ -233,13 +233,21 @@ private const val OFF_UNTIL = "off_until:"
 /** Whether [OwnerCheckBanners] shows anything for [gate]. */
 fun OwnerCheckGateState.bannerShown(): Boolean = notices.isNotEmpty() || (warning && !gated) || holdOff || presenceUnrecorded
 
+/**
+ * The banner's words for `owner_check.failed` by its `ref` (owner decisions 2026-11-05): `pin` is the PIN text, `password` the
+ * password text, and any other `ref` (or none) the general "A daily check failed." (never the PIN text it used to fall back to).
+ */
+internal fun failedCheckText(ref: String?): Int = when (ref) {
+    "pin" -> R.string.owner_check_notice_failed_pin
+    "password" -> R.string.owner_check_notice_failed_password
+    else -> R.string.owner_check_notice_failed
+}
+
 @Composable
 private fun noticeText(n: OwnerCheckNotice, count: Int): String {
     val main = when (n.kind) {
         "owner_check.locked" -> stringResource(R.string.owner_check_notice_locked)
-        "owner_check.failed" -> stringResource(
-            if (n.ref == "password") R.string.owner_check_notice_failed_password else R.string.owner_check_notice_failed_pin,
-        )
+        "owner_check.failed" -> stringResource(failedCheckText(n.ref))
         else -> holdChangedText(n.ref)
     }
     val at = n.at?.let { Times.short(it) }

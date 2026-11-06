@@ -67,6 +67,8 @@ data class VoteUiState(
     /** "Is this your vote?" is open. */
     val restoreDialog: Boolean = false,
     val restoreBusy: Boolean = false,
+    /** The member closed "Is this your vote?" with **Back** (offline, say): it stays closed for this visit. */
+    val restoreDismissed: Boolean = false,
     val restoreProblem: VoteProblem? = null,
     val proofWarning: Boolean = false,
     val proofBusy: Boolean = false,
@@ -97,7 +99,7 @@ data class VoteUiState(
         get() = detail?.serviceBallotChoiceId?.let { id -> detail.choices.firstOrNull { it.id == id }?.label ?: id }
 
     /** The dialog is offered only when the vault named a ballot to ask about (any other unsigned ballot is a problem). */
-    val restoreAsked: Boolean get() = summary?.confirmPending == true && restoreLabel != null
+    val restoreAsked: Boolean get() = summary?.confirmPending == true && restoreLabel != null && !restoreDismissed
 }
 
 /**
@@ -122,6 +124,10 @@ class VoteViewModel @Inject constructor(
     /** The evidence the vault gave, until the member saves it or leaves; only in memory. */
     private var proof: String? = null
     private var loadJob: Job? = null
+    private var recheckJob: Job? = null
+
+    /** The screen is at least STARTED: the recheck on open runs only then, and leaving or the background cancels it. */
+    private var visible = false
     private var lastSummary: VoteSummary? = null
 
     val uiState: StateFlow<VoteUiState> =
@@ -143,6 +149,7 @@ class VoteViewModel @Inject constructor(
                 val now = list.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId }
                 if (now != null && lastSummary != null && now != lastSummary) loadDetail()
                 if (now != null) lastSummary = now
+                maybeRecheck()
                 if (now?.check?.state == com.vettid.core.data.votes.CheckState.GAVE_UP) repo.diagnoseGaveUp(connectionId, proposalId)
             }
         }
@@ -175,6 +182,36 @@ class VoteViewModel @Inject constructor(
         }
     }
 
+    /** From the screen's lifecycle (ON_START / ON_STOP): a recheck runs while it is shown, and again on a return. */
+    fun setVisible(shown: Boolean) {
+        visible = shown
+        if (shown) {
+            maybeRecheck()
+        } else {
+            recheckJob?.cancel()
+            recheckJob = null
+        }
+    }
+
+    /**
+     * The recheck on open (ANDROID-PLAN 0.1.121): a `verified` or `unconfirmed` vote with no verdict in memory has its
+     * published results checked again by the observer, nothing submitted. Leaving the screen, the background or a lock
+     * cancels it (a lock voids it in the repository); it runs again on return while there is still no verdict.
+     */
+    @Suppress("ReturnCount")
+    private fun maybeRecheck() {
+        if (!visible || recheckJob?.isActive == true) return
+        val s = repo.votes.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId } ?: return
+        if (!VoteRules.recheckOnOpen(s, repo.hints.value[s.key]?.verdict)) return
+        recheckJob = viewModelScope.launch {
+            try {
+                repo.recheck(connectionId, proposalId)
+            } catch (_: VaultFailure) {
+                // The vote could not be read: nothing is shown as checked; the next return tries again.
+            }
+        }
+    }
+
     private suspend fun loadDetail() {
         try {
             val d = repo.get(connectionId, proposalId)
@@ -200,7 +237,10 @@ class VoteViewModel @Inject constructor(
         local.update { it.copy(cast = CastStep.CONFIRM, castProblem = null) }
     }
 
-    fun dismissCast() = local.update { it.copy(cast = CastStep.NONE, password = "", passwordError = null) }
+    /** Back or Cancel in a cast sheet. Not while the cast is on its way: it would be sent whatever the screen shows (A6 audit N22). */
+    fun dismissCast() = local.update {
+        if (it.cast == CastStep.SENDING) it else it.copy(cast = CastStep.NONE, password = "", passwordError = null)
+    }
 
     /** **Cast vote** in the sheet: at once when the unlock window is open, else the credential password is asked for first. */
     fun confirmCast() {
@@ -295,6 +335,10 @@ class VoteViewModel @Inject constructor(
                 local.update { it.copy(checking = false, checkOutcome = out) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(checking = false, checkProblem = problem(e)) }
+            } finally {
+                // A check that ends any other way (cancelled, or a failure that is not the vault's) never leaves the button
+                // disabled (lead review L2).
+                local.update { if (it.checking) it.copy(checking = false) else it }
             }
         }
     }
@@ -302,6 +346,12 @@ class VoteViewModel @Inject constructor(
     fun dismissCheckProblem() = local.update { it.copy(checkProblem = null) }
 
     // ---- Restore ----
+
+    /** **Back** on "Is this your vote?": the question is left for this visit; it is asked again on the next one (A6 audit E25). */
+    fun dismissRestore() {
+        if (local.value.restoreBusy) return
+        local.update { it.copy(restoreDismissed = true, restoreProblem = null) }
+    }
 
     fun answerRestore(mine: Boolean) {
         if (local.value.restoreBusy) return

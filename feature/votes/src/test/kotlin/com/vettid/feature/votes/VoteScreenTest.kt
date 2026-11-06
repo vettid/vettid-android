@@ -20,6 +20,7 @@ import com.vettid.core.data.votes.VoteChoice
 import com.vettid.core.data.votes.VoteCheck
 import com.vettid.core.data.votes.VoteCounts
 import com.vettid.core.data.votes.VoteDetail
+import com.vettid.core.data.votes.ObserverVerdict
 import com.vettid.core.data.votes.VoteHint
 import com.vettid.core.data.votes.VoteState
 import com.vettid.core.data.votes.VoteSummary
@@ -117,10 +118,12 @@ class VoteScreenTest {
     }
 
     @Test
-    fun theChoicesAreInTheOrderSentWithTheirLabelsAndAbstainAsSent() {
+    fun theChoicesAreInTheOrderSentWithTheirLabelsAndAbstainInTheAppsOwnWord() {
         show(state(summary()))
-        val labels = listOf("No", "Yes, really", "Yes")
+        // The reserved `abstain` is "Abstain" whatever its label says (ANDROID-PLAN 0.1.117).
+        val labels = listOf("No", "Abstain", "Yes")
         labels.forEach { shown(it).assertIsDisplayed() }
+        assertEquals(0, shownAll("Yes, really").fetchSemanticsNodes().size)
         val order = listOf("vote_choice_no", "vote_choice_abstain", "vote_choice_yes").map {
             rule.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot.top
         }
@@ -202,13 +205,52 @@ class VoteScreenTest {
     @Test
     fun aVerifiedCheckSaysTheResultsIncludeTheVoteAndShowsTheTally() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
-        show(state(s, detail(s, choiceId = "yes", tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L), counts = VoteCounts(120, 84, 0, 3))))
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        show(state(s, detail(s, choiceId = "yes", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(verdict = ObserverVerdict.PASSED)))
         shown("The published results include your vote.").assertIsDisplayed()
         shown("Results").assertIsDisplayed()
         shown("Yes: 52").assertIsDisplayed()
+        shown("Abstain: 2").assertIsDisplayed()
         shown("84 of 120 eligible members voted.").assertIsDisplayed()
         shown("Enough votes were cast: 84, and the service asked for at least 40.").assertIsDisplayed()
         shown("3 messages sent to $SERVICE during the vote were not handled; any vote among them was not counted.").assertIsDisplayed()
+    }
+
+    @Test
+    fun resultsThatDontAddUpUnderAVerifiedCheckShowTheLineButNoNumber() = dontAddUp(CheckState.VERIFIED)
+
+    @Test
+    fun resultsThatDontAddUpUnderAnUnconfirmedCheckShowTheLineButNoNumber() = dontAddUp(CheckState.UNCONFIRMED)
+
+    private fun dontAddUp(check: CheckState) {
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        run {
+            val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(check), canCast = false)
+            show(state(s, detail(s, choiceId = "abstain", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(observerFailed = true, verdict = ObserverVerdict.FAILED)))
+            val line = "The rest of the published results don't add up. The service may have published them wrongly."
+            assertEquals("$check", 1, shownAll(line).fetchSemanticsNodes().size)
+            rule.onNodeWithTag("vote_note_RESULTS_DONT_ADD_UP").assertIsDisplayed()
+            // No number: no Results section, no counts, turnout, quorum or unhandled line.
+            assertEquals(0, shownAll("Results").fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("Yes: 52").fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("84 of 120", substring = true).fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("Enough votes", substring = true).fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("were not handled", substring = true).fetchSemanticsNodes().size)
+            // Not the text for a problem with the published results.
+            assertEquals(0, shownAll("could not check the published results", substring = true).fetchSemanticsNodes().size)
+            // The member's own choice, abstain, in the app's own word.
+            shown("Your choice: Abstain").assertIsDisplayed()
+        }
+    }
+
+    @Test
+    fun noNumberIsShownWithoutAnObserverVerdictInMemory() {
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
+        show(state(s, detail(s, choiceId = "yes", tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L), counts = VoteCounts(120, 84, 0, 3))))
+        shown("The published results include your vote.").assertIsDisplayed()
+        assertEquals(0, shownAll("Results").fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("Yes: 52").fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("84 of 120", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test
@@ -227,7 +269,7 @@ class VoteScreenTest {
         // The owner-approved text, word for word, with the service's name; the asterisks are never shown.
         rule.onNodeWithTag("vote_note_IN_RESULTS_CONFLICT").assertIsDisplayed()
         shown(
-            "Your vote is in the published results. $SERVICE also once showed a different vote under your code. Save the proof and show it to the organisation.",
+            "Your vote is in the published results. $SERVICE also once showed a different vote under your code. Save the proof and show it to the organization.",
         ).assertIsDisplayed()
         assertEquals(0, texts("**"))
         shown("Save the proof").assertIsDisplayed()
@@ -257,7 +299,7 @@ class VoteScreenTest {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.FAILED), canCast = false)
         show(state(s, detail(s, choiceId = "yes")))
         shown("The published results don't match your vote").assertIsDisplayed()
-        shown("You can save the proof and show it to the organisation.").assertIsDisplayed()
+        shown("You can save the proof and show it to the organization.").assertIsDisplayed()
         shown("Save the proof").assertIsDisplayed()
     }
 
@@ -270,10 +312,23 @@ class VoteScreenTest {
     }
 
     @Test
+    fun aCheckAgainThatEndedUnchangedShowsNothingMore() {
+        // The lead's review of #312, M1: nothing was sent and nobody contacted, so no card or notice; the vote's own state
+        // line (shown once) says where it stands.
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.GAVE_UP), canCast = false)
+        val st = state(s, detail(s), hint = VoteHint(gaveUp = com.vettid.core.data.votes.GaveUpWhy.UNPUBLISHED))
+        rule.setContent { VoteScreen(st.copy(checkOutcome = com.vettid.core.data.votes.ResultsOutcome.Unchanged), VoteActions(), now = now) }
+        val line = "The results of this vote were not published within 7 days, so your vote has not been checked."
+        assertEquals(1, shownAll(line).fetchSemanticsNodes().size)
+        assertEquals(0, shownAll("Check with the service").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("vote_check_unchanged").assertDoesNotExist()
+    }
+
+    @Test
     fun theSaveProofWarningIsAConfirmationBeforeTheVaultIsAsked() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.CONFLICT), canCast = false)
         rule.setContent { VoteScreen(state(s, detail(s, choiceId = "yes")).copy(proofWarning = true), VoteActions(), now = now) }
-        shown("The file shows how you voted. Keep it private, and share it only with the organisation.").assertIsDisplayed()
+        shown("The file shows how you voted. Keep it private, and share it only with the organization.").assertIsDisplayed()
     }
 
     @Test
@@ -489,5 +544,48 @@ class VoteScreenTest {
         val description = (node.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) { emptyList() }).joinToString()
         val said = clean(description)
         assertTrue(said, said.startsWith("Adopt the budget, from the service Example Cooperative, You voted"))
+    }
+
+    @Test
+    fun aVoteThatCannotBeReadShowsItsErrorWithRetry() {
+        val s = summary()
+        var retried = 0
+        show(
+            state(s, d = null).copy(loadError = VoteProblem(com.vettid.core.data.vault.FailureKind.NETWORK, null, null)),
+            VoteActions(onRetry = { retried++ }),
+        )
+        rule.onNodeWithTag("vote_detail_load_failed").assertIsDisplayed()
+        shown("Try again").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun cancelInThePasswordPromptIsOffWhileTheCastIsOnItsWay() {
+        val s = summary()
+        show(state(s, selected = "yes", cast = CastStep.SENDING).copy(password = "hunter2"))
+        rule.onNodeWithTag("vote_password_sheet").assertIsDisplayed()
+        rule.onNodeWithTag("vote_password_cancel").assertIsNotEnabled()
+    }
+
+    @Test
+    fun backWhileTheCastIsOnItsWayLeavesTheSheetShown() {
+        val s = summary()
+        var dismissed = 0
+        show(state(s, selected = "yes", cast = CastStep.SENDING), VoteActions(onDismissCast = { dismissed++ }))
+        rule.onNodeWithTag("vote_confirm_sheet").assertIsDisplayed()
+        androidx.test.espresso.Espresso.pressBack()
+        rule.waitForIdle()
+        rule.onNodeWithTag("vote_confirm_sheet").assertIsDisplayed()
+        assertEquals(0, dismissed)
+    }
+
+    @Test
+    fun theRestoreQuestionCanBeLeftWithBack() {
+        val s = summary().copy(confirmPending = true, canCast = false, cannotCast = "checking")
+        val d = detail(s).copy(serviceBallotChoiceId = "yes")
+        var left = 0
+        show(state(s, d), VoteActions(onDismissRestore = { left++ }))
+        rule.onNodeWithTag("restore_back").performClick()
+        assertEquals(1, left)
     }
 }

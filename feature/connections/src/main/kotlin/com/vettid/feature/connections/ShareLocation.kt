@@ -33,7 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -43,6 +45,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.location.LengthSystem
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
@@ -53,6 +56,9 @@ import com.vettid.core.data.location.ShareLength
 import com.vettid.core.data.location.SharePrecision
 import com.vettid.core.data.location.ShareRequest
 import com.vettid.core.data.location.ShareTime
+import com.vettid.core.data.prefs.DistanceUnits
+import com.vettid.core.data.prefs.InMemoryPreferencesRepository
+import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.location.ShareTiming
@@ -67,6 +73,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecondaryButton
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -74,6 +81,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -136,6 +145,8 @@ data class ShareLocationUiState(
     val startedId: String? = null,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /** Miles or kilometers for the precision notes (Settings → Units). */
+    val units: com.vettid.core.data.prefs.DistanceUnits = com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC,
     /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
     val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
@@ -166,12 +177,16 @@ data class ShareLocationUiState(
     val ongoing: Boolean get() = !once
 }
 
+@Suppress("TooManyFunctions")
 @HiltViewModel
 class ShareLocationViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val location: LocationRepository = NoLocation,
+    prefs: PreferencesRepository = InMemoryPreferencesRepository(),
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
+    private val units = prefs.preferences.map { it.distanceUnits }.distinctUntilChanged()
+
     /** A request being answered (Approvals): the sheet opens at once and the start names it. */
     private val saved = savedState
     private var requestId: String? = savedState.get<String?>(ConnectionDetailRoute.ARG_REQUEST)?.takeIf { it.isNotEmpty() }
@@ -183,9 +198,12 @@ class ShareLocationViewModel @Inject constructor(
     }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
-    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability) { s, shares, a ->
-        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a)
+    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability, units) { s, shares, a, u ->
+        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a, units = u)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
+
+    // Declared before init: an initializer after it would reset the job that init's open() started.
+    private var readJob: kotlinx.coroutines.Job? = null
 
     init {
         if (requestId != null) open()
@@ -199,8 +217,20 @@ class ShareLocationViewModel @Inject constructor(
     fun open() {
         local.update { ShareLocationUiState(id, open = true, permission = it.permission) }
         // Whether the vault has location is read first when it is not known yet (the permission waits for it).
+        readAvailability()
+    }
+
+    /** Reads again whether the vault has location after it failed, keeping what the member has chosen (A6 audit E27). */
+    fun retry() {
+        // Not while a read is on its way (a second tap).
+        if (readJob?.isActive == true) return
+        local.update { it.copy(error = null, errorCode = null) }
+        readAvailability()
+    }
+
+    private fun readAvailability() {
         if (location.availability.value == LocationAvailability.UNKNOWN) {
-            viewModelScope.launch {
+            readJob = viewModelScope.launch {
                 try {
                     location.refresh()
                 } catch (e: VaultFailure) {
@@ -283,6 +313,7 @@ data class ShareLocationActions(
     val onInterval: (ShareInterval) -> Unit = {},
     val onTrail: (Boolean) -> Unit = {},
     val onStart: () -> Unit = {},
+    val onRetry: () -> Unit = {},
     val onDismiss: () -> Unit = {},
 )
 
@@ -364,9 +395,11 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
         }
     }
     Heading(R.string.connections_location_precision)
+    val system = rememberLengthSystem(state.units)
     SharePrecision.entries.forEach { p ->
         val enabled = !busy && (p != SharePrecision.EXACT || state.exactAvailable)
-        Choice(p == state.precision, precisionLabel(p), precisionNote(p), enabled, "share_location_${p.name}") { actions.onPrecision(p) }
+        val note = precisionNote(p, system)
+        Choice(p == state.precision, precisionLabel(p), note, enabled, "share_location_${p.name}") { actions.onPrecision(p) }
     }
     if (!state.exactAvailable) {
         Text(
@@ -426,7 +459,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
                 stringResource(R.string.connections_location_permission_denied),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("share_location_permission_denied"),
+                modifier = Modifier.testTag("share_location_permission_denied").announced(),
             )
         }
     }
@@ -437,7 +470,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
                 stringResource(text),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.testTag("share_location_issue"),
+                modifier = Modifier.testTag("share_location_issue").announced(),
             )
         }
         val context = LocalContext.current
@@ -454,6 +487,18 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             title = stringResource(R.string.connections_error_title),
             body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
             modifier = Modifier.testTag("share_location_error"),
+            announce = LiveRegionMode.Polite,
+            // While the vault's location support is unknown, Start stays off: a failed read must be possible to repeat.
+            actions = if (state.availability == LocationAvailability.UNKNOWN) {
+                {
+                    androidx.compose.material3.TextButton(
+                        onClick = actions.onRetry,
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("share_location_retry"),
+                    ) { Text(stringResource(R.string.connections_retry)) }
+                }
+            } else {
+                null
+            },
         )
     }
     if (state.alreadySharing) {
@@ -461,7 +506,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             stringResource(R.string.connections_location_already_sharing, name),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.testTag("share_location_already_sharing"),
+            modifier = Modifier.testTag("share_location_already_sharing").announced(),
         )
     }
     PrimaryButton(
@@ -526,10 +571,17 @@ private fun precisionLabel(p: SharePrecision): Int = when (p) {
     SharePrecision.CITY -> R.string.connections_location_city
 }
 
-private fun precisionNote(p: SharePrecision): Int = when (p) {
-    SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note
-    SharePrecision.EXACT -> R.string.connections_location_exact_note
-    SharePrecision.CITY -> R.string.connections_location_city_note
+private fun precisionNote(p: SharePrecision, system: LengthSystem): Int = when (system) {
+    LengthSystem.METRIC -> when (p) {
+        SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note
+        SharePrecision.EXACT -> R.string.connections_location_exact_note
+        SharePrecision.CITY -> R.string.connections_location_city_note
+    }
+    LengthSystem.IMPERIAL -> when (p) {
+        SharePrecision.APPROXIMATE -> R.string.connections_location_approximate_note_mi
+        SharePrecision.EXACT -> R.string.connections_location_exact_note_mi
+        SharePrecision.CITY -> R.string.connections_location_city_note_mi
+    }
 }
 
 /**
@@ -539,7 +591,15 @@ private fun precisionNote(p: SharePrecision): Int = when (p) {
  * settings can put it right. [missed]: the last once share found no position.
  */
 @Composable
-internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Boolean, onShare: () -> Unit, onStop: () -> Unit) {
+internal fun LocationCard(
+    location: DetailLocation?,
+    missed: Boolean,
+    busy: Boolean,
+    onShare: () -> Unit,
+    onStop: () -> Unit,
+    /** The connection's first name as a sentence says it (isolated), for the stalled line. */
+    name: String = "",
+) {
     val context = LocalContext.current
     DetailCard(Modifier.testTag("detail_location")) {
         if (location == null) {
@@ -560,6 +620,15 @@ internal fun LocationCard(location: DetailLocation?, missed: Boolean, busy: Bool
         } else {
             val until = remember(location.until) { ShareTime.format(context, location.until, Instant.now()) }
             val issueText = location.issue.textRes()
+            // Nothing reaches the other person (A6 N21): read first. A known cause is the issue line under it, with its action.
+            location.stalledMinutes?.let { minutes ->
+                Text(
+                    pluralStringResource(com.vettid.core.data.R.plurals.data_location_stalled, minutes, name, minutes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = Spacing.s).testTag("detail_location_stalled"),
+                )
+            }
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     when {

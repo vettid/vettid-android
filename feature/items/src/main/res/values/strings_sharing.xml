@@ -12,14 +12,14 @@
     <string name="items_tags_rename_title">Rename %1$s to %2$s?</string>
     <string name="items_tags_delete_title">Delete the tag %1$s?</string>
     <string name="items_tags_empty_title">No tags yet</string>
-    <string name="items_tags_empty_body">Tags organise your items and decide what you share with each connection</string>
+    <string name="items_tags_empty_body">Tags organize your items and decide what you share with each connection</string>
     <string name="items_tag_profile_note">Every connection sees these items in your profile</string>
     <!-- Tag colours (owner decision 2026-10-09): stored in the vault, picked on Manage tags -->
-    <string name="items_tags_edit_colour">Edit colour</string>
-    <string name="items_tags_cd_colour">Edit the colour of %1$s</string>
-    <string name="items_tags_colour_title">Colour of %1$s</string>
+    <string name="items_tags_edit_colour">Edit color</string>
+    <string name="items_tags_cd_colour">Edit the color of %1$s</string>
+    <string name="items_tags_colour_title">Color of %1$s</string>
     <string name="items_tags_colour_profile_title">Shared profile</string>
-    <string name="items_tags_colour_profile">Your shared profile always uses your colour</string>
+    <string name="items_tags_colour_profile">Your shared profile always uses your color</string>
     <string name="items_tags_cd_colour_selected">%1$s, selected</string>
     <string name="items_tag_colour_red">Red</string>
     <string name="items_tag_colour_orange">Orange</string>

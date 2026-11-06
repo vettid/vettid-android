@@ -68,6 +68,15 @@ class LocationSharing(
         /** A `once` share whose position was sent: it needs nothing more from this phone. */
         var delivered: Boolean = false
 
+        /**
+         * The start of the stall clock, on the uptime clock ([elapsedNanos]; a wall-clock jump cannot make or hide a stall, and
+         * deep sleep counts): when the share started or was taken up, or when the relay last took a position for it. "Accepted"
+         * means the deposit was taken: `location.update` is `sendOnce` with no answer, so a drop on the vault's side is not seen
+         * (a follow-up could compare with `location.share.list`'s `last_sent_at`). Moved forward at every look while the check is
+         * due or held, and set again on the first look after it, so paused time never counts. A time only, memory only.
+         */
+        var accepted: Long = 0L
+
         /** When this phone began waiting for a `once` share's position. */
         var waitingSince: Instant? = null
 
@@ -123,6 +132,12 @@ class LocationSharing(
     private val availabilityFlow = MutableStateFlow(LocationAvailability.UNKNOWN)
     private var inFront = false
     private var notRunningShown = false
+
+    /** The check was due or held (or the vault locked) at the last look: the first look after it starts every stall clock over. */
+    private var wasGated = false
+
+    /** The stall notices posted, with the minutes the share has gone without a position (memory only). One post per stall. */
+    private val stallShown = HashMap<String, Int>()
 
     @Volatile
     private var platform: LocationPlatform? = null
@@ -366,6 +381,7 @@ class LocationSharing(
         t.source = source && share.shareId !in stopMarks
         t.waitingSince = since.takeIf { source && share.once && share.lastSentAt == null }
         t.delivered = share.once && share.lastSentAt != null
+        t.accepted = elapsedNanos()
         t.timer = scope.launch { expire(share.shareId) }
         tracked[share.shareId] = t
     }
@@ -417,6 +433,7 @@ class LocationSharing(
             onceTimer = null
             held = null
             lastSent = null
+            wasGated = false
             resumed = false
             paused = false
             unsupported = false
@@ -434,6 +451,33 @@ class LocationSharing(
                 platform?.showNotRunning(false)
             }
         }
+    }
+
+    /**
+     * Under [lock]: the stalled shares, as connection id to whole minutes since the clock began. While the vault is locked or the
+     * check is due or held the clocks are moved to now instead (a pause is not a stall), and nothing is stalled. A `once` share has
+     * no stall: [missedOnce] says it when it ends without a position.
+     */
+    private fun stallsOf(active: List<Tracked>): Map<String, Int> {
+        val e = elapsedNanos()
+        val continuous = active.filter { !it.share.once }
+        val paused = !unlocked() || due()
+        // The first look after a pause too: nothing woke the phone meanwhile, so the clocks may be hours old. They start over.
+        if (paused || wasGated) {
+            wasGated = paused
+            continuous.forEach { it.accepted = e }
+            return emptyMap()
+        }
+        val out = LinkedHashMap<String, Int>()
+        for (s in continuous) {
+            val since = Duration.ofNanos(e - s.accepted)
+            val limit = Duration.ofSeconds(s.share.intervalSeconds ?: 0L).plus(STALL_GRACE)
+            if (since >= limit) {
+                val minutes = since.toMinutes().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                out.merge(s.share.connectionId, minutes) { x, y -> maxOf(x, y) }
+            }
+        }
+        return out
     }
 
     /**
@@ -498,7 +542,13 @@ class LocationSharing(
     }
 
     /** The check passed or came due: sending pauses or goes on, and a stop the vault refused is tried again. Also on a timer. */
-    fun onGateChanged() = tick()
+    fun onGateChanged(lifted: Boolean) {
+        // A pause that lifts may have been unseen (a deadline passing changes no value, and nothing wakes the phone): the lift
+        // itself starts the stall clocks over, so the time it was due can never count. Any other change of the check (an early
+        // pass, the idle lock, a failure count) leaves a real stall alone.
+        if (lifted) synchronized(lock) { if (unlocked() && !due()) wasGated = true }
+        tick()
+    }
 
     /** The app came to the front: a service start the system refused in the background is tried again. */
     override fun onForeground() {
@@ -549,7 +599,8 @@ class LocationSharing(
         val active = sources()
         // The permission was given again: the positions are asked for again.
         if (refused && platform?.issue() == SendIssue.NONE) refused = false
-        val changed = (active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue
+        val changed = (active.isNotEmpty() && due()) != paused || issueOf(active) != stateFlow.value.issue ||
+            stallsOf(active) != stateFlow.value.stalled
         if (changed || positionsDown(active)) recompute()
     }
 
@@ -886,6 +937,7 @@ class LocationSharing(
             var done = false
             for (s in sources()) {
                 s.share = s.share.copy(lastSentAt = t)
+                s.accepted = elapsedNanos() // the relay took it: the stall clock starts over
                 // The single position of a `once` share is delivered: this phone has nothing more to send for it.
                 if (s.share.once) {
                     s.delivered = true
@@ -929,11 +981,28 @@ class LocationSharing(
             issue = issueOf(active),
             stopping = stopMarks.values.mapNotNull { m -> m.connectionId.takeIf { it.isNotEmpty() } }.toSet(),
             stoppingShares = stopMarks.keys.toSet(),
+            stalled = stallsOf(active),
         )
+        syncStallNotices(stateFlow.value.stalled)
         val notRunning = stateFlow.value.issue == SendIssue.SERVICE
         if (notRunning != notRunningShown) {
             notRunningShown = notRunning
             platform?.showNotRunning(notRunning)
+        }
+    }
+
+    /**
+     * Under [lock]: one notice per stalled connection, posted once when the stall begins (a dismissed one is not posted again);
+     * the minutes are only updated in a notice that is still showing, and it is taken away when the stall ends.
+     */
+    private fun syncStallNotices(stalled: Map<String, Int>) {
+        for ((id, minutes) in stalled) {
+            val had = stallShown.put(id, minutes)
+            if (had == null) platform?.showStalled(id, minutes) else if (had != minutes) platform?.updateStalled(id, minutes)
+        }
+        for (id in stallShown.keys.filter { it !in stalled }) {
+            stallShown.remove(id)
+            platform?.clearStalled(id)
         }
     }
 

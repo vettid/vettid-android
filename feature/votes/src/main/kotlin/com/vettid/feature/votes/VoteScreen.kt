@@ -3,6 +3,7 @@ package com.vettid.feature.votes
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.ReportProblem
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -78,6 +83,7 @@ import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SecureWindow
+import com.vettid.core.ui.components.announced
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
@@ -107,6 +113,7 @@ data class VoteActions(
     val onPin: (String) -> Unit = {},
     val onConfirmRelease: () -> Unit = {},
     val onDismissCastProblem: () -> Unit = {},
+    val onDismissRestore: () -> Unit = {},
     val onCloseWindow: () -> Unit = {},
     val onDismissAlreadyVoted: () -> Unit = {},
     val proofFileName: () -> String = { "vettid-vote.json" },
@@ -216,6 +223,18 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // The list is in memory but the vote itself could not be read: say so, with Retry, not an empty page (A6 audit E26).
+        if (d == null && state.loadError != null) {
+            val e = state.loadError
+            NoticeCard(
+                kind = NoticeKind.WARNING,
+                title = stringResource(R.string.vote_error_title),
+                body = failureText(e.kind.messageRes(), e.kind.vaultCode(e.shownCode)),
+                modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("vote_detail_load_failed"),
+                announce = LiveRegionMode.Polite,
+                actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.votes_retry)) } },
+            )
+        }
         if (d != null) ProposalBody(d, service, s.closesAt?.let { Times.full(it) }, state)
         // The states in words, in order; a failure that arrives while the screen is open is announced.
         val notes = VoteRules.notes(
@@ -224,6 +243,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             resultsProblem = state.hint.resultsProblem,
             notListedLate = state.hint.notListedLate(now),
             resultsTooLarge = state.hint.resultsTooLarge,
+            observerFailed = state.hint.observerFailed,
+            notRechecked = state.hint.notRechecked,
         )
         val time = s.opensAt?.let { Times.full(it) }.orEmpty()
         Column(
@@ -258,7 +279,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 )
             }
             if (state.alreadyVoted) {
-                val label = AccountNames.isolateOrNull(state.choiceLabel)
+                val label = AccountNames.isolateOrNull(VoteTexts.choiceLabel(resources, d?.choiceId, state.choiceLabel))
                 val text = when (label) {
                     null -> stringResource(R.string.vote_already_voted_any)
                     else -> stringResource(R.string.vote_already_voted, label)
@@ -287,11 +308,13 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                         stringResource(R.string.vote_check_with_service),
                         stringResource(R.string.vote_check_not_published_now),
                     )
+                // Unchanged (the same results as last time: nothing was sent and nobody was contacted) says nothing more: the
+                // vote's own state line already says where it stands (the lead's review of #312, M1).
                 else -> Unit
             }
         }
         if (d != null) {
-            state.choiceLabel?.let { label ->
+            VoteTexts.choiceLabel(resources, d.choiceId, state.choiceLabel)?.let { label ->
                 Text(
                     stringResource(R.string.vote_your_choice, AccountNames.isolateOrNull(label).orEmpty()),
                     style = MaterialTheme.typography.bodyLarge,
@@ -299,7 +322,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                     modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("vote_your_choice"),
                 )
             }
-            Results(d, service)
+            // No number unless the vault's check is verified or unconfirmed and the last observer verdict allows it (0.1.117).
+            if (VoteRules.showNumbers(s, state.hint.verdict, state.hint.observerFailed)) Results(d, service, resources)
         }
         if (d != null && VoteRules.choosing(s)) {
             Choices(d, state, actions)
@@ -342,6 +366,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                         NoticeKind.WARNING,
                         stringResource(R.string.vote_save_proof),
                         failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)),
+                        announce = LiveRegionMode.Polite,
                     )
                 }
                 // A problem record, once its proof is saved: Release (the vault refuses it until then, and for an open vote).
@@ -349,7 +374,13 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 if (state.proofExported && releasable && !state.released) {
                     SecondaryButton(stringResource(R.string.vote_release), actions.onRelease, modifier = Modifier.testTag("vote_release"))
                 }
-                if (state.released) Text(stringResource(R.string.vote_released), style = MaterialTheme.typography.bodyMedium)
+                if (state.released) {
+                    Text(
+                        stringResource(R.string.vote_released),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.announced(),
+                    )
+                }
             }
         }
     }
@@ -390,7 +421,7 @@ private fun ProposalBody(d: VoteDetail, service: String, closes: String?, state:
     }
 }
 
-/** The choices in the order sent, each with its label as sent (the reserved `abstain` too), as one radio group. */
+/** The choices in the order sent, each with its label as sent (the reserved `abstain` as "Abstain"), as one radio group. */
 @Composable
 private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
     val enabled = state.cast == CastStep.NONE && state.summary?.let { VoteRules.castAllowed(it) } == true
@@ -402,7 +433,7 @@ private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
         )
         Column(Modifier.selectableGroup()) {
             for (c in d.choices) {
-                val label = AccountNames.isolateOrNull(c.label) ?: c.id
+                val label = AccountNames.isolateOrNull(VoteTexts.choiceLabel(rememberResources(), c.id, c.label)) ?: c.id
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -429,6 +460,11 @@ private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
 private fun NoteView(n: VoteNote, resources: android.content.res.Resources, service: String, time: String, rejectedReason: String?) {
     val why = VoteRules.rejectedWhy(rejectedReason)
     val body = VoteTexts.text(resources, n, service, time, if (n == VoteNote.REJECTED) why else null)
+    if (n == VoteNote.RESULTS_DONT_ADD_UP) {
+        // A plain note under the state line, once, with no error colour (ANDROID-PLAN 0.1.117).
+        Text(body, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vote_note_${n.name}"))
+        return
+    }
     if (n == VoteNote.IN_RESULTS_CONFLICT) {
         // "Your vote is in the published results." (bold) and what else the service showed: no error colour.
         Text(boldMarked(body), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vote_note_${n.name}"))
@@ -494,7 +530,7 @@ private fun CastProblem(p: VoteProblem, onDismiss: () -> Unit, resources: androi
 
 /** The results (screen 5): only from the verified results; before that, no number at all. */
 @Composable
-private fun Results(d: VoteDetail, service: String) {
+private fun Results(d: VoteDetail, service: String, resources: android.content.res.Resources) {
     val tally = d.tally ?: return
     val counts = d.counts
     Column(Modifier.padding(horizontal = Spacing.gutter).testTag("vote_results"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -506,7 +542,11 @@ private fun Results(d: VoteDetail, service: String) {
         for (c in d.choices) {
             val n = tally[c.id] ?: continue
             Text(
-                stringResource(R.string.vote_results_row, AccountNames.isolateOrNull(c.label) ?: c.id, n),
+                stringResource(
+                    R.string.vote_results_row,
+                    AccountNames.isolateOrNull(VoteTexts.choiceLabel(resources, c.id, c.label)) ?: c.id,
+                    n,
+                ),
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
@@ -537,18 +577,21 @@ private fun Results(d: VoteDetail, service: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
-    val label = state.detail?.choices?.firstOrNull { it.id == state.selected }?.label
+    val sent = state.detail?.choices?.firstOrNull { it.id == state.selected }?.label
+    val label = VoteTexts.choiceLabel(rememberResources(), state.selected, sent)
     val service = AccountNames.isolateOrNull(state.serviceName) ?: stringResource(R.string.vote_service_fallback)
     val focus = remember { FocusRequester() }
     val sending = state.cast == CastStep.SENDING
     ModalBottomSheet(
         onDismissRequest = { if (!sending) actions.onDismissCast() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetUnlessSending(sending),
     ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_confirm_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
+            BackHandler(enabled = sending) {}
             // The app's own sentence, never the proposal's, in its own element and read first.
             Text(
                 stringResource(R.string.vote_disclosure, service),
@@ -579,16 +622,34 @@ private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
     }
 }
 
+/**
+ * A sheet that a swipe, a tap on the scrim or Back cannot hide while the cast is on its way (A6 audit N22): Material animates to
+ * Hidden before it asks [androidx.compose.material3.ModalBottomSheet]'s `onDismissRequest`, so the guard is in the state.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun sheetUnlessSending(sending: Boolean): SheetState {
+    val sendingNow by rememberUpdatedState(sending)
+    return rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !sendingNow })
+}
+
 /** The unlock window prompt (ANDROID-PLAN §4), before `vote.cast` when the window is closed. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant) {
     val waiting = state.retryUntil?.isAfter(now) == true
-    ModalBottomSheet(onDismissRequest = actions.onDismissCast, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    // No dismiss and no Cancel while the cast is on its way: it would be sent whatever the screen shows (A6 audit N22).
+    val sending = state.cast == CastStep.SENDING
+    ModalBottomSheet(
+        onDismissRequest = { if (!sending) actions.onDismissCast() },
+        sheetState = sheetUnlessSending(sending),
+    ) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter).padding(bottom = Spacing.xl).testTag("vote_password_sheet"),
             verticalArrangement = Arrangement.spacedBy(Spacing.m),
         ) {
+            // Back while the cast is on its way does nothing (a second guard: the sheet state already refuses Hidden while sending).
+            BackHandler(enabled = sending) {}
             Text(
                 stringResource(R.string.vote_password_title),
                 style = MaterialTheme.typography.titleMedium,
@@ -611,7 +672,12 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
                 busy = state.cast == CastStep.SENDING,
                 modifier = Modifier.testTag("vote_password_confirm"),
             )
-            SecondaryButton(stringResource(com.vettid.core.ui.R.string.core_ui_cancel), actions.onDismissCast)
+            SecondaryButton(
+                stringResource(com.vettid.core.ui.R.string.core_ui_cancel),
+                actions.onDismissCast,
+                enabled = !sending,
+                modifier = Modifier.testTag("vote_password_cancel"),
+            )
         }
     }
 }
@@ -620,16 +686,29 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
 @Composable
 private fun RestoreDialog(state: VoteUiState, actions: VoteActions) {
     val service = AccountNames.isolateOrNull(state.serviceName) ?: stringResource(R.string.vote_service_fallback)
-    val choice = AccountNames.isolateOrNull(state.restoreLabel).orEmpty()
+    val restored = VoteTexts.choiceLabel(rememberResources(), state.detail?.serviceBallotChoiceId, state.restoreLabel)
+    val choice = AccountNames.isolateOrNull(restored).orEmpty()
     val title = AccountNames.isolateOrNull(state.summary?.title).orEmpty()
     AlertDialog(
-        onDismissRequest = {},
+        // Back and the scrim close it for this visit, also offline, when neither answer can reach the vault (A6 audit E25).
+        onDismissRequest = { if (!state.restoreBusy) actions.onDismissRestore() },
         title = { Text(stringResource(R.string.vote_restore_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 Text(stringResource(R.string.vote_restore_body, service, choice, title))
                 state.restoreProblem?.let { p ->
-                    Text(failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)), color = MaterialTheme.colorScheme.error)
+                    Text(
+                        failureText(p.kind.messageRes(), p.kind.vaultCode(p.shownCode)),
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.announced().testTag("restore_problem"),
+                    )
+                }
+                TextButton(
+                    onClick = actions.onDismissRestore,
+                    enabled = !state.restoreBusy,
+                    modifier = Modifier.testTag("restore_back"),
+                ) {
+                    Text(stringResource(R.string.vote_confirm_back))
                 }
             }
         },

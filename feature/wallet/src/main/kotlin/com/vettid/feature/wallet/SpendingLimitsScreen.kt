@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -17,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.dp
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.HoldsInput
@@ -220,9 +224,15 @@ private fun MemberField(
     )
     // Only a limit that is there can be removed.
     if (raise && now != null) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        // One control with its label (A6 audit A32).
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .toggleable(value = remove, role = Role.Switch, onValueChange = onRemove)
+                .testTag(removeTag),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(stringResource(R.string.wallet_limits_remove_switch), modifier = Modifier.weight(1f))
-            Switch(checked = remove, onCheckedChange = onRemove, modifier = Modifier.testTag(removeTag))
+            Switch(checked = remove, onCheckedChange = null)
         }
     }
 }

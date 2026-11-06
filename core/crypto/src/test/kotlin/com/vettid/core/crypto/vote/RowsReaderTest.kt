@@ -1,0 +1,252 @@
+package com.vettid.core.crypto.vote
+
+import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.VectorDoc
+import com.vettid.core.crypto.json.JsonNull
+import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.json.asObject
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.lang.reflect.Modifier
+import java.util.IdentityHashMap
+
+/**
+ * [RowsReader]: rows.json read strictly without keeping its text (review 1, finding 2). The same rows as the strict JSON
+ * parser reads, the strictness of VAULT-MESSAGING §5.3 (it need not be JCS), and the memory a capped file costs.
+ */
+class RowsReaderTest {
+    private companion object {
+        val JDK = listOf("java.", "javax.", "jdk.", "sun.", "com.sun.")
+    }
+
+    private val v = VectorDoc.load("vote.json")
+    private val rowsText = v.sub("documents").str("rows")
+
+    private fun read(text: String, eligible: Int = 3) = RowsReader(text.toByteArray(Charsets.UTF_8), eligible) {}.read()
+
+    private fun reason(block: () -> Unit): String = assertThrows(ResultsProblem::class.java) { block() }.reason
+
+    @Test
+    fun theSharedRowsReadAsTheStrictParserReadsThem() {
+        val t = read(rowsText)
+        val rows = StrictJson.parseObject(rowsText).array("rows").map { it.asObject() }
+        assertEquals(rows.size, t.count)
+        for ((i, r) in rows.withIndex()) {
+            assertArrayEquals(r.base64("record_tag", 32), t.tag(i))
+            val b = r["ballot"]
+            if (b == null || b is JsonNull) {
+                assertFalse(t.hasBallot(i))
+            } else {
+                val o = b.asObject()
+                assertArrayEquals(o.base64("vk"), t.vk(i))
+                assertArrayEquals(o.base64("ballot_sig"), t.sig(i))
+                assertEquals(o.string("choice_id"), String(t.choice(i), Charsets.UTF_8))
+            }
+        }
+        assertTrue(t.documentExact)
+        assertTrue(t.membersExact)
+        assertEquals("01JBQZ0000000000000000000A", t.proposalId)
+    }
+
+    @Test
+    fun whitespaceAndEscapesAreReadAsJson() {
+        // Not JCS: spaces, new lines and escaped characters are the same document.
+        val spaced = rowsText.replace(",", " ,\n ").replace(":", " : ").replace("\"yes\"", "\"\\u0079es\"")
+        val t = read(spaced)
+        assertEquals("yes", String(t.choice(0), Charsets.UTF_8))
+        assertArrayEquals(read(rowsText).leafHashes, t.leafHashes)
+    }
+
+    @Test
+    fun whatIsNotStrictJsonIsNotRead() {
+        val bad = listOf(
+            "\uFEFF" + rowsText, // a byte order mark
+            rowsText + "x", // something after the document
+            rowsText.replace("\"v\":1", "\"v\":01"), // a number out of the grammar
+            rowsText.replace("\"v\":1", "\"v\":1,\"v\":1"), // a duplicate name
+            rowsText.replace("\"yes\"", "\"y\u0001s\""), // a raw control character
+            rowsText.replace("\"yes\"", "\"\\ud800s\""), // a lone surrogate escape
+            rowsText.replace("\"yes\"", "\"\\x\""), // an unknown escape
+            rowsText.dropLast(1), // cut short
+            rowsText.replace("\"rows\"", "\"rowz\""), // no rows
+            rowsText.replace("[{", "[[{").replace("}]", "}]]"), // rows deeper than 4
+        )
+        for (b in bad) assertEquals(b.take(60), "rows", reason { read(b) })
+        // Invalid UTF-8: an overlong form, and a lone continuation byte.
+        for (seq in listOf(byteArrayOf(0xC0.toByte(), 0xAF.toByte()), byteArrayOf(0x80.toByte()))) {
+            val raw = rowsText.replace("\"yes\"", "\"#\"").toByteArray()
+            val at = raw.indexOf('#'.code.toByte())
+            val bytes = raw.copyOfRange(0, at) + seq + raw.copyOfRange(at + 1, raw.size)
+            assertEquals("rows", reason { RowsReader(bytes, 3) {}.read() })
+        }
+        // One more or one fewer row than eligible.
+        assertEquals("rows_count", reason { read(rowsText, eligible = 2) })
+        assertEquals("rows_count", reason { read(rowsText, eligible = 4) })
+    }
+
+    @Test
+    fun aRowThatCannotBeMadeIntoALeafIsNotRead() {
+        val bad = listOf(
+            rowsText.replace("\"ballot\":null", "\"ballot\":7"), // a ballot that is not an object
+            rowsText.replace("\"ballot\":null", "\"ballot\":[]"),
+            rowsText.replaceFirst(Regex("\"record_tag\":\"[^\"]+\""), "\"record_tag\":\"AAAA\""), // not 32 bytes
+            rowsText.replaceFirst("\"vk\":\"", "\"vk\":\"!"), // not base64
+            rowsText.replaceFirst("\"choice_id\":\"yes\"", "\"choice_id\":7"), // not a string
+            rowsText.replaceFirst("\"choice_id\":\"yes\",", ""), // a ballot member missing
+            rowsText.replaceFirst("{\"ballot\":null,", "7,"), // a row that is not an object
+        )
+        for (b in bad) assertEquals(b.take(80), "rows", reason { read(b) })
+    }
+
+    /** A rows.json of [n] rows with ballots, padded inside each ballot (an unknown member) to about [size] bytes in all. */
+    private fun padded(n: Int, size: Long): ByteArray {
+        val vk = Base64s.encodeStd(ByteArray(32) { 1 })
+        val sig = Base64s.encodeStd(ByteArray(64) { 2 })
+        fun row(i: Int, padding: String): String {
+            val tag = ByteArray(32).also { Bytes.uintBE(i.toLong(), 4).copyInto(it, 0) }
+            return "{\"ballot\":{\"ballot_sig\":\"$sig\",\"choice_id\":\"yes\",\"pad\":\"$padding\",\"vk\":\"$vk\"}," +
+                "\"record_tag\":\"${Base64s.encodeStd(tag)}\"}"
+        }
+        val head = "{\"proposal_id\":\"01JBQZ0000000000000000000A\",\"rows\":["
+        val foot = "],\"v\":1}"
+        val pad = ((size - head.length - foot.length) / n - row(0, "").length - 1).toInt().coerceAtLeast(0)
+        val padding = "0".repeat(pad)
+        val sb = StringBuilder(size.toInt()).append(head)
+        for (i in 0 until n) {
+            if (i > 0) sb.append(',')
+            sb.append(row(i, padding))
+        }
+        return sb.append(foot).toString().toByteArray(Charsets.US_ASCII)
+    }
+
+    /**
+     * The bytes an object graph holds in arrays and strings, walked by reflection from [root] and past [skip]: what the
+     * reader keeps, counted the same on every run (issue #316: heap figures depend on the GC and on the machine). A JDK type
+     * it does not know stops the walk, so that nothing is held where the count cannot see it.
+     */
+    @Suppress("CyclomaticComplexMethod")
+    private fun heldBytes(root: Any, vararg skip: Any): Long {
+        val seen = IdentityHashMap<Any, Unit>()
+        for (s in skip) seen[s] = Unit
+        val stack = ArrayDeque<Any>().apply { add(root) }
+        var total = 0L
+        while (stack.isNotEmpty()) {
+            val o = stack.removeLast()
+            if (seen.put(o, Unit) != null) continue
+            when (o) {
+                is ByteArray -> total += o.size
+                is IntArray -> total += o.size * 4L
+                is LongArray -> total += o.size * 8L
+                is CharArray -> total += o.size * 2L
+                is Array<*> -> o.filterNotNullTo(stack)
+                is CharSequence -> total += o.length
+                is Collection<*> -> o.filterNotNullTo(stack)
+                is Map<*, *> -> {
+                    o.keys.filterNotNullTo(stack)
+                    o.values.filterNotNullTo(stack)
+                }
+                is Number, is Boolean, is Char -> Unit
+                else -> fieldsOf(o, stack)
+            }
+        }
+        return total
+    }
+
+    /** The objects [o]'s own fields refer to, for [heldBytes]: only for the project's classes. */
+    private fun fieldsOf(o: Any, into: MutableCollection<Any>) {
+        val name = o.javaClass.name
+        assertFalse("the walk does not know $name", JDK.any { name.startsWith(it) })
+        var c: Class<*>? = o.javaClass
+        while (c != null && c != Any::class.java) {
+            for (f in c.declaredFields) {
+                if (Modifier.isStatic(f.modifiers) || f.type.isPrimitive) continue
+                f.isAccessible = true
+                f.get(o)?.let { into.add(it) }
+            }
+            c = c.superclass
+        }
+    }
+
+    /** [bytes] read by a reader that is then walked: what the reader holds when done (its input aside), and the table. */
+    private fun readHeld(bytes: ByteArray, n: Int): Triple<RowsTable, Long, Long> {
+        val checkpoint = {}
+        val reader = RowsReader(bytes, n, null, checkpoint)
+        val t = reader.read()
+        return Triple(t, heldBytes(reader, bytes, checkpoint), heldBytes(t))
+    }
+
+    @Test
+    fun aCappedFileIsReadWithinAMemoryBound() {
+        val n = VoteRows.MAX_ROWS
+        val bytes = padded(n, VoteRows.ROWS_CAP_MAX)
+        assertTrue("near the cap: ${bytes.size}", bytes.size > VoteRows.ROWS_CAP_MAX * 9 / 10 && bytes.size <= VoteRows.ROWS_CAP_MAX)
+        val plain = padded(n, 0)
+        val (t, readerHeld, tableHeld) = readHeld(bytes, n)
+        val (_, plainReaderHeld, plainTableHeld) = readHeld(plain, n)
+        assertEquals(n, t.count)
+        // What stays: tag, leaf hash, offsets, vk, choice and sig, 179 bytes a row, within the documented 208 (and a
+        // proposal_id of at most 64 bytes); never the text.
+        assertEquals(t.retainedBytes() + "01JBQZ0000000000000000000A".length, tableHeld)
+        assertTrue("retained $tableHeld", tableHeld <= n * 208L + 64)
+        // The padding (most of the file) is not kept, by the table or by the reader's own buffers: they hold exactly
+        // what they hold for the same rows without it.
+        assertEquals(plainTableHeld, tableHeld)
+        assertEquals(plainReaderHeld, readerHeld)
+        // The reader's working set: the per-row arrays (tag, leaf hash, offsets), a data buffer at most twice the kept
+        // ballots or its first 64 KiB, and one string's scratch.
+        assertTrue("reader $readerHeld", readerHeld <= n * (32 + 32 + 16 + 2 * 99L) + (1 shl 16) + 87_380)
+        // The padding was not a member the protocol has.
+        assertFalse(t.membersExact)
+    }
+
+    @Test
+    fun longVkAndSigValuesAreNotKeptSoTheBoundHoldsForAnyInput() {
+        // Recheck 1, R1-3: a file at the cap whose rows carry 200-byte vk values (still leafable, so read and reported).
+        val n = VoteRows.MAX_ROWS
+        val vk = Base64s.encodeStd(ByteArray(200) { 1 })
+        val sig = Base64s.encodeStd(ByteArray(64) { 2 })
+        val own = ByteArray(32).also { Bytes.uintBE(7L, 4).copyInto(it, 0) }
+        val sb = StringBuilder().append("{\"proposal_id\":\"01JBQZ0000000000000000000A\",\"rows\":[")
+        for (i in 0 until n) {
+            if (i > 0) sb.append(',')
+            val tag = ByteArray(32).also { Bytes.uintBE(i.toLong(), 4).copyInto(it, 0) }
+            sb.append("{\"ballot\":{\"ballot_sig\":\"").append(sig).append("\",\"choice_id\":\"yes\",\"vk\":\"").append(vk)
+                .append("\"},\"record_tag\":\"").append(Base64s.encodeStd(tag)).append("\"}")
+        }
+        val bytes = sb.append("],\"v\":1}").toString().toByteArray(Charsets.US_ASCII)
+        assertTrue("within the cap: ${bytes.size}", bytes.size <= VoteRows.rowsCap(n.toLong()))
+        val t = RowsReader(bytes, n, own) {}.read()
+        assertEquals(n, t.count)
+        assertFalse(t.lengthsMatch)
+        // At most 208 bytes a row: tag, leaf hash, offsets and nothing of the long values but the member's own row.
+        assertTrue("retained ${t.retainedBytes()}", t.retainedBytes() <= n * 210L)
+        assertEquals(7, t.ownIndex)
+        assertEquals(200, t.ownBallot!!.first.size)
+    }
+
+    @Test
+    fun theNextFourRowsUnderTheOwnTagAreKeptAsPublishedForOtherRows() {
+        // VAULT-MESSAGING 0.86.4 §10.19.6 step 1: further rows under the member's tag go as `other_rows` (at most 4), kept
+        // whatever their lengths, so that the vault can make their leaves.
+        val own = ByteArray(32) { 1 }
+        val other = ByteArray(32) { 2 }
+        val sig = Base64s.encodeStd(ByteArray(64) { 4 })
+        fun ballot(vk: Int?) =
+            vk?.let { """{"ballot_sig":"$sig","choice_id":"yes","vk":"${Base64s.encodeStd(ByteArray(it) { 3 })}"}""" } ?: "null"
+        fun row(tag: ByteArray, vk: Int?) = """{"ballot":${ballot(vk)},"record_tag":"${Base64s.encodeStd(tag)}"}"""
+        val rows = listOf(row(other, null), row(own, 32), row(own, 33), row(own, null)) + List(4) { row(own, 32) }
+        val text = """{"proposal_id":"P","rows":[${rows.joinToString(",")}],"v":1}"""
+        val t = RowsReader(text.toByteArray(), rows.size, own) {}.read()
+        assertEquals(1, t.ownIndex)
+        assertEquals(listOf(2, 3, 4, 5), t.ownExtras.map { it.first })
+        assertEquals(33, t.ownExtras[0].second!!.first.size)
+        assertEquals(null, t.ownExtras[1].second)
+        // Without an own tag nothing is kept.
+        assertTrue(RowsReader(text.toByteArray(), rows.size) {}.read().ownExtras.isEmpty())
+    }
+}

@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -80,6 +81,9 @@ class WalletScreensTest {
             )
         }
         rule.onNodeWithText("That's not word 11. Look at your paper again.").assertIsDisplayed()
+        val live = rule.onNodeWithTag("check_wrong").fetchSemanticsNode()
+            .config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.LiveRegion)
+        assertEquals(androidx.compose.ui.semantics.LiveRegionMode.Polite, live)
         rule.onNodeWithTag("check_typed").assertDoesNotExist()
         rule.onNodeWithTag("check_candidate_10").assertDoesNotExist()
         rule.onNodeWithTag("check_show_again").performClick()

@@ -145,15 +145,15 @@
     <string name="unlock_recovery_title">A recovery is in progress</string>
     <string name="unlock_recovery_body">Someone started a recovery of this vault from the account site, so it is locked for this phone. If that was you on a new phone, let it finish there. If it was not you, cancel it now: unlocking here with your PIN cancels the recovery.</string>
     <string name="unlock_recovery_cancel">Cancel the recovery and unlock</string>
-    <string name="unlock_recovery_cancelling">Cancelling the recovery…</string>
+    <string name="unlock_recovery_cancelling">Canceling the recovery…</string>
     <string name="unlock_rollback_state_title">Your vault\'s state is older than expected</string>
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
     <string name="unlock_no_user_guid">This phone cannot unlock your vault yet: it was moved here while your vault ran an older release. It can unlock once your vault is updated.</string>
     <string name="unlock_not_opened">Your vault was locked while it was opening. Unlock it again.</string> <!-- approved by the owner 2026-11-01 (#245): the vault locked itself during the unlock -->
     <string name="unlock_lock_pending">A lock you asked for came first, so your vault didn\'t open. Unlock it again when the lock has finished.</string> <!-- approved by the owner 2026-11-01 (#245): a lock asked for during the unlock is still pending -->
-    <string name="unlock_unreadable">Your vault did not recognise this phone. It may have been replaced by a recovery or a transfer.</string>
-    <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
+    <string name="unlock_unreadable">Your vault did not recognize this phone. It may have been replaced by a recovery or a transfer.</string>
+    <string name="unlock_not_recognised_title">Your vault did not recognize this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
     <string name="unlock_erase">Erase VettID from this phone</string>
     <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
@@ -206,7 +206,7 @@
     <string name="recover_scan_not_code">That is not a VettID recovery code.</string>
     <string name="recover_scan_other_environment">That code is from another VettID environment (%1$s), not the one this app uses.</string>
     <string name="recover_scan_no_api">That recovery code is from an older account site. Reload the recovery page on the account site and scan the new code.</string>
-    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (%1$s after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
+    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (%1$s after the request), or the recovery was canceled, used or has expired. Check the account site.</string>
     <!-- The code typed instead of scanned (VAULT-MESSAGING 0.25.0 §11.11.10; ANDROID-PLAN 0.1.33) -->
     <string name="recover_type">Type the code instead</string>
     <string name="recover_scan_instead">Scan instead</string>
@@ -226,11 +226,11 @@
     <string name="recover_account_title">Recovering the vault of</string>
     <string name="recover_registering">Checking the code with your vault</string>
     <string name="recover_registering_starting">If your vault was not running, it is starting now. This can take a couple of minutes.</string>
-    <string name="recover_bad_code">That code is not right. After 5 wrong codes the recovery is cancelled. Wrong codes from this phone: %1$d of 5.</string>
-    <string name="recover_voided">That was the fifth wrong code, so the recovery was cancelled. Start a new recovery on the account site.</string>
+    <string name="recover_bad_code">That code is not right. After 5 wrong codes the recovery is canceled. Wrong codes from this phone: %1$d of 5.</string>
+    <string name="recover_voided">That was the fifth wrong code, so the recovery was canceled. Start a new recovery on the account site.</string>
     <string name="recover_code_expired">This code has expired. Start a new recovery on the account site.</string>
     <string name="recover_code_early_unknown">This code is not valid yet. Try again later.</string>
-    <string name="recover_code_gone">This recovery is no longer active: it was cancelled, already used, or voided after wrong codes. Start a new recovery on the account site.</string>
+    <string name="recover_code_gone">This recovery is no longer active: it was canceled, already used, or voided after wrong codes. Start a new recovery on the account site.</string>
     <string name="recover_code_attestation">Your vault could not verify this phone (device attestation). The code is still valid; this phone may not be supported.</string>
     <string name="recover_code_retry">Your vault could not answer just now. Try again.</string>
     <string name="recover_pin_title">Enter your vault PIN</string>
@@ -238,9 +238,9 @@
     <string name="recover_pin_submit">Unlock</string>
     <string name="recover_start_over">Start over</string>
     <string name="recover_start_over_title">Start over on this phone?</string>
-    <string name="recover_start_over_body">This phone forgets the recovery it registered and goes back to the start. There you can recover again, use a setup code or move VettID from your old phone.\n\nThe recovery itself is not cancelled by this: it stays open until you cancel it on the account site or it expires, and its code cannot be used a second time. To recover with this phone later, cancel it there and start a new recovery. Your vault is not changed.</string>
+    <string name="recover_start_over_body">This phone forgets the recovery it registered and goes back to the start. There you can recover again, use a setup code or move VettID from your old phone.\n\nThe recovery itself is not canceled by this: it stays open until you cancel it on the account site or it expires, and its code cannot be used a second time. To recover with this phone later, cancel it there and start a new recovery. Your vault is not changed.</string>
     <string name="recover_ended_title">This recovery has ended</string>
-    <string name="recover_ended_body">Your vault did not recognise this phone. That is what happens when a recovery was cancelled (on the account site, with the link in the email, or by an unlock on your old phone), when it expired, when a newer recovery replaced it, or when the vault was deleted.</string>
+    <string name="recover_ended_body">Your vault did not recognize this phone. That is what happens when a recovery was canceled (on the account site, with the link in the email, or by an unlock on your old phone), when it expired, when a newer recovery replaced it, or when the vault was deleted.</string>
     <string name="recover_ended_next_title">What you can do</string>
     <string name="recover_ended_next">Start over on this phone, then start a new recovery on the account site if you still need one. If you think the recovery is still open, try the PIN again.</string>
     <string name="recover_ended_retry">Try the PIN again</string>
@@ -276,6 +276,14 @@
     <string name="transfer_in_compare_title">Compare the code</string>
     <string name="transfer_in_compare_body">Your old phone shows a code too. If they are the same, approve the move there with your PIN and credential password.</string>
     <string name="transfer_in_waiting">Waiting for your old phone (%1$s left)</string>
+    <!-- NEW (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537)), for owner approval -->
+    <string name="transfer_in_checking">Checking whether your old phone approved in time…</string>
+    <!-- NEW (follow-up to #302, the lead's recheck), for owner approval -->
+    <string name="transfer_in_checking_leave">You can leave the app. The check finishes in the background or the next time you open VettID.</string>
+    <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->
+    <string name="transfer_in_session_ended_title">The move stopped on this phone</string>
+    <!-- NEW (§11.14.10 rule 5, the recheck of #302), for owner approval -->
+    <string name="transfer_in_session_ended_body">This phone stopped before it could check whether your old phone approved. If you approved the move there, recover your vault on this phone. If not, show a new code on your old phone.</string>
     <string name="transfer_in_cancel">Cancel</string>
     <string name="transfer_in_rejected_title">Rejected on your phone</string>
     <string name="transfer_in_rejected_body">The move was rejected on your old phone. Nothing changed: your vault stays with your old phone. To try again, show a new code on the old phone.</string>
@@ -285,7 +293,7 @@
     <string name="transfer_in_finishing_title">Finishing the move</string>
     <string name="transfer_in_finishing_body">Your old phone approved the move. This phone could not finish it yet. Try again.</string>
     <string name="transfer_in_cancel_title">Cancel the move?</string>
-    <string name="transfer_in_cancel_body">If you already approved the move on your old phone, don\'t cancel: your vault is moving to this phone, and cancelling here loses it. Cancel only if you did not approve it.</string>
+    <string name="transfer_in_cancel_body">If you already approved the move on your old phone, don\'t cancel: your vault is moving to this phone, and canceling here loses it. Cancel only if you did not approve it.</string>
     <string name="transfer_in_cancel_confirm">Cancel the move</string>
     <string name="transfer_in_no_answer">Your vault did not answer. The code may have been used already, or this phone could not be verified. Show a new code on your old phone.</string>
     <string name="transfer_in_again">Try again</string>
@@ -433,7 +441,7 @@
     <string name="onboarding_open_right_incomplete">The last attempt was right but could not be completed. %1$d of 10 left. You can try again on %2$s.</string>
     <string name="onboarding_open_other">The vault answered %1$s.</string>
     <string name="onboarding_open_ok_plain">The vault is recovered. The attempts you used do not come back. Change your PIN or your password now to get 10 new ones.</string>
-    <string name="onboarding_open_no_recovery">This recovery has ended: it was cancelled, it expired or it was completed. Nothing was used. To go on, start a new recovery on the account site.</string>
+    <string name="onboarding_open_no_recovery">This recovery has ended: it was canceled, it expired or it was completed. Nothing was used. To go on, start a new recovery on the account site.</string>
     <string name="onboarding_open_no_recovery_unanswered">This recovery has ended. Your last attempt got no answer, and it may have recovered your vault on the way: your PIN finishes it on this phone. Do this before you start a new recovery.</string>
     <string name="onboarding_open_expired">This recovery has expired. Nothing was used. To go on, start a new recovery on the account site.</string>
     <string name="onboarding_open_attestation">The vault did not accept this phone\'s app. Nothing was used. Update VettID to continue.</string>

@@ -18,6 +18,18 @@ enum class VoteNote(val severity: Severity) {
     IN_RESULTS_CONFLICT(Severity.NOTE),
     UNCONFIRMED(Severity.WARNING),
     DIDNT_VOTE(Severity.INFO),
+
+    /**
+     * `vote_results_dont_add_up`, once, under the state line of a `verified` or `unconfirmed` check whose results failed the
+     * app's own observer check (ANDROID-PLAN 0.1.116/0.1.117): a plain note, no error colour, and no number is shown.
+     */
+    RESULTS_DONT_ADD_UP(Severity.NOTE),
+
+    /**
+     * `vote_results_not_rechecked` (owner-approved 2026-11-03), under the state line of a `verified` or `unconfirmed` vote
+     * whose recheck on open could not reach the site (ANDROID-PLAN 0.1.121 "Recheck on open"); no number is shown.
+     */
+    RESULTS_NOT_RECHECKED(Severity.NOTE),
     CHECK_PENDING(Severity.INFO),
 
     /** A check the vault leaves `pending` with reason `input`, or the app's own check of the results failed: never "failed". */
@@ -172,6 +184,8 @@ object VoteRules {
      * when it knows (a `gave_up` check says which of two things, ANDROID-PLAN 0.1.102 screen 4): null when it does not.
      * [resultsProblem] is a problem the app found itself in the site's results, kept until the next attempt.
      * [notListedLate]: the app has seen the vote missing from the site for 10 minutes or more (the summary carries no age).
+     * [observerFailed]: the app's observer check of the results it submitted failed ([VoteHint.observerFailed]).
+     * [notRechecked]: the recheck on open could not reach the site ([VoteHint.notRechecked]).
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
     fun notes(
@@ -180,12 +194,16 @@ object VoteRules {
         resultsProblem: Boolean = false,
         notListedLate: Boolean = false,
         resultsTooLarge: Boolean = false,
+        observerFailed: Boolean = false,
+        notRechecked: Boolean = false,
     ): List<VoteNote> {
         val out = ArrayList<VoteNote>()
         if (s.state == VoteState.CLOSED) out += VoteNote.CLOSED
         if (s.state == VoteState.REJECTED) out += VoteNote.REJECTED
         ballotNotes(s, out)
         checkNotes(s, gaveUp, resultsProblem, out)
+        if (observerFailed && judged(s)) out += VoteNote.RESULTS_DONT_ADD_UP
+        if (notRechecked && !observerFailed && judged(s)) out += VoteNote.RESULTS_NOT_RECHECKED
         siteNotes(s, notListedLate, out)
         if (s.ballot == null && s.state != VoteState.CLOSED && s.state != VoteState.REJECTED) cannotCastNote(s)?.let { out += it }
         if (s.ballot == null && s.state == VoteState.CHECKING && out.none { it in CHECKING_NOTES }) out += checkingNote(s.reason)
@@ -246,13 +264,14 @@ object VoteRules {
             }
             CheckState.UNCONFIRMED -> out += VoteNote.UNCONFIRMED
             CheckState.FAILED -> out += VoteNote.FAILED
-            CheckState.GAVE_UP -> out += when (gaveUp) {
+            // (0.83.3) A row the app could not get: its text for a problem with the published results (§10.19.6 step 3).
+            CheckState.GAVE_UP -> out += if (check.reason == ROWS_UNAVAILABLE) VoteNote.CHECK_RESULTS_PROBLEM else when (gaveUp) {
                 GaveUpWhy.SITE -> VoteNote.CHECK_GAVE_UP_SITE
                 GaveUpWhy.UNPUBLISHED -> VoteNote.CHECK_GAVE_UP_UNPUBLISHED
                 null -> VoteNote.CHECK_GAVE_UP
             }
             CheckState.PENDING -> out += when {
-                check.reason == "input" || resultsProblem -> VoteNote.CHECK_RESULTS_PROBLEM
+                check.reason == "input" || check.reason == ROWS_UNAVAILABLE || resultsProblem -> VoteNote.CHECK_RESULTS_PROBLEM
                 // A `pending` check whose reason is the vault's own (service_list, trust_root, clock) says so.
                 check.reason == "clock" -> VoteNote.CHECKING_CLOCK
                 check.reason == "trust_root" -> VoteNote.CHECKING_TRUST
@@ -277,6 +296,28 @@ object VoteRules {
         }
         if (note != null) out += note
     }
+
+    private const val ROWS_UNAVAILABLE = "rows_unavailable"
+
+    /** The vault's check is `verified` or `unconfirmed`: the only states under which numbers may be shown. */
+    private fun judged(s: VoteSummary): Boolean = s.check?.state == CheckState.VERIFIED || s.check?.state == CheckState.UNCONFIRMED
+
+    /**
+     * Whether the results' numbers (the choice counts, the turnout, the quorum line and the unhandled line) are shown
+     * (ANDROID-PLAN 0.1.117): only under a `verified` or `unconfirmed` check, and only while the last verdict of the app's
+     * observer check ([verdict], set only by a submit the vault answered) passed, and never while the "don't add up" flag
+     * ([observerFailed]) is set: "hidden whenever the flag is set" (recheck 1, R1-1: a later failed check whose submit was
+     * refused leaves a passed verdict behind). An attempt that submits nothing clears the line but not the verdict. No
+     * verdict in memory (after a lock or a restart, before a check has run again) is no numbers (review 1, finding 6).
+     */
+    fun showNumbers(s: VoteSummary, verdict: ObserverVerdict?, observerFailed: Boolean): Boolean =
+        judged(s) && verdict == ObserverVerdict.PASSED && !observerFailed
+
+    /**
+     * Whether opening the vote's screen runs the recheck on open (ANDROID-PLAN 0.1.121, owner decision of 2026-11-02): a
+     * closed vote whose check is `verified` or `unconfirmed` with no verdict in memory since the vault opened ([verdict]).
+     */
+    fun recheckOnOpen(s: VoteSummary, verdict: ObserverVerdict?): Boolean = s.closed && judged(s) && verdict == null
 
     /** The reason a cast is not offered (screen 2: the reason is written where the button would be). */
     @Suppress("ReturnCount")

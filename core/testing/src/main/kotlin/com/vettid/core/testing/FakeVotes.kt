@@ -97,9 +97,20 @@ class FakeVotes : VotesRepository {
         calls += "siteCheck:$connectionId/$proposalId"
     }
 
+    /** What [checkResults] answers (or throws) after it is recorded. */
+    var checkResultsAnswer: suspend () -> ResultsOutcome = { ResultsOutcome.SiteUnreachable }
+
     override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome {
         call("checkResults:$connectionId/$proposalId")
-        return ResultsOutcome.SiteUnreachable
+        return checkResultsAnswer()
+    }
+
+    /** What [recheck] answers. */
+    var recheckOutcome: ResultsOutcome = ResultsOutcome.Rechecked(passed = true)
+
+    override suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome {
+        call("recheck:$connectionId/$proposalId")
+        return recheckOutcome
     }
 
     override suspend fun diagnoseGaveUp(connectionId: String, proposalId: String) {

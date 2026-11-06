@@ -1,5 +1,7 @@
 package com.vettid.core.data.votes
 
+import android.icu.lang.UCharacter
+import android.icu.lang.UProperty
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
@@ -263,7 +265,31 @@ object VoteWire {
     private fun choice(e: JsonElement): VoteChoice? {
         val c = e as? JsonObject ?: return null
         val id = c.s("id")?.takeIf { it.isNotEmpty() } ?: return null
-        // The label as sent, in the order sent; cleaned like any received text. A label that shows nothing is its id.
-        return VoteChoice(id, AccountNames.cleaned(c.s("label")) ?: id)
+        // The label as sent, in the order sent; cleaned like any received text. A label that shows nothing is its id, and so
+        // is a real choice's label that reads "Abstain" (reserved: ANDROID-PLAN 0.1.117, owner decision a, 2026-11-02).
+        val label = AccountNames.cleaned(c.s("label"))?.takeUnless { id != ABSTAIN && readsAbstain(it) }
+        return VoteChoice(id, label ?: id)
     }
+
+    /** The reserved choice id (BALLOT-PROTOCOL §8.5). */
+    const val ABSTAIN = "abstain"
+
+    /**
+     * Whether [label] reads "Abstain" (ANDROID-PLAN 0.1.117 "Abstain" matching): Default_Ignorable code points and U+2800
+     * removed anywhere, White_Space trimmed at both ends, compared ignoring case. Look-alike letters are out of scope.
+     */
+    fun readsAbstain(label: String): Boolean {
+        val kept = buildString {
+            var i = 0
+            while (i < label.length) {
+                val cp = label.codePointAt(i)
+                i += Character.charCount(cp)
+                if (cp != BRAILLE_BLANK && !UCharacter.hasBinaryProperty(cp, UProperty.DEFAULT_IGNORABLE_CODE_POINT)) appendCodePoint(cp)
+            }
+        }
+        val trimmed = kept.dropWhile { UCharacter.isUWhiteSpace(it.code) }.dropLastWhile { UCharacter.isUWhiteSpace(it.code) }
+        return trimmed.equals("Abstain", ignoreCase = true)
+    }
+
+    private const val BRAILLE_BLANK = 0x2800
 }

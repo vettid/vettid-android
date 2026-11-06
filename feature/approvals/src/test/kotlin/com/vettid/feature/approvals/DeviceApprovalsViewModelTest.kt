@@ -418,6 +418,27 @@ class DeviceApprovalsViewModelTest {
     }
 
     @Test
+    fun theHeldPairingsRoleIsKnownToTheEntryAndOnlyForTheHeldOne() = runTest {
+        val p = Approval.DeviceRequest("device.pair.pending", "pend-1", null, null, null, now, now.plusSeconds(600), fromFeed = true)
+        social.approvals.value = listOf(p)
+        val m = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to p.key)), social, items, devices, FakeVault(), social, pairing)
+        val cmp = PairingStage.Compare(PendingPairing("pp", "Work laptop", "123456", now.plusSeconds(600), "pend-1"))
+        pairing.state.value = PairingState(cmp, role = com.vettid.core.data.devices.PairRole.DESKTOP)
+        runCurrent()
+        assertTrue(m.uiState.value.pairingDesktop)
+        pairing.state.value = PairingState(cmp, role = com.vettid.core.data.devices.PairRole.AGENT)
+        runCurrent()
+        assertFalse(m.uiState.value.pairingDesktop)
+        // Another pairing's entry is not the held one, so it says nothing of a role.
+        pairing.state.value = PairingState(
+            PairingStage.Compare(PendingPairing("pp", "x", "123456", now.plusSeconds(600), "pend-9")),
+            role = com.vettid.core.data.devices.PairRole.DESKTOP,
+        )
+        runCurrent()
+        assertFalse(m.uiState.value.pairingDesktop)
+    }
+
+    @Test
     fun denyOfAPairingTheyCannotCheckRejectsIt_butNotTheHeldOne() = runTest {
         val p = Approval.DeviceRequest("device.pair.pending", "pend-1", null, null, null, now, now.plusSeconds(600), fromFeed = true)
         social.approvals.value = listOf(p)

@@ -325,7 +325,8 @@ class OnboardingViewModel @Inject constructor(
     /** The portal's same-device App Link: redeemed only while nothing is set up on this phone. */
     private fun receiveLink(raw: String) {
         inbox.consume()
-        if (account.phase.value != AppPhase.SignedOut || state.value.busy) return
+        // Not while a transfer to this phone is on its screen: its window keeps the device (VAULT-MESSAGING 0.85.2).
+        if (account.phase.value != AppPhase.SignedOut || state.value.busy || state.value.step == OnboardingStep.TRANSFER_IN) return
         val secret = SetupCodes.parseLink(raw, account.apiOrigin)
         if (secret == null) {
             state.update { it.copy(step = OnboardingStep.SETUP_SCAN, scanRefusal = ScanRefusal.NOT_A_CODE) }

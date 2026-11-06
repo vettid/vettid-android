@@ -19,6 +19,9 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -71,13 +74,25 @@ class LocationSharingTest {
         var listRefusal: String? = null
         var stopRefusal: String? = null
 
+        /** When set, `location.share.start` answers only after it is completed (a start in flight). */
+        var startGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+        /** Completed when a `location.share.start` reaches the vault. */
+        @Volatile var startAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
+
         override suspend fun start(r: ShareRequest): JsonObject {
             synchronized(this) { starts += r }
+            startAsked.complete(Unit)
+            startGate?.await()
             val seconds = if (r.once) 900L else r.durationSeconds!!
             return obj("""{"share_id":"s${++n}","expires_at":"${t0.plusSeconds(seconds)}"}""")
         }
 
+        /** The vault refuses every position (a network refusal): none is accepted. */
+        var updateFails = false
+
         override suspend fun update(sample: LocationSample, ttl: Duration) {
+            if (updateFails) throw VaultOpException("location.update", "rate_limited")
             synchronized(this) { updates += Sent(sample.body(), ttl) }
         }
 
@@ -136,6 +151,30 @@ class LocationSharingTest {
         var precise = true
         var issue = SendIssue.NONE
         var notRunning = mutableListOf<Boolean>()
+
+        /** The stall notices up now (connection id to the minutes said), and how many separate ones were posted. */
+        val stalledNow = linkedMapOf<String, Int>()
+        var stallEpisodes = 0
+
+        /** Every post of a stall notice (an update of a showing one is not a post). */
+        override fun showStalled(connectionId: String, minutes: Int) {
+            stallEpisodes++
+            stalledNow[connectionId] = minutes
+        }
+
+        /** Like the real platform: only a notice that is still showing is changed. */
+        override fun updateStalled(connectionId: String, minutes: Int) {
+            if (connectionId in stalledNow) stalledNow[connectionId] = minutes
+        }
+
+        /** The member swipes the notice away. */
+        fun dismiss(connectionId: String) {
+            stalledNow.remove(connectionId)
+        }
+
+        override fun clearStalled(connectionId: String) {
+            stalledNow.remove(connectionId)
+        }
 
         override fun issue() = issue
 
@@ -212,6 +251,31 @@ class LocationSharingTest {
             scope.runCurrent()
         }
 
+        /**
+         * Runs a call of the manager that goes through the vault (a real IO thread, `vaultGuard`) and waits for it **without the test
+         * body suspending**. While the body is suspended, runTest runs the scheduler on its own, with the virtual time jumping to the
+         * next timer (the 5 s watcher, every share's hour-long expiry): a slow IO thread then lets an hour pass and ends the shares
+         * before the call returns. Here only [TestScope.runCurrent] runs, so the clock stays where the test put it.
+         */
+        suspend fun <T> call(block: suspend () -> T): T {
+            val done = scope.async { runCatching { block() } }
+            settleUntil("the call to the manager did not finish") { done.isCompleted }
+            return done.await().getOrThrow()
+        }
+
+        suspend fun stop(shareId: String) = call { sharing.stop(shareId) }
+
+        /** Lets the manager's jobs run until [condition] holds, for at most [REAL_LIMIT_MS] of real time (it fails with [what]). */
+        fun settleUntil(what: String, condition: () -> Boolean) {
+            val limit = System.nanoTime() + REAL_LIMIT_MS * NANOS_PER_MS
+            scope.runCurrent()
+            while (!condition()) {
+                check(System.nanoTime() < limit) { "Timed out: $what" }
+                Thread.sleep(1)
+                scope.runCurrent()
+            }
+        }
+
         fun fix(accuracy: Double? = 20.0, age: Duration = Duration.ZERO, lat: Double = 52.52, lon: Double = 13.405) =
             Fix(lat, lon, accuracy, 34.0, 1.5, 90.0, clock.minus(age))
 
@@ -229,7 +293,7 @@ class LocationSharingTest {
             precision: SharePrecision = SharePrecision.APPROXIMATE,
             id: String = "c1",
         ): OutgoingShare {
-            val s = sharing.start(ShareRequest(id, timing, precision))
+            val s = call { sharing.start(ShareRequest(id, timing, precision)) }
             settle()
             return s
         }
@@ -303,10 +367,10 @@ class LocationSharingTest {
         r.begin(ShareTiming.ForAWhile(ShareLength.HOUR_1, ShareInterval.SECONDS_30), id = "c")
         assertEquals(30_000L, r.provider.requests.last().intervalMs)
         // The shortest one goes: the next shortest is asked for again.
-        r.sharing.stop("s3")
+        r.stop("s3")
         r.settle()
         assertEquals(60_000L, r.provider.requests.last().intervalMs)
-        r.sharing.stop(one.shareId)
+        r.stop(one.shareId)
         r.settle()
         assertEquals(300_000L, r.provider.requests.last().intervalMs)
     }
@@ -489,7 +553,7 @@ class LocationSharingTest {
     fun stoppingStopsSendingAtOnceAndTellsTheVault() = runTest {
         val r = rig()
         val s = r.begin()
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertEquals(listOf(s.shareId), r.ops.stops)
         assertTrue(r.sharing.outgoing.value.isEmpty())
@@ -508,7 +572,10 @@ class LocationSharingTest {
         r.sharing.stopAll()
         // Sending ended before the vault was told.
         assertFalse(r.sharing.serviceState.value.active)
-        r.settle()
+        // The stops run one after the other on the IO thread: wait for the last one, not for a fixed time.
+        r.settleUntil("both stops reached the vault and the shares are gone") {
+            synchronized(r.ops) { r.ops.stops.size } == 2 && r.sharing.outgoing.value.isEmpty()
+        }
         assertEquals(listOf("s1", "s2"), r.ops.stops.sorted())
         assertTrue(r.sharing.outgoing.value.isEmpty())
     }
@@ -520,7 +587,7 @@ class LocationSharingTest {
         val s = r.begin()
         due = true
         r.elapse(Duration.ofSeconds(5))
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertEquals(listOf(s.shareId), r.ops.stops)
         assertTrue(r.sharing.outgoing.value.isEmpty())
@@ -533,7 +600,7 @@ class LocationSharingTest {
         val s = r.begin()
         r.ops.stopRefusal = "internal"
         try {
-            r.sharing.stop(s.shareId)
+            r.stop(s.shareId)
             fail("expected a failure")
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.OTHER, e.kind)
@@ -552,7 +619,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(1, r.platform.starts)
         unlocked = false
@@ -783,7 +850,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "not_found"
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         assertTrue(r.sharing.outgoing.value.isEmpty())
     }
@@ -1021,7 +1088,7 @@ class LocationSharingTest {
         val a = r.begin(id = "a")
         r.begin(id = "b")
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(a.shareId) }
+        runCatching { r.stop(a.shareId) }
         r.settle()
         r.emit(r.fix())
         assertTrue("no update at all", r.ops.updates.isEmpty())
@@ -1049,7 +1116,7 @@ class LocationSharingTest {
         val read = backgroundScope.async { r.sharing.refresh() }
         // The read is at the vault before the stop (with settle() alone it could arrive after, and then no longer test the guard).
         r.ops.listAsked.await()
-        r.sharing.stop(s.shareId)
+        r.stop(s.shareId)
         r.settle()
         // The read answers with the list as it was when asked, which still has the share.
         gate.complete(Unit)
@@ -1078,7 +1145,7 @@ class LocationSharingTest {
         val r = rig(retry = listOf(5L, 15L, 60L).map { Duration.ofSeconds(it) })
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         repeat(6) { r.elapse(Duration.ofSeconds(5)) }
         // Now, and after 5, 10 and 25 seconds; a fixed 5 s would have made seven by 30 s.
         assertEquals(4, r.ops.stops.size)
@@ -1089,7 +1156,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(1, r.store.saved.size)
         r.sharing.forget()
@@ -1105,13 +1172,20 @@ class LocationSharingTest {
     @Test
     fun aSecondStartForTheSameConnectionIsRefused() = runTest {
         val r = rig()
+        // Hold the first start at the vault, so the second is made while the first is surely in flight (without the gate, a
+        // fast first start could finish before the second began, and a second start after it is a legitimate new share).
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.startGate = gate
+        r.ops.startAsked = kotlinx.coroutines.CompletableDeferred()
         val a = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
-        val b = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
         r.settle()
-        val results = listOf(a.await(), b.await())
-        assertEquals(1, results.count { it.isSuccess })
+        withContext(Dispatchers.Default) { withTimeout(10_000) { r.ops.startAsked.await() } }
+        val b = runCatching { r.sharing.start(ShareRequest("c1")) }
+        assertEquals("busy", (b.exceptionOrNull() as VaultFailure).code)
+        gate.complete(Unit)
+        r.settle()
+        assertTrue(a.await().isSuccess)
         assertEquals(1, r.ops.starts.size)
-        assertEquals("busy", (results.single { it.isFailure }.exceptionOrNull() as VaultFailure).code)
     }
 
     @Test
@@ -1192,7 +1266,7 @@ class LocationSharingTest {
         val r = rig()
         val s = r.begin()
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(s.shareId) }
+        runCatching { r.stop(s.shareId) }
         r.settle()
         assertEquals(setOf("c1"), r.sharing.serviceState.value.stopping)
         r.ops.stopRefusal = null
@@ -1281,7 +1355,7 @@ class LocationSharingTest {
         r.ops.outgoing = "[${listed("s7", "dev-this")}]"
         r.sharing.resume()
         r.settle()
-        runCatching { r.sharing.stop("s7") }
+        runCatching { r.stop("s7") }
         r.settle()
         val kept = store.saved.single()
         assertEquals("s7", kept.shareId)
@@ -1298,7 +1372,7 @@ class LocationSharingTest {
         r.emit(r.fix(accuracy = 900.0))
         assertTrue(r.ops.updates.isEmpty())
         r.ops.stopRefusal = "internal"
-        runCatching { r.sharing.stop(a.shareId) }
+        runCatching { r.stop(a.shareId) }
         r.elapse(Duration.ofSeconds(61))
         assertTrue("the held position stays unsent", r.ops.updates.isEmpty())
     }
@@ -1346,8 +1420,284 @@ class LocationSharingTest {
         assertFalse(r.sharing.serviceState.value.active)
     }
 
+    // --- a share whose positions do not get through (A6 N21) ---
+
+    private val stallAfter = Duration.ofSeconds(60).plus(STALL_GRACE) // the default share: every minute
+
+    @Test
+    fun aShareStallsAfterItsIntervalPlusFifteenMinutesAndNotJustBefore() = runTest {
+        val r = rig()
+        r.begin() // never gets a position: the clock starts at the share's start
+        r.elapse(stallAfter.minusSeconds(5))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(mapOf("c1" to 16), r.sharing.serviceState.value.stalled)
+        assertEquals(mapOf("c1" to 16), r.platform.stalledNow)
+        // The minutes keep counting.
+        r.elapse(Duration.ofMinutes(4))
+        assertEquals(mapOf("c1" to 20), r.sharing.serviceState.value.stalled)
+        assertEquals(mapOf("c1" to 20), r.platform.stalledNow)
+        assertEquals("one notice for the stall, kept current", 1, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun theThresholdFollowsTheSharesOwnInterval() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTES_15))
+        r.elapse(Duration.ofMinutes(29).plusSeconds(55))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(mapOf("c1" to 30), r.sharing.serviceState.value.stalled)
+    }
+
+    @Test
+    fun aPositionTheVaultAcceptsEndsTheStallAndTheClockStartsOver() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+        r.emit(r.fix())
+        assertEquals(1, r.ops.updates.size)
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertTrue(r.platform.stalledNow.isEmpty())
+        // The clock began again at the accepted position.
+        r.elapse(stallAfter.minusSeconds(5))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+        assertEquals("a second stall is a second notice", 2, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun aRefusedPositionIsNotAcceptedSoItDoesNotEndTheStall() = runTest {
+        val r = rig()
+        r.begin()
+        r.ops.updateFails = true
+        r.elapse(stallAfter)
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+        r.ops.updateFails = false
+        r.elapse(Duration.ofSeconds(60))
+        r.emit(r.fix())
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+    }
+
+    @Test
+    fun aPositionDroppedForItsAgeIsNotAcceptedEither() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        r.emit(r.fix(age = Duration.ofMinutes(6)))
+        assertTrue(r.ops.updates.isEmpty())
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+    }
+
+    @Test
+    fun aOnceShareIsNotReportedAsStalledAndItsMissIsSaidOnceAtItsEnd() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.Once)
+        r.elapse(Duration.ofSeconds(899))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+        assertTrue(r.sharing.missedOnce.value.isEmpty())
+        r.elapse(Duration.ofSeconds(2))
+        assertEquals(setOf("c1"), r.sharing.missedOnce.value)
+        r.elapse(Duration.ofHours(1))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun aDueCheckIsAPauseNotAStallAndItsTimeDoesNotCount() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
+        r.elapse(Duration.ofMinutes(10))
+        due = true
+        r.elapse(Duration.ofHours(2))
+        assertTrue(r.sharing.serviceState.value.paused)
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+        due = false
+        r.sharing.onGateChanged(lifted = true)
+        // Ten minutes before the pause plus eight after would be 18, yet the paused time reset the clock.
+        r.elapse(Duration.ofMinutes(8))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(stallAfter.minus(Duration.ofMinutes(8)).minusSeconds(15))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(15))
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+    }
+
+    @Test
+    fun aStallEndsWhenTheCheckComesDueAndItsNoticeGoes() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stalledNow.size)
+        due = true
+        r.elapse(Duration.ofSeconds(10))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertTrue(r.platform.stalledNow.isEmpty())
+    }
+
+    @Test
+    fun aLockClearsTheStallAndItsNotice() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stalledNow.size)
+        unlocked = false
+        r.sharing.clear()
+        r.settle()
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertTrue(r.platform.stalledNow.isEmpty())
+    }
+
+    @Test
+    fun theNoticeGoesWhenTheShareEnds() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stalledNow.size)
+        r.stop("s1")
+        r.settle()
+        assertTrue(r.platform.stalledNow.isEmpty())
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        // Ending by its own expiry as well.
+        val again = r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stalledNow.size)
+        r.elapse(Duration.between(clock, again.expiresAt).plusSeconds(1))
+        assertTrue(r.platform.stalledNow.isEmpty())
+    }
+
+    @Test
+    fun aDismissedNoticeIsNotPostedAgainByTheNextMinutes() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stallEpisodes)
+        r.platform.dismiss("c1")
+        r.elapse(Duration.ofMinutes(5))
+        assertTrue(r.platform.stalledNow.isEmpty())
+        assertEquals("still stalled, on the card", mapOf("c1" to 21), r.sharing.serviceState.value.stalled)
+        assertEquals(1, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun theFirstLookAfterAPauseStartsTheClocksOverEvenIfNothingLookedMeanwhile() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
+        r.elapse(Duration.ofMinutes(1))
+        due = true
+        // Nothing looks while it is due and nothing wakes the phone for two hours: only the clocks move.
+        clock = clock.plus(Duration.ofHours(2))
+        elapsed += Duration.ofHours(2).toNanos()
+        due = false
+        r.sharing.onGateChanged(lifted = true)
+        r.settle()
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+        r.elapse(stallAfter.minusSeconds(5))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(1, r.sharing.serviceState.value.stalled.size)
+    }
+
+    @Test
+    fun aChangeOfTheCheckThatLiftsNothingLeavesARealStallAlone() = runTest {
+        val r = rig()
+        r.begin()
+        r.elapse(stallAfter)
+        assertEquals(1, r.platform.stallEpisodes)
+        r.sharing.onGateChanged(lifted = false) // an early pass, the idle lock or a failure count changed; due was false throughout
+        r.settle()
+        assertEquals(mapOf("c1" to 16), r.sharing.serviceState.value.stalled)
+        assertEquals(mapOf("c1" to 16), r.platform.stalledNow)
+        r.elapse(Duration.ofMinutes(2))
+        assertEquals(1, r.platform.stallEpisodes)
+        assertEquals(mapOf("c1" to 18), r.platform.stalledNow)
+    }
+
+    @Test
+    fun aJumpOfTheWallClockMakesNoStall() = runTest {
+        val r = rig()
+        r.begin(ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1))
+        clock = clock.plus(Duration.ofHours(2)) // the date was set forward; the uptime clock did not move
+        r.elapse(Duration.ofSeconds(10))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+    }
+
+    @Test
+    fun theNoticeGoesWithStopAllAWipeAnEndEventAndAListWithoutTheShare() = runTest {
+        // stopAll (the notification's button)
+        val long = ShareTiming.ForAWhile(ShareLength.HOURS_8, ShareInterval.MINUTE_1)
+        val a = rig()
+        a.begin(long)
+        a.elapse(stallAfter)
+        assertEquals(1, a.platform.stalledNow.size)
+        a.sharing.stopAll()
+        a.settle()
+        assertTrue(a.platform.stalledNow.isEmpty())
+        // forget() (wipe, sign-out)
+        val b = rig()
+        b.begin(long)
+        b.elapse(stallAfter)
+        assertEquals(1, b.platform.stalledNow.size)
+        b.sharing.forget()
+        b.settle()
+        assertTrue(b.platform.stalledNow.isEmpty())
+        // location.event{stopped, out}
+        val c = rig()
+        c.begin(long)
+        c.elapse(stallAfter)
+        assertEquals(1, c.platform.stalledNow.size)
+        c.sharing.onEvent(message("location.event", """{"share_id":"s1","direction":"out","event":"stopped"}"""))
+        c.settle()
+        assertTrue(c.platform.stalledNow.isEmpty())
+        // a list that no longer holds the share
+        val d = rig()
+        d.begin(long)
+        d.elapse(stallAfter)
+        assertEquals(1, d.platform.stalledNow.size)
+        d.ops.outgoing = "[]"
+        d.sharing.refresh()
+        d.settle()
+        assertTrue(d.platform.stalledNow.isEmpty())
+    }
+
+    @Test
+    fun aShareTakenUpAgainAtAnUnlockStartsItsClockThen() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("s1", "dev-this", expires = t0.plusSeconds(8 * 3_600))}]"
+        r.elapse(Duration.ofHours(3)) // long after the list's own times; nothing is tracked yet
+        r.sharing.resume()
+        r.settle()
+        assertTrue(r.sharing.serviceState.value.active)
+        r.elapse(stallAfter.minusSeconds(5))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        r.elapse(Duration.ofSeconds(5))
+        assertEquals(mapOf("c-s1" to 16), r.sharing.serviceState.value.stalled)
+    }
+
+    @Test
+    fun aShareAnotherPhoneSendsForIsNeverStalledHere() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("s1", "dev-other", expires = t0.plusSeconds(8 * 3_600))}]"
+        r.sharing.resume()
+        r.settle()
+        r.elapse(Duration.ofHours(2))
+        assertTrue(r.sharing.serviceState.value.stalled.isEmpty())
+        assertEquals(0, r.platform.stallEpisodes)
+    }
+
     private companion object {
         const val TRIES = 4
         const val SLEEP_MS = 15L
+        const val REAL_LIMIT_MS = 10_000L
+        const val NANOS_PER_MS = 1_000_000L
     }
 }

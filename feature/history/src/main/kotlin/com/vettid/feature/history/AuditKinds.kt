@@ -2,6 +2,7 @@ package com.vettid.feature.history
 
 import androidx.annotation.StringRes
 import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.RecoveryRefs
 
 /**
@@ -38,6 +39,8 @@ object AuditKinds {
     const val KIND_EXPORTED = "audit.exported"
 
     const val KIND_LOCKED = "vault.locked"
+    const val KIND_CHECK_FAILED = "owner_check.failed"
+    const val REF_PIN = "pin"
 
     /** (Release L) `vault.locked`'s `ref` for the idle lock (§3.6.8). */
     const val REF_IDLE = "idle"
@@ -136,6 +139,8 @@ object AuditKinds {
                 ?.let { Title.Counted(R.string.history_kind_recovery_attempts_used, it) }
                 ?: Title.Known(R.string.history_kind_recovery_attempts_used_any)
             KIND_CLOSED -> return Title.Known(closedTitle(RecoveryRefs.closure(ref)?.reason))
+            // (Owner decision 2026-11-05) A wrong PIN on any check, such as a wallet limit raise, is not a "daily" check.
+            KIND_CHECK_FAILED -> if (ref == REF_PIN) return Title.Known(R.string.history_kind_owner_check_failed_pin)
             // (VAULT-MESSAGING 0.29.0 §3.6.8, release L) The vault locked itself: `vault.locked` with `ref` `idle`.
             KIND_LOCKED -> if (ref == REF_IDLE) return Title.Known(R.string.history_kind_vault_locked_idle)
         }
@@ -269,6 +274,22 @@ object AuditKinds {
         KIND_CLOSED -> RecoveryRefs.closure(ref)?.reason == RecoveryRefs.REASON_STALE
         else -> false
     }
+
+    /**
+     * The entries to list, with the item entry of a deleted wallet folded into the wallet's (VAULT-MESSAGING §10.18: a wallet is
+     * deleted by `item.delete` of its item, so the vault audits both `item.deleted` and `wallet.deleted`, and the wallet's id is
+     * the item's id). An `item.deleted` is left out only when a `wallet.deleted` with the same `ref` is in [entries]; any other
+     * `item.deleted` stays. The folded entry stays in [entries] for the chain check and in an export.
+     */
+    fun listed(entries: List<AuditRecord>): List<AuditRecord> {
+        val wallets = entries.filter { r -> r.kind == KIND_WALLET_DELETED }.mapNotNull { r -> r.ref }.toSet()
+        return entries.filterNot { r ->
+            hidden(r.kind, r.ref) || (r.kind == KIND_ITEM_DELETED && r.ref in wallets)
+        }
+    }
+
+    private const val KIND_WALLET_DELETED = "wallet.deleted"
+    private const val KIND_ITEM_DELETED = "item.deleted"
 
     /** One line of an entry's **Details**. */
     sealed interface Detail {

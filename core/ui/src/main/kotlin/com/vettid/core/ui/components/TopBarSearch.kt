@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -86,7 +87,7 @@ fun SearchTopBar(search: TopBarSearch, modifier: Modifier = Modifier, autoFocus:
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(72.dp)
+            .heightIn(min = 72.dp)
             .padding(horizontal = Spacing.xs)
             .testTag("top_bar_search"),
         verticalAlignment = Alignment.CenterVertically,

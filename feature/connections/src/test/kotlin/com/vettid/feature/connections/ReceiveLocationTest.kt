@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -60,7 +61,10 @@ class ReceiveLocationTest {
     val main = MainDispatcherRule()
 
     private val location = FakeLocation()
-    private val prefs = com.vettid.core.data.prefs.InMemoryPreferencesRepository()
+    // Robolectric's locale is en-US (Automatic would be miles): the older tests read kilometers.
+    private val prefs = com.vettid.core.data.prefs.InMemoryPreferencesRepository(
+        com.vettid.core.data.prefs.AppPreferences(distanceUnits = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS),
+    )
     private val vault = com.vettid.core.testing.FakeVault()
     private val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"), FakeSocial.connection("c2", "Kim"))) }
     private val now = Instant.now()
@@ -108,7 +112,7 @@ class ReceiveLocationTest {
     fun theCardSaysAgeAccuracyAndUntilAndOffersStopReceiving() {
         val c = FakeSocial.connection("c1", "Sam")
         var stopped = false
-        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE))
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE), units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
         rule.setContent { ConnectionDetailScreen(state, DetailActions(onStopReceiving = { stopped = true })) }
         rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
         rule.onNodeWithText("5 min", substring = true).assertIsDisplayed()
@@ -127,7 +131,7 @@ class ReceiveLocationTest {
         rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
         rule.onNodeWithTag("detail_incoming_line").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithText("within", substring = true).fetchSemanticsNodes().size)
-        assertEquals(null, com.vettid.core.data.location.PositionText.accuracy(org.robolectric.RuntimeEnvironment.getApplication().resources, 0.0))
+        assertEquals(null, com.vettid.core.data.location.PositionText.accuracy(org.robolectric.RuntimeEnvironment.getApplication().resources, 0.0, com.vettid.core.data.location.LengthSystem.METRIC))
     }
 
     @Test
@@ -315,7 +319,7 @@ class ReceiveLocationTest {
         val vm = positionVm()
         advanceUntilIdle()
         rule.setContent { PositionScreen(read(vm.uiState), {}, {}, {}, {}) }
-        rule.onNodeWithText("About 3.2 km north-east of this phone").assertIsDisplayed()
+        rule.onNodeWithText("About 3.2 km northeast of this phone").assertIsDisplayed()
     }
 
     @Test
@@ -413,13 +417,13 @@ class ReceiveLocationTest {
     @Test
     fun theDistanceIsRoundedCoarselyAndNeverAboutOneMetre() {
         val r = org.robolectric.RuntimeEnvironment.getApplication().resources
-        assertEquals("10 m", com.vettid.core.data.location.PositionText.distance(r, 3.0))
-        assertEquals("1.2 km".replace(".", java.text.DecimalFormatSymbols.getInstance().decimalSeparator.toString()), com.vettid.core.data.location.PositionText.distance(r, 1_240.0))
-        assertEquals("340 m", com.vettid.core.data.location.PositionText.distance(r, 343.0))
-        assertEquals("14 km", com.vettid.core.data.location.PositionText.distance(r, 14_400.0))
-        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(4.0, 10.0), null))
-        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(800.0, 10.0), 1_000.0))
-        assertTrue(com.vettid.core.data.location.PositionText.offset(r, PositionOffset(3_000.0, 0.0), 1_000.0).contains("north"))
+        assertEquals("10 m", com.vettid.core.data.location.PositionText.distance(r, 3.0, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertEquals("1.2 km".replace(".", java.text.DecimalFormatSymbols.getInstance().decimalSeparator.toString()), com.vettid.core.data.location.PositionText.distance(r, 1_240.0, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertEquals("340 m", com.vettid.core.data.location.PositionText.distance(r, 343.0, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertEquals("14 km", com.vettid.core.data.location.PositionText.distance(r, 14_400.0, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(4.0, 10.0), null, SharePrecision.EXACT, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertEquals("Near this phone", com.vettid.core.data.location.PositionText.offset(r, PositionOffset(800.0, 10.0), 1_000.0, SharePrecision.EXACT, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertTrue(com.vettid.core.data.location.PositionText.offset(r, PositionOffset(3_000.0, 0.0), 1_000.0, SharePrecision.EXACT, com.vettid.core.data.location.LengthSystem.METRIC).contains("north"))
     }
 
     @Test
@@ -517,12 +521,12 @@ class ReceiveLocationTest {
         val approx = SharePrecision.APPROXIMATE
         val city = SharePrecision.CITY
         // City, accuracy unknown: 5 km from the centre of a ~11 km area is still "near"
-        assertEquals("Near this phone", text.offset(r, PositionOffset(5_000.0, 10.0), null, city))
-        assertTrue(text.offset(r, PositionOffset(15_000.0, 0.0), null, city).contains("north"))
-        assertEquals("Near this phone", text.offset(r, PositionOffset(800.0, 10.0), 0.0, approx))
-        assertTrue(text.offset(r, PositionOffset(3_000.0, 0.0), null, approx).contains("north"))
+        assertEquals("Near this phone", text.offset(r, PositionOffset(5_000.0, 10.0), null, city, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertTrue(text.offset(r, PositionOffset(15_000.0, 0.0), null, city, com.vettid.core.data.location.LengthSystem.METRIC).contains("north"))
+        assertEquals("Near this phone", text.offset(r, PositionOffset(800.0, 10.0), 0.0, approx, com.vettid.core.data.location.LengthSystem.METRIC))
+        assertTrue(text.offset(r, PositionOffset(3_000.0, 0.0), null, approx, com.vettid.core.data.location.LengthSystem.METRIC).contains("north"))
         // Exact with no accuracy: a direction is given from 800 m
-        assertTrue(text.offset(r, PositionOffset(800.0, 0.0), null, SharePrecision.EXACT).contains("north"))
+        assertTrue(text.offset(r, PositionOffset(800.0, 0.0), null, SharePrecision.EXACT, com.vettid.core.data.location.LengthSystem.METRIC).contains("north"))
     }
 
     @Test
@@ -582,15 +586,75 @@ class ReceiveLocationTest {
 
     @Test
     fun theDistanceUsesTheLocalesOwnDigitsWithoutStringSurgery() {
-        val r = org.robolectric.RuntimeEnvironment.getApplication().resources
-        val old = java.util.Locale.getDefault()
-        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
-        try {
-            val t = com.vettid.core.data.location.PositionText.distance(r, 12_000.0)
-            assertTrue(t, t.any { it in '\u0660'..'\u0669' })
-            assertTrue(t, t.none { it in '0'..'9' })
-        } finally {
-            java.util.Locale.setDefault(old)
-        }
+        // The digits follow the configuration's locale (as the units do), so the resources are built in that locale.
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(java.util.Locale.forLanguageTag("ar-EG-u-nu-arab"))
+        val r = app.createConfigurationContext(c).resources
+        val t = com.vettid.core.data.location.PositionText.distance(r, 12_000.0, com.vettid.core.data.location.LengthSystem.METRIC)
+        assertTrue(t, t.any { it in '\u0660'..'\u0669' })
+        assertTrue(t, t.none { it in '0'..'9' })
+    }
+
+    // --- miles or kilometers (Settings → Units, owner decision 2026-11-05) ---
+
+    private fun dec(s: String) = s.replace(".", java.text.DecimalFormatSymbols.getInstance().decimalSeparator.toString())
+
+    @Test
+    fun theIncomingCardsWithinFollowsTheUnits() {
+        val c = FakeSocial.connection("c1", "Sam")
+        val incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)
+        val state = ConnectionDetailUiState("c1", c, null, loading = false, incoming = incoming, units = com.vettid.core.data.prefs.DistanceUnits.MILES)
+        rule.setContent { ConnectionDetailScreen(state, DetailActions()) }
+        rule.onNodeWithText(dec("within 0.6 mi"), substring = true).assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("within 1 km", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theDetailViewModelResolvesTheUnitsFromTheSetting() = runTest {
+        val p = com.vettid.core.data.prefs.InMemoryPreferencesRepository()
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location, prefs = p)
+        p.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS, read(vm.uiState).units)
+        p.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.MILES, read(vm.uiState).units)
+    }
+
+    @Test
+    fun thePositionScreenWithinAndAboutFollowTheSettingAtOnce() = runTest {
+        location.incoming.value = listOf(share(last = position(accuracy = 1000.0)))
+        location.offset = PositionOffset(3_000.0, 0.0)
+        val vm = positionVm()
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.prefs.DistanceUnits.KILOMETERS, read(vm.uiState).units)
+        rule.setContent { PositionScreen(vm.uiState.collectAsState().value, {}, {}, {}, {}) }
+        rule.onNodeWithText("Within ${dec("1")} km").assertIsDisplayed()
+        rule.onNodeWithText("About ${dec("3")} km north of this phone").assertIsDisplayed()
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
+        advanceUntilIdle()
+        rule.waitForIdle()
+        rule.onNodeWithText("Within ${dec("0.6")} mi").assertIsDisplayed()
+        rule.onNodeWithText("About ${dec("1.9")} mi north of this phone").assertIsDisplayed()
+    }
+
+    private fun automaticCard() {
+        val c = FakeSocial.connection("c1", "Sam")
+        val incoming = DetailIncoming("in1", now.plusSeconds(3600), now.minusSeconds(300), 1000.0, com.vettid.core.data.location.SharePrecision.APPROXIMATE)
+        rule.setContent { ConnectionDetailScreen(ConnectionDetailUiState("c1", c, null, loading = false, incoming = incoming), DetailActions()) }
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(qualifiers = "en-rUS-w411dp-h2400dp")
+    fun automaticReadsTheConfigurationsRegionUs() {
+        automaticCard()
+        rule.onNodeWithText(dec("within 0.6 mi"), substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    @org.robolectric.annotation.Config(qualifiers = "en-rGB-w411dp-h2400dp")
+    fun automaticReadsTheConfigurationsRegionGb() {
+        automaticCard()
+        rule.onNodeWithText("within 1 km", substring = true).assertIsDisplayed()
     }
 }

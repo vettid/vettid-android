@@ -11,8 +11,11 @@
     <string name="owner_check_hold_on">Turn on</string>
     <string name="owner_check_notice_ok">OK</string>
     <string name="owner_check_notice_locked">Your vault locked after ten wrong daily checks.</string>
-    <string name="owner_check_notice_failed_pin">A daily check failed: wrong PIN.</string>
+    <!-- Owner-approved 2026-11-05 (replaces the daily-check wording) -->
+    <string name="owner_check_notice_failed_pin">A PIN check failed: wrong PIN.</string>
     <string name="owner_check_notice_failed_password">A daily check failed: wrong credential password.</string>
+    <!-- Owner-approved 2026-11-05 (iOS #216): a failed check whose ref is neither pin nor password, or has none -->
+    <string name="owner_check_notice_failed">A daily check failed.</string>
     <string name="owner_check_notice_hold_off">The hold was turned off.</string>
     <string name="owner_check_notice_hold_off_until">The hold was turned off until %1$s.</string>
     <string name="owner_check_notice_hold_on">The hold was turned back on.</string>

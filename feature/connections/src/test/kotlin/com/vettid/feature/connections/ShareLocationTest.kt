@@ -31,6 +31,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import androidx.compose.runtime.collectAsState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -42,7 +43,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.time.Instant
 
-/** The share sheet and the connection page's location card (ANDROID-PLAN §4 "Location", L1a). */
+/** The share sheet (ANDROID-PLAN §4 "Location", L1a); the connection page's card is in [LocationCardTest]. */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], qualifiers = "w411dp-h2400dp")
@@ -62,7 +63,11 @@ class ShareLocationTest {
         return f.value
     }
 
-    private fun vm() = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location)
+    private val prefs = com.vettid.core.data.prefs.InMemoryPreferencesRepository(
+        com.vettid.core.data.prefs.AppPreferences(distanceUnits = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS),
+    )
+
+    private fun vm() = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location, prefs)
 
     // --- the choices and the vault's bounds ---
 
@@ -335,6 +340,7 @@ class ShareLocationTest {
 
     private val open = ShareLocationUiState(
         "c1", open = true, permission = LocationPermission.PRECISE, availability = com.vettid.core.data.location.LocationAvailability.AVAILABLE,
+        units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS,
     )
 
     @Test
@@ -344,9 +350,9 @@ class ShareLocationTest {
         rule.onNodeWithText("Once").assertIsDisplayed()
         rule.onNodeWithText("Sends one position now; ends after 15 minutes").assertIsDisplayed()
         rule.onNodeWithText("For a while").assertIsDisplayed()
-        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few metres", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
+        listOf("15 min", "1 hour", "8 hours", "1 day", "7 days", "Precision", "Approximate", "within about 1 km", "Exact", "within a few meters", "City", "within about 10 km", "Update every", "30 s", "1 min", "5 min", "Start sharing")
             .forEach { rule.requireText(it) }
-        rule.onNodeWithText("Approximate and City show the centre of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
+        rule.onNodeWithText("Approximate and City show the center of a fixed area. If you move across an area's edge, $sam may see that you were near it.").assertIsDisplayed()
         rule.onNodeWithText("Let $sam keep the trail").assertIsDisplayed()
         rule.onNodeWithText("Without this, $sam sees only your latest position.").assertIsDisplayed()
         rule.onNodeWithTag("share_location_trail").assertIsDisplayed()
@@ -426,116 +432,6 @@ class ShareLocationTest {
     }
 
     // --- the connection page ---
-
-    @Test
-    fun theCardOffersShareMyLocationAndWhileSharingSaysUntilWhenWithStop() {
-        val c = FakeSocial.connection("c1", "Sam")
-        var shared = 0
-        var stopped = 0
-        val detail = androidx.compose.runtime.mutableStateOf(ConnectionDetailUiState(c.id, c, null, loading = false))
-        rule.setContent { ConnectionDetailScreen(detail.value, DetailActions(onShareLocation = { shared++ }, onStopSharingLocation = { stopped++ })) }
-        rule.onNodeWithTag("detail_location_share").assertIsDisplayed().performClick()
-        assertEquals(1, shared)
-        detail.value = detail.value.copy(location = DetailLocation("s1", Instant.now().plusSeconds(1_800)))
-        rule.onNodeWithTag("detail_location_sharing").assertIsDisplayed()
-        rule.onNodeWithText("Stop").assertIsDisplayed().performClick()
-        assertEquals(1, stopped)
-        val h = rule.onNodeWithTag("detail_location_stop").getUnclippedBoundsInRoot().let { it.bottom - it.top }
-        assertTrue(h >= 48.dp)
-    }
-
-    private fun card(loc: DetailLocation?, missed: Boolean = false, onStop: () -> Unit = {}) {
-        val c = FakeSocial.connection("c1", "Sam")
-        rule.setContent {
-            ConnectionDetailScreen(
-                ConnectionDetailUiState(c.id, c, null, loading = false, location = loc, locationMissed = missed),
-                DetailActions(onStopSharingLocation = onStop),
-            )
-        }
-    }
-
-    @Test
-    fun thePausedCardSaysSoAndKeepsStop() {
-        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), paused = true))
-        rule.onNodeWithText("Paused until your daily check.").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
-        assertEquals(0, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
-    }
-
-    @Test
-    fun aCardThatIsNotSendingSaysWhyWithStopAndWhereItCanBePutRight() {
-        val until = Instant.now().plusSeconds(1_800)
-        card(DetailLocation("s1", until, issue = com.vettid.core.data.location.SendIssue.NO_PERMISSION))
-        rule.onNodeWithText("Not sending: location is off for VettID.").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_settings").assertIsDisplayed()
-        assertEquals(0, rule.onAllNodesWithText("Sharing your location until", substring = true).fetchSemanticsNodes().size)
-    }
-
-    @Test
-    fun locationOffOnThePhoneOffersTheLocationSettings() {
-        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = com.vettid.core.data.location.SendIssue.LOCATION_OFF))
-        rule.onNodeWithText("Not sending: location is off on this phone.").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_settings").assertIsDisplayed()
-        val h = rule.onNodeWithTag("detail_location_settings").getUnclippedBoundsInRoot().let { it.bottom - it.top }
-        assertTrue(h >= 48.dp)
-    }
-
-    @Test
-    fun aStopToWaitForIsSaidWithoutASettingsButton() {
-        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), issue = com.vettid.core.data.location.SendIssue.STOP_PENDING))
-        rule.onNodeWithText("Not sending until your vault has stopped a share.").assertIsDisplayed()
-        assertEquals(0, rule.onAllNodesWithTag("detail_location_settings").fetchSemanticsNodes().size)
-    }
-
-    @Test
-    fun aOnceShareThatFoundNoPositionIsSaidAboveTheButton() {
-        card(null, missed = true)
-        rule.onNodeWithText("No position was found, so nothing was sent.").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_share").assertIsDisplayed()
-    }
-
-    @Test
-    fun theDetailViewModelCarriesThePausedStateTheIssueAndTheMissedOnce() = runTest {
-        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
-        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
-        val share = location.start(com.vettid.core.data.location.ShareRequest("c1"))
-        location.serviceState.value = com.vettid.core.data.location.ServiceState(
-            listOf(com.vettid.core.data.location.ServiceState.Target("c1", share.expiresAt)),
-            paused = true,
-            issue = com.vettid.core.data.location.SendIssue.STOP_PENDING,
-        )
-        advanceUntilIdle()
-        val shown = read(vm.uiState).location!!
-        assertTrue(shown.paused)
-        assertEquals(com.vettid.core.data.location.SendIssue.STOP_PENDING, shown.issue)
-        location.stop(share.shareId)
-        location.missedOnce.value = setOf("c1")
-        advanceUntilIdle()
-        assertTrue(read(vm.uiState).locationMissed)
-        assertNull(read(vm.uiState).location)
-    }
-
-    @Test
-    fun aStoppingShareIsSaidSoAndKeepsStop() {
-        card(DetailLocation("s1", Instant.now().plusSeconds(1_800), stopping = true))
-        rule.onNodeWithText("Stopping…").assertIsDisplayed()
-        rule.onNodeWithTag("detail_location_stop").assertIsDisplayed()
-        assertEquals(0, rule.onAllNodesWithText("Sharing your location until", substring = true).fetchSemanticsNodes().size)
-    }
-
-    @Test
-    fun theDetailViewModelSaysStoppingWhileTheStopIsPending() = runTest {
-        val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
-        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
-        location.start(com.vettid.core.data.location.ShareRequest("c1"))
-        advanceUntilIdle()
-        assertFalse(read(vm.uiState).location!!.stopping)
-        // The share's sending ended (it is no target any more) but its stop is not taken: still listed, "Stopping…".
-        location.serviceState.value = com.vettid.core.data.location.ServiceState(stopping = setOf("c1"))
-        advanceUntilIdle()
-        assertTrue(read(vm.uiState).location!!.stopping)
-    }
 
     @Test
     fun aStartRefusedBecauseNothingCouldBeSentSaysWhyWithSettings() = runTest {
@@ -647,5 +543,56 @@ class ShareLocationTest {
         advanceUntilIdle()
         assertFalse(read(vm.uiState).alreadySharing)
         assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun thePrecisionNotesFollowTheUnitsSettingAtOnce() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.open()
+        advanceUntilIdle()
+        rule.setContent {
+            ShareLocationSheet(vm.uiState.collectAsState().value, sam, ShareLocationActions())
+        }
+        listOf("within about 1 km", "within a few meters", "within about 10 km").forEach { rule.requireText(it) }
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.MILES)
+        advanceUntilIdle()
+        rule.waitForIdle()
+        listOf("within about half a mile", "within a few yards", "within about 6 miles").forEach { rule.requireText(it) }
+        assertEquals(0, rule.onAllNodesWithText("within about 1 km").fetchSemanticsNodes().size)
+        prefs.setDistanceUnits(com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC)
+        advanceUntilIdle()
+        rule.waitForIdle()
+        // Robolectric's default locale is en-US: Automatic reads as miles.
+        rule.requireText("within about half a mile")
+    }
+
+    @Test
+    fun whileTheVaultsLocationSupportIsUnknownAFailedReadCanBeTriedAgain() = runTest {
+        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+        location.fail = VaultFailure(FailureKind.NETWORK)
+        val vm = vm()
+        vm.open()
+        vm.setOnce(true)
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, read(vm.uiState).error)
+        assertFalse(read(vm.uiState).available)
+        var tried = 0
+        sheet(read(vm.uiState), ShareLocationActions(onRetry = { tried++ }))
+        rule.onNodeWithTag("share_location_retry").assertIsDisplayed().performClick()
+        assertEquals(1, tried)
+        // The view model reads again and keeps what the member chose.
+        vm.retry()
+        advanceUntilIdle()
+        assertNull(read(vm.uiState).error)
+        assertTrue(read(vm.uiState).available)
+        assertTrue(read(vm.uiState).once)
+    }
+
+    @Test
+    fun aKnownAvailabilityHasNoTryAgainOnItsErrorCard() {
+        sheet(open.copy(error = FailureKind.NETWORK))
+        rule.onNodeWithTag("share_location_error").assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithTag("share_location_retry").fetchSemanticsNodes().size)
     }
 }

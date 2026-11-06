@@ -254,6 +254,9 @@ object KeptTransfer {
 object TransferInWait {
     val WAIT: java.time.Duration = java.time.Duration.ofMinutes(11)
 
+    /** The vault's own window for the approval (VAULT-MESSAGING §6.7, 0.10.4), counted from the stored start. */
+    val VAULT_WINDOW: java.time.Duration = java.time.Duration.ofMinutes(10)
+
     private val MIN_LEFT: java.time.Duration = java.time.Duration.ofSeconds(1)
 
     /** What is left of [WAIT] at [now] for a transfer this phone started at [started] (at least a second). */
@@ -331,6 +334,9 @@ object ReleasePath {
 
     /** (0.83.0, decision 17) Whether the vault lists `item_ways`: only then may an agent's rule include items automatically. */
     fun itemWays(capabilities: List<String>): Boolean = com.vettid.core.crypto.altchan.Capabilities.ITEM_WAYS in capabilities
+
+    /** (0.83.3) Whether the vault lists `vote_rows`: only then are `other_rows` and `rows_unavailable` sent (§10.19.6 step 3). */
+    fun voteRows(capabilities: List<String>): Boolean = com.vettid.core.crypto.altchan.Capabilities.VOTE_ROWS in capabilities
 
     /** Whether recovery is offered: always for a release before R (its earlier recovery), else only with `recovery_offered`. */
     fun recoveryOffered(capabilities: List<String>): Boolean =

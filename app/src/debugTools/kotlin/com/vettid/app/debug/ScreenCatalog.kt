@@ -667,6 +667,8 @@ object ScreenCatalog {
         "transfer_in.paste" to { TIn(TransferInUiState(step = TransferInStep.PASTE, input = "not a code", inputProblem = FailureKind.INVITE_INVALID)) },
         "transfer_in.connecting" to { TIn(TransferInUiState(step = TransferInStep.CONNECTING)) },
         "transfer_in.compare" to { TIn(TransferInUiState(step = TransferInStep.COMPARE, sas = "042817", secondsLeft = 563)) },
+        "transfer_in.checking" to { TIn(TransferInUiState(step = TransferInStep.COMPARE, sas = "042817", secondsLeft = 0, settling = true)) },
+        "transfer_in.session_ended" to { TIn(TransferInUiState(step = TransferInStep.SESSION_ENDED)) },
         "transfer_in.done" to { TIn(TransferInUiState(step = TransferInStep.DONE)) },
         "transfer_in.done_no_guid" to { TIn(TransferInUiState(step = TransferInStep.DONE, canUnlockLater = false)) },
         "transfer_in.rejected" to { TIn(TransferInUiState(step = TransferInStep.REJECTED)) },
@@ -928,6 +930,10 @@ object ScreenCatalog {
         },
         "settings.screenshots_on_development" to {
             SettingsContent(SettingsUiState(account = sampleAccount, screenshotsAllowed = true, screenshotsStayOn = true), SettingsActions())
+        },
+        // Settings → App → Units: the row and its three choices (owner decision 2026-11-05).
+        "settings.units" to {
+            SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askUnits = true)
         },
         "settings.screenshots_confirm" to {
             SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), askScreenshots = true)

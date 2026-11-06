@@ -44,7 +44,7 @@
     <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>
     <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>
     <string name="data_failure_invite_not_connection">That code is not a connection invitation.</string>
-    <string name="data_failure_invite_unavailable">This invitation is no longer available: it was used, cancelled or has expired. Ask for a new one.</string>
+    <string name="data_failure_invite_unavailable">This invitation is no longer available: it was used, canceled or has expired. Ask for a new one.</string>
     <!-- PENDING owner approval (no unblock advice; the apps don't offer blocking, 2026-11-03) -->
     <string name="data_failure_blocked">You blocked this vault earlier, so this invitation can\'t be used to connect.</string>
     <string name="data_failure_credential_locked">Your credential is locked. Enter your credential password to continue.</string>
@@ -201,7 +201,8 @@
     <string name="data_feed_credential_rotated">Your credential was renewed</string>
     <string name="data_feed_credential_reset">Your credential was reset</string>
     <string name="data_feed_check_failed">A daily check failed</string>
-    <string name="data_feed_check_failed_pin">A daily check failed: wrong PIN</string>
+    <!-- Owner-approved 2026-11-05 (replaces the daily-check wording) -->
+    <string name="data_feed_check_failed_pin">A PIN check failed: wrong PIN</string>
     <string name="data_feed_check_failed_password">A daily check failed: wrong password</string>
     <string name="data_feed_check_locked">Your vault locked after 10 failed checks</string>
     <string name="data_feed_hold_off_until">Hold turned off until %1$s</string>
@@ -263,6 +264,9 @@
     <string name="data_feed_vote_open">A new vote</string>
     <string name="data_feed_vote_closing">A vote closes soon</string>
     <string name="data_feed_vote_result">Vote results are out</string>
+    <!-- Owner-approved 2026-11-06 (decision a, thread 01M6RH58PE19ZBEHX3JK5ZW06A): the give-up `vote.result` item. -->
+    <string name="data_feed_vote_result_gave_up">Vote results not checked yet</string>
+    <string name="data_feed_vote_result_gave_up_detail">VettID couldn\'t check the published results of this vote yet. It will check them again by itself when it can. You don\'t need to do anything.</string>
     <string name="data_feed_vote_problem">Check your vote</string>
     <string name="data_feed_vote_problem_body">Something about your vote needs your attention.</string>
     <string name="data_feed_vote_line">%1$s: %2$s</string>
@@ -292,6 +296,13 @@
     <string name="data_location_open_settings">Open settings</string>
     <!-- DRAFT: ANDROID-PLAN §4 Location (Texts: Paused). The same words as the ongoing notification's. -->
     <string name="data_location_paused">Paused until your daily check.</string>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). On the card and in the notice: %1$s the first name, %2$d the minutes. -->
+    <plurals name="data_location_stalled">
+        <item quantity="one">Your location hasn\'t reached %1$s for %2$d minute.</item>
+        <item quantity="other">Your location hasn\'t reached %1$s for %2$d minutes.</item>
+    </plurals>
+    <!-- NEW: not in the plan (A6 N21, owner decision 2026-11-05). The notice without a name: the app lock's cover is up, or names are not shown. -->
+    <string name="data_location_stalled_unnamed">Your location isn\'t getting through.</string>
     <string name="data_location_missed">No position was found, so nothing was sent.</string>
 
     <!-- Receiving a connection's location (ANDROID-PLAN §4 "Location", L1b). All NEW: not in the plan. -->
@@ -304,20 +315,24 @@
     <!-- NEW: not in the plan -->
     <string name="data_location_age_days">%1$d d</string>
     <!-- NEW: not in the plan (the plan's example is "1 km") -->
-    <string name="data_location_metres">%1$d m</string>
+    <string name="data_location_metres">%1$s m</string>
     <!-- NEW: not in the plan -->
     <string name="data_location_kilometres">%1$s km</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05): feet, under about 0.1 mile -->
+    <string name="data_location_feet">%1$s ft</string>
+    <!-- NEW: not in the plan (units, owner decision 2026-11-05) -->
+    <string name="data_location_miles">%1$s mi</string>
     <!-- NEW: not in the plan (distance and direction from this phone) -->
     <string name="data_location_from_here">About %1$s %2$s of this phone</string>
     <!-- NEW: not in the plan (the position is within its own accuracy of this phone) -->
     <string name="data_location_near_here">Near this phone</string>
     <!-- NEW: not in the plan (eight compass words) -->
     <string name="data_location_dir_n">north</string>
-    <string name="data_location_dir_ne">north-east</string>
+    <string name="data_location_dir_ne">northeast</string>
     <string name="data_location_dir_e">east</string>
-    <string name="data_location_dir_se">south-east</string>
+    <string name="data_location_dir_se">southeast</string>
     <string name="data_location_dir_s">south</string>
-    <string name="data_location_dir_sw">south-west</string>
+    <string name="data_location_dir_sw">southwest</string>
     <string name="data_location_dir_w">west</string>
-    <string name="data_location_dir_nw">north-west</string>
+    <string name="data_location_dir_nw">northwest</string>
 </resources>

@@ -116,7 +116,7 @@ fun OnboardingContent(
     onOpenAccountSite: () -> Unit,
     recover: @Composable (onLeave: () -> Unit, onNewVault: () -> Unit, onOpenAccountSite: () -> Unit) -> Unit =
         { l, n, o -> RecoverFlow(l, n, o) },
-    transferIn: @Composable (onLeave: () -> Unit) -> Unit = { l -> TransferInFlow(l) },
+    transferIn: @Composable (onLeave: () -> Unit) -> Unit = { l -> TransferInFlow(l, onRecover = actions::recover) },
     camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val canBack = state.step in BACKABLE || (state.step == OnboardingStep.PASSWORD && !state.credentialOnly)

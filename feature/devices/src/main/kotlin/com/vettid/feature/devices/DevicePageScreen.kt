@@ -38,8 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -260,6 +260,7 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
         ),
         body = body,
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("device_failure"),
+        announce = LiveRegionMode.Polite,
         actions = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.devices_ok)) } },
     )
 }
@@ -427,8 +428,9 @@ private fun RuleRow(r: ShareRule, itemWays: Boolean, onOpen: (String) -> Unit) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = Spacing.touchTarget)
-            .clickable(role = Role.Button) { onOpen(r.ruleId) }
-            .semantics(mergeDescendants = true) { contentDescription = cd }
+            // "edit this rule" is the click's label, so the row's own text (mode, limits, the privacy warning) is read as it is.
+            .clickable(onClickLabel = cd, role = Role.Button) { onOpen(r.ruleId) }
+            .semantics(mergeDescendants = true) {}
             .padding(vertical = Spacing.xs)
             .testTag("rule_${r.ruleId}"),
     ) {

@@ -12,6 +12,7 @@ import androidx.compose.ui.text.withStyle
 import com.vettid.core.data.votes.RejectedWhy
 import com.vettid.core.data.votes.VoteChip
 import com.vettid.core.data.votes.VoteNote
+import com.vettid.core.data.votes.VoteWire
 
 /**
  * The words of the Votes screens (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes"): which text a state of the vault reads as.
@@ -40,6 +41,8 @@ internal object VoteTexts {
         VoteNote.IN_RESULTS_CONFLICT -> R.string.vote_conflict_after_verified
         VoteNote.UNCONFIRMED -> R.string.vote_state_unconfirmed
         VoteNote.DIDNT_VOTE -> R.string.vote_state_didnt_vote
+        VoteNote.RESULTS_DONT_ADD_UP -> R.string.vote_results_dont_add_up
+        VoteNote.RESULTS_NOT_RECHECKED -> R.string.vote_results_not_rechecked
         VoteNote.CHECK_PENDING -> R.string.vote_check_pending
         VoteNote.CHECK_RESULTS_PROBLEM -> R.string.vote_check_results_problem
         VoteNote.CHECK_RESULTS_TOO_LARGE -> R.string.vote_check_results_too_large
@@ -91,6 +94,14 @@ internal object VoteTexts {
         RejectedWhy.RECORD -> R.string.vote_rejected_record
         RejectedWhy.OTHER -> R.string.vote_rejected_other
     }
+
+    /**
+     * The label a choice is shown by (ANDROID-PLAN 0.1.117): the reserved `abstain` always in the app's own words
+     * ("Abstain"), whatever its label; any other choice by [label] (as sent, cleaned; a real choice that reads "Abstain" is
+     * already its id, `VoteWire.readsAbstain`). Null when there is no [label] for a choice that is not `abstain`.
+     */
+    fun choiceLabel(r: Resources, id: String?, label: String?): String? =
+        if (id == VoteWire.ABSTAIN) r.getString(R.string.vote_choice_abstain) else label
 
     /**
      * A note's text. [service] is the service's name (isolated), [time] the time `vote_not_open` names. A note whose text

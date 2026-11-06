@@ -12,7 +12,8 @@
 #   different, Google-held certificate (owner decision 2026-10-11), so a Play install and an F-Droid install
 #   cannot update each other. Check it against the published APK before submitting
 #   (`apksigner verify --print-certs`);
-# - the signed foss APK published at the `Binaries` URL for that tag;
+# - the signed foss APK published at the `Binaries` URL for that tag, signed with `apksigner sign --alignment-preserved
+#   --v1-signing-enabled false` and checked with `apksigcopier compare` first (README "F-Droid build");
 # - store listing text and images in this repository (fastlane/metadata/android/en-US/), or Summary/Description here.
 
 Categories:

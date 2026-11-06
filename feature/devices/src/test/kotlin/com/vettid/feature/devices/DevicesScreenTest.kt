@@ -76,14 +76,33 @@ class DevicesScreenTest {
     fun thePairButtonIsThereWithOnlyThisPhoneAndWithAgents() {
         var pairs = 0
         rule.setContent { DevicesScreen(state(phone), chrome, now = now, onPair = { pairs++ }) }
-        rule.onNodeWithContentDescription("Pair an agent").performClick()
+        // The button offers both pairings (owner decision 2026-11-05); Pair an agent is the agent's.
+        rule.onNodeWithContentDescription("Pair an agent or desktop").performClick()
+        rule.onNodeWithText("Pair an agent").performClick()
         assertEquals(1, pairs)
+    }
+
+    @Test
+    fun theButtonOffersPairAnAgentAndPairADesktopEachItsOwnAction() {
+        val picked = mutableListOf<String>()
+        rule.setContent {
+            DevicesScreen(state(phone, agent), chrome, now = now, onPair = { picked += "agent" }, onPairDesktop = { picked += "desktop" })
+        }
+        // Nothing is chosen until one is tapped.
+        rule.onNodeWithTag("pair_new").performClick()
+        rule.onNodeWithTag("pair_agent").assertIsDisplayed()
+        rule.onNodeWithTag("pair_desktop").assertIsDisplayed()
+        rule.onNodeWithText("Pair a desktop").performClick()
+        assertEquals(listOf("desktop"), picked)
+        rule.onNodeWithTag("pair_new").performClick()
+        rule.onNodeWithText("Pair an agent").performClick()
+        assertEquals(listOf("desktop", "agent"), picked)
     }
 
     @Test
     fun theListShowsThePairButtonBesideAgents() {
         list(state(phone, agent))
-        rule.onNodeWithTag("pair_agent").assertIsDisplayed()
+        rule.onNodeWithTag("pair_new").assertIsDisplayed()
     }
 
     @Test
@@ -94,9 +113,12 @@ class DevicesScreenTest {
     }
 
     @Test
-    fun thisPhoneAloneSaysNoAgentsYet() {
+    fun thisPhoneAloneSaysNothingIsPairedYetForAgentsAndDesktopsAlike() {
         list(state(phone))
-        rule.onNodeWithText("No agents yet").assertIsDisplayed()
+        rule.onNodeWithText("Nothing paired yet").assertIsDisplayed()
+        rule.onNodeWithText("Pair VettID on your computer, or pair an agent to let an AI assistant use items you choose.", substring = true)
+            .assertIsDisplayed()
+        assertEquals(0, rule.onAllNodesWithText("No agents yet").fetchSemanticsNodes().size)
         rule.onNodeWithText("This phone").assertIsDisplayed()
     }
 

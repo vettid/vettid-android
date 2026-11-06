@@ -258,10 +258,14 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
         if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
-            LocationCard(state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation)
+            LocationCard(
+                state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation, firstOf(c, name),
+            )
             // This connection shares with the member: the card with the latest position; Ask for location while it does not.
             state.incoming?.let {
-                IncomingLocationCard(it, firstOf(c, name), state.stoppingIncoming, actions.onOpenPosition, actions.onStopReceiving)
+                IncomingLocationCard(
+                    it, firstOf(c, name), state.units, state.stoppingIncoming, actions.onOpenPosition, actions.onStopReceiving,
+                )
             } ?: AskLocationCard(actions.onAskLocation, enabled = !state.busy)
         }
         if (c.service) {

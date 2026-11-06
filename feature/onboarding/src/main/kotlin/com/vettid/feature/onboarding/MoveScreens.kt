@@ -115,14 +115,23 @@ internal fun ScannerBox(
 }
 
 @Composable
-private fun Waiting(text: String, modifier: Modifier = Modifier) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
-    ) {
-        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.size(Spacing.m))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
+private fun Waiting(text: String, modifier: Modifier = Modifier, note: String? = null) {
+    // (follow-up to #302) The optional note is inside the same polite live region, so TalkBack reads both lines at once.
+    Column(modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.size(Spacing.m))
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+        if (note != null) {
+            Spacer(Modifier.height(Spacing.s))
+            Text(
+                note,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("checking_leave_note"),
+            )
+        }
     }
 }
 
@@ -135,6 +144,7 @@ private fun Failure(kind: FailureKind?, text: String? = null, modifier: Modifier
         stringResource(R.string.recover_failed_title),
         text ?: failureText(kind!!.messageRes(), kind.vaultCode(shownCode)),
         modifier.testTag("error"),
+        announce = LiveRegionMode.Polite,
     )
 }
 
@@ -517,9 +527,9 @@ fun MovedScreen(body: String, onGo: () -> Unit) {
 
 /** The transfer on this (new) phone, driven by [TransferInViewModel]. [onLeave] returns to the onboarding choice. */
 @Composable
-fun TransferInFlow(onLeave: () -> Unit, viewModel: TransferInViewModel = hiltViewModel()) {
+fun TransferInFlow(onLeave: () -> Unit, onRecover: () -> Unit = {}, viewModel: TransferInViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    TransferInContent(state, viewModel, onLeave)
+    TransferInContent(state, viewModel, onLeave, onRecover)
 }
 
 /** One transfer step on the new phone for [state] (stateless). */
@@ -529,6 +539,7 @@ fun TransferInContent(
     state: TransferInUiState,
     actions: TransferInActions,
     onLeave: () -> Unit,
+    onRecover: () -> Unit = {},
     camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val back: () -> Unit = { if (!actions.back()) onLeave() }
@@ -620,17 +631,28 @@ fun TransferInContent(
         }
         TransferInStep.COMPARE -> FormScaffold(
             title = stringResource(R.string.transfer_in_compare_title),
-            body = stringResource(R.string.transfer_in_compare_body),
+            // (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
+            // Past the countdown the old phone can no longer approve: no code, no "0:00 left".
+            body = if (state.settling) null else stringResource(R.string.transfer_in_compare_body),
             primaryLabel = null,
             onPrimary = {},
-            secondaryLabel = stringResource(R.string.transfer_in_cancel),
+            // No cancel during the settlement window: a device.paired may be leased and must not be thrown away.
+            secondaryLabel = if (state.settling) null else stringResource(R.string.transfer_in_cancel),
             onSecondary = actions::cancel,
         ) {
             // (A6 audit N1) The screen stays on while the member approves on the old phone.
             KeepScreenOn()
-            state.sas?.let { SasBox(it) }
-            Spacer(Modifier.height(Spacing.l))
-            Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
+            if (state.settling) {
+                Waiting(
+                    stringResource(R.string.transfer_in_checking),
+                    Modifier.testTag("checking_old_phone"),
+                    note = stringResource(R.string.transfer_in_checking_leave),
+                )
+            } else {
+                state.sas?.let { SasBox(it) }
+                Spacer(Modifier.height(Spacing.l))
+                Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
+            }
         }
         // Release R (§11.14.10): the new phone finishes the move with its own secret before anything else.
         TransferInStep.DONE -> if (state.phoneSecret) {
@@ -658,7 +680,8 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_rejected"),
         ) {}
-        // (A6 audit N1) The 11-minute deadline passed with no approval (after one collect): dropped; a new code.
+        // (A6 audit N1) The 11-minute deadline passed with no approval (after collecting for the settlement window):
+        // dropped; a new code.
         TransferInStep.TIMED_OUT -> FormScaffold(
             title = stringResource(R.string.transfer_in_timeout_title),
             body = stringResource(R.string.transfer_in_timeout_body),
@@ -679,6 +702,16 @@ fun TransferInContent(
         ) {
             Failure(state.error, null, shownCode = state.errorShown)
         }
+        // (the recheck of #302) The session ended: neither dropped nor finishing; a new code, or recovery if it was approved.
+        TransferInStep.SESSION_ENDED -> FormScaffold(
+            title = stringResource(R.string.transfer_in_session_ended_title),
+            body = stringResource(R.string.transfer_in_session_ended_body),
+            primaryLabel = stringResource(R.string.transfer_in_scan_new),
+            onPrimary = actions::again,
+            secondaryLabel = stringResource(R.string.onboarding_elsewhere_recover),
+            onSecondary = onRecover,
+            modifier = Modifier.testTag("transfer_session_ended"),
+        ) {}
         TransferInStep.NOT_ANSWERED -> FormScaffold(
             title = stringResource(R.string.transfer_in_no_answer_title),
             body = stringResource(R.string.transfer_in_no_answer),

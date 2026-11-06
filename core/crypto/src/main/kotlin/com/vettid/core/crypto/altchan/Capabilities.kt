@@ -21,6 +21,9 @@ object Capabilities {
     /** (0.83.0) The ways to use a secret (§10.11): an agent's `item.get` is answered only for an item whose ways hold `reveal`. */
     const val ITEM_WAYS = "item_ways"
 
+    /** (0.83.3) `other_rows` and `rows_unavailable` of `vote.results.submit` (§10.19.6 step 3): sent only to a vault with it. */
+    const val VOTE_ROWS = "vote_rows"
+
     const val MEMBER = "capabilities"
     private const val MAX_NAMES = 32
     private const val MAX_NAME = 32

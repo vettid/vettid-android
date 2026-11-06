@@ -75,6 +75,9 @@ internal object VotesCatalog {
     private fun Vote(s: VoteSummary, d: VoteDetail? = detail(s), selected: String? = null, cast: CastStep = CastStep.NONE, hint: com.vettid.core.data.votes.VoteHint = com.vettid.core.data.votes.VoteHint()) =
         VoteScreen(VoteUiState(connectionId = CONN, proposalId = s.proposalId, summary = s, detail = d, serviceName = SERVICE, loaded = true, selected = selected, cast = cast, hint = hint), VoteActions())
 
+    /** The observer's verdict in memory: numbers show only with it (review 1, finding 6). */
+    private val passed = com.vettid.core.data.votes.VoteHint(verdict = com.vettid.core.data.votes.ObserverVerdict.PASSED)
+
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "votes" to { VotesScreen(list(open, recorded, closed, missed), chrome) },
         "votes.notices" to {
@@ -94,10 +97,20 @@ internal object VotesCatalog {
         "vote.recorded" to { Vote(recorded, detail(recorded, "yes")) },
         "vote.sending" to { Vote(summary("p5", "Adopt the budget", ballot = VoteBallot(BallotState.SENDING)), detail(open, "no")) },
         "vote.waiting" to { Vote(summary("p5", "Adopt the budget", ballot = VoteBallot(BallotState.WAITING, reason = "not_open")), detail(open, "no")) },
-        "vote.results" to { Vote(closed, detail(closed, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2))) },
+        "vote.results" to { Vote(closed, detail(closed, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = passed) },
+        "vote.results_dont_add_up" to {
+            Vote(closed, detail(closed, "abstain", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = com.vettid.core.data.votes.VoteHint(observerFailed = true, verdict = com.vettid.core.data.votes.ObserverVerdict.FAILED))
+        },
+        "vote.results_not_rechecked" to {
+            Vote(closed, detail(closed, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = com.vettid.core.data.votes.VoteHint(notRechecked = true))
+        },
+        "vote.rows_unavailable" to {
+            val s = closed.copy(check = VoteCheck(CheckState.GAVE_UP, "rows_unavailable"))
+            Vote(s, detail(s, "yes"))
+        },
         "vote.conflict_after_verified" to {
             val s = closed.copy(conflictEvidence = true)
-            Vote(s, detail(s, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)))
+            Vote(s, detail(s, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = passed)
         },
         "vote.failed" to {
             val s = closed.copy(check = VoteCheck(CheckState.FAILED))

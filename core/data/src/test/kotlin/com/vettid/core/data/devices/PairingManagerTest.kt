@@ -11,10 +11,13 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -24,13 +27,15 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.util.concurrent.CopyOnWriteArrayList
 
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
-/** Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). */
+/** Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2; "Pair a desktop", owner decision 2026-11-05; VAULT-MESSAGING §6.7, §10.3). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [36])
+@Suppress("LargeClass") // one scenario per rule of the pairing machine
 class PairingManagerTest {
     private var clock = Instant.parse("2026-10-26T12:00:00Z")
 
@@ -39,18 +44,44 @@ class PairingManagerTest {
 
     private inner class Ops : PairingOps {
         var created = obj("""{"pairing_id":"p1","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
-        val calls = mutableListOf<String>()
+        /** Written from the request threads (a reject and a create can be out at once): a list safe to add to and read concurrently. */
+        val calls: MutableList<String> = CopyOnWriteArrayList()
         val refuse = mutableMapOf<String, String>()
         var onApprove: () -> Unit = {}
 
-        override suspend fun create(): JsonObject {
+        val roles: MutableList<String> = CopyOnWriteArrayList()
+
+        /** An answer per role (else [created]), and a gate that holds the next create (once) until it is completed. */
+        val byRole = mutableMapOf<String, JsonObject>()
+        var holdNext: CompletableDeferred<Unit>? = null
+
+        /** Completed when an agent create reached the gate (the request runs on another thread, so a test must wait for it). */
+        val held = CompletableDeferred<Unit>()
+
+        override suspend fun create(role: PairRole): JsonObject {
+            roles += role.wire
             calls += "create"
             refuse["create"]?.let { throw VaultOpException("device.pair.create", it) }
-            return created
+            val gate = holdNext
+            if (gate != null && role == PairRole.AGENT) {
+                holdNext = null
+                held.complete(Unit)
+                gate.await()
+            }
+            return byRole[role.wire] ?: created
         }
+
+        /** Holds the next approval (once) until completed; [approveEntered] says it got there. */
+        var holdApprove: CompletableDeferred<Unit>? = null
+        val approveEntered = CompletableDeferred<Unit>()
 
         override suspend fun approve(pairingId: String, sessionSeconds: Int?) {
             calls += "approve:$pairingId:$sessionSeconds"
+            holdApprove?.let {
+                holdApprove = null
+                approveEntered.complete(Unit)
+                it.await()
+            }
             onApprove()
             refuse["approve"]?.let { throw VaultOpException("device.pair.approve", it) }
         }
@@ -533,5 +564,322 @@ class PairingManagerTest {
         m.start()
         assertEquals(listOf("create"), ops.calls)
         assertTrue(m.state.value.stage is PairingStage.Compare)
+    }
+
+    private fun desktopLink() = link(InviteKind.DESKTOP)
+
+    private fun TestScope.desktop(ops: Ops, known: Set<String>? = setOf("me"), listed: List<DeviceInfo> = emptyList()) =
+        manager(ops, known, listed).also {
+            ops.created = obj("""{"pairing_id":"p1","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+        }
+
+    private fun desktopDevice(id: String, name: String) = DeviceInfo(id, "desktop", name, null, null, null, null)
+
+    @Test
+    fun aDesktopCodeAsksForTheDesktopRoleAndTheStateSaysSo() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        assertEquals(listOf("desktop"), ops.roles)
+        assertTrue(m.state.value.stage is PairingStage.Code)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        // The agent's button still asks for an agent.
+        val a = Ops()
+        manager(a).also { it.start() }
+        assertEquals(listOf("agent"), a.roles)
+    }
+
+    @Test
+    fun anAgentLinkIsRefusedForADesktopPairingAndTheReverse() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        // Default (an agent link) for a desktop pairing: never shown.
+        m.start(PairRole.DESKTOP)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(FailureKind.OTHER, m.state.value.error)
+        // A desktop link for an agent pairing: never shown.
+        ops.created = obj("""{"pairing_id":"p1","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+        m.acknowledge()
+        m.start(PairRole.AGENT)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(FailureKind.OTHER, m.state.value.error)
+        // The right kind for each is shown.
+        m.acknowledge()
+        m.start(PairRole.DESKTOP)
+        assertTrue(m.state.value.stage is PairingStage.Code)
+    }
+
+    @Test
+    fun aDesktopPairingIsComparedAndApprovedWithNoGrants() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(name = "Work laptop", role = "desktop"))
+        val c = m.state.value.stage as PairingStage.Compare
+        assertTrue(c.pending.comparable)
+        assertEquals("123456", c.pending.sas)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        m.approve(3600)
+        // The approval op has no place for grants: pairing id and the first session only.
+        assertEquals(listOf("create", "approve:p1:3600"), ops.calls)
+        assertTrue(m.state.value.stage is PairingStage.Paired)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+    }
+
+    @Test
+    fun aDesktopPairingWhosePendingIsForAnAgentOrHasNoCodeCanOnlyBeRejected() = runTest {
+        for ((sas, role) in listOf("123456" to "agent", "12345" to "desktop", "abcdef" to "desktop")) {
+            val ops = Ops()
+            val m = desktop(ops)
+            m.start(PairRole.DESKTOP)
+            m.onEvent(pending(sas = sas, role = role))
+            assertFalse("$sas $role", (m.state.value.stage as PairingStage.Compare).pending.comparable)
+            m.approve(3600)
+            assertEquals(listOf("create"), ops.calls)
+            m.reject()
+            assertEquals(listOf("create", "reject:p1"), ops.calls)
+        }
+        // And the agent's pairing refuses a desktop's pending.
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending(role = "desktop"))
+        assertFalse((m.state.value.stage as PairingStage.Compare).pending.comparable)
+    }
+
+    @Test
+    fun aMismatchRejectsADesktopPairing() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(role = "desktop"))
+        m.reject()
+        assertEquals(listOf("create", "reject:p1"), ops.calls)
+        assertEquals(PairingStage.Rejected(told = true), m.state.value.stage)
+    }
+
+    @Test
+    fun aDesktopCodeExpiresAndALockClearsIt() = runTest {
+        val ops = Ops()
+        val m = desktop(ops)
+        m.start(PairRole.DESKTOP)
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        assertTrue(m.state.value.stage is PairingStage.CodeExpired)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        val n = desktop(Ops())
+        n.start(PairRole.DESKTOP)
+        n.onEvent(pending(role = "desktop"))
+        n.clear()
+        assertEquals(PairingState(), n.state.value)
+        n.onEvent(pending(role = "desktop"))
+        assertEquals(PairingStage.Idle, n.state.value.stage)
+    }
+
+    @Test
+    fun theNewDesktopsIdComesFromTheListAsADesktopNotAnAgent() = runTest {
+        val listed = listOf(agent("a1", "Work laptop"), desktopDevice("d1", "Work laptop"))
+        val m = desktop(Ops(), listed = listed)
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(name = "Work laptop", role = "desktop"))
+        m.approve(3600)
+        assertEquals("d1", (m.state.value.stage as PairingStage.Paired).deviceId)
+    }
+
+    private fun both(ops: Ops) {
+        ops.byRole["agent"] = obj("""{"pairing_id":"pa","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
+        ops.byRole["desktop"] = obj("""{"pairing_id":"pd","link":"${desktopLink()}","exp":"${clock.plusSeconds(600)}"}""")
+    }
+
+    @Test
+    fun theOtherButtonRejectsTheHeldCodeAndReplacesItInOneStep() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        assertEquals("pa", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        m.start(PairRole.DESKTOP)
+        // Already the desktop's code: nothing of the agent's is left to read, and the old id is told it is not wanted.
+        val s = m.state.value
+        assertEquals(PairRole.DESKTOP, s.role)
+        assertEquals("pd", (s.stage as PairingStage.Code).code.pairingId)
+        // (Idle runs the virtual time; the reject goes out in the manager's own scope, on a real thread: wait for it.)
+        advanceUntilIdle()
+        pump { ops.calls.contains("reject:pa") }
+        // The reject is launched before the desktop's create and both run on the IO dispatcher at once, so either can reach
+        // the vault first: only the agent's create comes first for sure, then the other two, once each, in either order.
+        assertEquals("create", ops.calls.first())
+        assertEquals(listOf("create", "reject:pa"), ops.calls.drop(1).sorted())
+    }
+
+    @Test
+    fun theOtherButtonRejectsAHeldComparisonToo() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.onEvent(pending(id = "pa"))
+        m.start(PairRole.DESKTOP)
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        advanceUntilIdle()
+        pump { ops.calls.contains("reject:pa") }
+        assertTrue(ops.calls.contains("reject:pa"))
+    }
+
+    /**
+     * Runs the test scheduler's current tasks until [until] holds, waiting for the request threads in real time but never
+     * advancing the virtual clock (a code's own end must not fire). Gives up after [timeoutMs] so no test can hang.
+     */
+    private fun TestScope.pump(timeoutMs: Long = 10_000, until: () -> Boolean) {
+        val end = System.nanoTime() + timeoutMs * 1_000_000
+        while (!until()) {
+            check(System.nanoTime() < end) { "timed out waiting" }
+            runCurrent()
+            Thread.sleep(5)
+        }
+    }
+
+    private fun held(m: PairingManager): String? = when (val st = m.state.value.stage) {
+        is PairingStage.Code -> st.code.pairingId
+        is PairingStage.CodeExpired -> st.pairingId
+        else -> null
+    }
+
+    @Test
+    fun aCreateOfTheOtherRoleStillInFlightIsSupersededDroppedAndRejected() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        assertTrue(m.state.value.stage is PairingStage.Creating)
+        // The desktop button while the agent's create is out: the desktop code is made, not skipped.
+        m.start(PairRole.DESKTOP)
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        gate.complete(Unit)
+        pump { first.isCompleted && ops.calls.contains("reject:pa") }
+        // The agent's late answer is dropped (the desktop code is still the one shown, exactly) and that pairing is rejected.
+        assertEquals("pd", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        assertFalse(ops.calls.contains("reject:pd"))
+    }
+
+    @Test
+    fun aSupersededCreateIsRejectedEvenWhenItsCallerWasCancelled() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        first.cancel()
+        m.start(PairRole.DESKTOP)
+        gate.complete(Unit)
+        pump { ops.calls.contains("reject:pa") }
+        assertEquals("pd", held(m))
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+    }
+
+    @Test
+    fun aLockDuringCreatingShowsNothingAndRejectsTheAnswerWhenItArrives() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        m.clear()
+        assertEquals(PairingState(), m.state.value)
+        gate.complete(Unit)
+        pump { first.isCompleted && ops.calls.contains("reject:pa") }
+        // Nothing of it was shown.
+        assertEquals(PairingState(), m.state.value)
+        assertEquals(listOf("create", "reject:pa"), ops.calls)
+    }
+
+    @Test
+    fun anApprovalInFlightIsNotSwitchedByTheOtherButton() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.onEvent(pending(id = "pa"))
+        val gate = CompletableDeferred<Unit>()
+        ops.holdApprove = gate
+        val approving = launch { m.approve(3600) }
+        pump { ops.approveEntered.isCompleted }
+        val before = m.state.value
+        assertTrue(before.busy)
+        m.start(PairRole.DESKTOP)
+        // Nothing changed: the same state and role, and no create (so no new generation either: the approval still settles).
+        assertEquals(before, m.state.value)
+        assertEquals(PairRole.AGENT, m.state.value.role)
+        assertEquals(listOf("agent"), ops.roles)
+        gate.complete(Unit)
+        // The approval settles as Paired (not dropped by a new generation); its search for the id then needs virtual time.
+        pump { m.state.value.stage is PairingStage.Paired }
+        advanceUntilIdle()
+        assertTrue(approving.isCompleted)
+        assertEquals(PairRole.AGENT, m.state.value.role)
+    }
+
+    @Test
+    fun theSameRoleKeepsAHeldCodeButTheOtherRoleReplacesAComparison() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        m.start(PairRole.AGENT)
+        assertEquals(listOf("create"), ops.calls)
+        m.onEvent(pending(id = "pa"))
+        m.start(PairRole.DESKTOP)
+        advanceUntilIdle()
+        assertEquals(PairRole.DESKTOP, m.state.value.role)
+        // The replaced comparison's reject goes out in the manager's own scope, on a real thread: wait for it.
+        pump { ops.calls.contains("reject:pa") }
+        assertTrue(ops.calls.contains("reject:pa"))
+    }
+
+    @Test
+    fun aReadablePairingWithTheWrongKindOrAnUnreadableLinkIsRejectedAtOnceAndNeverShown() = runTest {
+        val cases = listOf(
+            Triple(PairRole.AGENT, "p1", desktopLink()),
+            Triple(PairRole.DESKTOP, "p2", link()),
+            Triple(PairRole.AGENT, "p3", "not a link"),
+            Triple(PairRole.DESKTOP, "p4", "not a link"),
+        )
+        for ((role, id, bad) in cases) {
+            val ops = Ops()
+            ops.created = obj("""{"pairing_id":"$id","link":"$bad","exp":"${clock.plusSeconds(600)}"}""")
+            val m = manager(ops)
+            m.start(role)
+            // Nothing is shown, and the vault is told this pairing is not wanted (in the manager's scope).
+            assertEquals(PairingStage.Idle, m.state.value.stage)
+            assertEquals(FailureKind.OTHER, m.state.value.error)
+            pump { ops.calls.contains("reject:$id") }
+        }
+        // No readable id: nothing to reject.
+        val ops = Ops()
+        ops.created = obj("""{"link":"${link()}"}""")
+        val m = manager(ops)
+        m.start(PairRole.AGENT)
+        assertEquals(PairingStage.Idle, m.state.value.stage)
+        assertEquals(listOf("create"), ops.calls)
+    }
+
+    @Test
+    fun pressingTheOtherButtonJustAfterPairedStartsTheOtherPairingAndTheLateSearchTouchesNothing() = runTest {
+        val ops = Ops().also { both(it) }
+        val m = manager(ops, listed = listOf(desktopDevice("d1", "Work laptop")))
+        m.start(PairRole.DESKTOP)
+        m.onEvent(pending(id = "pd", name = "Work laptop", role = "desktop"))
+        val approving = launch { m.approve(3600) }
+        pump { m.state.value.stage is PairingStage.Paired }
+        // The id search is still waiting (virtual time); the member pairs an agent instead.
+        m.start(PairRole.AGENT)
+        assertEquals("pa", held(m))
+        assertEquals(PairRole.AGENT, m.state.value.role)
+        advanceUntilIdle()
+        assertTrue(approving.isCompleted)
+        assertEquals(PairRole.AGENT, m.state.value.role)
+        // The late search wrote nothing: the agent's code is still the one held.
+        assertEquals("pa", held(m))
     }
 }

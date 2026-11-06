@@ -338,4 +338,25 @@ class WalletDetailViewModelTest {
         eventually { !vm.state.value.capsPending }
         assertFalse(vm.state.value.settingsUnreadable)
     }
+
+    @Test
+    fun setTheLimitNowOnAWalletHeldInThisSessionSendsOneSetAndLiftsTheNote() = runTest {
+        val newId = "01NEW000000000000000000000"
+        val flags = WalletFlags(flagsFile)
+        flags.setPrivacyNoteShown(newId)
+        val m = manager(backgroundScope, ops, flags, chain)
+        m.open()
+        // Created with a limit, then the flow is left before the phrase check: the limit is held, nothing was sent for it.
+        val created = m.create("Savings", Network.TESTNET4, "pw".toCharArray(), com.vettid.core.wallet.WalletCaps(500_000, null))
+        assertEquals(newId, created.wallet.id)
+        assertTrue(ops.calls.none { it.startsWith("caps.set") })
+        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to newId)), m, settings)
+        eventually { vm.state.value.loaded && vm.state.value.capsPending }
+        assertTrue(ops.calls.none { it.startsWith("caps.set") })
+        val before = ops.calls.size
+        vm.retryCaps()
+        eventually { !vm.state.value.capsPending }
+        assertEquals(listOf("caps.set:500000:null"), ops.calls.drop(before))
+        assertTrue(vm.state.value.capped)
+    }
 }

@@ -41,13 +41,18 @@ suspend fun VaultApi.leashAgentResume(agentId: String) {
 }
 
 /*
- * Pairing an agent (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). Only an agent is ever paired from the app
- * (decision 9: no "Pair a desktop"), so the role is not a parameter.
+ * Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2; VAULT-MESSAGING §6.7, §10.3). "Pair a desktop" (owner decision
+ * 2026-11-05) reverses decision 9, so the role is a parameter; never `app` (that is a transfer, §6.7.1).
  */
 
-/** `device.pair.create{role: "agent"}` (§10.3): `{pairing_id, link, exp}`; the link is a bare pairing payload (§6.4). */
-suspend fun VaultApi.devicePairCreateAgent(): JsonObject =
-    device.op("device.pair.create", buildJsonObject { put("role", "agent") })
+/**
+ * `device.pair.create{role}` with [role] `agent` or `desktop` (§10.3): `{pairing_id, link, exp}`; the link is a bare pairing
+ * payload (§6.4).
+ */
+suspend fun VaultApi.devicePairCreate(role: String): JsonObject {
+    require(role == "agent" || role == "desktop") { "pairing role" }
+    return device.op("device.pair.create", buildJsonObject { put("role", role) })
+}
 
 /**
  * `device.pair.approve{pairing_id, session_seconds?}` (§10.3): `{}`. Never carries `grants` (decision 2: an agent's

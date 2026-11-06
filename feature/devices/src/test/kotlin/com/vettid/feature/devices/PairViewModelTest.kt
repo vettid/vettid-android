@@ -1,6 +1,7 @@
 package com.vettid.feature.devices
 
 import androidx.lifecycle.SavedStateHandle
+import com.vettid.core.data.devices.PairRole
 import com.vettid.core.data.devices.PairingCode
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.devices.PairingState
@@ -27,7 +28,8 @@ class PairViewModelTest {
     private val pairing = FakePairing()
     private val pending = PendingPairing("p1", "Claude", "123456", exp)
 
-    private fun vm(held: Boolean = false) = PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to held)), pairing, FakeVault())
+    private fun vm(held: Boolean = false, desktop: Boolean = false) =
+        PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to held, PairRoute.DESKTOP to desktop)), pairing, FakeVault())
 
     @Test
     fun theButtonOpensANewCodeAndAFeedItemOpensWhatIsHeld() = runTest {
@@ -160,5 +162,85 @@ class PairViewModelTest {
         val code = PairingCode("p", "SECRETLINKVALUE", exp)
         assertFalse(code.toString().contains("SECRETLINKVALUE"))
         assertFalse(pending.toString().contains("123456"))
+    }
+
+    @Test
+    fun thePairADesktopButtonStartsADesktopPairingAndNewCodeKeepsTheRole() = runTest {
+        val vm = vm(desktop = true)
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+        assertEquals(PairRole.DESKTOP, pairing.state.value.role)
+        pairing.calls.clear()
+        pairing.state.value = PairingState(PairingStage.CodeExpired("p1", exp), role = PairRole.DESKTOP)
+        vm.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+    }
+
+    @Test
+    fun aPairingHeldForTheOtherRoleIsReplacedByTheRepositoryInOneCall() = runTest {
+        pairing.state.value = PairingState(PairingStage.Code(PairingCode("p1", "x", exp)), role = PairRole.AGENT)
+        vm(desktop = true)
+        advanceUntilIdle()
+        // No cancel then start from the screen: the repository switches in `start`.
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+    }
+
+    @Test
+    fun newCodeAfterALockKeepsTheDesktopRoleOfTheRoute() = runTest {
+        val vm = vm(desktop = true)
+        advanceUntilIdle()
+        pairing.state.value = PairingState(PairingStage.Code(PairingCode("p1", "x", exp)), role = PairRole.DESKTOP)
+        advanceUntilIdle()
+        // The lock clears the repository: nothing, and the role of nothing is AGENT.
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        // The screen still says what it showed.
+        assertEquals(PairRole.DESKTOP, vm.uiState.value.pairing.role)
+        assertTrue(vm.uiState.value.interrupted)
+        pairing.calls.clear()
+        vm.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+    }
+
+    @Test
+    fun newCodeOnAHeldScreenKeepsTheRoleItLastShowed() = runTest {
+        val vm = vm(held = true)
+        pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.DESKTOP)
+        advanceUntilIdle()
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        pairing.calls.clear()
+        vm.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start:desktop"), pairing.calls)
+        // And an agent's held pairing starts an agent's.
+        val agent = vm(held = true)
+        pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.AGENT)
+        advanceUntilIdle()
+        pairing.state.value = PairingState()
+        advanceUntilIdle()
+        pairing.calls.clear()
+        agent.newCode()
+        advanceUntilIdle()
+        assertEquals(listOf("acknowledge", "start"), pairing.calls)
+    }
+
+    @Test
+    fun aDesktopApprovalSendsTheChosenSessionOnlyAndTheMismatchRejects() = runTest {
+        val vm = vm(desktop = true)
+        pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.DESKTOP)
+        advanceUntilIdle()
+        vm.codesMatch()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.sheet)
+        vm.pair()
+        advanceUntilIdle()
+        // The repository's approve takes the session and nothing else: no grants exist to send.
+        assertEquals("approve:3600", pairing.calls.last())
+        vm.reject()
+        advanceUntilIdle()
+        assertEquals("reject", pairing.calls.last())
     }
 }
