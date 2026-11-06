@@ -31,6 +31,12 @@ data class ResultsAttempt(
      */
     val answered: Boolean = false,
     /**
+     * That submission carried the member's real row, not `rows_unavailable` (the lead's review of #312, M2): a rows.json
+     * that was broken (over its cap, a row that is not a leaf, no row for the member, not reaching `rows_root`) may be
+     * corrected under the same results.json, so after such an attempt rows.json is always fetched again.
+     */
+    val sentRow: Boolean = false,
+    /**
      * Hex SHA-256 of the `results.json.sig` and `results.json.sigstore.json` it read (review 1, M4: public, small); null when
      * absent or not fetched. A fixed bundle or signature beside the same results.json is a change: fetched and sent again.
      */
@@ -43,7 +49,7 @@ data class ResultsAttempt(
      * vault and did not end on the vault's side.
      */
     fun skipsRows(results: String?, sig: String?, bundle: String?): Boolean =
-        answered && rowsFetched && !vaultSide && results != null && sig != null && bundle != null &&
+        answered && sentRow && rowsFetched && !vaultSide && results != null && sig != null && bundle != null &&
             results == resultsSha256 && sig == sigSha256 && bundle == bundleSha256
 
     override fun toString() = "ResultsAttempt"

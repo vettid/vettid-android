@@ -843,6 +843,9 @@ class VotesManager(
         /** rows.json's bytes were downloaded (review 1, L1: such an attempt counts toward the daily limit, whatever follows). */
         var rowsDownloaded = false
 
+        /** The submission carried the member's real row (not `rows_unavailable`). */
+        var sentRow = false
+
         /** An `Unchanged` re-check keeps the last attempt's "answered" (it is the same submission). */
         var answered = false
         var rowsFetched = false
@@ -906,6 +909,7 @@ class VotesManager(
             if (attemptOf(key)?.skipsRows(trace.resultsSha256, trace.sigSha256, trace.bundleSha256) == true) {
                 trace.rowsFetched = true
                 trace.answered = true
+                trace.sentRow = true
                 return@run ResultsOutcome.Unchanged
             }
         }
@@ -1011,6 +1015,7 @@ class VotesManager(
         if (synchronized(lock) { gen != generation }) return@run ResultsOutcome.Voided
         // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
         hint(key, gen) { it.copy(observerFailed = sent.observerFailed) }
+        trace.sentRow = !sent.unavailable
         val answer = vaultGuard { ops().submit(body) }
         val check = answer["check"] as? JsonObject
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
@@ -1166,6 +1171,7 @@ class VotesManager(
         val entry = ResultsAttempt(
             key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide,
             answered = out is ResultsOutcome.Submitted || trace.answered && out == ResultsOutcome.Unchanged,
+            sentRow = trace.sentRow && (out is ResultsOutcome.Submitted || out == ResultsOutcome.Unchanged),
             sigSha256 = trace.sigSha256,
             bundleSha256 = trace.bundleSha256,
         )

@@ -2051,4 +2051,43 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Rechecked(passed = true), recheck.await())
         assertEquals("one download: the recheck made none", 1, site.reads.count { it == "p/$PID/rows.json" })
     }
+
+    @Test
+    fun aCorrectedRowsJsonBesideTheSameResultsIsFetchedAgainAfterRowsUnavailable() = runTest {
+        // The lead's review of #312, M2: a broken rows.json gave rows_unavailable; the service corrects rows.json with
+        // results.json, its signature and bundle unchanged. The next re-check (daily, and Check again) fetches it again.
+        val o = observed()
+        val (ops, site) = observedScenario(o)
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"rows_unavailable"}}""")
+        site.answers["p/$PID/rows.json"] = ok(o.rowsJson.replace(Base64s.encodeStd(o.tags[2]), Base64s.encodeStd(tagOf(9))))
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, voteRows = true, attempts = store)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertRowsUnavailable(ops.submitted.single())
+        assertFalse(store.load().single().sentRow)
+        // Corrected: Check again fetches it and submits the real row.
+        site.answers["p/$PID/rows.json"] = ok(o.rowsJson)
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals("1", (ops.submitted.last()["row_proof"] as JsonObject).str("index"))
+        assertEquals(2, site.reads.count { it == "p/$PID/rows.json" })
+        // After a real row was answered, unchanged results are skipped as before.
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(2, site.reads.count { it == "p/$PID/rows.json" })
+        // The daily re-check too: a broken rows.json (rows_unavailable), corrected, a day later.
+        val (ops2, site2) = observedScenario(o)
+        ops2.list = listing(gaveUp())
+        ops2.submitAnswer = ops.submitAnswer
+        site2.answers["p/$PID/rows.json"] = ok(o.rowsJson.replace(Base64s.encodeStd(o.tags[2]), Base64s.encodeStd(tagOf(9))))
+        val m2 = manager(ops2, site2, voteRows = true)
+        m2.refresh()
+        assertTrue(m2.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertRowsUnavailable(ops2.submitted.single())
+        site2.answers["p/$PID/rows.json"] = ok(o.rowsJson)
+        clock = clock.plus(Duration.ofDays(1))
+        assertTrue(m2.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals("1", (ops2.submitted.last()["row_proof"] as JsonObject).str("index"))
+        assertEquals(2, site2.reads.count { it == "p/$PID/rows.json" })
+    }
 }

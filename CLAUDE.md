@@ -462,9 +462,11 @@ The A2 exit test:
   the vote's own state line already says where it stands (the lead's review of #312, M1, replacing review 1's L5 notice). The last attempt per vote is kept on disk (`ResultsAttempt` in
   `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir): the time, the SHA-256 of the `results.json`, `.sig`
   and `.sigstore.json` read (the last two always fetched, small; review 1 M4, the coordinator's call, a step past
-  §10.19.6's literal list), whether rows.json was had, whether the vault answered the submission (M2) and whether its
-  answer was on its side (`trust_root`, `service_list`, `clock`); **never a choice, row or proof**. With the same three
-  hashes, rows had, an answered submission and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends
+  §10.19.6's literal list), whether rows.json was had, whether the vault answered the submission (M2), whether that
+  submission carried the member's real row and not `rows_unavailable` (`sentRow`, the lead's review of #312, M2: a broken
+  rows.json may be corrected under the same results.json) and whether its answer was on its side (`trust_root`,
+  `service_list`, `clock`); **never a choice, row or proof**. With the same three hashes, rows had, an answered
+  submission of a real row and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends
   nothing (`ResultsOutcome.Unchanged`); an attempt that failed (no answer) counts as rows not had, and one cancelled or
   voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). The entry goes
   when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
