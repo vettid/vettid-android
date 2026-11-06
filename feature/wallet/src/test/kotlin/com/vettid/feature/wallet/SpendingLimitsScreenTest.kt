@@ -5,12 +5,14 @@ package com.vettid.feature.wallet
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.wallet.WalletsManager
@@ -118,6 +120,17 @@ class SpendingLimitsScreenTest {
         rule.onNodeWithTag("wallet_limits_password").assertExists()
         // Nothing to send until both are typed.
         rule.onNodeWithText("Raise").assertIsNotEnabled()
+    }
+
+    @Test
+    fun nextOnThePinMovesToThePasswordAndDoneOnThePasswordRaises() {
+        var raised = 0
+        show(state(step = LimitsStep.CONFIRM_RAISE, raise = true, form = CapsEditForm(perTx = "600000")), SpendingLimitsActions(onConfirmRaise = { raised++ }))
+        rule.onNodeWithTag("wallet_limits_pin").performImeAction()
+        rule.onNodeWithTag("wallet_limits_password").assertIsFocused()
+        assertEquals(0, raised)
+        rule.onNodeWithTag("wallet_limits_password").performImeAction()
+        assertEquals(1, raised)
     }
 
     @Test

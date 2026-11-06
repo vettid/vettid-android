@@ -740,6 +740,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override val unlockCheckOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     override val notices = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
     override val presenceUnrecorded = MutableStateFlow(false)
+    override val relayRefused = MutableStateFlow(false)
     override val checkAfterCancel = MutableStateFlow(false)
     override val lockCauseUnknown = MutableStateFlow(false)
 
