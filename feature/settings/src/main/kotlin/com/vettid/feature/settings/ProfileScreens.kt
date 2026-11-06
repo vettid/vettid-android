@@ -361,7 +361,7 @@ private fun NamesStep(state: ChangeNameUiState, actions: ChangeNameActions, now:
             }
             NameField(
                 state.first, actions.onFirst, stringResource(R.string.settings_name_first),
-                if (state.checked) nameError(state.firstCheck) else null, ImeAction.Next, {}, "name_first",
+                if (state.checked) nameError(state.firstCheck) else null, ImeAction.Next, null, "name_first",
             )
             NameField(
                 state.last, actions.onLast, stringResource(R.string.settings_name_last),
@@ -385,9 +385,10 @@ private fun NameField(
     label: String,
     error: String?,
     ime: ImeAction,
-    onIme: () -> Unit,
+    onIme: (() -> Unit)?,
     tag: String,
 ) {
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
@@ -396,7 +397,15 @@ private fun NameField(
         isError = error != null,
         singleLine = true,
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ime),
-        keyboardActions = androidx.compose.foundation.text.KeyboardActions(onAny = { onIme() }),
+        // Without a handler, Next goes to the field below (an empty one would do nothing).
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+            onAny = {
+                when {
+                    onIme != null -> onIme()
+                    ime == ImeAction.Next -> focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                }
+            },
+        ),
         modifier = Modifier.fillMaxWidth().testTag(tag),
     )
 }
