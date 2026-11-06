@@ -201,8 +201,8 @@ internal object TransferInResume {
      * move it at every failure for ever); or, after the final send, one more held final collect, for a lease noticed during
      * it that outlives its start (past the cap, or within it but ending after the send began), or for a final collect the
      * relay refused (429, or 401 with a stale signature: held for its `retry_after`, at most V, and signed afresh; any other
-     * status is no cut). Once the extra is used, nothing raises a hold past what was due when it was taken (a background or a
-     * return grants nothing); but a freeze during the last send (the app in the background) earns one more `wait=0` look, at
+     * status is no cut). Once the extra is used at or after the cap, nothing raises a hold past what was due when it was
+     * taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze during the last send (the app in the background) earns one more `wait=0` look, at
      * once and held for nothing, so the drop never follows only a look made before the freeze. Then the drop (not when
      * paired, not when the end moved past now).
      *
@@ -358,13 +358,15 @@ internal object TransferInResume {
 
         /**
          * The one extra of the settlement: a move of the hold target, or another held final collect after the send. [due]
-         * is the hold it grants: no later hold goes past it.
+         * is the hold it grants: when it is taken at or after the cap, no later hold goes past it. One taken before the cap
+         * (a refused or late last look at a first end the window then moved past) sets no ceiling: the first hold for a
+         * lease past the cap is still due (it is no move), and the bound holds, since that extra lies inside the window.
          */
         @Synchronized
         private fun takeExtra(due: Long): Boolean {
             if (extraUsed) return false
             extraUsed = true
-            ceiling = due
+            if (settle.now() >= cap) ceiling = due
             return true
         }
 

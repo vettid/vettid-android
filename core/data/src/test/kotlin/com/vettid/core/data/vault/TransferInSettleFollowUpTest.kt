@@ -368,4 +368,43 @@ class TransferInSettleFollowUpTest {
         assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle))
         assertEquals(listOf(185_000L, 280_000L), finals)
     }
+
+    /**
+     * (Review F2) An extra taken before the cap sets no ceiling on the first hold. F = 90 s, the cap 185 s. The last look at
+     * 90 s is rate limited (`retry_after` 1 s): the extra re-collects at 91 s, and the collector's request (written at 80 s,
+     * wait 25 s) is cut then: its lease runs to 165 s, the end to 180 s. At 175 s the collector's request written at 174 s
+     * (wait 25 s) is cut: its lease runs to 259 s, past the cap; the hold goes at 274 s, not at once.
+     */
+    @Test
+    fun anExtraTakenBeforeTheCapDoesNotBlockTheFirstHold() = runTest {
+        val clock = FrozenClock(this)
+        val cuts = mutableListOf<CollectorCut>() // sentAgoMs holds the send time here; turned into an age when read
+        var refused = false
+        var reCollected = false
+        val lasts = mutableListOf<Long>()
+        launch {
+            delay(175_000)
+            cuts += CollectorCut(2L, 174_000L, 25_000L)
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            when {
+                w == 0L && clock.now() >= 90_000 && !refused -> {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 1)
+                }
+                refused && !reCollected -> {
+                    reCollected = true
+                    cuts += CollectorCut(1L, 80_000L, 25_000L)
+                }
+                clock.now() >= 185_000 -> lasts += clock.now()
+            }
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = timingWith(clock), cuts = { cuts.size.toLong() },
+                cutLeases = { cuts.map { it.copy(sentAgoMs = clock.now() - it.sentAgoMs) } },
+            ),
+        )
+        assertEquals(listOf(274_000L), lasts)
+    }
 }
