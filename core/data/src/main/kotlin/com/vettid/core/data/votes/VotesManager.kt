@@ -810,7 +810,7 @@ class VotesManager(
                 // Never after a wipe: the store's epoch drops the write (M1).
                 val counted = !cancelled && out !is ResultsOutcome.Voided && synchronized(lock) { gen == generation }
                 if (counted || trace.rowsDownloaded) {
-                    withContext(NonCancellable) { recordAttempt(key, epoch, trace, if (counted) out else null) }
+                    withContext(NonCancellable) { recordAttempt(key, epoch, trace, if (counted) out else null, due) }
                 }
             }
         }
@@ -1165,17 +1165,24 @@ class VotesManager(
         return since < 0 || since >= RECHECK_EVERY.toMillis()
     }
 
-    private suspend fun recordAttempt(key: String, epoch: Int, trace: Trace, out: ResultsOutcome?) {
+    private suspend fun recordAttempt(key: String, epoch: Int, trace: Trace, out: ResultsOutcome?, due: Boolean) {
         val final = out is ResultsOutcome.Submitted && finalCheck(out.state)
+        // A Check again that ended Unchanged (nothing sent) keeps the last attempt's time, so it does not defer the daily
+        // re-check (#314 item 3); the daily re-check's own Unchanged is its attempt of the day.
+        val keepTime = !due && out == ResultsOutcome.Unchanged
+        val at = now().toEpochMilli()
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
         val entry = ResultsAttempt(
-            key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide,
+            key, at, trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide,
             answered = out is ResultsOutcome.Submitted || trace.answered && out == ResultsOutcome.Unchanged,
             sentRow = trace.sentRow && (out is ResultsOutcome.Submitted || out == ResultsOutcome.Unchanged),
             sigSha256 = trace.sigSha256,
             bundleSha256 = trace.bundleSha256,
         )
-        withAttempts(epoch) { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
+        withAttempts(epoch) { list ->
+            val kept = if (keepTime) list.firstOrNull { it.key == key }?.let { entry.copy(atMs = it.atMs) } ?: entry else entry
+            (list.filterNot { it.key == key } + listOfNotNull(kept.takeUnless { final })) to Unit
+        }
     }
 
     private suspend fun forgetAttempts(epoch: Int, gone: (ResultsAttempt) -> Boolean) {

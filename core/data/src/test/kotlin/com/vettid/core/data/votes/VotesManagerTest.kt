@@ -2121,4 +2121,26 @@ class VotesManagerTest {
             assertFalse(name, VoteRules.showNumbers(s, h.verdict, h.observerFailed))
         }
     }
+
+    @Test
+    fun aCheckAgainThatEndsUnchangedDoesNotDeferTheDailyReCheck() = runTest {
+        // Item 3: an attempt on day 0, Check again ending Unchanged on day 0.9; the daily re-check is still due on day 1.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store)
+        m.refresh()
+        val day0 = clock
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        clock = day0.plus(Duration.ofMinutes(24 * 54)) // 0.9 of a day
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(day0.toEpochMilli(), store.load().single().atMs)
+        clock = day0.plus(Duration.ofDays(1))
+        val reads = site.reads.count { it == "p/$PID/results.json" }
+        m.checkDue(CONN, PID)
+        assertEquals("due on day 1", reads + 1, site.reads.count { it == "p/$PID/results.json" })
+        // The daily re-check's own Unchanged is its attempt of the day: stamped.
+        assertEquals(clock.toEpochMilli(), store.load().single().atMs)
+    }
 }

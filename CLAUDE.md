@@ -458,7 +458,8 @@ The A2 exit test:
   shows the results-problem text. **A `gave_up` check is not final** (owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK):
   `submitDue` runs it again whenever the app opens, at most once a day per record, keyed off the state, and looks at the
   daily limit again under the vote's lock (`checkDue`, review 1 L2); the member's **Check again** is not held by the daily
-  limit but is by the skip below, and an `Unchanged` one shows nothing more: it sent nothing and contacted nobody, and
+  limit but is by the skip below, and an `Unchanged` one keeps the last attempt's time, so it does not defer the daily re-check (#314 item 3), and shows
+  nothing more: it sent nothing and contacted nobody, and
   the vote's own state line already says where it stands (the lead's review of #312, M1, replacing review 1's L5 notice). The last attempt per vote is kept on disk (`ResultsAttempt` in
   `vote-attempts.bin`, `KeystoreResultsAttemptStore`, no-backup dir): the time, the SHA-256 of the `results.json`, `.sig`
   and `.sigstore.json` read (the last two always fetched, small; review 1 M4, the coordinator's call, a step past
