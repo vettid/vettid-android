@@ -1030,6 +1030,9 @@ class VaultManager(
         voteRows = { ReleasePath.voteRows(local.capabilities) },
         attempts = KeystoreResultsAttemptStore(KeystoreFileStore(File(app.noBackupFilesDir, VOTE_ATTEMPTS_FILE), "vote-attempts")),
         unmetered = { com.vettid.core.data.votes.NetworkMeter.unmetered(app) },
+        stamps = com.vettid.core.data.votes.KeystoreRecheckStampStore(
+            KeystoreFileStore(File(app.noBackupFilesDir, VOTE_RECHECKS_FILE), "vote-rechecks"),
+        ),
     )
 
     /**
@@ -4912,6 +4915,9 @@ class VaultManager(
         private const val LOCATION_FILE = "location-shares.bin"
         /** The last attempt at each vote's results (VAULT-MESSAGING 0.86.4 §10.19.6): no choice, row or proof. */
         private const val VOTE_ATTEMPTS_FILE = "vote-attempts.bin"
+
+        /** When the recheck on open last downloaded rows.json per vote (#321 M1): a key and a time. */
+        private const val VOTE_RECHECKS_FILE = "vote-rechecks.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"

@@ -493,8 +493,10 @@ The A2 exit test:
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
   verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4); on a
   metered or unknown network it downloads rows.json at most once a day per vote for 7 days after the vote's `closes_at`
-  (as extended), then at most weekly, and weekly when the close is not known (`recheckRowsWait`, `recheckRowsAt`: memory
-  only, kept across a lock, cleared by a wipe, a stamp only under the store epoch it began in; #319 item 2, the lead's
+  (as extended), then at most weekly, and weekly when the close is not known (`recheckRowsWait`, `recheckRowsAt`: kept on
+  disk in `vote-rechecks.bin` (`RecheckStamp`: a key and a time; `KeystoreRecheckStampStore`, no-backup dir; #321 M1, so a
+  cold start does not reset the cap), kept across a lock, pruned with the list, cleared by a wipe, a stamp only under the
+  store epoch it began in; #319 item 2, the lead's
   call (a): the verdict is forgotten at every lock, so each open would download again); on Wi-Fi every open downloads;
   behind the cap the not-rechecked line and no number, and a
   site that cannot be

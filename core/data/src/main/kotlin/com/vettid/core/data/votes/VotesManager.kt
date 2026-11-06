@@ -302,6 +302,8 @@ class VotesManager(
     private val attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
     /** Where [attempts] is read and written. */
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** The recheck's last rows downloads (#321 M1): encrypted beside the attempts, under the same epoch, wiped with them. */
+    private val stamps: RecheckStampStore = MemoryRecheckStampStore(),
     /**
      * Whether the phone's network is unmetered now (Wi-Fi; [NetworkMeter]): true, false, or null when it cannot be told,
      * which counts as metered (#314 item 1).
@@ -330,11 +332,11 @@ class VotesManager(
     private var generation = 0
 
     /**
-     * When the recheck on open last downloaded rows.json for a vote (epoch ms, by [VoteKeys.of]; #319 item 2). Memory only and
-     * not cleared by a lock (that is when the recheck runs again); a wipe ([forgetStored]) and the process end clear it.
-     * Holds no choice and no verdict.
+     * When the recheck on open last downloaded rows.json for a vote (epoch ms, by [VoteKeys.of]; #319 item 2), as [stamps]
+     * keeps it (the lead's review of #321, M1: a cold start must not reset the cap). Read lazily under [attemptsSync]; not
+     * cleared by a lock (that is when the recheck runs again); a wipe ([forgetStored]) clears it. No choice, no verdict.
      */
-    private val recheckRowsAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private var recheckRowsAt: MutableMap<String, Long>? = null
 
     /** The results checks in flight (under [lock]): [clear] cancels them (lead review L2). */
     private val checks = HashSet<Job>()
@@ -437,7 +439,10 @@ class VotesManager(
                     hintsFlow.value = hintsFor(shown, hintsFlow.value)
                 }
                 // The kept attempts go with their record: a vote no longer listed, or whose check is final. Only from a whole list.
-                if (after == null) forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
+                if (after == null) {
+                    forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
+                    forgetRecheckStamps(epoch, shown.mapTo(HashSet()) { it.key })
+                }
             } catch (e: VaultFailure) {
                 synchronized(lock) {
                     if (gen == generation) {
@@ -1213,7 +1218,8 @@ class VotesManager(
         synchronized(attemptsSync) {
             storeEpoch++
             // Under the same lock as [stampRecheckRows]' test: a chunk still arriving after this stamps nothing.
-            recheckRowsAt.clear()
+            recheckRowsAt = HashMap()
+            runCatching { stamps.save(emptyList()) }
             attemptsHeld = emptyList()
             runCatching { attempts.save(emptyList()) }
         }
@@ -1319,7 +1325,7 @@ class VotesManager(
         // open after a lock would download it again (the verdict is memory only and a lock forgets it). Until then the
         // existing not-rechecked line, and no number.
         val at = now().toEpochMilli()
-        if (recheckRowsWait(key, at)) return@run notRechecked(key, gen)
+        if (withContext(io) { recheckRowsWait(key, at) }) return@run notRechecked(key, gen)
         // The callback runs in the site client's blocking read, which a lock does not interrupt (review of #319, L1): it
         // stamps only while this recheck's job is active and no wipe happened since it began.
         val job = kotlinx.coroutines.currentCoroutineContext()[Job]
@@ -1348,10 +1354,35 @@ class VotesManager(
         rechecked(key, passed, gen)
     }
 
-    /** [recheckRowsAt] for [key], only while the store's epoch is still [epoch] (no wipe since the recheck began). */
+    /** [recheckRowsAt], read from [stamps] the first time (under [attemptsSync]). */
+    private fun recheckStampsLocked(): MutableMap<String, Long> = recheckRowsAt
+        ?: runCatching { stamps.load() }.getOrDefault(emptyList()).associateTo(HashMap()) { it.key to it.atMs }.also { recheckRowsAt = it }
+
+    private fun saveStampsLocked(map: Map<String, Long>) {
+        runCatching { stamps.save(map.map { (k, v) -> RecheckStamp(k, v) }) }
+    }
+
+    /** The recheck's last rows download for [key], if any. */
+    private fun recheckStampOf(key: String): Long? = synchronized(attemptsSync) { recheckStampsLocked()[key] }
+
+    /** [recheckRowsAt] for [key], kept on disk, only while the store's epoch is still [epoch] (no wipe since the recheck began). */
     private fun stampRecheckRows(key: String, at: Long, epoch: Int) {
         synchronized(attemptsSync) {
-            if (epoch == storeEpoch) recheckRowsAt[key] = at
+            if (epoch != storeEpoch) return
+            val map = recheckStampsLocked()
+            map[key] = at
+            saveStampsLocked(map)
+        }
+    }
+
+    /** The recheck stamps of votes no longer listed go, with the attempts' pruning (#321 M1). */
+    private suspend fun forgetRecheckStamps(epoch: Int, listed: Set<String>) {
+        withContext(io) {
+            synchronized(attemptsSync) {
+                if (epoch != storeEpoch) return@synchronized
+                val map = recheckStampsLocked()
+                if (map.keys.retainAll(listed)) saveStampsLocked(map)
+            }
         }
     }
 
@@ -1361,7 +1392,7 @@ class VotesManager(
      * known).
      */
     private fun recheckRowsWait(key: String, at: Long): Boolean {
-        val lastRows = recheckRowsAt[key] ?: return false
+        val lastRows = recheckStampOf(key) ?: return false
         // The lead's call on #319 item 2 (a): for 7 days after the vote's close (as extended) at most daily, then weekly; a vote
         // without a known close, weekly. Wi-Fi is never capped.
         val closesAt = votesFlow.value.firstOrNull { it.key == key }?.closesAt?.toEpochMilli()

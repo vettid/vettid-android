@@ -102,3 +102,53 @@ class KeystoreResultsAttemptStore(private val file: KeystoreFileStore) : Results
         val json = Json { ignoreUnknownKeys = true }
     }
 }
+
+/**
+ * When the recheck on open last downloaded rows.json for a vote (#319 item 2; the lead's review of #321, M1): a key and a time,
+ * no choice and no verdict. Its own file, since the attempts of a final check are dropped and the recheck is for verified and
+ * unconfirmed votes.
+ */
+@Serializable
+data class RecheckStamp(val key: String, val atMs: Long) {
+    override fun toString() = "RecheckStamp"
+}
+
+/** Where [RecheckStamp]s are kept. */
+interface RecheckStampStore {
+    fun load(): List<RecheckStamp>
+
+    fun save(stamps: List<RecheckStamp>)
+}
+
+/** In memory only (tests, and builds without a file). */
+class MemoryRecheckStampStore : RecheckStampStore {
+    @Volatile
+    private var held: List<RecheckStamp> = emptyList()
+
+    override fun load(): List<RecheckStamp> = held
+
+    override fun save(stamps: List<RecheckStamp>) {
+        held = stamps
+    }
+}
+
+/** In a Keystore-encrypted file in the no-backup directory (erased with it at a wipe); an unreadable file reads as empty. */
+class KeystoreRecheckStampStore(private val file: KeystoreFileStore) : RecheckStampStore {
+    override fun load(): List<RecheckStamp> = try {
+        file.load()?.let { json.decodeFromString(ListSerializer(RecheckStamp.serializer()), it.decodeToString()) }.orEmpty()
+    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+        emptyList()
+    }
+
+    override fun save(stamps: List<RecheckStamp>) {
+        if (stamps.isEmpty()) {
+            file.clear()
+        } else {
+            file.save(json.encodeToString(ListSerializer(RecheckStamp.serializer()), stamps).encodeToByteArray())
+        }
+    }
+
+    private companion object {
+        val json = Json { ignoreUnknownKeys = true }
+    }
+}

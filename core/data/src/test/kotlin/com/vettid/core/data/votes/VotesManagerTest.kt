@@ -201,6 +201,7 @@ class VotesManagerTest {
         voteRows: Boolean = false,
         attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
         unmetered: () -> Boolean? = { null },
+        stamps: RecheckStampStore = MemoryRecheckStampStore(),
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -226,6 +227,7 @@ class VotesManagerTest {
         attempts = attempts,
         io = Dispatchers.Default,
         unmetered = unmetered,
+        stamps = stamps,
     )
 
     @Test
@@ -2569,5 +2571,37 @@ class VotesManagerTest {
         clock = day0.plus(Duration.ofDays(7))
         assertEquals(checked, m.reopen())
         assertEquals(2, site.rowsReads())
+    }
+
+    // ---- The lead's review of #321 ----
+
+    @Test
+    fun theRechecksCapSurvivesARestartAndGoesWithTheVoteOrAWipe() = runTest {
+        // M1: a new manager over the same store (a cold start) keeps the cap; a vote no longer listed and a wipe drop it.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val stamps = MemoryRecheckStampStore()
+        val first = manager(ops, site, unmetered = { false }, stamps = stamps)
+        first.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), first.recheck(CONN, PID))
+        assertEquals(listOf("$CONN/$PID"), stamps.load().map { it.key })
+        clock = clock.plus(Duration.ofDays(1))
+        val restarted = manager(ops, site, unmetered = { false }, stamps = stamps)
+        restarted.refresh()
+        assertEquals("held after the restart", ResultsOutcome.SiteUnreachable, restarted.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        // Pruned with the list.
+        ops.list = listing()
+        restarted.refresh()
+        assertTrue(stamps.load().isEmpty())
+        // Wiped.
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        restarted.clear()
+        restarted.refresh()
+        restarted.recheck(CONN, PID)
+        assertEquals(1, stamps.load().size)
+        restarted.clear()
+        restarted.forgetStored()
+        assertTrue(stamps.load().isEmpty())
     }
 }
