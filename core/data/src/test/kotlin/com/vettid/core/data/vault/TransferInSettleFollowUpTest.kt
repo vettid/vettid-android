@@ -508,4 +508,45 @@ class TransferInSettleFollowUpTest {
         assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle, cuts = { cutCount }))
         assertEquals(listOf(1_040_000L, 1_070_100L), lasts)
     }
+
+    /**
+     * (Recheck 4, B1′) After an extra taken before the cap with no lease hold honoured yet, the look after a freeze in the
+     * last send gets the free first lease hold. F = 90 s, the cap 185 s. The last look at 90 s is rate limited (`retry_after`
+     * 1 s): the extra re-collects at 91 s. Its round writes the collector's poll at 94.5 s (wait 25 s) and the app freezes at
+     * 94.9 s until 195 s: the poll may reach the relay at the wake, so the lease runs to 195 + 25 + 60 = 280 s. The look is
+     * held to 295 s, not sent at once at the wake.
+     */
+    @Test
+    fun theLookAfterAFreezeAfterAnEarlyExtraGetsTheFreeLeaseHold() = runTest {
+        val clock = FrozenClock(this)
+        val sends = mutableListOf<Pair<Long, Long>>()
+        var refused = false
+        var froze = false
+        val lasts = mutableListOf<Long>()
+        val round: suspend () -> Unit = {
+            if (refused && !froze && lasts.isNotEmpty()) {
+                froze = true
+                delay(3_500)
+                sends += clock.now() to 25_000L // the collector's poll, written at 94.5 s
+                delay(400)
+                clock.jumpedMs += 100_100 // frozen 94.9 s to 195 s, after the tick of 94 s
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 90_000) {
+                if (!refused) {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 1)
+                }
+                lasts += clock.now()
+            }
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = timingWith(clock), awaitRound = round,
+                collectorSends = { sends.map { (clock.now() - it.first) to it.second } },
+            ),
+        )
+        assertEquals(listOf(91_000L, 295_000L), lasts)
+    }
 }
