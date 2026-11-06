@@ -85,9 +85,48 @@ class SharingTextTest {
     }
 
     @Test
-    fun anotherDayComesFirst() {
+    fun anotherDayNamesTheDate() {
         val t = ShareTime.format(app, until.plusSeconds(3 * 86_400), now, ZoneOffset.UTC)
         assertTrue(t, t.contains(","))
         assertTrue(t, t.contains("Nov"))
+    }
+
+    @Test
+    fun anotherDayFollowsThePhones12Or24HourSetting() {
+        val later = until.plusSeconds(3 * 86_400)
+        try {
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, "24")
+            val h24 = ShareTime.format(app, later, now, ZoneOffset.UTC)
+            assertTrue(h24, h24.contains("15:30") && !h24.contains("PM"))
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, "12")
+            val h12 = ShareTime.format(app, later, now, ZoneOffset.UTC)
+            assertTrue(h12, h12.contains("3:30") && h12.contains("PM"))
+        } finally {
+            android.provider.Settings.System.putString(app.contentResolver, android.provider.Settings.System.TIME_12_24, null)
+        }
+    }
+
+    @Test
+    fun aCalendarExtensionLocaleNeverThrows() {
+        // The location service's notification uses this text: a locale like zh-u-ca-chinese falls back, never throws.
+        val c = android.content.res.Configuration(app.resources.configuration)
+        c.setLocale(java.util.Locale.forLanguageTag("zh-u-ca-chinese"))
+        val t = ShareTime.format(app.createConfigurationContext(c), until.plusSeconds(3 * 86_400), now, ZoneOffset.UTC)
+        assertTrue(t, t.isNotBlank())
+    }
+
+    @Test
+    fun anotherDayFollowsTheRegionsOrder() {
+        // One locale skeleton for date and time (owner decision 2026-11-05): month first in the US, day first in the UK.
+        fun inLocale(tag: String): android.content.Context {
+            val c = android.content.res.Configuration(app.resources.configuration)
+            c.setLocale(java.util.Locale.forLanguageTag(tag))
+            return app.createConfigurationContext(c)
+        }
+        val later = until.plusSeconds(3 * 86_400)
+        val us = ShareTime.format(inLocale("en-US"), later, now, ZoneOffset.UTC)
+        assertTrue(us, us.startsWith("Nov"))
+        val uk = ShareTime.format(inLocale("en-GB"), later, now, ZoneOffset.UTC)
+        assertTrue(uk, uk.indexOf("Nov") > 0 && uk.first().isDigit())
     }
 }
