@@ -8,8 +8,11 @@ import java.security.MessageDigest
 /**
  * `rows.json` as it was read ([RowsReader]): no text is kept, only what the checks need, packed. [tags] and [leafHashes]
  * hold 32 bytes per row; a row's ballot is `vk`, `choice_id` and `ballot_sig` in [data] at [offsets] (`vkStart`,
- * `choiceStart`, `sigStart`, `end` per row; `vkStart` -1 for an empty row). The shape flags are what the observer only
- * reports (VAULT-MESSAGING 0.86.4 §10.19.6 step 1).
+ * `choiceStart`, `sigStart`, `end` per row; `vkStart` [EMPTY] for an empty row, [NOT_KEPT] for a ballot whose lengths are
+ * not the protocol's: only [lengthsMatch] says so, recheck 1, R1-3). The member's own row (the first under the tag the
+ * reader was given) keeps its ballot whatever its lengths ([ownIndex], [ownBallot]). At most 32 + 32 + 16 + 32 + 32 + 64 =
+ * 208 bytes a row whatever the input. The shape flags are what the observer only reports (VAULT-MESSAGING 0.86.4 §10.19.6
+ * step 1).
  */
 internal class RowsTable(
     val count: Int,
@@ -23,10 +26,19 @@ internal class RowsTable(
     val proposalId: String?,
     /** Every row is exactly `{record_tag, ballot}` and every ballot exactly `{vk, choice_id, ballot_sig}` (BALLOT-PROTOCOL §8.5). */
     val membersExact: Boolean,
+    /** Every ballot has a 32-byte `vk`, a 64-byte `ballot_sig` and a `choice_id` of 1 to 32 bytes (BALLOT-PROTOCOL §8.5). */
+    val lengthsMatch: Boolean,
+    /** The first row under the member's tag, or -1. */
+    val ownIndex: Int,
+    /** That row's ballot (`vk`, `choice_id`, `ballot_sig`) as published, whatever its lengths; null for an empty row. */
+    val ownBallot: Triple<ByteArray, ByteArray, ByteArray>?,
 ) {
     fun tag(i: Int): ByteArray = tags.copyOfRange(i * HASH, (i + 1) * HASH)
 
-    fun hasBallot(i: Int): Boolean = offsets[i * 4] >= 0
+    fun hasBallot(i: Int): Boolean = offsets[i * 4] != EMPTY
+
+    /** The ballot's bytes are held ([vk], [choice], [sig] may be read): every ballot is, when [lengthsMatch]. */
+    fun kept(i: Int): Boolean = offsets[i * 4] >= 0
 
     fun vk(i: Int): ByteArray = data.copyOfRange(offsets[i * 4], offsets[i * 4 + 1])
 
@@ -37,8 +49,10 @@ internal class RowsTable(
     /** The bytes held for the rows: what stays alive after the reading. */
     fun retainedBytes(): Long = tags.size.toLong() + leafHashes.size + data.size + offsets.size * 4L
 
-    private companion object {
-        const val HASH = 32
+    companion object {
+        private const val HASH = 32
+        const val EMPTY = -1
+        const val NOT_KEPT = -2
     }
 }
 
@@ -53,7 +67,12 @@ internal class RowsTable(
  * that is not an object, a `record_tag` that is not 32 bytes of base64, a ballot member missing or not a base64 string).
  * The rest (other members, other lengths) is kept for the observer to report.
  */
-internal class RowsReader(private val b: ByteArray, private val eligible: Int, private val checkpoint: () -> Unit) {
+internal class RowsReader(
+    private val b: ByteArray,
+    private val eligible: Int,
+    private val ownTag: ByteArray? = null,
+    private val checkpoint: () -> Unit,
+) {
     private var i = 0
     private val tags = ByteArray(eligible * HASH)
     private val leafHashes = ByteArray(eligible * HASH)
@@ -62,6 +81,9 @@ internal class RowsReader(private val b: ByteArray, private val eligible: Int, p
     private val offsets = IntArray(eligible * 4)
     private var count = 0
     private var membersExact = true
+    private var lengthsMatch = true
+    private var ownIndex = -1
+    private var ownBallot: Triple<ByteArray, ByteArray, ByteArray>? = null
     private val scratch = Scratch()
 
     fun read(): RowsTable {
@@ -92,7 +114,9 @@ internal class RowsReader(private val b: ByteArray, private val eligible: Int, p
         if (!sawRows) fail()
         if (count != eligible) throw ResultsProblem("rows_count")
         val exact = names == DOCUMENT_MEMBERS && vOne
-        return RowsTable(count, tags, leafHashes, data.copyOf(dataLen), offsets, exact, proposalId, membersExact)
+        return RowsTable(
+            count, tags, leafHashes, data.copyOf(dataLen), offsets, exact, proposalId, membersExact, lengthsMatch, ownIndex, ownBallot,
+        )
     }
 
     private fun rows() {
@@ -157,15 +181,28 @@ internal class RowsReader(private val b: ByteArray, private val eligible: Int, p
         t.copyInto(tags, count * HASH)
         val at = count * 4
         val leaf: ByteArray
-        if (vk == null) {
-            offsets[at] = -1
+        val v = vk
+        val c = choice
+        val s = sig
+        if (ownIndex < 0 && ownTag != null && Bytes.constantTimeEquals(t, ownTag)) {
+            ownIndex = count
+            ownBallot = if (v == null) null else Triple(v, c!!, s!!)
+        }
+        if (v == null) {
+            offsets[at] = RowsTable.EMPTY
             leaf = t
         } else {
-            offsets[at] = append(vk!!)
-            offsets[at + 1] = append(choice!!)
-            offsets[at + 2] = append(sig!!)
-            offsets[at + 3] = dataLen
-            leaf = Bytes.concat(t, VoteRows.lp(vk!!), VoteRows.lp(choice!!), VoteRows.lp(sig!!))
+            if (v.size == KEY && s!!.size == SIG && c!!.size in 1..MAX_ID) {
+                offsets[at] = append(v)
+                offsets[at + 1] = append(c)
+                offsets[at + 2] = append(s)
+                offsets[at + 3] = dataLen
+            } else {
+                // Not the protocol's lengths: reported (ballot_shape), and not kept (R1-3: memory is bounded per row).
+                offsets[at] = RowsTable.NOT_KEPT
+                lengthsMatch = false
+            }
+            leaf = Bytes.concat(t, VoteRows.lp(v), VoteRows.lp(c!!), VoteRows.lp(s!!))
         }
         VoteMerkle.leafHash(leaf).copyInto(leafHashes, count * HASH)
         count++
@@ -436,6 +473,9 @@ internal class RowsReader(private val b: ByteArray, private val eligible: Int, p
 
     private companion object {
         const val HASH = 32
+        const val KEY = 32
+        const val SIG = 64
+        const val MAX_ID = 32
         const val MAX_DEPTH = 4
         const val CHECK_EVERY = 256
         const val INITIAL_DATA = 1 shl 16

@@ -418,7 +418,9 @@ The A2 exit test:
   Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
   `VoteRows.read` reads `results.json` and `rows.json` (`RowsReader`: strict JSON, nested at most 4 deep, **no text kept**, only
-  each row's decoded tag, `vk`, `choice_id`, `ballot_sig` and leaf hash, about 180 bytes a row; rows.json at most
+  each row's decoded tag, leaf hash and, when they have the protocol's lengths (32, 64, 1 to 32 bytes), `vk`, `ballot_sig` and
+  `choice_id`: at most 208 bytes a row whatever the input; a ballot of other lengths is only flagged (`ballot_shape`), except the
+  member's own row, kept as published; rows.json at most
   `VoteRows.rowsCap(counts.eligible)` = 512 × eligible + 4,096, never over 51,204,096 bytes, the download capped the same way).
   **Only what VAULT-MESSAGING 0.86.4 §10.19.6 step 1 names stops the submit of a row**: the cap, the depth, a row that cannot
   be made into a leaf, and what the vault's check of the row needs (`counts.eligible` rows reaching `rows_root`; the member's

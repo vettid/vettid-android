@@ -772,7 +772,7 @@ class VotesManager(
             }
             step("read")
             val published = try {
-                VoteRows.read(doc, rows) { step("read") }
+                VoteRows.read(doc, rows, tag) { step("read") }
             } catch (_: ResultsProblem) {
                 return@withContext null
             }

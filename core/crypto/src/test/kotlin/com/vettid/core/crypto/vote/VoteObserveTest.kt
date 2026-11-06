@@ -284,8 +284,10 @@ class VoteObserveTest {
         val longVk = vectorRows[0].copy(vk = ByteArray(33) { 3 })
         val rows = listOf(longVk, vectorRows[1], vectorRows[2])
         val rowsBytes = rowsJson(rows)
-        val p = VoteRows.read(resultsJson(rows, rowsBytes), rowsBytes)
+        // The member's own row keeps its ballot as published (the tag is given to the reader); other rows are not kept.
+        val p = VoteRows.read(resultsJson(rows, rowsBytes), rowsBytes, longVk.tag)
         assertEquals(33, p.ownRow(longVk.tag).ballot!!.vk.size)
+        assertEquals("rows", reason { VoteRows.read(resultsJson(rows, rowsBytes), rowsBytes).ownRow(longVk.tag) })
         assertEquals("ballot_shape", reason { p.observe(PID) })
         for (bad in listOf(vectorRows[0].copy(sig = ByteArray(65)), vectorRows[0].copy(choice = "y".repeat(33)))) {
             val r = listOf(bad, vectorRows[1], vectorRows[2])

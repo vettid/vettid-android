@@ -48,7 +48,14 @@ class PublishedResults internal constructor(
         }
         if (found < 0) throw ResultsProblem("no_row")
         val path = VoteMerkle.proofOfHashes(rows.leafHashes, rows.count, found, checkpoint) ?: throw ResultsProblem("rows")
-        val ballot = if (rows.hasBallot(found)) OwnBallot(rows.vk(found), rows.choice(found), rows.sig(found)) else null
+        val own = rows.ownBallot.takeIf { found == rows.ownIndex }
+        val ballot = when {
+            !rows.hasBallot(found) -> null
+            own != null -> OwnBallot(own.first, own.second, own.third)
+            rows.kept(found) -> OwnBallot(rows.vk(found), rows.choice(found), rows.sig(found))
+            // A ballot of other lengths is kept only for the tag the rows were read for (VoteRows.read's ownTag).
+            else -> throw ResultsProblem("rows")
+        }
         return OwnRow(ballot, found.toLong(), rows.count.toLong(), path)
     }
 
@@ -195,7 +202,7 @@ object VoteRows {
      * for anything that does not hold, including a tag that has no row.
      */
     fun ownRow(resultsBytes: ByteArray, rowsBytes: ByteArray, recordTag: ByteArray): OwnRow =
-        read(resultsBytes, rowsBytes).ownRow(recordTag)
+        read(resultsBytes, rowsBytes, recordTag).ownRow(recordTag)
 
     /**
      * Reads the published results. What stops the submit of a row (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, ANDROID-PLAN
@@ -206,7 +213,7 @@ object VoteRows {
      * reported, by [PublishedResults.observe] (review 1, finding 5). [checkpoint] is called every 256 rows and tree nodes.
      */
     @Suppress("ThrowsCount", "CyclomaticComplexMethod")
-    fun read(resultsBytes: ByteArray, rowsBytes: ByteArray, checkpoint: () -> Unit = {}): PublishedResults {
+    fun read(resultsBytes: ByteArray, rowsBytes: ByteArray, ownTag: ByteArray? = null, checkpoint: () -> Unit = {}): PublishedResults {
         val results: JsonObject
         val rowsHash: ByteArray
         val rowsRoot: ByteArray
@@ -221,14 +228,10 @@ object VoteRows {
         }
         if (rowsBytes.size > rowsCap(eligible)) throw ResultsProblem("rows_size")
         val hashMatches = Bytes.constantTimeEquals(Bytes.sha256(rowsBytes), rowsHash)
-        val rows = RowsReader(rowsBytes, eligible.toInt(), checkpoint).read()
+        val rows = RowsReader(rowsBytes, eligible.toInt(), ownTag, checkpoint).read()
         // Sorted by tag, each once (§8.2), and the lengths of §8.5: reported, not a reason not to submit.
         val sorted = (1 until rows.count).all { compare(rows.tags, (it - 1) * KEY, it * KEY) < 0 }
-        val lengths = (0 until rows.count).all { i ->
-            if (!rows.hasBallot(i)) return@all true
-            val choice = rows.choice(i).size
-            rows.vk(i).size == KEY && rows.sig(i).size == SIG && choice in 1..MAX_ID
-        }
+        val lengths = rows.lengthsMatch
         val root = VoteMerkle.rootOfHashes(rows.leafHashes, rows.count, checkpoint)
         if (!Bytes.constantTimeEquals(root, rowsRoot)) throw ResultsProblem("rows_root")
         return PublishedResults(results, rows, hashMatches, sorted, lengths)
@@ -246,6 +249,4 @@ object VoteRows {
     }
 
     private const val KEY = 32
-    private const val SIG = 64
-    private const val MAX_ID = 32
 }

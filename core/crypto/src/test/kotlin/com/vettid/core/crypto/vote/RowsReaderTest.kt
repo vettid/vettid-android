@@ -147,4 +147,29 @@ class RowsReaderTest {
         // The padding was not a member the protocol has.
         assertFalse(t!!.membersExact)
     }
+
+    @Test
+    fun longVkAndSigValuesAreNotKeptSoTheBoundHoldsForAnyInput() {
+        // Recheck 1, R1-3: a file at the cap whose rows carry 200-byte vk values (still leafable, so read and reported).
+        val n = VoteRows.MAX_ROWS
+        val vk = Base64s.encodeStd(ByteArray(200) { 1 })
+        val sig = Base64s.encodeStd(ByteArray(64) { 2 })
+        val own = ByteArray(32).also { Bytes.uintBE(7L, 4).copyInto(it, 0) }
+        val sb = StringBuilder().append("{\"proposal_id\":\"01JBQZ0000000000000000000A\",\"rows\":[")
+        for (i in 0 until n) {
+            if (i > 0) sb.append(',')
+            val tag = ByteArray(32).also { Bytes.uintBE(i.toLong(), 4).copyInto(it, 0) }
+            sb.append("{\"ballot\":{\"ballot_sig\":\"").append(sig).append("\",\"choice_id\":\"yes\",\"vk\":\"").append(vk)
+                .append("\"},\"record_tag\":\"").append(Base64s.encodeStd(tag)).append("\"}")
+        }
+        val bytes = sb.append("],\"v\":1}").toString().toByteArray(Charsets.US_ASCII)
+        assertTrue("within the cap: ${bytes.size}", bytes.size <= VoteRows.rowsCap(n.toLong()))
+        val t = RowsReader(bytes, n, own) {}.read()
+        assertEquals(n, t.count)
+        assertFalse(t.lengthsMatch)
+        // At most 208 bytes a row: tag, leaf hash, offsets and nothing of the long values but the member's own row.
+        assertTrue("retained ${t.retainedBytes()}", t.retainedBytes() <= n * 210L)
+        assertEquals(7, t.ownIndex)
+        assertEquals(200, t.ownBallot!!.first.size)
+    }
 }
