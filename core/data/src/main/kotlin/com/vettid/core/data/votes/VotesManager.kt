@@ -29,6 +29,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -281,6 +283,9 @@ class VotesManager(
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
 
+    /** The results checks in flight (under [lock]): [clear] cancels them (lead review L2). */
+    private val checks = HashSet<Job>()
+
     @Volatile
     private var queued = false
 
@@ -306,7 +311,7 @@ class VotesManager(
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
         stopSync()
-        synchronized(lock) {
+        val running = synchronized(lock) {
             generation++
             queued = false
             loadState.value = ListLoad.NOT_LOADED
@@ -320,7 +325,10 @@ class VotesManager(
             pendingAck.clear()
             listVersion = null
             listSha256 = null
+            checks.toList()
         }
+        // The generation already voids what they would write or send; this stops their work too (lead review L2).
+        running.forEach { it.cancel() }
     }
 
     /** `vote.event` (§10.19.8): the app only; a change of any vote re-reads the list; a due check is run. */
@@ -724,13 +732,30 @@ class VotesManager(
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
     override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
-        return resultLocks.computeIfAbsent(key) { Mutex() }.withLock { checkResultsLocked(key, connectionId, proposalId) }
+        return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
+            // Its own job, so that a lock (clear) can cancel the check and not the caller (lead review L2).
+            coroutineScope {
+                val gen = synchronized(lock) { generation }
+                val check = async { checkResultsLocked(key, connectionId, proposalId, gen) }
+                if (!synchronized(lock) { (gen == generation).also { if (it) checks += check } }) check.cancel()
+                try {
+                    check.await()
+                } catch (e: CancellationException) {
+                    // The caller's own cancellation (leaving the screen, the sync stopped) goes on; a check that a lock or
+                    // clear cancelled is void, as one that runs to its end after it (R1-2).
+                    if (!isActive || synchronized(lock) { gen == generation }) throw e
+                    ResultsOutcome.Voided
+                } finally {
+                    synchronized(lock) { checks -= check }
+                }
+            }
+        }
     }
 
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
-    private suspend fun checkResultsLocked(key: String, connectionId: String, proposalId: String): ResultsOutcome = run {
-        // A lock (or any clear) during the check voids it: its hints are not written and nothing is submitted (R1-2).
-        val gen = synchronized(lock) { generation }
+    private suspend fun checkResultsLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
+        // A lock (or any clear) during the check voids it: its hints are not written and nothing is submitted (R1-2), and
+        // [clear] cancels it (L2).
         if (!site.configured) return@run ResultsOutcome.SiteUnreachable
         val detail = get(connectionId, proposalId)
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
@@ -774,8 +799,8 @@ class VotesManager(
         // main thread. The observer's verdict is only shown, never a reason not to submit (0.83.2).
         val examined = withContext(compute) {
             // Every 256 rows and tree nodes: a cancellation (leaving the screen ends its viewModelScope; a lock cancels the
-            // sync job and so the due checks) stops the work there. A lock does not cancel a Check again still running:
-            // that one runs to its end, and the generation check below voids what it would write or send.
+            // sync job and every check in flight, Check again included) stops the work there. Whatever still returns after a
+            // lock is voided by the generation check below.
             val ctx = coroutineContext
             fun step(stage: String) {
                 computeStep("$key:$stage")

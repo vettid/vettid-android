@@ -430,9 +430,10 @@ The A2 exit test:
   proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default; the
   parse of results.json for `rowsCap`, needed before rows.json is fetched, runs on `compute` too),
   with `ensureActive()` every 256 rows and tree nodes (a cancellation stops it there: leaving the screen ends its
-  `viewModelScope`, a lock cancels the sync job and so the due checks; a lock does **not** cancel a Check again still running,
-  which runs to its end, but a `generation` taken at its start voids it: no hint is written and nothing is submitted after a
-  lock or clear, `ResultsOutcome.Voided`), under a lock per vote (one vote's long check holds up no other), and
+  `viewModelScope`, a lock cancels the sync job and so the due checks; `clear()` also cancels every check in flight, Check again
+  included: each runs in its own child job (`checks`), so its caller is not cancelled but answered `ResultsOutcome.Voided`,
+  and a `generation` taken at its start voids whatever still returns: no hint is written and nothing is submitted after a
+  lock or clear; `VoteViewModel.checkWithService` resets `checking` in a `finally`, so no ending leaves Check again disabled), under a lock per vote (one vote's long check holds up no other), and
   compares the vault's own `tally` and `counts` (`vote.get`, when it holds them) too; any exception in the observer's work is an
   observer failure, and so is an `observe` that runs past 60 s in one attempt (`observeLimit`; `withTimeoutOrNull` around
   the observer alone, so results that keep every signature on the slow path still get submitted, flagged). It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`

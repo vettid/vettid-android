@@ -1139,7 +1139,8 @@ class VotesManagerTest {
             val stages = steps.map { it.first.substringAfterLast(':') }.toSet()
             // "cap": results.json read for rows.json's download cap (lead review L1).
             assertEquals(setOf("cap", "read", "row", "observe"), stages)
-            assertTrue("$steps", steps.all { it.second == "vote-compute" })
+            // (The check runs in its own job since L2; with debug on, the thread's name carries the coroutine's.)
+            assertTrue("$steps", steps.all { it.second.substringBefore(" @") == "vote-compute" })
         } finally {
             pool.shutdown()
         }
@@ -1241,6 +1242,47 @@ class VotesManagerTest {
         assertEquals(1, ops.submitted.size)
         assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
         assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue("$CONN/$PID").verdict)
+    }
+
+    @Test
+    fun aLockCancelsACheckInFlightWhichStopsAtItsNextStepAndIsVoided() = runTest {
+        // Lead review L2: Check again on a large vote, the member locks during the observer's work.
+        val (ops, site) = observedScenario(observed(n = 1024))
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var m: VotesManager? = null
+        var lockedAt = -1
+        m = manager(ops, site) {
+            steps += it.substringAfterLast(':')
+            if (it.endsWith(":observe") && lockedAt < 0) {
+                lockedAt = steps.size
+                m!!.clear()
+            }
+        }
+        m.refresh()
+        // The caller is not cancelled: it gets the voided outcome.
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        // The work stopped at the step of the lock (it would otherwise run on to the end: several hundred more steps).
+        assertEquals("$steps", lockedAt, steps.size)
+        assertTrue(ops.submitted.isEmpty())
+        m.refresh() // the unlock
+        assertNull(m.hints.value["$CONN/$PID"])
+        // A check after the unlock runs as usual.
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+    }
+
+    @Test
+    fun aCancelledCallerOfACheckIsStillCancelledAndNotVoided() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var job: Job? = null
+        val m = manager(ops, site) { if (it.endsWith(":observe")) job!!.cancel() }
+        m.refresh()
+        var out: ResultsOutcome? = null
+        job = launch(start = CoroutineStart.LAZY) { out = m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertNull(out)
+        assertTrue(ops.submitted.isEmpty())
     }
 
     @Test
@@ -1365,7 +1407,8 @@ class VotesManagerTest {
         var m: VotesManager? = null
         m = manager(ops, site) { if (it.endsWith(":read")) m!!.clear() }
         m.refresh()
-        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        // The lock cancels the check (L2) before it finds the problem: void.
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
         m.refresh()
         assertNull(m.hints.value["$CONN/$PID"])
     }
