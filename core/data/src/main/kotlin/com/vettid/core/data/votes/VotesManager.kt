@@ -2,6 +2,7 @@ package com.vettid.core.data.votes
 
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
+import com.vettid.core.crypto.vote.OwnRow
 import com.vettid.core.crypto.vote.PublishedResults
 import com.vettid.core.crypto.vote.ResultsProblem
 import com.vettid.core.crypto.vote.VoteRows
@@ -24,6 +25,7 @@ import com.vettid.core.vault.voteResultsSubmit
 import com.vettid.core.vault.voteSiteSync
 import com.vettid.core.vault.voteSiteSyncBlob
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -233,6 +235,10 @@ class VotesManager(
     private val unlockTtl: suspend () -> Int? = { null },
     private val now: () -> Instant = Instant::now,
     private val syncEvery: Duration = SYNC_EVERY,
+    /** Where the results are read, proved and observed: never the main thread (review 1, finding 1). */
+    private val compute: CoroutineDispatcher = Dispatchers.Default,
+    /** Called at each step of that work with "<vote key>:<stage>" (tests watch the thread and cancel through it). */
+    private val computeStep: (String) -> Unit = {},
 ) : VotesRepository {
     private val lock = Any()
     private val votesFlow = MutableStateFlow<List<VoteSummary>>(emptyList())
@@ -725,16 +731,25 @@ class VotesManager(
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
         if (!VoteSync.submittable(doc, sig)) return@withLock fail(key, ResultsOutcome.Problem)
         val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH) ?: return@withLock fail(key, ResultsOutcome.Problem)
-        val published = try {
-            VoteRows.read(doc, rows)
-        } catch (_: ResultsProblem) {
-            return@withLock fail(key, ResultsOutcome.Problem)
-        }
-        val own = try {
-            published.ownRow(tag)
-        } catch (_: ResultsProblem) {
-            return@withLock fail(key, ResultsOutcome.Problem)
-        }
+        // The heavy part (up to 51 MB: the hash, the reading, the trees, the proof, the signatures) in one block off the
+        // main thread. The observer's verdict is only shown, never a reason not to submit (0.83.2).
+        val examined = withContext(compute) {
+            computeStep("$key:read")
+            val published = try {
+                VoteRows.read(doc, rows) { computeStep("$key:read") }
+            } catch (_: ResultsProblem) {
+                return@withContext null
+            }
+            computeStep("$key:row")
+            val own = try {
+                published.ownRow(tag) { computeStep("$key:row") }
+            } catch (_: ResultsProblem) {
+                return@withContext null
+            }
+            computeStep("$key:observe")
+            Examined(own, observerFails(published, proposalId, detail) { computeStep("$key:observe") })
+        } ?: return@withLock fail(key, ResultsOutcome.Problem)
+        val own = examined.own
         val ballot = own.ballot
         // (0.81.6) A choice id the vault would refuse (and with it the whole submission) is the site's problem: not submitted.
         if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) return@withLock fail(key, ResultsOutcome.Problem)
@@ -778,10 +793,8 @@ class VotesManager(
             VoteSync.Inline.TOO_LARGE -> return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
             VoteSync.Inline.OTHER -> return@withLock fail(key, ResultsOutcome.Problem)
         }
-        // The rest of the observer's check: shown to the member, never a reason not to submit (0.83.2). Off the main thread.
-        val observerFailed = withContext(Dispatchers.Default) { observerFails(published, proposalId, detail) }
         // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
-        hint(key) { it.copy(observerFailed = observerFailed) }
+        hint(key) { it.copy(observerFailed = examined.observerFailed) }
         val answer = vaultGuard { ops().submit(body) }
         val check = answer["check"] as? JsonObject
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
@@ -797,8 +810,8 @@ class VotesManager(
      * reported: the documents naming another proposal or rows.json not exactly `{v, proposal_id, rows}`, and a `tally` or
      * `counts` other than the vault's own (`vote.get`, when it holds them).
      */
-    private fun observerFails(published: PublishedResults, proposalId: String, detail: VoteDetail): Boolean = try {
-        published.observe(proposalId)
+    private fun observerFails(published: PublishedResults, proposalId: String, detail: VoteDetail, checkpoint: () -> Unit): Boolean = try {
+        published.observe(proposalId, checkpoint)
         val tallyDiffers = detail.tally != null && detail.tally != published.tally()
         val c = published.counts()
         val countsDiffer = detail.counts != null && detail.counts != VoteCounts(c.eligible, c.ballots, c.removed, c.unhandled)
@@ -806,6 +819,9 @@ class VotesManager(
     } catch (_: ResultsProblem) {
         true
     }
+
+    /** The member's row and whether the observer's check failed. */
+    private class Examined(val own: OwnRow, val observerFailed: Boolean)
 
     /** The site could not be reached, or had no results (yet): which of the two is what a `gave_up` check will say. */
     private fun unavailable(key: String, siteDown: Boolean): ResultsOutcome =

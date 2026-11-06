@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -172,7 +173,13 @@ class VotesManagerTest {
         var closeFail: Exception? = null
     }
 
-    private fun TestScope.manager(ops: Ops, site: Site = Site(), window: Window = Window()) = VotesManager(
+    private fun TestScope.manager(
+        ops: Ops,
+        site: Site = Site(),
+        window: Window = Window(),
+        compute: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
+        computeStep: (String) -> Unit = {},
+    ) = VotesManager(
         this,
         ops = { ops },
         site = site,
@@ -189,6 +196,8 @@ class VotesManagerTest {
         },
         unlockTtl = { 300 },
         now = { clock },
+        compute = compute,
+        computeStep = computeStep,
     )
 
     @Test
@@ -1107,5 +1116,24 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
         assertFalse(site2.reads.contains("p/$PID/rows.json"))
         assertTrue(ops2.submitted.isEmpty())
+    }
+
+    // ---- Review 1 ----
+
+    @Test
+    fun theResultsAreReadProvedAndObservedOffTheCallersThread() = runTest {
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "vote-compute") }
+        try {
+            val steps = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+            val (ops, site) = observedScenario(observed())
+            val m = manager(ops, site, compute = pool.asCoroutineDispatcher()) { steps += it to Thread.currentThread().name }
+            m.refresh()
+            assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+            val stages = steps.map { it.first.substringAfterLast(':') }.toSet()
+            assertEquals(setOf("read", "row", "observe"), stages)
+            assertTrue("$steps", steps.all { it.second == "vote-compute" })
+        } finally {
+            pool.shutdown()
+        }
     }
 }
