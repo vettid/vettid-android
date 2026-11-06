@@ -18,9 +18,9 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class TransferInSettleFreezeTest {
     private companion object {
-        const val EXPECTED_OFFLINE_DROP = 220_000L
-        const val EXPECTED_CUTS_DROP = 239_000L
-        const val FIX3_FINAL = 230_000L
+        const val EXPECTED_OFFLINE_DROP = 240_000L
+        const val EXPECTED_CUTS_DROP = 259_000L
+        const val FIX3_FINAL = 250_000L
     }
 
     // --- the collector's own request cut, or a process freeze, during the window ---
@@ -103,7 +103,7 @@ class TransferInSettleFreezeTest {
 
     /**
      * A freeze begins with a collector request out since s (just before the cap), and wakes after the cap but before s + V:
-     * its lease runs to s + V. The final collect waits until s + V + 5 s and gathers the message; going at once it would
+     * its lease runs to s + V. The final collect waits until s + V + 15 s and gathers the message; going at once it would
      * find nothing.
      */
     @Test
@@ -138,13 +138,13 @@ class TransferInSettleFreezeTest {
             ),
         )
         assertEquals(0, drops)
-        assertTrue("not before s + V + 5 s: ${clock.now()} vs ${outSince!! + 65_000}", clock.now() >= outSince!! + 65_000)
+        assertTrue("not before s + V + 15 s: ${clock.now()} vs ${outSince!! + 75_000}", clock.now() >= outSince!! + 75_000)
     }
 
     /**
      * A freeze inside the final send itself: the window runs to the cap (195 s), the final `wait=0` collect goes out, and the
      * collector's request is out since s (~195 s) when the process freezes and wakes (~226 s) past the cap but before s + V.
-     * The end cannot move, yet one more final collect is due, after s + V + 5 s: it gathers the message.
+     * The end cannot move, yet one more final collect is due, after s + V + 15 s: it gathers the message.
      */
     @Test
     fun aFreezeInsideTheFinalSendEarnsOneMoreFinalCollect() = runTest {
@@ -184,7 +184,7 @@ class TransferInSettleFreezeTest {
             ),
         )
         assertEquals(0, drops)
-        assertTrue("not before s + V + 5 s: ${clock.now()} vs ${outSince!! + 65_000}", clock.now() >= outSince!! + 65_000)
+        assertTrue("not before s + V + 15 s: ${clock.now()} vs ${outSince!! + 75_000}", clock.now() >= outSince!! + 75_000)
     }
 
     /**
@@ -399,7 +399,7 @@ class TransferInSettleFreezeTest {
         }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle))
         assertEquals(0, drops)
-        assertTrue("held to sent + V + 5 s", clock.now() >= sentAt!! + 65_000)
+        assertTrue("held to sent + V + 15 s", clock.now() >= sentAt!! + 75_000)
     }
 
     /**
@@ -427,7 +427,7 @@ class TransferInSettleFreezeTest {
 
     /**
      * (round 3, M3) A freeze that wakes BEFORE the cap still holds the last collect: a request out at 150 s, frozen 150 to 170 s,
-     * the end 185 s (the cap), the message leased until 210 s. The last collect goes at 215 s and gathers it.
+     * the end 185 s (the cap), the message leased until 210 s. The last collect goes at 225 s and gathers it.
      */
     @Test
     fun aFreezeThatWakesBeforeTheCapStillHoldsTheLastCollect() = runTest {
@@ -449,12 +449,12 @@ class TransferInSettleFreezeTest {
         val age: () -> Long? = { sentAt?.let { clock.now() - it } }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorAge = age))
         assertEquals(0, drops)
-        assertTrue("held to s + V + 5 s: ${clock.now()}", clock.now() >= sentAt!! + 65_000)
+        assertTrue("held to s + V + 15 s: ${clock.now()}", clock.now() >= sentAt!! + 75_000)
     }
 
     /**
      * (iOS point 1) A cut during the hold moves the hold: the last collect goes once, after the new lease. Cuts at 98 s (lease
-     * 158 s, hold 163 s) and 150 s, during the hold (lease 210 s, hold 215 s).
+     * 158 s, hold 173 s) and 150 s, during the hold (noticed at 173 s: lease 233 s, hold 248 s).
      */
     @Test
     fun aCutDuringTheHoldMovesTheHold() = runTest {
@@ -477,10 +477,10 @@ class TransferInSettleFreezeTest {
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, cuts = { cutCount }))
         assertEquals(0, drops)
         assertEquals("one final collect, after the new lease: $finalTimes", 1, finalTimes.size)
-        assertTrue(finalTimes[0] >= 215_000) // the notice is at the look after the first hold (163 s): 163 + 60 + 5
+        assertTrue(finalTimes[0] >= 248_000) // the notice is at the look after the first hold (173 s): 173 + 60 + 15
     }
 
-    /** (R1) A second move of the hold is ignored: cuts at 98, 150 and 200 s; the hold moves once (to 228 s), then the drop. */
+    /** (R1) A second move of the hold is ignored: cuts at 98, 150 and 200 s; the hold moves once (to 248 s), then the drop. */
     @Test
     fun aSecondMoveOfTheHoldIsIgnored() = runTest {
         val clock = FrozenClock(this)
@@ -502,7 +502,7 @@ class TransferInSettleFreezeTest {
             ),
         )
         assertEquals(1, drops)
-        assertEquals("one move of the hold, then the drop", 228_000L, droppedAt)
+        assertEquals("one move of the hold, then the drop", 248_000L, droppedAt)
     }
 
     /**
@@ -551,13 +551,13 @@ class TransferInSettleFreezeTest {
         val ages: () -> List<Pair<Long, Long>> = { sends.map { (clock.now() - it) to 0L } }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = ages))
         assertEquals(0, drops)
-        assertTrue("held for A's lease: ${clock.now()} ours=$ours A=${sends[0]}", clock.now() >= sends[0] + 65_000)
+        assertTrue("held for A's lease: ${clock.now()} ours=$ours A=${sends[0]}", clock.now() >= sends[0] + 75_000)
     }
 
     /**
      * (round 4) A long poll's lease starts when the relay returns, up to its wait after the send. The collector's request goes
      * out at 103.5 s with a 25 s wait, the process freezes and wakes past the cap (105 s). The message is handed to it at
-     * 128.5 s (A + wait) and leased until A + 25 + 60 s = 188.5 s: the hold runs to A + wait + V + 5 s.
+     * 128.5 s (A + wait) and leased until A + 25 + 60 s = 188.5 s: the hold runs to A + wait + V + 15 s.
      */
     @Test
     fun aLongPollsLeaseCountsItsWait() = runTest {
@@ -579,15 +579,15 @@ class TransferInSettleFreezeTest {
         val sends: () -> List<Pair<Long, Long>> = { listOfNotNull(sentAt?.let { (clock.now() - it) to 25_000L }) }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = sends))
         assertEquals(0, drops)
-        assertTrue("held to A + w + V + 5 s: ${clock.now()}", clock.now() >= sentAt!! + 25_000 + 65_000)
+        assertTrue("held to A + w + V + 15 s: ${clock.now()}", clock.now() >= sentAt!! + 25_000 + 75_000)
     }
 
     /**
      * (Fix 3) The first hold, set while nothing was due yet, is not a move. A cut is recorded between the two looks at the
      * start of the hold (the cuts lambda flips on its 4th read at the end: the pause's look, the loop's, and the hold's two):
      * the hold adopts it without using up the one extra. A later cut during the hold then still moves it (once).
-     * F = 100 s, the cap 105 s. The first cut, noticed at 100 s, leases to 160 s: the hold is 165 s. The second, at 130 s, is
-     * noticed at 165 s and leases to 225 s: the hold moves to 230 s, where the one final collect goes.
+     * F = 100 s, the cap 105 s. The first cut, noticed at 100 s, leases to 160 s: the hold is 175 s. The second, at 130 s, is
+     * noticed at 175 s and leases to 235 s: the hold moves to 250 s, where the one final collect goes.
      */
     @Test
     fun aLeaseRecordedBetweenTheHoldsTwoLooksIsNotAMove() = runTest {

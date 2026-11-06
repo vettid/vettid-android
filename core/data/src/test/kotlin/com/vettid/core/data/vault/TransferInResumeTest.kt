@@ -146,7 +146,7 @@ class TransferInResumeTest {
         assertEquals(25_000L, waits[0])
         assertTrue(starts[1] >= 25_000L + 30_000L)
         assertTrue("an abandoned request may hold a lease: the window moved out", droppedAt > TransferInResume.SETTLE_WINDOW_MS)
-        assertEquals(400_000L, droppedAt)
+        assertEquals(420_000L, droppedAt)
     }
 
     @Test
@@ -288,8 +288,8 @@ class TransferInResumeTest {
         val settle = TransferInResume.Settle(maxExtraMs = 10_000, now = { testScheduler.currentTime })
         TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = settle)
         // The END stays within first end 90 s + 10 s; the abandoned requests' leases (up to a visibility timeout past their
-        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 301 s here.
-        assertEquals(301_000L, droppedAt)
+        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 321 s here.
+        assertEquals(321_000L, droppedAt)
     }
 
     /**
@@ -390,8 +390,8 @@ class TransferInResumeTest {
         val gaps = at.zipWithNext { a, b -> b - a }
         assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), gaps.take(4))
         // the last gap is the held final collect (a lost attempt may hold a lease); the others are the backoff
-        // after the 1, 2, 4 s backoff: 8 s steps to the cap, then the held last collect (V + 5 s later) and the one extra (V + 5 s)
-        assertEquals(List(21) { 8_000L } + listOf(65_000L, 65_000L), gaps.drop(4))
+        // after the 1, 2, 4 s backoff: 8 s steps to the cap, then the held last collect (V + 15 s later) and the one extra (V + 15 s)
+        assertEquals(List(21) { 8_000L } + listOf(75_000L, 75_000L), gaps.drop(4))
     }
 
     @Test

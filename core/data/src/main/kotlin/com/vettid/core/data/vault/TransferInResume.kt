@@ -84,6 +84,12 @@ internal object TransferInResume {
     /** What is kept back from the end of the window for handling what a request brings. */
     const val HANDLING_MARGIN_MS = 5_000L
 
+    /**
+     * What the held last collect adds to a lease's end: 15 s. The send time of a request is noted before the client's
+     * transport retry and its connect, so the request may reach the relay (and its lease start) some seconds later.
+     */
+    const val HOLD_MARGIN_MS = 15_000L
+
     /** See [Settle.freezeMarginMs]. */
     const val FREEZE_MARGIN_MS = 10_000L
 
@@ -133,6 +139,8 @@ internal object TransferInResume {
          */
         val freezeMarginMs: Long = FREEZE_MARGIN_MS,
         val heartbeatMs: Long = HEARTBEAT_MS,
+        /** See [HOLD_MARGIN_MS]: the held last collect goes at the latest lease end + this. */
+        val holdMarginMs: Long = HOLD_MARGIN_MS,
     )
 
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
@@ -179,17 +187,17 @@ internal object TransferInResume {
      * request
      * sent at or before it began, ours or the collector's, kept after the request ended via [collectorAge]; the notice time
      * + V for a cut) that runs past the cap is recorded however and whenever it was noticed (before the cap or after).
-     * The final `wait=0` collect then goes at `max(now, latest lease end + 5 s)`. The settlement has ONE extra in all: either
+     * The final `wait=0` collect then goes at `max(now, latest lease end + 15 s)` ([HOLD_MARGIN_MS]). The settlement has ONE extra in all: either
      * the hold target moves once (a cut or freeze noticed during the hold; a later move is ignored, since a collector
      * failing offline would otherwise move it at every failure for ever), or, after the final send, a lease noticed during it
      * that outlives its start earns one more held final collect. Then the drop (not when paired, not when the end moved
      * past now).
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
-     * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 5 s more; the
-     * final send takes at most 140 s (55 + 30 + 55); the extra (a hold move, or a second held collect after the first send) is
-     * at most V + 5 s more, and a second final send 140 s: at most cap + 2V + 488 s in all (558 s + 50 s at the default V):
-     * each hold's lease starts by s + w, w up to 25 s (the long-poll cap, ours and the collector's), 25 s more per hold.
+     * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 40 s more
+     * (the lease starts by s + w, w up to 25 s, the long-poll cap, ours and the collector's; then the 15 s margin); the final
+     * send takes at most 140 s (55 + 30 + 55); the extra (a hold move, or a second held collect after the first send) is at
+     * most V + 40 s more, and a second final send 140 s: at most cap + 2V + 508 s in all (cap + 628 s at the default V).
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
@@ -222,7 +230,7 @@ internal object TransferInResume {
                         if (alive() && !paired()) out.pause()
                     } else {
                         // The window's end: one final wait=0 collect, held until every lease that runs past the cap has
-                        // run out (max(now, s + w + V + 5 s), however and whenever the cut or freeze was noticed). A cut or a
+                        // run out (max(now, s + w + V + 15 s), however and whenever the cut or freeze was noticed). A cut or a
                         // freeze during the hold moves it. One that is noticed during the send itself, with a lease
                         // beyond its start, earns ONE more held final collect in all, then the drop.
                         out.awaitHold()
@@ -282,7 +290,7 @@ internal object TransferInResume {
         }
 
         /**
-         * Before the last collect: waits until every lease that runs past the cap has run out (+ the handling margin). The
+         * Before the last collect: waits until every lease that runs past the cap has run out (+ [Settle.holdMarginMs]). The
          * target may move ONCE (a cut or freeze noticed during the wait, which uses up the one extra of the settlement); a
          * later move is ignored, so the hold, and the pin, cannot go on for ever (a collector failing offline moves it at every
          * failure).
@@ -302,7 +310,7 @@ internal object TransferInResume {
             }
         }
 
-        private fun holdTarget(): Long = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.handlingMs
+        private fun holdTarget(): Long = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.holdMarginMs
 
         /** The one extra of the settlement: a move of the hold target, or another held final collect after the send. */
         @Synchronized
