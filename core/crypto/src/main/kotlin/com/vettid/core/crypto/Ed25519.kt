@@ -23,6 +23,64 @@ object Ed25519 {
         }
     }
 
+    /**
+     * Checks an Ed25519 signature over label || msg by exactly the four steps of BALLOT-PROTOCOL §2, which every verifier
+     * of a vote applies so that they all agree (VAULT-MESSAGING 0.86.4 §10.19.4):
+     * 1. `A` and `R` have `y` below p, and are not `x = 0` with the sign bit set;
+     * 2. neither `[8]A` nor `[8]R` is the identity;
+     * 3. `S < L`;
+     * 4. `[S]B = R + [k]A`, **cofactorless**.
+     *
+     * Bouncy Castle's [verifyRaw] does step 3, refuses an `A` of small order or that does not decode, and checks the
+     * equation **cofactored** (it accepts an `R` of small order, and a key with a small-order part whose equation holds
+     * only times 8). Steps 1 and 2 are a table here, as in vettid-vault `vms/votewire/verify.go`. Step 4: when `A` and `R`
+     * are both of order L the cofactored equation is the cofactorless one; otherwise (a mixed-order point, which no honest
+     * signer makes) [Ed25519Exact] decides it.
+     */
+    fun verifyStrict(publicKey: ByteArray, label: String, msg: ByteArray, sig: ByteArray): Boolean {
+        if (publicKey.size != Suite.ED25519_PUBLIC_SIZE || sig.size != Suite.ED25519_SIGNATURE_SIZE) return false
+        val r = sig.copyOf(Suite.ED25519_PUBLIC_SIZE)
+        if (!strictPoint(publicKey) || !strictPoint(r)) return false
+        val m = Bytes.concat(label.toByteArray(Charsets.US_ASCII), msg)
+        if (!verifyRaw(publicKey, m, sig)) return false
+        if (BcEd25519.validatePublicKeyFull(publicKey, 0) && BcEd25519.validatePublicKeyFull(r, 0)) return true
+        return Ed25519Exact.cofactorless(publicKey, m, sig)
+    }
+
+    /** Steps 1 and 2 of BALLOT-PROTOCOL §2 for a 32-byte point encoding: `y` below p and not the `y` of a small-order point. */
+    internal fun strictPoint(b: ByteArray): Boolean {
+        val y = b.copyOf()
+        y[31] = (y[31].toInt() and 0x7f).toByte()
+        if (!lessLE(y, FIELD_P)) return false
+        // The eight points of small order have y = 0 (order 4), 1 (the identity), p-1 (order 2) or one of the two y of the
+        // points of order 8, each with either sign of x; x = 0 with the sign bit set has y = 1 or p-1, so it is here too.
+        return SMALL_ORDER_Y.none { it.contentEquals(y) }
+    }
+
+    /** a < b, both little-endian of the same length. */
+    private fun lessLE(a: ByteArray, b: ByteArray): Boolean {
+        for (i in a.indices.reversed()) {
+            val x = a[i].toInt() and 0xff
+            val z = b[i].toInt() and 0xff
+            if (x != z) return x < z
+        }
+        return false
+    }
+
+    /** p = 2^255 - 19, little-endian. */
+    private val FIELD_P = ByteArray(32) { 0xff.toByte() }.also {
+        it[0] = 0xed.toByte()
+        it[31] = 0x7f
+    }
+
+    private val SMALL_ORDER_Y: List<ByteArray> = listOf(
+        ByteArray(32),
+        ByteArray(32).also { it[0] = 1 },
+        FIELD_P.copyOf().also { it[0] = 0xec.toByte() },
+        Bytes.unhex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"),
+        Bytes.unhex("c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"),
+    )
+
     /** Throws unless the signature verifies. */
     fun requireValid(publicKey: ByteArray, label: String, msg: ByteArray, sig: ByteArray, what: String) {
         if (!verify(publicKey, label, msg, sig)) throw CryptoException.Signature(what)
