@@ -478,7 +478,8 @@ The A2 exit test:
   daily rule alone; after them the small fetches (results.json, sig, bundle) stay daily, rows.json is downloaded on an
   unmetered network (`NetworkMeter`: `NET_CAPABILITY_NOT_METERED`; unknown counts as metered; the `unmetered` seam) by
   the daily rule, and on a metered one only when the last rows download (`ResultsAttempt.lastRowsMs`) is at least 7 days
-  old (`METERED_ROWS_EVERY`): a weekly cap, not a block. A deferred download ends as `ResultsOutcome.Deferred`: nothing
+  old (`METERED_ROWS_EVERY`): a weekly cap, not a block; any rows bytes received count, also of a download cut off
+  partway (`VoteSite.getCounted`, #319 item 1). A deferred download ends as `ResultsOutcome.Deferred`: nothing
   sent, no new text, the vote's own state line; it keeps the last attempt's record (only its time moves). The member's **Check again is not held by the network cap** (the lead's call on #317 Q2: they asked, so
   rows.json is downloaded on any network); it still follows the unchanged-results skip, its time rule is unchanged
   (an `Unchanged` one keeps the last attempt's time, #314 item 3), and its download moves `lastRowsMs` (data was spent, so the weekly mobile cap counts from it). Both times are wiped with the attempts. Erratum due (the lead writes it):

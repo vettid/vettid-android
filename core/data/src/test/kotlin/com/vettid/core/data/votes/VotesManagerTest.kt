@@ -169,6 +169,15 @@ class VotesManagerTest {
             }
             return answers[path] ?: SiteAnswer.Absent
         }
+
+        /** Bytes a read receives before its answer (a download cut off partway: `Unreachable` after some bytes). */
+        val partial = mutableMapOf<String, Long>()
+
+        override suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
+            val answer = get(path, maxBytes)
+            partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
+            return answer
+        }
     }
 
     private class Window {
@@ -2269,5 +2278,40 @@ class VotesManagerTest {
         clock = day(11.0)
         assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
         assertEquals(4, site.rowsReads())
+    }
+
+    // ---- #319 ----
+
+    @Test
+    fun aRowsDownloadCutOffPartwayCountsTowardTheWeeklyCap() = runTest {
+        // Item 1: day 8 on mobile, the last whole download on day 0; a download that drops after some bytes on day 8 counts,
+        // so day 9 is deferred (no daily retry of up to 51 MB on mobile data).
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.checkDue(CONN, PID)
+        val rows = site.answers.getValue("p/$PID/rows.json")
+        site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site.partial["p/$PID/rows.json"] = 1_000_000
+        clock = day0.plus(Duration.ofDays(8))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.checkDue(CONN, PID))
+        assertEquals(clock.toEpochMilli(), store.load().single().lastRowsMs)
+        site.answers["p/$PID/rows.json"] = rows
+        site.partial.clear()
+        clock = day0.plus(Duration.ofDays(9))
+        assertEquals(ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        // A drop before any byte arrived does not count.
+        val (ops2, site2) = wifiScenario()
+        val store2 = MemoryResultsAttemptStore()
+        val m2 = manager(ops2, site2, attempts = store2, unmetered = { false })
+        m2.refresh()
+        clock = day0
+        m2.checkDue(CONN, PID)
+        site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        clock = day0.plus(Duration.ofDays(8))
+        m2.checkDue(CONN, PID)
+        assertEquals(day0.toEpochMilli(), store2.load().single().lastRowsMs)
     }
 }

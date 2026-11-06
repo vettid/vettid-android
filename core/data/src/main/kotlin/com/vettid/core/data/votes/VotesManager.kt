@@ -854,7 +854,7 @@ class VotesManager(
         /** The check was `gave_up` when this attempt ran: it is a re-check (#314 item 1, the 7 days run from the first). */
         var gaveUp = false
 
-        /** rows.json was fetched with a body (read, or cut at its cap): the time of the last rows download (#314 item 1). */
+        /** rows.json's bytes were received (read, cut at its cap, or cut off partway): the last rows download (#314, #319). */
         var rowsSpent = false
 
         /** The rows.json download was deferred on a metered network (#314 item 1): the last attempt's record is kept. */
@@ -963,9 +963,24 @@ class VotesManager(
             trace.deferred = true
             return@run ResultsOutcome.Deferred
         }
-        val rows = rowsCap?.let { fetch("rows.json", it) }
+        // Any bytes of rows.json received count toward the weekly cap, also of a download cut off partway (#319 item 1).
+        var rowsBytes = false
+        val rows = rowsCap?.let { cap ->
+            when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n -> if (n > 0) rowsBytes = true }) {
+                is SiteAnswer.Found -> a.bytes
+                SiteAnswer.Absent -> null
+                SiteAnswer.TooLarge -> {
+                    tooLarge = true
+                    null
+                }
+                SiteAnswer.Unreachable -> {
+                    siteDown = true
+                    null
+                }
+            }
+        }
         if (rows != null) trace.rowsDownloaded = true
-        if (rows != null || tooLarge) trace.rowsSpent = true
+        if (rows != null || tooLarge || rowsBytes) trace.rowsSpent = true
         // rows.json over its cap stops the submit of a row (§10.19.6 step 1): with `vote_rows`, `rows_unavailable`.
         val rowsOver = tooLarge
         if (rowsOver && !rowsOk) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
