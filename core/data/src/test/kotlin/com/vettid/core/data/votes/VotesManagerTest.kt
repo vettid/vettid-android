@@ -1194,4 +1194,32 @@ class VotesManagerTest {
         }
         assertEquals(2, ops.submitted.size)
     }
+
+    @Test
+    fun anythingThrownInTheObserversWorkIsAnObserverFailureAndTheRowIsStillSubmitted() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var observeSteps = 0
+        val m = manager(ops, site) {
+            // The second "observe" step is inside the observer's own work (its first checkpoint).
+            if (it.endsWith(":observe") && ++observeSteps == 2) error("a library failure")
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, ops.submitted.size)
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+    }
+
+    @Test
+    fun aCancellationInTheObserversWorkIsNotSwallowed() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var job: Job? = null
+        var observeSteps = 0
+        val m = manager(ops, site) { if (it.endsWith(":observe") && ++observeSteps == 2) job!!.cancel() }
+        m.refresh()
+        job = launch(start = CoroutineStart.LAZY) { m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertTrue(ops.submitted.isEmpty())
+    }
 }

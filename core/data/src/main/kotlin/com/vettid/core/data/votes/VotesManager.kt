@@ -833,7 +833,11 @@ class VotesManager(
         val c = published.counts()
         val countsDiffer = detail.counts != null && detail.counts != VoteCounts(c.eligible, c.ballots, c.removed, c.unhandled)
         tallyDiffers || countsDiffer
-    } catch (_: ResultsProblem) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+        // Any failure of the observer's own work (a ResultsProblem, or anything thrown under it) is an observer failure,
+        // never a reason not to submit (review 1, finding 7).
         true
     }
 
