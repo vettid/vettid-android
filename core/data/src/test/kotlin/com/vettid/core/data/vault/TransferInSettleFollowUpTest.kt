@@ -471,4 +471,41 @@ class TransferInSettleFollowUpTest {
         )
         assertEquals(listOf(234_000L), lasts)
     }
+
+    /**
+     * (Recheck 2, B1) After an extra taken before the cap (no ceiling), the one look after a freeze in the last send still goes
+     * at once. V = 300 s, F = 400 s, the cap 401 s. The last look at 400 s is rate limited (`retry_after` 300 s): the extra holds
+     * to 700 s. A cut is seen at the end of that hold (undescribed: its lease from 725 s to 1,025 s): the free first lease hold
+     * goes to 1,040 s. That last collect is frozen for 30 s: the look goes at the wake (1,070.1 s), not at the freeze's lease
+     * + 15 s (1,385.1 s).
+     */
+    @Test
+    fun theLookAfterAFreezeGoesAtOnceAfterAnExtraTakenBeforeTheCap() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var refused = false
+        val lasts = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(
+            windowMs = 400_000, maxExtraMs = 1_000, visibilityMs = 300_000, now = clock::now,
+        )
+        launch {
+            delay(699_000)
+            cutCount++ // seen at the hold's look at 700 s (undescribed: now + 25 s)
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 400_000) {
+                if (!refused) {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 300)
+                }
+                lasts += clock.now()
+                if (lasts.size == 1) {
+                    delay(100)
+                    clock.jumpedMs += 30_000 // to the background and back, during the last collect
+                }
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle, cuts = { cutCount }))
+        assertEquals(listOf(1_040_000L, 1_070_100L), lasts)
+    }
 }
