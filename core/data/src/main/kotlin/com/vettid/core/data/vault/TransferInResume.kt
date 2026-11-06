@@ -200,10 +200,14 @@ internal object TransferInResume {
      * hold; setting the first hold is no move; a later move is ignored, since a collector failing offline would otherwise
      * move it at every failure for ever); or, after the final send, one more held final collect, for a lease noticed during
      * it that outlives its start (past the cap, or within it but ending after the send began), or for a final collect the
-     * relay refused (429, or 401 with a stale signature: held for its `retry_after`, at most V, and signed afresh; any other
-     * status is no cut). Once the extra is used at or after the cap, nothing raises a hold past what was due when it was
-     * taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze during the last send (the app in the background) earns one more `wait=0` look, at
-     * once and held for nothing, so the drop never follows only a look made before the freeze. Then the drop (not when
+     * relay refused (call B: 429, or 401 with a stale signature; any other status is no cut). In production the relay client
+     * itself first retries a 429 or a stale 401 (up to 3 attempts, each signed afresh, honouring `retry_after`): a refusal
+     * reaches the window only after those, and is then held for its `retry_after`, at most V, and sent as a new request; a
+     * `retry_after` longer than the request's bound (wait + 30 s) ends it as an abandoned request first, a cut held to
+     * max(now, s + w) + V + 15 s. Once the extra is used at or after the cap, nothing raises a hold past what was due when it
+     * was taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze
+     * during the last send (the app in the background) earns one more `wait=0` look, at once and held for nothing, so the
+     * drop never follows only a look made before the freeze. Then the drop (not when
      * paired, not when the end moved past now).
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
@@ -373,7 +377,8 @@ internal object TransferInResume {
         /**
          * After the last collect, at the end: whether to look once more. A lease noticed during it that outlives its start (one
          * past the cap, or one within it that ended during the send), or a last collect the relay refused (429, a stale
-         * signature: nothing was looked at; held for its `retry_after`, at most V, and signed afresh), earns the one extra, if
+         * signature, after the client's own retries: nothing was looked at; held for its `retry_after`, at most V, and sent as a
+         * new request, signed afresh), earns the one extra, if
          * still unused. Once it is used, a freeze during the last send (the app was in the background) earns one more look,
          * at once and held for nothing, so the drop never follows a look made before the freeze.
          */
