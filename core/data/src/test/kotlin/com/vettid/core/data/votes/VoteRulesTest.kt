@@ -278,6 +278,84 @@ class VoteRulesTest {
     }
 
     @Test
+    fun resultsThatDontAddUpAreANoteOnceUnderAVerifiedOrUnconfirmedCheckAndHideTheNumbers() {
+        val recorded = ballot(BallotState.RECORDED)
+        val verified = vote(VoteState.CLOSED, recorded, check(CheckState.VERIFIED))
+        val notes = VoteRules.notes(verified, observerFailed = true)
+        // Once, right under the state line, a plain note.
+        assertEquals(1, notes.count { it == VoteNote.RESULTS_DONT_ADD_UP })
+        assertEquals(notes.indexOf(VoteNote.IN_RESULTS) + 1, notes.indexOf(VoteNote.RESULTS_DONT_ADD_UP))
+        assertEquals(VoteNote.Severity.NOTE, VoteNote.RESULTS_DONT_ADD_UP.severity)
+        assertFalse(VoteNote.CHECK_RESULTS_PROBLEM in notes)
+        val unconfirmed = vote(VoteState.CLOSED, ballot(BallotState.WAITING), check(CheckState.UNCONFIRMED))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(unconfirmed, observerFailed = true))
+        val didntVote = vote(VoteState.CLOSED, null, check(CheckState.VERIFIED))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(didntVote, observerFailed = true))
+        // Not without the flag, and not under any other check (failed shows only its own text; pending its own).
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified))
+        for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
+            assertFalse("$c", VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded, check(c)), observerFailed = true))
+        }
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded), observerFailed = true))
+        // Numbers: only under verified or unconfirmed, and never with a failed verdict.
+        val failed = ObserverVerdict.FAILED
+        val passed = ObserverVerdict.PASSED
+        assertTrue(VoteRules.showNumbers(verified, passed, observerFailed = false))
+        assertTrue(VoteRules.showNumbers(unconfirmed, passed, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(verified, failed, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(unconfirmed, failed, observerFailed = false))
+        for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
+            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), passed, observerFailed = false))
+        }
+        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), passed, observerFailed = false))
+    }
+
+    @Test
+    fun numbersAreHiddenWheneverTheFlagIsSetEvenWithAPassedVerdict() {
+        // Recheck 1, R1-1: a first submit passed; a later Check again failed the observer and its submit was refused.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        val h = VoteHint(observerFailed = true, verdict = ObserverVerdict.PASSED)
+        assertFalse(VoteRules.showNumbers(verified, h.verdict, h.observerFailed))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = h.observerFailed))
+    }
+
+    @Test
+    fun noVerdictInMemoryMeansNoNumbers() {
+        // After a lock or a restart the hints are gone: until a check has run again, no number is shown.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        assertFalse(VoteRules.showNumbers(verified, VoteHint().verdict, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(verified, null, observerFailed = false))
+        assertTrue(VoteRules.showNumbers(verified, ObserverVerdict.PASSED, observerFailed = false))
+    }
+
+    @Test
+    fun anAttemptThatSubmitsNothingClearsTheLineButTheLastVerdictKeepsTheNumbersHidden() {
+        // The reviewer's case: a verified check whose results did not add up, then a Check again that submitted nothing.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        val after = VoteHint(observerFailed = false, verdict = ObserverVerdict.FAILED)
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = after.observerFailed))
+        assertFalse(VoteRules.showNumbers(verified, after.verdict, after.observerFailed))
+    }
+
+    @Test
+    fun aRealChoiceLabelledAbstainIsShownByItsId() {
+        // ANDROID-PLAN 0.1.117 "Abstain" matching: Default_Ignorable and U+2800 removed anywhere, White_Space trimmed, any case.
+        val labels = listOf("Abstain", "abstain", "  ABSTAIN\u00a0", "Ab\u200bstain", "Abs\u2800tain", "\u2800Abstain", "Abst\u00adain")
+        for (l in labels) assertTrue(l, VoteWire.readsAbstain(l))
+        for (l in listOf("Abstain now", "Ab stain", "Abstention", "\u0410bstain")) assertFalse(l, VoteWire.readsAbstain(l))
+        val choices = labels.mapIndexed { i, l -> """{"id":"c$i","label":"$l"}""" }.joinToString(",")
+        val o = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"proposal_id":"P1","connection_id":"C1","title":"A","state":"closed","choices":[$choices,""" +
+                """{"id":"abstain","label":"Abstain"},{"id":"yes","label":"Yes"}]}""",
+        ) as kotlinx.serialization.json.JsonObject
+        val d = VoteWire.detail(o)!!
+        labels.indices.forEach { assertEquals("c$it", d.choices[it].label) }
+        // The reserved choice keeps its label (the app's own words for it need the approved string), and other labels stay.
+        assertEquals("Abstain", d.choices[labels.size].label)
+        assertEquals("Yes", d.choices.last().label)
+    }
+
+    @Test
     fun theWireReadsAListingWithoutTrustingIt() {
         val o = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"votes":[{"proposal_id":"P1","connection_id":"C1","title":"A","state":"newstate","ballot":{"state":"x"},"check":{"state":"y"},"site":"z"},{"connection_id":"C2"},"junk"],"dropped":[{"count":2}],"problems":[],"reconnect":[{"connection_id":"C9","service_id":"s","name":"N"}],"list_version":4,"list_sha256":"AA"}""",

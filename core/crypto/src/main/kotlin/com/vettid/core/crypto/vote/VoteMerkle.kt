@@ -46,6 +46,52 @@ object VoteMerkle {
         }
     }
 
+    /**
+     * The tree head over [n] leaf hashes packed 32 bytes each in [leafHashes] (no per-leaf array: review 1, finding 2);
+     * [checkpoint] is called every 256 node hashes, so a long tree can be cancelled.
+     */
+    fun rootOfHashes(leafHashes: ByteArray, n: Int, checkpoint: () -> Unit = {}): ByteArray {
+        if (n == 0) return Bytes.sha256()
+        return Packed(leafHashes, checkpoint).root(0, n)
+    }
+
+    /** The audit path of leaf [index] of [n] packed leaf hashes; null when [index] is outside them. */
+    fun proofOfHashes(leafHashes: ByteArray, n: Int, index: Int, checkpoint: () -> Unit = {}): List<ByteArray>? {
+        if (index < 0 || index >= n) return null
+        val p = Packed(leafHashes, checkpoint)
+        val out = ArrayList<ByteArray>()
+        p.path(0, n, index, out)
+        return out
+    }
+
+    private class Packed(private val h: ByteArray, private val checkpoint: () -> Unit) {
+        private var nodes = 0
+
+        fun root(lo: Int, hi: Int): ByteArray {
+            if (hi - lo == 1) return h.copyOfRange(lo * HASH, (lo + 1) * HASH)
+            val k = split(hi - lo)
+            val l = root(lo, lo + k)
+            val r = root(lo + k, hi)
+            if (++nodes % CHECK_EVERY == 0) checkpoint()
+            return nodeHash(l, r)
+        }
+
+        // Nearest sibling first: the deeper levels are appended before this level's sibling.
+        fun path(lo: Int, hi: Int, m: Int, out: MutableList<ByteArray>) {
+            if (hi - lo == 1) return
+            val k = split(hi - lo)
+            if (m < k) {
+                path(lo, lo + k, m, out)
+                out += root(lo + k, hi)
+            } else {
+                path(lo + k, hi, m - k, out)
+                out += root(lo, lo + k)
+            }
+        }
+    }
+
+    private const val CHECK_EVERY = 256
+
     /** Whether [leaf] is at [index] of a tree of [size] leaves with head [root]. A path entry that is not 32 bytes fails. */
     fun verify(root: ByteArray, leaf: ByteArray, index: Long, size: Long, path: List<ByteArray>): Boolean {
         if (index < 0 || index >= size || root.size != HASH) return false

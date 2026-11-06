@@ -417,10 +417,47 @@ The A2 exit test:
   the lists, the entries and each results submit as separate stages, so one bad item stops nothing else; the member's row and its
   Merkle proof from `rows.json` for `vote.results.submit`, `VoteRows`
   in `:core:crypto` against vettid-vault's `vote.json` vectors) never decides anything: the vault checks all of it again.
+  `VoteRows.read` reads `results.json` and `rows.json` (`RowsReader`: strict JSON, nested at most 4 deep, **no text kept**, only
+  each row's decoded tag, leaf hash and, when they have the protocol's lengths (32, 64, 1 to 32 bytes), `vk`, `ballot_sig` and
+  `choice_id`: at most 208 bytes a row whatever the input; a ballot of other lengths is only flagged (`ballot_shape`), except the
+  member's own row, kept as published; rows.json at most
+  `VoteRows.rowsCap(counts.eligible)` = 512 × eligible + 4,096, never over 51,204,096 bytes, the download capped the same way).
+  **Only what VAULT-MESSAGING 0.86.4 §10.19.6 step 1 names stops the submit of a row**: the cap, the depth, a row that cannot
+  be made into a leaf, and what the vault's check of the row needs (`counts.eligible` rows reaching `rows_root`; the member's
+  row, the first under its tag; a valid own `choice_id`). `PublishedResults.observe` is the rest of the observer's check
+  (BALLOT-PROTOCOL §8.4) and also reports the `rows_hash`, the tag order and duplicates, the field lengths, members other than
+  §8.5's (`pad` is not allowed in rows.json), the documents naming another proposal and rows.json not exactly `{v: 1,
+  proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default; the
+  parse of results.json for `rowsCap`, needed before rows.json is fetched, runs on `compute` too),
+  with `ensureActive()` every 256 rows and tree nodes (a cancellation stops it there: leaving the screen ends its
+  `viewModelScope`, a lock cancels the sync job and so the due checks; `clear()` also cancels every check in flight, Check again
+  included: each runs in its own child job (`checks`), so its caller is not cancelled but answered `ResultsOutcome.Voided`,
+  and a `generation` taken at its start voids whatever still returns: no hint is written and nothing is submitted after a
+  lock or clear; `VoteViewModel.checkWithService` resets `checking` in a `finally`, so no ending leaves Check again disabled), under a lock per vote (one vote's long check holds up no other), and
+  compares the vault's own `tally` and `counts` (`vote.get`, when it holds them) too; any exception in the observer's work is an
+  observer failure, and so is an `observe` that runs past its time box in one attempt (`VotesManager.observeLimitFor`:
+  `max(60 s, counts.eligible x 3 ms)`, 300 s at 100,000 rows; the 60 s floor is the injectable `observeLimit`;
+  `withTimeoutOrNull` around the observer alone, so results it cannot finish in time still get submitted, flagged). It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`
+  (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing clears it), and a submit the vault
+  answered sets `VoteHint.verdict` (`ObserverVerdict`), which nothing else changes. With a `verified` or `unconfirmed` check and
+  the flag, the screen shows the state, then `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`);
+  numbers show only with a `PASSED` verdict (`VoteRules.showNumbers`), so none after a failed verdict, and none with no verdict
+  in memory (after a lock or a restart, until a check runs again); it is not the results-problem text. Not built yet (the
+  0.83.6 task): `rows_unavailable`, `other_rows`, the recheck on open, and submitting when `counts.eligible` does not read.
+  Every vote signature the app checks goes through
+  `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
+  byte table (`strictPoint`), then `S < L` and the cofactorless equation are Tink's pure-Java `subtle.Ed25519Verify`
+  (`com.google.crypto.tink:tink-android`, pinned in `libs.versions.toml`, used by `:core:crypto` for this alone; owner
+  decision a, #310), which recomputes `R` and compares encodings. Tink alone takes an `A` of small order or with `y >= p`
+  (read mod p), and an `R` of small order whose equation holds: the table refuses them first. Bouncy Castle stays for every
+  other signature (`verify`, `verifyRaw`, signing), not for votes). The reserved `abstain` choice is always "Abstain" (`vote_choice_abstain`, `VoteTexts.choiceLabel`) wherever a
+  choice label appears (the choices, the confirm sheet, the member's own choice, the restore question, the Results rows), and a
+  real choice whose label reads "Abstain" (ANDROID-PLAN 0.1.117 matching) is shown by its id (`VoteWire.readsAbstain`). Both
+  strings are owner-approved (ANDROID-PLAN 0.1.116 table, owner decision a, 2026-11-02).
   `Endpoints.votesBase` is `https://votes.vettid.org` (production) or `https://votes.staging.vettid.org` (staging), none on the dev
   stack. Screens: `votes`, `votes.notices`, `votes.empty`, `vote`, `vote.confirm`, `vote.password`, `vote.recorded`, `vote.sending`,
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
-  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`.
+  `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`, `vote.results_dont_add_up`.
 
 - Wallet (ANDROID-PLAN §4 "Wallet", W1; VAULT-MESSAGING §10.18): **not in production builds**, laid out like calls. `:core:chain` (bitcoin-kmp
   behind the module, PSBT, the Esplora client, `ChainServers`: the chain server per network in `chain-servers.bin`, block 0 checked

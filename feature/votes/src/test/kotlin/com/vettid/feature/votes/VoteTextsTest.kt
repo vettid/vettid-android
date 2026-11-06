@@ -104,6 +104,26 @@ class VoteTextsTest {
     }
 
     @Test
+    fun theDontAddUpLineAndAbstainAreTheOwnersTexts() {
+        // ANDROID-PLAN 0.1.116 table, owner decision a, 2026-11-02.
+        assertEquals(
+            "The rest of the published results don't add up. The service may have published them wrongly.",
+            r.getString(R.string.vote_results_dont_add_up),
+        )
+        assertEquals("Abstain", r.getString(R.string.vote_choice_abstain))
+        assertEquals(r.getString(R.string.vote_results_dont_add_up), VoteTexts.text(r, VoteNote.RESULTS_DONT_ADD_UP, "Example", ""))
+    }
+
+    @Test
+    fun theReservedAbstainIsAlwaysTheAppsOwnWord() {
+        assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", "Skip this one"))
+        assertEquals("Abstain", VoteTexts.choiceLabel(r, "abstain", null))
+        assertEquals("Yes", VoteTexts.choiceLabel(r, "yes", "Yes"))
+        assertEquals(null, VoteTexts.choiceLabel(r, "yes", null))
+        assertEquals(null, VoteTexts.choiceLabel(r, null, null))
+    }
+
+    @Test
     fun boldMarkersAreBoldAndNeverShown() {
         val a = boldMarked("**Bold.** Rest")
         assertEquals("Bold. Rest", a.text)

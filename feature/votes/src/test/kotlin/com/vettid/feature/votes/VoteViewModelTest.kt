@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.votes.BallotState
 import com.vettid.core.data.votes.CheckState
+import com.vettid.core.data.votes.ResultsOutcome
 import com.vettid.core.data.votes.VoteBallot
 import com.vettid.core.data.votes.VoteChoice
 import com.vettid.core.data.votes.VoteCheck
@@ -432,6 +433,24 @@ class VoteViewModelTest {
         closed.checkWithService()
         advanceUntilIdle()
         assertTrue("checkResults:$CONN/P2" in votes.calls)
+    }
+
+    @Test
+    fun aCheckThatALockCancelledOrVoidedNeverLeavesCheckAgainDisabled() = runTest {
+        // Lead review L2: a lock cancels the check in flight; the manager answers Voided, and a cancellation that still
+        // reaches the screen ends its check all the same.
+        publish(summary(state = VoteState.CLOSED, ballot = VoteBallot(BallotState.RECORDED), check = VoteCheck(CheckState.PENDING)))
+        val vm = vm()
+        advanceUntilIdle()
+        votes.checkResultsAnswer = { throw kotlinx.coroutines.CancellationException("the check was cancelled") }
+        vm.checkWithService()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.checking)
+        votes.checkResultsAnswer = { ResultsOutcome.Voided }
+        vm.checkWithService()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.checking)
+        assertEquals(2, votes.calls.count { it == "checkResults:$CONN/$PID" })
     }
 
     @Test

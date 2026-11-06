@@ -19,6 +19,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -152,10 +158,14 @@ class VotesManagerTest {
     private class Site(var hasSite: Boolean = true) : VoteSite {
         val answers = mutableMapOf<String, SiteAnswer>()
         val reads = mutableListOf<String>()
+        val maxes = mutableMapOf<String, Long>()
         override val configured: Boolean get() = hasSite
 
         override suspend fun get(path: String, maxBytes: Long): SiteAnswer {
-            synchronized(this) { reads += path }
+            synchronized(this) {
+                reads += path
+                maxes[path] = maxBytes
+            }
             return answers[path] ?: SiteAnswer.Absent
         }
     }
@@ -168,7 +178,14 @@ class VotesManagerTest {
         var closeFail: Exception? = null
     }
 
-    private fun TestScope.manager(ops: Ops, site: Site = Site(), window: Window = Window()) = VotesManager(
+    private fun TestScope.manager(
+        ops: Ops,
+        site: Site = Site(),
+        window: Window = Window(),
+        compute: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
+        observeLimit: Duration = Duration.ofSeconds(60),
+        computeStep: (String) -> Unit = {},
+    ) = VotesManager(
         this,
         ops = { ops },
         site = site,
@@ -185,6 +202,9 @@ class VotesManagerTest {
         },
         unlockTtl = { 300 },
         now = { clock },
+        compute = compute,
+        computeStep = computeStep,
+        observeLimit = observeLimit,
     )
 
     @Test
@@ -988,5 +1008,449 @@ class VotesManagerTest {
         assertTrue(m.hints.value.getValue("$CONN/$PID").resultsTooLarge)
         assertTrue(m.hints.value.getValue("$CONN/$PID").resultsProblem)
         assertTrue(ops.submitted.isEmpty())
+    }
+
+    // ---- The observer's check (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, ANDROID-PLAN 0.1.116/0.1.117) ----
+
+    /**
+     * Results that pass the app's whole observer check: a proposal naming three choices, the tags' record root and three
+     * eligible members, rows.json exactly `{v, proposal_id, rows}` with three empty rows, and a tally of zeros.
+     */
+    private class Observed(val rowsJson: String, val results: String, val tags: List<ByteArray>)
+
+    private fun observed(proposalIdInResults: String = PID, tally: String = """{"abstain":0,"no":0,"yes":0}""", n: Int = 3): Observed {
+        val tags = (1..n).map { i -> ByteArray(32) { 7 }.also { it[0] = (i shr 8).toByte(); it[1] = i.toByte() } }
+        val rowsJson = """{"proposal_id":"$PID","rows":[${tags.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }}],"v":1}"""
+        val proposal = """{"choices":[{"id":"yes","label":"Yes"},{"id":"no","label":"No"},{"id":"abstain","label":"Abstain"}],"eligible":$n,"record_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}"}"""
+        val hash = Base64s.encodeStd(Bytes.sha256(rowsJson.toByteArray()))
+        val results = """{"counts":{"ballots":0,"eligible":$n,"removed":0,"unhandled":0},"extensions":[],"proposal":{"doc":"${Base64s.encodeStd(proposal.toByteArray())}","sig":"AA=="},"proposal_id":"$proposalIdInResults","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}","tally":$tally,"v":1}"""
+        return Observed(rowsJson, results, tags)
+    }
+
+    private fun observedScenario(o: Observed, detailExtra: String = ""): Pair<Ops, Site> {
+        val ops = Ops().apply {
+            list = listing(closedWithPendingCheck())
+            detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(o.tags[1])}"$detailExtra}""")
+        }
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            answers["p/$PID/results.json"] = ok(o.results)
+            answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(64) { 9 })
+            answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"x"}""")
+            answers["p/$PID/rows.json"] = ok(o.rowsJson)
+        }
+        return ops to site
+    }
+
+    private suspend fun TestScope.observedFlag(ops: Ops, site: Site): Boolean {
+        val m = manager(ops, site)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals("submitted whatever the observer found", 1, ops.submitted.size)
+        return m.hints.value["$CONN/$PID"]?.observerFailed == true
+    }
+
+    @Test
+    fun resultsThatPassTheObserversCheckAreSubmittedWithoutTheFlag() = runTest {
+        val (ops, site) = observedScenario(observed())
+        assertFalse(observedFlag(ops, site))
+        // The vault's own tally and counts, when it holds them, agree too.
+        val (ops2, site2) = observedScenario(
+            observed(),
+            ""","tally":{"abstain":0,"no":0,"yes":0},"counts":{"eligible":3,"ballots":0,"removed":0,"unhandled":0}""",
+        )
+        assertFalse(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun aFailedObserverCheckStillSubmitsAndSetsTheFlag() = runTest {
+        // A tally that does not recompute.
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        assertTrue(observedFlag(ops, site))
+    }
+
+    @Test
+    fun whatIsOnlyReportedSetsTheFlagAndStillSubmits() = runTest {
+        // results.json names another proposal.
+        val (ops, site) = observedScenario(observed(proposalIdInResults = "01JBQZ0000000000000000000Z"))
+        assertTrue(observedFlag(ops, site))
+        // rows.json is not exactly {v, proposal_id, rows} (rebuilt without v, with its own hash).
+        val o = observed()
+        val noV = o.rowsJson.replace(""","v":1""", "")
+        val results = o.results.replace(Base64s.encodeStd(Bytes.sha256(o.rowsJson.toByteArray())), Base64s.encodeStd(Bytes.sha256(noV.toByteArray())))
+        val (ops2, site2) = observedScenario(Observed(noV, results, o.tags))
+        assertTrue(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun aTallyOrCountsOtherThanTheVaultsSetTheFlag() = runTest {
+        val (ops, site) = observedScenario(observed(), ""","tally":{"abstain":0,"no":0,"yes":1}""")
+        assertTrue(observedFlag(ops, site))
+        val (ops2, site2) = observedScenario(observed(), ""","counts":{"eligible":3,"ballots":0,"removed":1,"unhandled":0}""")
+        assertTrue(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun anAttemptThatSubmitsNothingClearsTheFlagAndALostSubmissionKeepsIt() = runTest {
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        val m = manager(ops, site)
+        m.refresh()
+        // A submission the vault refuses: the flag stays (ANDROID-PLAN 0.1.117).
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        // An attempt that submits nothing (the signature is not 64 bytes): the flag goes.
+        ops.refuse.clear()
+        site.answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(63))
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertFalse(m.hints.value.getValue("$CONN/$PID").observerFailed)
+    }
+
+    @Test
+    fun rowsJsonIsDownloadedUpToItsCapForTheEligibleCount() = runTest {
+        val (ops, site) = observedScenario(observed())
+        observedFlag(ops, site)
+        assertEquals(3 * 512L + 4_096, site.maxes["p/$PID/rows.json"])
+        // Results whose counts do not read: a problem, and rows.json is not fetched.
+        val (ops2, site2) = observedScenario(observed())
+        site2.answers["p/$PID/results.json"] = ok("""{"counts":{"eligible":0}}""")
+        val m = manager(ops2, site2)
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertFalse(site2.reads.contains("p/$PID/rows.json"))
+        assertTrue(ops2.submitted.isEmpty())
+    }
+
+    // ---- Review 1 ----
+
+    @Test
+    fun theResultsAreReadProvedAndObservedOffTheCallersThread() = runTest {
+        val pool = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "vote-compute") }
+        try {
+            val steps = java.util.Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+            val (ops, site) = observedScenario(observed())
+            val m = manager(ops, site, compute = pool.asCoroutineDispatcher()) { steps += it to Thread.currentThread().name }
+            m.refresh()
+            assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+            val stages = steps.map { it.first.substringAfterLast(':') }.toSet()
+            // "cap": results.json read for rows.json's download cap (lead review L1).
+            assertEquals(setOf("cap", "read", "row", "observe"), stages)
+            // (The check runs in its own job since L2; with debug on, the thread's name carries the coroutine's.)
+            assertTrue("$steps", steps.all { it.second.substringBefore(" @") == "vote-compute" })
+        } finally {
+            pool.shutdown()
+        }
+    }
+
+    @Test
+    fun aCancelledCheckStopsAtItsNextStepAndSubmitsNothing() = runTest {
+        val (ops, site) = observedScenario(observed())
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var job: Job? = null
+        val m = manager(ops, site) {
+            steps += it
+            if (steps.size == 1) job!!.cancel()
+        }
+        m.refresh()
+        job = launch(start = CoroutineStart.LAZY) { m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertEquals("$steps", 1, steps.size)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun aLargeVoteChecksForCancellationEvery256Rows() = runTest {
+        val (ops, site) = observedScenario(observed(n = 1024))
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val m = manager(ops, site) { steps += it.substringAfterLast(':') }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        // The reading, the tree and the signature loop each look at least once per 256 rows.
+        assertTrue("$steps", steps.count { it == "read" } >= 1 + 1024 / 256)
+        assertTrue("$steps", steps.count { it == "observe" } >= 1 + 1024 / 256)
+    }
+
+    @Test
+    fun oneVotesLongCheckDoesNotHoldUpAnother() = runTest {
+        val other = "01JBQZ0000000000000000000C"
+        val (ops, site) = observedScenario(observed())
+        for (name in listOf("results.json", "results.json.sig", "results.json.sigstore.json", "rows.json")) {
+            site.answers["p/$other/$name"] = site.answers.getValue("p/$PID/$name")
+        }
+        val gate = CompletableDeferred<Unit>()
+        // The gate is bounded and always opened, so a shared lock makes this fail instead of hanging.
+        val m = manager(ops, site) { if (it.startsWith("$CONN/$PID:")) runBlocking { withTimeoutOrNull(15_000) { gate.await() } } }
+        m.refresh()
+        val first = launch(Dispatchers.Default) { m.checkResults(CONN, PID) }
+        try {
+            // While the first vote's check is held in its work, the other vote's check runs to its end.
+            val second = withContext(Dispatchers.Default) { withTimeoutOrNull(5_000) { m.checkResults(CONN, other) } }
+            assertTrue("the other vote waited for the first", second is ResultsOutcome.Submitted)
+        } finally {
+            gate.complete(Unit)
+            first.join()
+        }
+        assertEquals(2, ops.submitted.size)
+    }
+
+    @Test
+    fun anythingThrownInTheObserversWorkIsAnObserverFailureAndTheRowIsStillSubmitted() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var observeSteps = 0
+        val m = manager(ops, site) {
+            // The second "observe" step is inside the observer's own work (its first checkpoint).
+            if (it.endsWith(":observe") && ++observeSteps == 2) error("a library failure")
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, ops.submitted.size)
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+    }
+
+    @Test
+    fun aCancellationInTheObserversWorkIsNotSwallowed() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var job: Job? = null
+        var observeSteps = 0
+        val m = manager(ops, site) { if (it.endsWith(":observe") && ++observeSteps == 2) job!!.cancel() }
+        m.refresh()
+        job = launch(start = CoroutineStart.LAZY) { m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    // ---- Lead review ----
+
+    @Test
+    fun anObserverCheckThatRunsOutOfTimeIsAnObserverFailureAndTheRowIsStillSubmitted() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var observeSteps = 0
+        // The observer's own work (from its first checkpoint) is slower than the limit: results that would pass, given time.
+        val m = manager(ops, site, observeLimit = Duration.ofMillis(100)) {
+            if (it.endsWith(":observe") && ++observeSteps == 2) Thread.sleep(600)
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, ops.submitted.size)
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue("$CONN/$PID").verdict)
+    }
+
+    @Test
+    fun theObserversTimeBoxScalesWithEligible() {
+        // Opus recheck 3, M1-a: max(60 s, counts.eligible x 3 ms), 300 s at the 100,000-row cap and never more.
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(0))
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(20_000))
+        assertEquals(Duration.ofMillis(60_003), VotesManager.observeLimitFor(20_001))
+        assertEquals(Duration.ofSeconds(150), VotesManager.observeLimitFor(50_000))
+        assertEquals(Duration.ofSeconds(300), VotesManager.observeLimitFor(100_000))
+        assertEquals(Duration.ofSeconds(300), VotesManager.observeLimitFor(Long.MAX_VALUE))
+        assertEquals(Duration.ofSeconds(60), VotesManager.observeLimitFor(-5))
+        // The floor is the injected limit.
+        assertEquals(Duration.ofMillis(30), VotesManager.observeLimitFor(10, Duration.ofMillis(1)))
+    }
+
+    @Test
+    fun aLargerVoteGetsALongerObserverCheck() = runTest {
+        // The same slow observer as above (600 ms past a 100 ms floor), but 1,024 eligible rows give it 3,072 ms: it passes.
+        val (ops, site) = observedScenario(observed(n = 1024))
+        var observeSteps = 0
+        val m = manager(ops, site, observeLimit = Duration.ofMillis(100)) {
+            if (it.endsWith(":observe") && ++observeSteps == 2) Thread.sleep(600)
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertFalse(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
+    }
+
+    @Test
+    fun aHintWriteWithAStaleGenerationIsDropped() = runTest {
+        // Recheck 1, R1-2: a check's writes carry the generation it started under; a lock or clear since voids them.
+        val m = manager(Ops())
+        val key = "$CONN/$PID"
+        val stale = m.generationNow()
+        m.clear()
+        m.hint(key, stale) { it.copy(observerFailed = true) }
+        assertNull(m.hints.value[key])
+        m.hint(key, m.generationNow()) { it.copy(observerFailed = true) }
+        assertTrue(m.hints.value.getValue(key).observerFailed)
+    }
+
+    @Test
+    fun aLockCancelsACheckInFlightWhichStopsAtItsNextStepAndIsVoided() = runTest {
+        // Lead review L2: Check again on a large vote, the member locks during the observer's work.
+        val (ops, site) = observedScenario(observed(n = 1024))
+        val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
+        var m: VotesManager? = null
+        var lockedAt = -1
+        m = manager(ops, site) {
+            steps += it.substringAfterLast(':')
+            if (it.endsWith(":observe") && lockedAt < 0) {
+                lockedAt = steps.size
+                m!!.clear()
+            }
+        }
+        m.refresh()
+        // The caller is not cancelled: it gets the voided outcome.
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        // The work stopped at the step of the lock (it would otherwise run on to the end: several hundred more steps).
+        assertEquals("$steps", lockedAt, steps.size)
+        assertTrue(ops.submitted.isEmpty())
+        m.refresh() // the unlock
+        assertNull(m.hints.value["$CONN/$PID"])
+        // A check after the unlock runs as usual.
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+    }
+
+    @Test
+    fun aCancelledCallerOfACheckIsStillCancelledAndNotVoided() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var job: Job? = null
+        val m = manager(ops, site) { if (it.endsWith(":observe")) job!!.cancel() }
+        m.refresh()
+        var out: ResultsOutcome? = null
+        job = launch(start = CoroutineStart.LAZY) { out = m.checkResults(CONN, PID) }
+        job.start()
+        job.join()
+        assertTrue(job.isCancelled)
+        assertNull(out)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    @Test
+    fun theVerdictIsSetOnlyByAnAnsweredSubmitAndANonSubmitKeepsIt() = runTest {
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        val m = manager(ops, site)
+        m.refresh()
+        val key = "$CONN/$PID"
+        // A refused submission: the line is set, but the vault answered nothing, so there is no verdict.
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        assertTrue(m.hints.value.getValue(key).observerFailed)
+        assertNull(m.hints.value.getValue(key).verdict)
+        // Answered: the verdict is the observer's.
+        ops.refuse.clear()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue(key).verdict)
+        // Check again with the site down: nothing submitted, the line goes, the verdict stays (no numbers come back).
+        site.answers["p/$PID/results.json"] = SiteAnswer.Unreachable
+        assertEquals(ResultsOutcome.SiteUnreachable, m.checkResults(CONN, PID))
+        assertFalse(m.hints.value.getValue(key).observerFailed)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue(key).verdict)
+        // Results that add up, answered: the verdict passes.
+        val (ops2, site2) = observedScenario(observed())
+        val m2 = manager(ops2, site2)
+        m2.refresh()
+        assertTrue(m2.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.PASSED, m2.hints.value.getValue(key).verdict)
+    }
+
+    /** Observed results around rows given as (tag, ballot JSON or null), in the order given. */
+    private fun observedRows(rows: List<Pair<ByteArray, Triple<ByteArray, String, ByteArray>?>>): Observed {
+        val o = observed()
+        fun lp(x: ByteArray) = Bytes.concat(byteArrayOf((x.size shr 8).toByte(), x.size.toByte()), x)
+        val rowsJson = """{"proposal_id":"$PID","rows":[""" + rows.joinToString(",") { (tag, b) ->
+            val ballot = b?.let { (vk, choice, sig) ->
+                """{"ballot_sig":"${Base64s.encodeStd(sig)}","choice_id":"$choice","vk":"${Base64s.encodeStd(vk)}"}"""
+            } ?: "null"
+            """{"ballot":$ballot,"record_tag":"${Base64s.encodeStd(tag)}"}"""
+        } + """],"v":1}"""
+        val leaves = rows.map { (tag, b) -> b?.let { (vk, choice, sig) -> Bytes.concat(tag, lp(vk), lp(choice.toByteArray()), lp(sig)) } ?: tag }
+        val results = o.results
+            .replace(Base64s.encodeStd(Bytes.sha256(o.rowsJson.toByteArray())), Base64s.encodeStd(Bytes.sha256(rowsJson.toByteArray())))
+            .replace(""""rows_root":"${Base64s.encodeStd(VoteMerkle.root(o.tags))}"""", """"rows_root":"${Base64s.encodeStd(VoteMerkle.root(leaves))}"""")
+        return Observed(rowsJson, results, o.tags)
+    }
+
+    @Test
+    fun anOwnRowWithAVkOfAnotherLengthIsStillSubmitted() = runTest {
+        // The vault judges a row whose ballot is not the protocol's (a signed contradiction); the app only reports it.
+        val tags = observed().tags
+        val ballot = Triple(ByteArray(33) { 3 }, "yes", ByteArray(64) { 4 })
+        val (ops, site) = observedScenario(observedRows(listOf(tags[0] to null, tags[1] to ballot, tags[2] to null)))
+        assertTrue(observedFlag(ops, site))
+        val row = (ops.submitted.single()["row"] as JsonObject)["ballot"] as JsonObject
+        assertEquals(Base64s.encodeStd(ByteArray(33) { 3 }), (row["vk"] as JsonPrimitive).content)
+    }
+
+    @Test
+    fun rowsOutOfOrderAreStillSubmittedWithTheOwnRowAtItsIndex() = runTest {
+        val tags = observed().tags
+        val (ops, site) = observedScenario(observedRows(listOf(tags[1] to null, tags[0] to null, tags[2] to null)))
+        assertTrue(observedFlag(ops, site))
+        val proof = ops.submitted.single()["row_proof"] as JsonObject
+        assertEquals("0", (proof["index"] as JsonPrimitive).content)
+    }
+
+    @Test
+    fun aLaterFailedCheckWhoseSubmitIsRefusedHidesTheNumbersOfAPassedVerdict() = runTest {
+        // Recheck 1, R1-1: a first submit passes; the site later serves results that do not add up, and that submit is refused.
+        val (ops, site) = observedScenario(observed())
+        val m = manager(ops, site)
+        m.refresh()
+        val key = "$CONN/$PID"
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue(key).verdict)
+        val bad = observed(tally = """{"abstain":0,"no":1,"yes":0}""")
+        site.answers["p/$PID/results.json"] = ok(bad.results)
+        site.answers["p/$PID/rows.json"] = ok(bad.rowsJson)
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        val h = m.hints.value.getValue(key)
+        assertEquals(ObserverVerdict.PASSED, h.verdict)
+        assertTrue(h.observerFailed)
+        val verified = VoteWire.summary(obj("""{"proposal_id":"$PID","connection_id":"$CONN","state":"closed","ballot":{"state":"recorded"},"check":{"state":"verified"}}"""))!!
+        assertFalse(VoteRules.showNumbers(verified, h.verdict, h.observerFailed))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = h.observerFailed))
+    }
+
+    @Test
+    fun aLockDuringACheckVoidsItsLineItsFlagAndItsSubmit() = runTest {
+        // Recheck 1, R1-2: Check again on results that do not add up, the member locks mid-check, then unlocks.
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        var m: VotesManager? = null
+        var locked = false
+        m = manager(ops, site) {
+            if (it.endsWith(":observe") && !locked) {
+                locked = true
+                m!!.clear()
+            }
+        }
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        assertTrue(ops.submitted.isEmpty())
+        m.refresh() // the unlock
+        assertNull(m.hints.value["$CONN/$PID"])
+    }
+
+    @Test
+    fun aLockDuringACheckThatFailsLeavesNoProblemBehind() = runTest {
+        val o = observed()
+        // A tag the rows do not have: the check ends as a problem, but the lock came first.
+        val (ops, site) = observedScenario(Observed(o.rowsJson, o.results, listOf(o.tags[0], ByteArray(32) { 9 }, o.tags[2])))
+        var m: VotesManager? = null
+        m = manager(ops, site) { if (it.endsWith(":read")) m!!.clear() }
+        m.refresh()
+        // The lock cancels the check (L2) before it finds the problem: void.
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        m.refresh()
+        assertNull(m.hints.value["$CONN/$PID"])
     }
 }
