@@ -32,6 +32,10 @@ class ResultsProblem(val reason: String) : Exception(reason)
 class PublishedResults internal constructor(
     private val results: JsonObject,
     private val rows: RowsTable,
+    /** What the observer only reports (review 1, finding 5): it does not stop the submit. */
+    private val rowsHashMatches: Boolean,
+    private val sortedOnce: Boolean,
+    private val lengthsMatch: Boolean,
 ) {
     /** The first row of [recordTag] with its proof. Throws [ResultsProblem] (`no_row`) when the tag has no row. */
     fun ownRow(recordTag: ByteArray, checkpoint: () -> Unit = {}): OwnRow {
@@ -66,6 +70,10 @@ class PublishedResults internal constructor(
         // exactly {v: 1, proposal_id, rows}.
         if ((results["proposal_id"] as? JsonString)?.value != proposalId) throw ResultsProblem("proposal_id")
         if (!rows.documentExact || rows.proposalId != proposalId) throw ResultsProblem("rows_shape")
+        // rows.json is the one rows_hash names, sorted by tag with each tag once, its ballots of the protocol's lengths.
+        if (!rowsHashMatches) throw ResultsProblem("rows_hash")
+        if (!sortedOnce) throw ResultsProblem("rows_order")
+        if (!lengthsMatch) throw ResultsProblem("ballot_shape")
         val proposalBytes: ByteArray
         val choices: Set<String>
         val recordRoot: ByteArray
@@ -187,11 +195,12 @@ object VoteRows {
         read(resultsBytes, rowsBytes).ownRow(recordTag)
 
     /**
-     * Reads the published results: `results.json` names `rows_hash`, `rows_root` and `counts.eligible`; `rows.json` is within
-     * [rowsCap], read by [RowsReader] (nested at most 4 deep, `counts.eligible` rows, each one that can be made into a leaf;
-     * no text kept), hashes to `rows_hash`, is sorted by tag with each tag once, has ballots of the protocol's lengths, and its
-     * leaves reach `rows_root`. Throws [ResultsProblem] for anything that does not hold. [checkpoint] is called every 256
-     * rows and tree nodes.
+     * Reads the published results. What stops the submit of a row (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, ANDROID-PLAN
+     * 0.1.117) throws [ResultsProblem]: `results.json` that does not name `rows_hash`, `rows_root` and `counts.eligible`;
+     * `rows.json` over [rowsCap], nested deeper than 4, or with a row that cannot be made into a leaf ([RowsReader]); and
+     * what the vault's own check of the row needs: `counts.eligible` rows whose leaves reach `rows_root`. The hash of
+     * `rows.json`, the order and uniqueness of the tags and the lengths of `vk`, `ballot_sig` and `choice_id` are only
+     * reported, by [PublishedResults.observe] (review 1, finding 5). [checkpoint] is called every 256 rows and tree nodes.
      */
     @Suppress("ThrowsCount", "CyclomaticComplexMethod")
     fun read(resultsBytes: ByteArray, rowsBytes: ByteArray, checkpoint: () -> Unit = {}): PublishedResults {
@@ -208,18 +217,18 @@ object VoteRows {
             throw ResultsProblem("results")
         }
         if (rowsBytes.size > rowsCap(eligible)) throw ResultsProblem("rows_size")
-        if (!Bytes.constantTimeEquals(Bytes.sha256(rowsBytes), rowsHash)) throw ResultsProblem("rows_hash")
+        val hashMatches = Bytes.constantTimeEquals(Bytes.sha256(rowsBytes), rowsHash)
         val rows = RowsReader(rowsBytes, eligible.toInt(), checkpoint).read()
-        // Sorted by tag, each once (§8.2): another order is not the tree the root was made over.
-        for (i in 1 until rows.count) if (compare(rows.tags, (i - 1) * KEY, i * KEY) >= 0) throw ResultsProblem("rows_order")
-        for (i in 0 until rows.count) {
-            if (!rows.hasBallot(i)) continue
+        // Sorted by tag, each once (§8.2), and the lengths of §8.5: reported, not a reason not to submit.
+        val sorted = (1 until rows.count).all { compare(rows.tags, (it - 1) * KEY, it * KEY) < 0 }
+        val lengths = (0 until rows.count).all { i ->
+            if (!rows.hasBallot(i)) return@all true
             val choice = rows.choice(i).size
-            if (rows.vk(i).size != KEY || rows.sig(i).size != SIG || choice == 0 || choice > MAX_ID) throw ResultsProblem("rows")
+            rows.vk(i).size == KEY && rows.sig(i).size == SIG && choice in 1..MAX_ID
         }
         val root = VoteMerkle.rootOfHashes(rows.leafHashes, rows.count, checkpoint)
         if (!Bytes.constantTimeEquals(root, rowsRoot)) throw ResultsProblem("rows_root")
-        return PublishedResults(results, rows)
+        return PublishedResults(results, rows, hashMatches, sorted, lengths)
     }
 
     internal fun lp(x: ByteArray) = Bytes.concat(Bytes.uintBE(x.size.toLong(), 2), x)

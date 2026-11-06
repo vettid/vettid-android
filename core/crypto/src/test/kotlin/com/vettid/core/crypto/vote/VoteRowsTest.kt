@@ -19,6 +19,10 @@ import org.junit.Test
  * `testdata/vote/vectors.json` (`vote.json`, see SOURCE.md), byte for byte.
  */
 class VoteRowsTest {
+    private companion object {
+        const val PID = "01JBQZ0000000000000000000A"
+    }
+
     private val v = VectorDoc.load("vote.json")
     private val docs = v.sub("documents")
 
@@ -87,9 +91,14 @@ class VoteRowsTest {
         val results = docs.str("results").toByteArray()
         val rowsBytes = docs.str("rows").toByteArray()
         val tag = v.hex("record_tag")
-        // Any changed byte of rows.json: its hash is not rows_hash.
-        val changed = rowsBytes.copyOf().also { it[it.size / 2] = (it[it.size / 2] + 1).toByte() }
-        assertEquals("rows_hash", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow(results, changed, tag) }.reason)
+        // rows.json with one more space: the same rows, another hash. The row is still had (the vault judges it);
+        // the observer reports the hash (review 1, finding 5).
+        val spaced = (" " + docs.str("rows")).toByteArray()
+        val tag0 = rows()[0].base64("record_tag", 32)
+        assertEquals(0L, VoteRows.ownRow(results, spaced, tag0).index)
+        assertEquals("rows_hash", assertThrows(ResultsProblem::class.java) { VoteRows.read(results, spaced).observe(PID) }.reason)
+        // A row that is not there.
+        assertEquals("no_row", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow(results, rowsBytes, tag) }.reason)
         // Results that are not a document.
         assertEquals("results", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow("{}".toByteArray(), rowsBytes, tag) }.reason)
         assertEquals("results", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow("nope".toByteArray(), rowsBytes, tag) }.reason)

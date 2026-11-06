@@ -11,6 +11,7 @@ import com.vettid.core.crypto.json.asObject
 import com.vettid.core.crypto.rep
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.math.BigInteger
 
@@ -248,11 +249,61 @@ class VoteObserveTest {
     }
 
     @Test
-    fun theFourInputsAreStillReadFirst() {
-        // read() refuses what it refused before; observe() is never reached.
+    fun aRowsHashThatDiffersIsReportedNotFatal() {
+        val rowsBytes = rowsJson(vectorRows)
+        val hash = Base64s.encodeStd(Bytes.sha256(rowsBytes))
+        val res = String(resultsJson(vectorRows, rowsBytes)).replace(hash, Base64s.encodeStd(ByteArray(32)))
+        val p = VoteRows.read(res.toByteArray(), rowsBytes)
+        assertEquals(1L, p.ownRow(vectorRows[1].tag).index)
+        assertEquals("rows_hash", reason { p.observe(PID) })
+    }
+
+    @Test
+    fun rowsOutOfOrderOrRepeatedAreReportedAndTheOwnRowIsTheFirstUnderItsTag() {
+        // The first two rows swapped: the tree is made over the rows as published, and the row is still had with its proof.
+        val swapped = listOf(vectorRows[1], vectorRows[0], vectorRows[2])
+        val rowsBytes = rowsJson(swapped)
+        val res = resultsJson(swapped, rowsBytes)
+        val p = VoteRows.read(res, rowsBytes)
+        val own = p.ownRow(vectorRows[0].tag)
+        assertEquals(1L, own.index)
+        val root = Base64s.decodeStd(StrictJson.parseObject(res).string("rows_root"))
+        assertTrue(VoteMerkle.verify(root, leaf(vectorRows[0]), own.index, own.treeSize, own.path))
+        assertEquals("rows_order", reason { p.observe(PID) })
+        // A tag twice: the first row under it is the member's.
+        val twice = listOf(vectorRows[0], vectorRows[0].copy(vk = null, choice = null, sig = null), vectorRows[2])
+        val twiceBytes = rowsJson(twice)
+        val p2 = VoteRows.read(resultsJson(twice, twiceBytes, mapOf("yes" to 1L, "no" to 0L, "abstain" to 0L)), twiceBytes)
+        assertEquals(0L, p2.ownRow(vectorRows[0].tag).index)
+        assertTrue(p2.ownRow(vectorRows[0].tag).ballot != null)
+        assertEquals("rows_order", reason { p2.observe(PID) })
+    }
+
+    @Test
+    fun ballotsOfOtherLengthsAreReportedAndStillMadeIntoLeaves() {
+        val longVk = vectorRows[0].copy(vk = ByteArray(33) { 3 })
+        val rows = listOf(longVk, vectorRows[1], vectorRows[2])
+        val rowsBytes = rowsJson(rows)
+        val p = VoteRows.read(resultsJson(rows, rowsBytes), rowsBytes)
+        assertEquals(33, p.ownRow(longVk.tag).ballot!!.vk.size)
+        assertEquals("ballot_shape", reason { p.observe(PID) })
+        for (bad in listOf(vectorRows[0].copy(sig = ByteArray(65)), vectorRows[0].copy(choice = "y".repeat(33)))) {
+            val r = listOf(bad, vectorRows[1], vectorRows[2])
+            val b = rowsJson(r)
+            val tally = if (bad.choice == "yes") defaultTally else mapOf("yes" to 0L, "no" to 1L, "abstain" to 0L)
+            assertEquals("ballot_shape", reason { VoteRows.read(resultsJson(r, b, tally), b).observe(PID) })
+        }
+    }
+
+    @Test
+    fun whatStopsTheSubmitIsStillRefusedByRead() {
         val rowsBytes = rowsJson(vectorRows)
         val res = resultsJson(vectorRows, rowsBytes)
-        val changed = rowsBytes.copyOf().also { it[it.size / 2] = (it[it.size / 2] + 1).toByte() }
-        assertEquals("rows_hash", reason { VoteRows.read(res, changed) })
+        // Leaves that do not reach rows_root: the vault could not take the row's proof.
+        val otherRoot = String(res).replace(Base64s.encodeStd(VoteMerkle.root(vectorRows.map(::leaf))), Base64s.encodeStd(ByteArray(32)))
+        assertEquals("rows_root", reason { VoteRows.read(otherRoot.toByteArray(), rowsBytes) })
+        // Fewer rows than counts.eligible.
+        val fewer = rowsJson(vectorRows.dropLast(1))
+        assertEquals("rows_count", reason { VoteRows.read(res, fewer) })
     }
 }

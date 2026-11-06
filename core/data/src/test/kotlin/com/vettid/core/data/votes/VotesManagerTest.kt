@@ -1254,4 +1254,41 @@ class VotesManagerTest {
         assertTrue(m2.checkResults(CONN, PID) is ResultsOutcome.Submitted)
         assertEquals(ObserverVerdict.PASSED, m2.hints.value.getValue(key).verdict)
     }
+
+    /** Observed results around rows given as (tag, ballot JSON or null), in the order given. */
+    private fun observedRows(rows: List<Pair<ByteArray, Triple<ByteArray, String, ByteArray>?>>): Observed {
+        val o = observed()
+        fun lp(x: ByteArray) = Bytes.concat(byteArrayOf((x.size shr 8).toByte(), x.size.toByte()), x)
+        val rowsJson = """{"proposal_id":"$PID","rows":[""" + rows.joinToString(",") { (tag, b) ->
+            val ballot = b?.let { (vk, choice, sig) ->
+                """{"ballot_sig":"${Base64s.encodeStd(sig)}","choice_id":"$choice","vk":"${Base64s.encodeStd(vk)}"}"""
+            } ?: "null"
+            """{"ballot":$ballot,"record_tag":"${Base64s.encodeStd(tag)}"}"""
+        } + """],"v":1}"""
+        val leaves = rows.map { (tag, b) -> b?.let { (vk, choice, sig) -> Bytes.concat(tag, lp(vk), lp(choice.toByteArray()), lp(sig)) } ?: tag }
+        val results = o.results
+            .replace(Base64s.encodeStd(Bytes.sha256(o.rowsJson.toByteArray())), Base64s.encodeStd(Bytes.sha256(rowsJson.toByteArray())))
+            .replace(""""rows_root":"${Base64s.encodeStd(VoteMerkle.root(o.tags))}"""", """"rows_root":"${Base64s.encodeStd(VoteMerkle.root(leaves))}"""")
+        return Observed(rowsJson, results, o.tags)
+    }
+
+    @Test
+    fun anOwnRowWithAVkOfAnotherLengthIsStillSubmitted() = runTest {
+        // The vault judges a row whose ballot is not the protocol's (a signed contradiction); the app only reports it.
+        val tags = observed().tags
+        val ballot = Triple(ByteArray(33) { 3 }, "yes", ByteArray(64) { 4 })
+        val (ops, site) = observedScenario(observedRows(listOf(tags[0] to null, tags[1] to ballot, tags[2] to null)))
+        assertTrue(observedFlag(ops, site))
+        val row = (ops.submitted.single()["row"] as JsonObject)["ballot"] as JsonObject
+        assertEquals(Base64s.encodeStd(ByteArray(33) { 3 }), (row["vk"] as JsonPrimitive).content)
+    }
+
+    @Test
+    fun rowsOutOfOrderAreStillSubmittedWithTheOwnRowAtItsIndex() = runTest {
+        val tags = observed().tags
+        val (ops, site) = observedScenario(observedRows(listOf(tags[1] to null, tags[0] to null, tags[2] to null)))
+        assertTrue(observedFlag(ops, site))
+        val proof = ops.submitted.single()["row_proof"] as JsonObject
+        assertEquals("0", (proof["index"] as JsonPrimitive).content)
+    }
 }
