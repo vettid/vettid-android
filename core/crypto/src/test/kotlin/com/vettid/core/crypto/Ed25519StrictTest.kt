@@ -73,6 +73,36 @@ class Ed25519StrictTest {
     }
 
     @Test
+    fun aSmallOrderRWithAMixedKeyIsRefusedByTheTableAlone() {
+        // A' = A + T (T of order 8), R = -[k]T of order 4 or 8, S = k·a: [S]B = R + [k]A' holds exactly (cofactorless too),
+        // so only rule 2 (the table) refuses it.
+        val t8 = Edwards.decode(Bytes.unhex(order8Key()))!!
+        val mixed = Edwards.encode(Edwards.add(Edwards.mul(a, Edwards.BASE), t8))
+        val smalls = (2..7).filter { it != 4 }.map { Edwards.mul(BigInteger.valueOf(it.toLong()), t8) }
+        var found: ByteArray? = null
+        var msg = m
+        var i = 0
+        while (found == null) {
+            msg = "message $i".toByteArray()
+            val lmi = label.toByteArray(Charsets.US_ASCII) + msg
+            for (q in smalls) {
+                val k = Edwards.challenge(Edwards.encode(q), mixed, lmi)
+                val sum = Edwards.add(q, Edwards.mul(k, t8))
+                if (Edwards.encode(sum).contentEquals(Edwards.encode(Edwards.IDENTITY))) {
+                    found = Edwards.encode(q) + Edwards.le(k.multiply(a).mod(Edwards.L))
+                    break
+                }
+            }
+            i++
+        }
+        val sig = found!!
+        val lmf = label.toByteArray(Charsets.US_ASCII) + msg
+        assertTrue("the library alone accepts it", Ed25519.verifyRaw(mixed, lmf, sig))
+        assertTrue("the equation holds without the factor 8", Ed25519Exact.cofactorless(mixed, lmf, sig))
+        assertFalse(Ed25519.verifyStrict(mixed, label, msg, sig))
+    }
+
+    @Test
     fun aNonCanonicalSAndWrongSizesAreRefused() {
         val sig = Edwards.sign(a, pub, lm, BigInteger.valueOf(777))
         val s = BigInteger(1, sig.copyOfRange(32, 64).reversedArray()).add(Edwards.L)
