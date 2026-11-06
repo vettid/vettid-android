@@ -407,4 +407,39 @@ class TransferInSettleFollowUpTest {
         )
         assertEquals(listOf(274_000L), lasts)
     }
+
+    /**
+     * (#308 review M1) The first hold for a lease is no move, also when the target was only the `retry_after` of an extra
+     * taken before the cap. F = 104 s, the cap 105 s. The last look at 104 s is rate limited (`retry_after` 30 s): the extra
+     * waits to 134 s. The collector's poll (written at 119 s, wait 25 s) is lost at 120 s, seen at 134 s: its lease runs to
+     * 204 s, and the hold goes on to 219 s instead of the re-look at 134 s.
+     */
+    @Test
+    fun aLeaseNoticedDuringAnEarlyExtrasRetryAfterStillGetsItsHold() = runTest {
+        val clock = FrozenClock(this)
+        val cuts = mutableListOf<CollectorCut>() // sentAgoMs holds the send time here; turned into an age when read
+        var refused = false
+        val lasts = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 104_000, maxExtraMs = 1_000, now = clock::now)
+        launch {
+            delay(120_000)
+            cuts += CollectorCut(1L, 119_000L, 25_000L)
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 104_000) {
+                if (!refused) {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 30)
+                }
+                lasts += clock.now()
+            }
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = settle, cuts = { cuts.size.toLong() },
+                cutLeases = { cuts.map { it.copy(sentAgoMs = clock.now() - it.sentAgoMs) } },
+            ),
+        )
+        assertEquals(listOf(219_000L), lasts)
+    }
 }

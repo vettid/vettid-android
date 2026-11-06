@@ -346,15 +346,18 @@ internal object TransferInResume {
         suspend fun awaitHold() {
             look()
             var target = holdDue()
+            // Whether the target held for a lease: the first lease hold is no move (also when the target was only an
+            // extra's own `retry_after`, taken before the cap), so it does not need the extra.
+            var leaseHeld = maxLeaseEnd != 0L
             while (true) {
                 val w = target - settle.now()
                 if (w > 0) delay(w)
                 look()
                 val moved = holdDue()
                 if (moved <= target) return
-                // The first hold, set while nothing was due yet, is not a move: it does not use up the extra.
-                if (target != 0L && !takeExtra(moved)) return
+                if (leaseHeld && !takeExtra(moved)) return
                 target = moved
+                leaseHeld = maxLeaseEnd != 0L
             }
         }
 
