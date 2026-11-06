@@ -1963,4 +1963,22 @@ class VotesManagerTest {
         m2.syncOnce()
         assertTrue(store2.load().isEmpty())
     }
+
+    @Test
+    fun theDailyLimitIsLookedAtAgainUnderTheVotesLock() = runTest {
+        // Review 1, L2: a second pass that found the check due before the first one ran waits for the vote's lock, then
+        // looks again: nothing is fetched. The member's own Check again is not held by the daily limit.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        val m = manager(ops, site)
+        m.refresh()
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        val reads = site.reads.count { it == "p/$PID/results.json" }
+        assertEquals(ResultsOutcome.Unchanged, m.checkDue(CONN, PID))
+        assertEquals(reads, site.reads.count { it == "p/$PID/results.json" })
+        // Check again reads the results (and, unchanged, sends nothing).
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(reads + 1, site.reads.count { it == "p/$PID/results.json" })
+    }
 }

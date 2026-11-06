@@ -767,7 +767,7 @@ class VotesManager(
             // One vote's failure does not stop the others; a cancellation does (it is not caught).
             if (due) {
                 try {
-                    checkResults(v.connectionId, v.proposalId)
+                    checkDue(v.connectionId, v.proposalId)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
@@ -777,9 +777,22 @@ class VotesManager(
         }
     }
 
-    override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome {
+    override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome =
+        checkResults(connectionId, proposalId, due = false)
+
+    /**
+     * A check [submitDue] found due: a `gave_up` one is looked at again under the vote's lock (review 1, L2), so that two
+     * passes that both found it due (a `check_due` event and the sync) do not run it back to back.
+     */
+    @VisibleForTesting
+    internal suspend fun checkDue(connectionId: String, proposalId: String): ResultsOutcome =
+        checkResults(connectionId, proposalId, due = true)
+
+    private suspend fun checkResults(connectionId: String, proposalId: String, due: Boolean): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
         return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
+            val gaveUp = votesFlow.value.firstOrNull { it.key == key }?.check?.state == CheckState.GAVE_UP
+            if (due && gaveUp && !dailyDue(key, now())) return@withLock ResultsOutcome.Unchanged
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
             val trace = Trace()
