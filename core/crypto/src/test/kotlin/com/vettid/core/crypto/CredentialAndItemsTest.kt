@@ -144,6 +144,10 @@ class CredentialAndItemsTest {
         val chain = listOf(CredentialKeyRotation.create(k1, k2), CredentialKeyRotation.create(k2, k1), CredentialKeyRotation.create(k1, k3))
         assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k1.publicKey, chain)))
         assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k2.publicKey, chain)))
+        // Followed from the FIRST statement from the pin: a forged statement between two statements from the pin fails.
+        val forged = CredentialKeyRotation(k2.publicKey, k1.publicKey, ByteArray(64), ByteArray(64))
+        val withForged = listOf(CredentialKeyRotation.create(k1, k2), forged, CredentialKeyRotation.create(k1, k3))
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, withForged) }
     }
 
     /** VAULT-MESSAGING 0.83.11 §10.4: a chain whose last `new_key` is the pinned key is ignored, not refused. */

@@ -176,6 +176,16 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
          * `connection.authenticate.rotation_rejected`) for an empty chain or one over 32 statements (checked first, wherever
          * it ends), a chain with no statement from the pinned key (one that ends before the pin, or another key's), or one
          * that breaks or fails a signature after it.
+         *
+         * What the caller does with the result depends on where the chain came from (§10.4):
+         * - **A delivered `connection.authenticate.rotated`:** [CredentialChainResult.Moved] means pin its key and tell
+         *   every owner device with `connection.authenticate.key`. [CredentialChainResult.AlreadyCurrent] means ignore it.
+         * - **The `rotations` of a signed `connection.authenticate.response`:** [CredentialChainResult.Moved] counts only when
+         *   its key equals the response's `key` (the key `sig` verified under). Then the caller pins it and reports
+         *   `key_changed: false`. Otherwise the response is a key change: `key_changed: true`, re-pinned to the response's
+         *   `key`. [CredentialChainResult.AlreadyCurrent] ignores the chain, not the response: its `key` is still compared
+         *   with the pin as usual.
+         * - **A receiver with no pinned key** ignores `rotated` and does not call this (it would throw, and so be audited).
          */
         fun followChain(pinned: ByteArray, chain: List<CredentialKeyRotation>): CredentialChainResult {
             if (pinned.size != Suite.ED25519_PUBLIC_SIZE || chain.isEmpty() || chain.size > MAX_CHAIN) {
@@ -197,13 +207,20 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
 
 /** What [CredentialKeyRotation.followChain] gives for a chain it does not refuse (VAULT-MESSAGING 0.83.11 §10.4). */
 sealed class CredentialChainResult {
-    /** The chain verified from the pinned key and leads to [key]: pin it and tell every owner device. */
+    /**
+     * The chain verified from the pinned key and leads to [key] (§10.4). For a delivered `rotated` chain: pin it and tell every
+     * owner device with `connection.authenticate.key`. For a response's `rotations`: this counts only when [key] equals the
+     * response's `key` (then pin it, `key_changed: false`); otherwise the response is a key change (`key_changed: true`).
+     */
     class Moved(key: ByteArray) : CredentialChainResult() {
         private val key = key.copyOf()
 
         fun key(): ByteArray = key.copyOf()
     }
 
-    /** The chain ends at the pinned key: ignore it, with no audit and no key event. */
+    /**
+     * The chain ends at the pinned key: ignore the chain, with no audit and no key event (0.83.11 §10.4). For a response, only
+     * the chain is ignored: the response's `key` is still compared with the pin.
+     */
     data object AlreadyCurrent : CredentialChainResult()
 }
