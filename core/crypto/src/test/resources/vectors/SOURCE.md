@@ -64,5 +64,7 @@ a8d86c76b9469f26526f8238d41bd07a6b74fcce3da6035879fc5910c5f36427  attachment.jso
 member's row from it:
 
 - Source repository: github.com/vettid/vettid-vault
-- Source commit (HEAD when copied): a8a968e465ca2700d23d0f4ae6d93b2813a95b93 (the merge of PR #174, "vote: app API, site sync, reminders, staging config")
-- Copied: 2026-10-31
+- Source commit (HEAD when copied): 5deefac (the merge of PR #208, BALLOT-PROTOCOL 0.13.10's 24 Ed25519 cases, itself a byte-for-byte copy of
+  vettid/service-vault `vote/testdata/vectors.json` at 61aca6e); sha256 9bbc4feed0f9752c7592a47f365665867e746384be950dd5ad66e76baea66a81
+- Copied: 2026-11-06 (since the 2026-10-31 copy at a8a968e: `credential.cast_body` and its sha256 from vettid-vault #189,
+  VAULT-MESSAGING 0.83.6, and 12 more Ed25519 cases; nothing earlier changed)
