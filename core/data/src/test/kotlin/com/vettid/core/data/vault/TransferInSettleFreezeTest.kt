@@ -20,6 +20,7 @@ class TransferInSettleFreezeTest {
     private companion object {
         const val EXPECTED_OFFLINE_DROP = 220_000L
         const val EXPECTED_CUTS_DROP = 239_000L
+        const val FIX3_FINAL = 230_000L
     }
 
     // --- the collector's own request cut, or a process freeze, during the window ---
@@ -579,5 +580,41 @@ class TransferInSettleFreezeTest {
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, collectorSends = sends))
         assertEquals(0, drops)
         assertTrue("held to A + w + V + 5 s: ${clock.now()}", clock.now() >= sentAt!! + 25_000 + 65_000)
+    }
+
+    /**
+     * (Fix 3) The first hold, set while nothing was due yet, is not a move. A cut is recorded between the two looks at the
+     * start of the hold (the cuts lambda flips on its 4th read at the end: the pause's look, the loop's, and the hold's two):
+     * the hold adopts it without using up the one extra. A later cut during the hold then still moves it (once).
+     * F = 100 s, the cap 105 s. The first cut, noticed at 100 s, leases to 160 s: the hold is 165 s. The second, at 130 s, is
+     * noticed at 165 s and leases to 225 s: the hold moves to 230 s, where the one final collect goes.
+     */
+    @Test
+    fun aLeaseRecordedBetweenTheHoldsTwoLooksIsNotAMove() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var readsAtEnd = 0
+        var flippedAt = -1L
+        val finalTimes = mutableListOf<Long>()
+        var droppedAt = -1L
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        launch {
+            delay(130_000)
+            cutCount++ // the second cut, during the hold
+        }
+        val cuts: () -> Long = {
+            if (flippedAt < 0 && clock.now() >= 100_000 && ++readsAtEnd == 4) {
+                flippedAt = clock.now()
+                cutCount++ // between the hold's first look and its second
+            }
+            cutCount
+        }
+        val collect: suspend (Long) -> Unit = { w -> if (w == 0L && clock.now() >= 100_000) finalTimes += clock.now() }
+        assertFalse(
+            TransferInResume.atDeadline({ false }, collect, { droppedAt = clock.now() }, settle = settle, cuts = cuts),
+        )
+        assertEquals("the flip came at the end", 100_000L, flippedAt)
+        assertEquals("one final collect, after the moved hold: $finalTimes", listOf(FIX3_FINAL), finalTimes)
+        assertEquals(FIX3_FINAL, droppedAt)
     }
 }
