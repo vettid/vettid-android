@@ -821,6 +821,11 @@ class VotesManager(
     /** What one attempt saw, for [ResultsAttempt]. */
     private class Trace {
         var resultsSha256: String? = null
+        var sigSha256: String? = null
+        var bundleSha256: String? = null
+
+        /** An `Unchanged` re-check keeps the last attempt's "answered" (it is the same submission). */
+        var answered = false
         var rowsFetched = false
         var vaultSide = false
     }
@@ -870,16 +875,21 @@ class VotesManager(
         if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
         if (doc == null) return@run unavailable(key, siteDown, gen)
         trace.resultsSha256 = Bytes.hex(Bytes.sha256(doc))
-        // A `gave_up` check run again (0.84.1 §10.19.6): with the same results.json as the last attempt, which had rows.json
-        // and did not end on the vault's side, rows.json is not downloaded again and nothing is sent.
+        // The signature and the bundle are always fetched (small): a fixed one beside the same results.json is a change (M4).
+        val sig = fetch("results.json.sig", SIG_MAX)
+        val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
+        trace.sigSha256 = sig?.let { Bytes.hex(Bytes.sha256(it)) }
+        trace.bundleSha256 = bundleBytes?.let { Bytes.hex(Bytes.sha256(it)) }
+        // A `gave_up` check run again (0.84.1 §10.19.6): with the same results.json, signature and bundle as the last
+        // attempt, which had rows.json, was answered and did not end on the vault's side, rows.json is not downloaded again
+        // and nothing is sent.
         if (votesFlow.value.firstOrNull { it.key == key }?.check?.state == CheckState.GAVE_UP) {
-            if (attemptOf(key)?.skipsRows(trace.resultsSha256) == true) {
+            if (attemptOf(key)?.skipsRows(trace.resultsSha256, trace.sigSha256, trace.bundleSha256) == true) {
                 trace.rowsFetched = true
+                trace.answered = true
                 return@run ResultsOutcome.Unchanged
             }
         }
-        val sig = fetch("results.json.sig", SIG_MAX)
-        val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
         if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
         if (sig == null || bundleBytes == null) return@run unavailable(key, siteDown, gen)
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
@@ -1117,7 +1127,9 @@ class VotesManager(
         // An attempt that ended in a failure (no answer from the vault) counts as not having had the rows.
         val entry = ResultsAttempt(
             key, now().toEpochMilli(), trace.resultsSha256, trace.rowsFetched && out != null, trace.vaultSide,
-            answered = out is ResultsOutcome.Submitted,
+            answered = out is ResultsOutcome.Submitted || trace.answered && out == ResultsOutcome.Unchanged,
+            sigSha256 = trace.sigSha256,
+            bundleSha256 = trace.bundleSha256,
         )
         withAttempts(epoch) { list -> (list.filterNot { it.key == key } + listOfNotNull(entry.takeUnless { final })) to Unit }
     }

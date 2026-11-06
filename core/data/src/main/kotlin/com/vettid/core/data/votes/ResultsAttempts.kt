@@ -30,12 +30,21 @@ data class ResultsAttempt(
      * answer" hold: an attempt that sent nothing (no `vote_rows` then, a row the app could not use) is never skipped.
      */
     val answered: Boolean = false,
+    /**
+     * Hex SHA-256 of the `results.json.sig` and `results.json.sigstore.json` it read (review 1, M4: public, small); null when
+     * absent or not fetched. A fixed bundle or signature beside the same results.json is a change: fetched and sent again.
+     */
+    val sigSha256: String? = null,
+    val bundleSha256: String? = null,
 ) {
     /**
-     * Whether a `gave_up` re-check that read results.json of [sha256] skips rows.json and sends nothing (0.84.1 §10.19.6): the
-     * same results as this attempt, which had rows.json, was answered by the vault and did not end on the vault's side.
+     * Whether a `gave_up` re-check that read results.json, its signature and its bundle of these hashes skips rows.json and
+     * sends nothing (0.84.1 §10.19.6; review 1, M4): the same three as this attempt, which had rows.json, was answered by the
+     * vault and did not end on the vault's side.
      */
-    fun skipsRows(sha256: String?): Boolean = answered && sha256 != null && sha256 == resultsSha256 && rowsFetched && !vaultSide
+    fun skipsRows(results: String?, sig: String?, bundle: String?): Boolean =
+        answered && rowsFetched && !vaultSide && results != null && sig != null && bundle != null &&
+            results == resultsSha256 && sig == sigSha256 && bundle == bundleSha256
 
     override fun toString() = "ResultsAttempt"
 }

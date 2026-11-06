@@ -1903,4 +1903,27 @@ class VotesManagerTest {
         assertRowsUnavailable(ops.submitted.single())
         assertTrue(store.load().single().answered)
     }
+
+    @Test
+    fun aFixedBundleBesideTheSameResultsIsSubmittedAgain() = runTest {
+        // Review 1, M4: a bad-bundle `input` answer, then the bundle fixed with results.json unchanged.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up","reason":"input"}}""")
+        val m = manager(ops, site)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        // Unchanged: nothing more is sent.
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(1, ops.submitted.size)
+        // The service republishes a correct bundle (and, separately, a signature): sent again each time.
+        site.answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"y"}""")
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals("""{"mediaType":"y"}""", ops.submitted.last()["bundle"].toString())
+        site.answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(64) { 8 })
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(3, ops.submitted.size)
+        assertEquals(ResultsOutcome.Unchanged, m.checkResults(CONN, PID))
+        assertEquals(3, ops.submitted.size)
+    }
 }
