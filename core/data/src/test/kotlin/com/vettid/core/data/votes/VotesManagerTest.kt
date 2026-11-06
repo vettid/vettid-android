@@ -173,8 +173,12 @@ class VotesManagerTest {
         /** Bytes a read receives before its answer (a download cut off partway: `Unreachable` after some bytes). */
         val partial = mutableMapOf<String, Long>()
 
+        /** Runs before the read's bytes are reported (a wipe while the download is still arriving). */
+        var beforeReceived: (() -> Unit)? = null
+
         override suspend fun getCounted(path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
             val answer = get(path, maxBytes)
+            beforeReceived?.invoke()
             partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
             return answer
         }
@@ -2444,5 +2448,22 @@ class VotesManagerTest {
         clock = clock.plus(Duration.ofHours(5))
         assertEquals(ResultsOutcome.Unchanged, m.checkDue(CONN, PID))
         assertEquals(reads, site.reads.size)
+    }
+
+    @Test
+    fun aRowsChunkArrivingAfterAWipeStampsNothing() = runTest {
+        // Review of #319, L1: the recheck's download callback after forgetStored() puts no key back in memory. Shown through
+        // the weekly cap: had the chunk stamped, the next recheck on mobile data would be held.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        val m = manager(ops, site, unmetered = { false })
+        site.beforeReceived = { m.forgetStored() } // a wipe's store reset while the bytes are on their way (the job still runs)
+        m.refresh()
+        m.recheck(CONN, PID)
+        site.beforeReceived = null
+        m.clear()
+        m.refresh()
+        assertEquals("not held: nothing was stamped", ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
     }
 }

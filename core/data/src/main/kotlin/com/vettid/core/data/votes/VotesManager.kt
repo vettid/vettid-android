@@ -1210,9 +1210,10 @@ class VotesManager(
      * files are erased. Not at a lock.
      */
     fun forgetStored() {
-        recheckRowsAt.clear()
         synchronized(attemptsSync) {
             storeEpoch++
+            // Under the same lock as [stampRecheckRows]' test: a chunk still arriving after this stamps nothing.
+            recheckRowsAt.clear()
             attemptsHeld = emptyList()
             runCatching { attempts.save(emptyList()) }
         }
@@ -1292,13 +1293,14 @@ class VotesManager(
             hintsFlow.value[key]?.verdict?.let { return@withLock ResultsOutcome.Rechecked(it == ObserverVerdict.PASSED) }
             // A child job as a results check is (lead review L2): a lock cancels it and it is void.
             val gen = synchronized(lock) { generation }
-            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen) }
+            val epoch = storeEpochNow()
+            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen, epoch) }
         }
     }
 
     /** The observer's check alone, on the published results as they are now; nothing is submitted or kept on disk. */
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one early return per reason it could not check
-    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
+    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int, epoch: Int): ResultsOutcome = run {
         if (!site.configured) return@run notRechecked(key, gen)
         val detail = get(connectionId, proposalId)
         // Nothing checked (no tag to look for, results.json over the limit, a cap that does not read): not a failed observer
@@ -1318,7 +1320,12 @@ class VotesManager(
         // existing not-rechecked line, and no number.
         val at = now().toEpochMilli()
         if (recheckRowsWait(key, at)) return@run notRechecked(key, gen)
-        val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n -> if (n > 0) recheckRowsAt[key] = at }) {
+        // The callback runs in the site client's blocking read, which a lock does not interrupt (review of #319, L1): it
+        // stamps only while this recheck's job is active and no wipe happened since it began.
+        val job = kotlinx.coroutines.currentCoroutineContext()[Job]
+        val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n ->
+            if (n > 0 && job?.isActive != false) stampRecheckRows(key, at, epoch)
+        }) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
             SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
@@ -1339,6 +1346,13 @@ class VotesManager(
             }
         }
         rechecked(key, passed, gen)
+    }
+
+    /** [recheckRowsAt] for [key], only while the store's epoch is still [epoch] (no wipe since the recheck began). */
+    private fun stampRecheckRows(key: String, at: Long, epoch: Int) {
+        synchronized(attemptsSync) {
+            if (epoch == storeEpoch) recheckRowsAt[key] = at
+        }
     }
 
     /** The recheck's rows.json waits: downloaded for [key] less than a week ago, on a network not known unmetered (#319 2). */
