@@ -135,6 +135,38 @@ class VoteRulesTest {
     }
 
     @Test
+    fun aRowTheAppCouldNotGetIsAProblemWithTheResultsPendingOrGivenUp() {
+        // VAULT-MESSAGING 0.86.4 §10.19.6 step 3: `rows_unavailable` shows the app's text for a problem with the published results.
+        for (state in listOf(CheckState.PENDING, CheckState.GAVE_UP)) {
+            val v = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(state, "rows_unavailable"))
+            val notes = VoteRules.notes(v, GaveUpWhy.SITE)
+            assertTrue("$state", VoteNote.CHECK_RESULTS_PROBLEM in notes)
+            assertFalse("$state", VoteNote.CHECK_GAVE_UP_SITE in notes)
+            assertFalse(VoteNote.FAILED in notes)
+        }
+    }
+
+    @Test
+    fun theRecheckOnOpenRunsOnlyForAJudgedVoteWithNoVerdictAndItsLineOnlyThere() {
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        val unconfirmed = vote(VoteState.CLOSED, ballot(BallotState.WAITING), check(CheckState.UNCONFIRMED))
+        assertTrue(VoteRules.recheckOnOpen(verified, null))
+        assertTrue(VoteRules.recheckOnOpen(unconfirmed, null))
+        assertFalse(VoteRules.recheckOnOpen(verified, ObserverVerdict.PASSED))
+        assertFalse(VoteRules.recheckOnOpen(verified, ObserverVerdict.FAILED))
+        for (c in listOf(CheckState.PENDING, CheckState.GAVE_UP, CheckState.FAILED)) {
+            assertFalse("$c", VoteRules.recheckOnOpen(vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(c)), null))
+        }
+        assertTrue(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(verified, notRechecked = true))
+        assertTrue(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(unconfirmed, notRechecked = true))
+        assertFalse(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(verified))
+        // "Don't add up" already says the numbers are hidden: not both.
+        assertFalse(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(verified, observerFailed = true, notRechecked = true))
+        val pending = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.PENDING))
+        assertFalse(VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(pending, notRechecked = true))
+    }
+
+    @Test
     fun theAppsOwnFindInTheResultsIsShownWhileTheVaultHasNotJudged() {
         val v = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check = null)
         assertTrue(VoteNote.CHECK_RESULTS_PROBLEM in VoteRules.notes(v, resultsProblem = true))

@@ -103,4 +103,35 @@ class VoteRowsTest {
         assertEquals("results", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow("{}".toByteArray(), rowsBytes, tag) }.reason)
         assertEquals("results", assertThrows(ResultsProblem::class.java) { VoteRows.ownRow("nope".toByteArray(), rowsBytes, tag) }.reason)
     }
+
+    @Test
+    fun otherRowsUnderTheOwnTagComeWithProofsToRowsRoot() {
+        val tags = (1..3).map { n -> ByteArray(32) { n.toByte() } }
+        val order = listOf(tags[0], tags[1], tags[1], tags[2], tags[1])
+        val rowList = order.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }
+        val rowsText = """{"proposal_id":"$PID","rows":[$rowList],"v":1}"""
+        val root = VoteMerkle.root(order)
+        val hash = Base64s.encodeStd(Bytes.sha256(rowsText.toByteArray()))
+        val counts = """{"ballots":0,"eligible":5,"removed":0,"unhandled":0}"""
+        val results = """{"counts":$counts,"proposal_id":"$PID","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(root)}"}"""
+        val p = VoteRows.read(results.toByteArray(), rowsText.toByteArray(), tags[1])
+        assertEquals(1L, p.ownRow(tags[1]).index)
+        val others = p.otherRows()
+        assertEquals(listOf(2L, 4L), others.map { it.index })
+        for (o in others) assertTrue(VoteMerkle.verify(root, tags[1], o.index, 5, o.path))
+        // Read for another tag: none.
+        assertTrue(VoteRows.read(results.toByteArray(), rowsText.toByteArray(), tags[0]).otherRows().isEmpty())
+    }
+
+    @Test
+    fun anEligibleCountOutsideItsRangeIsToldApartFromOneThatDoesNotRead() {
+        fun r(e: String) = """{"counts":{"eligible":$e}}""".toByteArray()
+        for (e in listOf("0", "100001", "9007199254740991")) {
+            assertTrue(e, VoteRows.eligibleOutOfRange(r(e)))
+            assertNull(e, VoteRows.rowsCap(r(e)))
+        }
+        for (e in listOf("1", "100000")) assertFalse(e, VoteRows.eligibleOutOfRange(r(e)))
+        for (e in listOf("-1", "\"3\"", "1.5", "9007199254740992")) assertFalse(e, VoteRows.eligibleOutOfRange(r(e)))
+        assertFalse(VoteRows.eligibleOutOfRange("{}".toByteArray()))
+    }
 }

@@ -42,6 +42,7 @@ internal object VoteTexts {
         VoteNote.UNCONFIRMED -> R.string.vote_state_unconfirmed
         VoteNote.DIDNT_VOTE -> R.string.vote_state_didnt_vote
         VoteNote.RESULTS_DONT_ADD_UP -> R.string.vote_results_dont_add_up
+        VoteNote.RESULTS_NOT_RECHECKED -> R.string.vote_results_not_rechecked
         VoteNote.CHECK_PENDING -> R.string.vote_check_pending
         VoteNote.CHECK_RESULTS_PROBLEM -> R.string.vote_check_results_problem
         VoteNote.CHECK_RESULTS_TOO_LARGE -> R.string.vote_check_results_too_large

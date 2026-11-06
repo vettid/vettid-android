@@ -10,9 +10,9 @@ import java.security.MessageDigest
  * hold 32 bytes per row; a row's ballot is `vk`, `choice_id` and `ballot_sig` in [data] at [offsets] (`vkStart`,
  * `choiceStart`, `sigStart`, `end` per row; `vkStart` [EMPTY] for an empty row, [NOT_KEPT] for a ballot whose lengths are
  * not the protocol's: only [lengthsMatch] says so, recheck 1, R1-3). The member's own row (the first under the tag the
- * reader was given) keeps its ballot whatever its lengths ([ownIndex], [ownBallot]). At most 32 + 32 + 16 + 32 + 32 + 64 =
- * 208 bytes a row whatever the input. The shape flags are what the observer only reports (VAULT-MESSAGING 0.86.4 §10.19.6
- * step 1).
+ * reader was given) keeps its ballot whatever its lengths ([ownIndex], [ownBallot]), and so do the next four rows under
+ * that tag ([ownExtras]). At most 32 + 32 + 16 + 32 + 32 + 64 = 208 bytes a row whatever the input, besides those five.
+ * The shape flags are what the observer only reports (VAULT-MESSAGING 0.86.4 §10.19.6 step 1).
  */
 internal class RowsTable(
     val count: Int,
@@ -32,6 +32,11 @@ internal class RowsTable(
     val ownIndex: Int,
     /** That row's ballot (`vk`, `choice_id`, `ballot_sig`) as published, whatever its lengths; null for an empty row. */
     val ownBallot: Triple<ByteArray, ByteArray, ByteArray>?,
+    /**
+     * The next rows under the member's tag, at most [RowsReader.MAX_EXTRA] (VAULT-MESSAGING 0.86.4 §10.19.6 step 1: sent as
+     * `other_rows`), each with its ballot as published, whatever its lengths, or null for an empty row.
+     */
+    val ownExtras: List<Pair<Int, Triple<ByteArray, ByteArray, ByteArray>?>> = emptyList(),
 ) {
     fun tag(i: Int): ByteArray = tags.copyOfRange(i * HASH, (i + 1) * HASH)
 
@@ -84,6 +89,7 @@ internal class RowsReader(
     private var lengthsMatch = true
     private var ownIndex = -1
     private var ownBallot: Triple<ByteArray, ByteArray, ByteArray>? = null
+    private val ownExtras = ArrayList<Pair<Int, Triple<ByteArray, ByteArray, ByteArray>?>>()
     private val scratch = Scratch()
 
     fun read(): RowsTable {
@@ -116,6 +122,7 @@ internal class RowsReader(
         val exact = names == DOCUMENT_MEMBERS && vOne
         return RowsTable(
             count, tags, leafHashes, data.copyOf(dataLen), offsets, exact, proposalId, membersExact, lengthsMatch, ownIndex, ownBallot,
+            ownExtras.toList(),
         )
     }
 
@@ -184,9 +191,15 @@ internal class RowsReader(
         val v = vk
         val c = choice
         val s = sig
-        if (ownIndex < 0 && ownTag != null && Bytes.constantTimeEquals(t, ownTag)) {
-            ownIndex = count
-            ownBallot = if (v == null) null else Triple(v, c!!, s!!)
+        if (ownTag != null && Bytes.constantTimeEquals(t, ownTag)) {
+            val ballot = if (v == null) null else Triple(v, c!!, s!!)
+            if (ownIndex < 0) {
+                ownIndex = count
+                ownBallot = ballot
+            } else if (ownExtras.size < MAX_EXTRA) {
+                // A second row under the member's tag (§10.19.6 step 1): kept as published, for `other_rows`.
+                ownExtras += count to ballot
+            }
         }
         if (v == null) {
             offsets[at] = RowsTable.EMPTY
@@ -482,6 +495,9 @@ internal class RowsReader(
         const val INITIAL_SCRATCH = 64
         const val NAME_KEEP = 64
         const val PROPOSAL_ID_MAX = 64
+
+        /** The most `other_rows` entries (§10.19.8: at most 4). */
+        const val MAX_EXTRA = 4
 
         /** `lp` lengths are 16 bits. */
         const val LP_MAX = 65_535

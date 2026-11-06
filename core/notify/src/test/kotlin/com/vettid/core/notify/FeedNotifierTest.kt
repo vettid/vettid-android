@@ -18,6 +18,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -87,6 +88,11 @@ class FeedNotifierTest {
             namesCalls++
             return names
         }
+
+        /** What [refreshVotes] does: by default the list reads and [names] stays as it is. */
+        var refresh: suspend () -> Boolean = { true }
+
+        override suspend fun refreshVotes(): Boolean = refresh()
 
         /** When set, [messageText] waits for it: an item notification still being prepared. */
         var textGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -682,5 +688,55 @@ class FeedNotifierTest {
         arrive(deviceItem("n2", "leash.agent.suspended", device = null))
         assertEquals("A device asks for access", poster.shown.getValue("n1").title)
         assertEquals("An agent was paused", poster.shown.getValue("n2").title)
+    }
+
+    // --- review 1, M3: the give-up vote.result is titled from the list as read after it arrived ---
+
+    private val voteKey = com.vettid.core.data.feed.VoteTitles.key("c1", "P1")
+
+    private suspend fun TestScope.voteResult(id: String) = arrive(item(id, kind = "vote.result", ref = "P1"))
+
+    @Test
+    fun aGiveUpThatTheFreshListShowsVerifiedIsTitledAsAResult() = runTest {
+        notifier()
+        source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+        source.refresh = {
+            source.names = source.names.copy(votesGaveUp = emptySet())
+            true
+        }
+        voteResult("v1")
+        assertEquals("Vote results are out", poster.shown.getValue("v1").title)
+    }
+
+    @Test
+    fun aFreshGiveUpIsTitledAsOne() = runTest {
+        notifier()
+        source.refresh = {
+            source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+            true
+        }
+        voteResult("v2")
+        assertEquals("Vote results not checked yet", poster.shown.getValue("v2").title)
+    }
+
+    @Test
+    fun aListThatCannotBeReadInTimeOrAtAllGivesTheGenericTitle() = runTest {
+        notifier()
+        source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+        source.refresh = {
+            kotlinx.coroutines.awaitCancellation()
+        }
+        voteResult("v3")
+        assertFalse(poster.shown.containsKey("v3"))
+        advanceTimeBy(FeedNotifier.VOTE_LIST_WAIT_MS + 1)
+        runCurrent()
+        assertEquals("Vote results are out", poster.shown.getValue("v3").title)
+        source.refresh = { throw com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.OTHER, "x") }
+        voteResult("v4")
+        assertEquals("Vote results are out", poster.shown.getValue("v4").title)
+        // Another kind is not held up.
+        source.refresh = { kotlinx.coroutines.awaitCancellation() }
+        arrive(item("v5"))
+        assertTrue(poster.shown.containsKey("v5"))
     }
 }
