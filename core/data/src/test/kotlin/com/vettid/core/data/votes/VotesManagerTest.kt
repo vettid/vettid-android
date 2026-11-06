@@ -2090,4 +2090,35 @@ class VotesManagerTest {
         assertEquals("1", (ops2.submitted.last()["row_proof"] as JsonObject).str("index"))
         assertEquals(2, site2.reads.count { it == "p/$PID/rows.json" })
     }
+
+    // ---- #314 (the lead's blind review of #312) ----
+
+    @Test
+    fun aRecheckThatCouldCheckNothingSaysNotRecheckedNotDontAddUp() = runTest {
+        // Item 2: a missing record_tag, results.json over the limit and a cap that does not read check nothing: the
+        // not-rechecked line and no number, never "don't add up".
+        val cases = mapOf<String, (Ops, Site) -> Unit>(
+            "no tag" to { ops, _ -> ops.detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed"}""") },
+            "too large" to { _, site -> site.answers["p/$PID/results.json"] = SiteAnswer.TooLarge },
+            "no cap" to { _, site ->
+                site.answers["p/$PID/results.json"] = ok(observed().results.replace(""""eligible":3,"removed"""", """"eligible":"3","removed""""))
+            },
+        )
+        for ((name, change) in cases) {
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(verifiedVote())
+            change(ops, site)
+            val m = manager(ops, site)
+            m.refresh()
+            assertEquals(name, ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+            val h = m.hints.value.getValue("$CONN/$PID")
+            assertTrue(name, h.notRechecked)
+            assertNull(name, h.verdict)
+            assertFalse(name, h.observerFailed)
+            val s = m.votes.value.single()
+            assertTrue(name, VoteNote.RESULTS_NOT_RECHECKED in VoteRules.notes(s, observerFailed = h.observerFailed, notRechecked = h.notRechecked))
+            assertFalse(name, VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(s, observerFailed = h.observerFailed, notRechecked = h.notRechecked))
+            assertFalse(name, VoteRules.showNumbers(s, h.verdict, h.observerFailed))
+        }
+    }
 }

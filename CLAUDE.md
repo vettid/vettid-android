@@ -478,7 +478,9 @@ The A2 exit test:
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
   verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4), and a
   site that cannot be
-  reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03). **The give-up feed item**
+  reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03), as does a recheck that could
+  check nothing (no `record_tag`, results.json over its limit, a `counts.eligible` cap that does not read; #314 item 2):
+  no verdict, no number, never "don't add up". **The give-up feed item**
   (owner decision a, 2026-11-06, thread 01M6RH58PE19ZBEHX3JK5ZW06A): a `vote.result` item carries no check state, so the app
   looks the vote up in the list in memory (`FeedNames.votesGaveUp`, from `vote.list`'s `gave_up` checks): then its title is
   "Vote results not checked yet" (`data_feed_vote_result_gave_up`), the second line "<service>: <vote title>" as for every

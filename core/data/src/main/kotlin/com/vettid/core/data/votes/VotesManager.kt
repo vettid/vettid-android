@@ -1201,17 +1201,18 @@ class VotesManager(
     private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
         if (!site.configured) return@run notRechecked(key, gen)
         val detail = get(connectionId, proposalId)
+        // Nothing checked (no tag to look for, results.json over the limit, a cap that does not read): not a failed observer
+        // check but one that could not run, so `vote_results_not_rechecked` and no number, not "don't add up" (#314 item 2).
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
-            ?: return@run rechecked(key, passed = false, gen)
+            ?: return@run notRechecked(key, gen)
         val doc = when (val a = site.get("p/$proposalId/results.json", RESULTS_MAX)) {
             is SiteAnswer.Found -> a.bytes
-            SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
-            SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
+            SiteAnswer.TooLarge, SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
         }
         val cap = withContext(compute) {
             computeStep("$key:cap")
             VoteRows.rowsCap(doc)
-        } ?: return@run rechecked(key, passed = false, gen)
+        } ?: return@run notRechecked(key, gen)
         val rows = when (val a = site.get("p/$proposalId/rows.json", cap)) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
