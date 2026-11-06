@@ -189,13 +189,14 @@ internal object TransferInResume {
      * only the cuts [cuts] counted since the window began; one not described is taken as now + the long-poll cap). For a
      * freeze it is s + w of the latest request sent at or before the freeze began, ours or the collector's, kept after the
      * request ended ([collectorAge], [collectorSends]); for a send since the last heartbeat tick before the freeze it is the
-     * wake + w (its bytes may reach the relay only at the wake, which parks it for its wait: the lead's call R2). A cut of a request written at or before a freeze belongs to the
-     * freeze: it reached the relay before it, so its lease starts by its s + w, within the freeze's own, and it moves nothing
-     * (call C). Our own requests are recorded with the wait they were sent with ([sentWait]: 0 while the collection runs).
-     * A cut is: a request of ours abandoned or failed with anything but a
-     * relay status, or the collector's in-flight request cut or lost. A freeze is a gap of more than [Settle.freezeMarginMs]
-     * between the ticks of a 1 s heartbeat that lives only as long as the window. The check is made after the final collect
-     * too, so a cut or a freeze just before the end extends and loops instead of dropping.
+     * wake + w (its bytes may reach the relay only at the wake, which parks it for its wait: the lead's call R2). A cut of
+     * a request written at or before a freeze belongs to the freeze: the freeze's lease already covers it (s + w, or the
+     * wake + w for a send since the last tick), so it is taken as its s + w and moves nothing (call C). Our own requests
+     * are recorded with the wait they were sent with ([sentWait]: 0 while the collection runs). A cut is: a request of ours
+     * abandoned or failed with anything but a relay status, or the collector's in-flight request cut or lost. A freeze is
+     * a gap of more than [Settle.freezeMarginMs] between the ticks of a 1 s heartbeat that lives only as long as the window.
+     * The check is made after the final collect too, so a cut or a freeze just before the end extends and loops instead of
+     * dropping.
      *
      * **The last collect.** A lease that runs past the cap (its end + 15 s) is recorded however and whenever it was noticed
      * (before the cap or after). The final `wait=0` collect then goes at `max(now, latest lease end + 15 s)`
