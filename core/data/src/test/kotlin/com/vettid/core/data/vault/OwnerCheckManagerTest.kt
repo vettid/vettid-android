@@ -1198,17 +1198,32 @@ class OwnerCheckManagerTest {
         val m = manager(Ops())
         val refused = com.vettid.core.vault.VaultStatusInfo("v", relay = JsonPrimitive("refused"))
         val absent = com.vettid.core.vault.VaultStatusInfo("v")
-        assertEquals(refused, RelayReads.read(m) { refused })
+        assertEquals(refused, RelayReads.read(m, open = { true }) { refused })
         assertTrue("an overview read shows the notice", m.relayRefused.value)
-        assertNull(RelayReads.read(m) { null })
+        assertNull(RelayReads.read(m, open = { true }) { null })
         assertTrue("no answer changes nothing", m.relayRefused.value)
-        RelayReads.read(m) { absent }
+        RelayReads.read(m, open = { true }) { absent }
         assertFalse("and one without `relay` takes it away", m.relayRefused.value)
-        RelayReads.read(m) {
+        RelayReads.read(m, open = { true }) {
             m.onLockedHere() // the member locks while the overview's read is out
             refused
         }
         assertFalse("an answer to a read sent before the lock is dropped", m.relayRefused.value)
+    }
+
+    /**
+     * Review of #301, F2: the overview's answer is applied only while the vault is still open, even when its stamp was
+     * taken after the member's lock cleared the notice and before the lock set the phase.
+     */
+    @Test
+    fun theOverviewsAnswerIsNotAppliedOnceTheVaultIsNoLongerOpen() = runTest {
+        val m = manager(Ops())
+        var open = true
+        RelayReads.read(m, open = { open }) {
+            open = false // the phase became Locked while the read was out; no epoch moved since the stamp
+            com.vettid.core.vault.VaultStatusInfo("v", relay = JsonPrimitive("refused"))
+        }
+        assertFalse(m.relayRefused.value)
     }
 
     /** The re-read is cancelled by a lock. */

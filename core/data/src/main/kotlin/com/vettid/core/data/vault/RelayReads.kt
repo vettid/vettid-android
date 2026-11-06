@@ -11,12 +11,18 @@ internal object RelayReads {
     /**
      * Stamps the read ([OwnerCheckManager.beginStatusRead]) before [read] sends it, so a lock or a newer read since drops
      * its answer, and applies the answer's `relay` ([OwnerCheckManager.noteRelay]). Returns the status, or null when
-     * [read] got none (nothing is applied then).
+     * [read] got none (nothing is applied then). (Review F2, as iOS's phase guard) Applied only while [open] still says the
+     * vault is open: the member's lock clears the notice before it sets the phase, so a read that took its stamp in
+     * between is not applied after the lock.
      */
-    suspend fun read(ownerCheck: OwnerCheckManager, read: suspend () -> VaultStatusInfo?): VaultStatusInfo? {
+    suspend fun read(
+        ownerCheck: OwnerCheckManager,
+        open: () -> Boolean,
+        read: suspend () -> VaultStatusInfo?,
+    ): VaultStatusInfo? {
         val stamp = ownerCheck.beginStatusRead()
         val status = read() ?: return null
-        ownerCheck.noteRelay(stamp, status.relayRefused)
+        if (open()) ownerCheck.noteRelay(stamp, status.relayRefused)
         return status
     }
 }

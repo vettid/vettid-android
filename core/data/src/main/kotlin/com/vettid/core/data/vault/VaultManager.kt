@@ -2786,7 +2786,7 @@ class VaultManager(
         val open = phaseFlow.value is AppPhase.Unlocked
         // (VAULT-MESSAGING 0.84.0) Every status read of the open vault decides the relay notice, this one too ([RelayReads]).
         val vs = if (open) {
-            RelayReads.read(ownerCheck) {
+            RelayReads.read(ownerCheck, open = { phaseFlow.value is AppPhase.Unlocked }) {
                 try {
                     s.openApi.status()
                 } catch (_: IOException) {
