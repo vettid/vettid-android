@@ -7,6 +7,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -279,7 +280,7 @@ class TransferInResumeTest {
     /** (review of #302, 5) Abandoned requests move the end out by at most the clamped visibility timeout. */
     @Test
     fun theExtensionIsCappedAtTheVisibilityTimeout() = runTest {
-        assertEquals(60_000L, TransferInResume.SETTLE_MAX_EXTRA_MS)
+        assertEquals(95_000L, TransferInResume.SETTLE_MAX_EXTRA_MS)
         assertEquals(60_000L, TransferInResume.visibilityMs(null))
         assertEquals(300_000L, TransferInResume.visibilityMs(3_600))
         assertEquals(0L, TransferInResume.visibilityMs(0))
@@ -348,26 +349,102 @@ class TransferInResumeTest {
     }
 
     /**
-     * A freeze: the process is frozen while the collector's request is out, and wakes 400 s later on the monotonic clock;
-     * the message it was handed becomes free 20 s after the wake. The frozen time does not count and the end is extended:
-     * the message is gathered. Without freeze detection the window is long over at the wake and drops at once.
+     * A long freeze (10 minutes) wakes far past the cap (F + V + 35 s = 185 s): there is no further extension, one final
+     * `wait=0` collect goes at once and gathers a message whose lease ended before the cap.
      */
     @Test
-    fun aFreezeExtendsTheWindowSoALateLeaseIsGathered() = runTest {
+    fun aLongFreezeWakesPastTheCapAndOneFinalCollectGathersAnExpiredLease() = runTest {
         val clock = FrozenClock(this)
         var isPaired = false
         var drops = 0
-        var froze = false
-        var freeAt = Long.MAX_VALUE
-        val round: suspend () -> Unit = {
-            if (!froze) {
-                froze = true
-                clock.jumpedMs += 400_000 // the freeze
-                freeAt = clock.now() + 20_000
-            }
+        var calls = 0
+        val collect: suspend (Long) -> Unit = {
+            calls++
+            if (calls == 1) clock.jumpedMs += 600_000 // the freeze, in the middle of the first request
+            if (clock.now() >= 150_000 && calls > 1) isPaired = true // free since 150 s (before the cap)
         }
-        val collect: suspend (Long) -> Unit = { w -> if (clock.now() >= freeAt) isPaired = true else delay(w.coerceAtMost(5_000)) }
-        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), awaitRound = round))
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock)))
+        assertEquals(0, drops)
+        assertEquals("the request that was out, and one final collect", 2, calls)
+    }
+
+    /** The same freeze with nothing there: the drop comes at once after the one final collect, with no further extension. */
+    @Test
+    fun aLongFreezeWithNothingThereDropsAtOnceAfterOneFinalCollect() = runTest {
+        val clock = FrozenClock(this)
+        var drops = 0
+        var calls = 0
+        var droppedAt = -1L
+        val collect: suspend (Long) -> Unit = {
+            calls++
+            if (calls == 1) clock.jumpedMs += 600_000
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, { drops++; droppedAt = clock.now() }, settle = timingWith(clock)))
+        assertEquals(1, drops)
+        assertEquals("the request that was out, and one final collect", 2, calls)
+        assertTrue("dropped at the wake: $droppedAt", droppedAt - 600_000 <= 1_000)
+    }
+
+    /**
+     * A freeze begins with a collector request out since s (just before the cap), and wakes after the cap but before s + V:
+     * its lease runs to s + V. The final collect waits until s + V + 5 s and gathers the message; going at once it would
+     * find nothing.
+     */
+    @Test
+    fun theFinalCollectAfterAFreezePastTheCapWaitsForTheLeaseOfTheRequestThatWasOut() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        var outSince: Long? = null
+        val settle = TransferInResume.Settle(windowMs = 100_000, now = clock::now) // F = 100 s, the cap F + 95 s = 195 s
+        launch {
+            // Cuts keep the window going to the cap (each moves the end to now + V, at most 195 s).
+            delay(60_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+            delay(30_000)
+            outSince = clock.now() // s = 190 s: the collector's request goes out, just before the cap
+            delay(1_500)
+            clock.jumpedMs += 30_000 // frozen: wakes at ~221 s, past the cap, before s + V = 250 s
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            val s = outSince
+            if (s != null && clock.now() >= s + 60_000) isPaired = true else delay(w.coerceAtMost(2_000))
+        }
+        val age: () -> Long? = { outSince?.let { clock.now() - it } }
+        assertTrue(
+            TransferInResume.atDeadline(
+                { isPaired }, collect, { drops++ }, settle = settle, cuts = { cutCount }, collectorAge = age,
+            ),
+        )
+        assertEquals(0, drops)
+        assertTrue("not before s + V + 5 s: ${clock.now()} vs ${outSince!! + 65_000}", clock.now() >= outSince!! + 65_000)
+    }
+
+    /**
+     * Cuts at 60 s and 110 s (F + 20 s, F = 90 s): the second leases until 170 s, past F + V (150 s) but before the cap
+     * F + V + 35 s (185 s). It is gathered; a cap of F + V would have dropped the transfer first.
+     */
+    @Test
+    fun aCutTwentySecondsPastTheFirstEndIsStillGatheredWithinTheCap() = runTest {
+        val clock = FrozenClock(this)
+        var cutCount = 0L
+        var isPaired = false
+        var drops = 0
+        launch {
+            delay(60_000)
+            cutCount++
+            delay(50_000)
+            cutCount++
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (clock.now() >= 168_000) isPaired = true else delay(w.coerceAtMost(5_000))
+        }
+        assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), cuts = { cutCount }))
         assertEquals(0, drops)
     }
 
@@ -402,8 +479,9 @@ class TransferInResumeTest {
     /**
      * A freeze of about 30 s in the middle of a long round wait (25 s of waiting, 30 s frozen: the phase took 55 s by the
      * clock, inside its own 55 s bound plus the old rule's 10 s margin, so the phase-overrun rule never saw it). The
-     * heartbeat sees a gap of 30 s between ticks. The message the collector was handed is leased until 130 s, past the
-     * window's first end (90 s); the extended window gathers it, where without the detection the transfer is dropped at 90 s.
+     * heartbeat sees a gap of 30 s between ticks and extends the end to now + V (about 101 s). The message the collector was
+     * handed is free at 100 s, past the window's first end (90 s); the extended window gathers it,
+     * where without the detection the transfer is dropped at 90 s.
      */
     @Test
     fun aThirtySecondFreezeDuringALongRoundWaitIsSeenByTheHeartbeat() = runTest {
@@ -420,7 +498,7 @@ class TransferInResumeTest {
             }
         }
         val collect: suspend (Long) -> Unit = { w ->
-            if (froze && clock.now() >= 130_000) isPaired = true else delay(w.coerceAtMost(5_000))
+            if (froze && clock.now() >= 100_000) isPaired = true else delay(w.coerceAtMost(5_000))
         }
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = timingWith(clock), awaitRound = round))
         assertEquals(0, drops)
@@ -435,26 +513,20 @@ class TransferInResumeTest {
         assertEquals("no ticker left running on", TransferInResume.SETTLE_WINDOW_MS, testScheduler.currentTime)
     }
 
-    /** Repeated cuts and freezes never extend the window past its first end plus the cap (in awake time). */
+    /** Repeated cuts never extend the window past its first end plus the cap (a fixed point on the window's clock). */
     @Test
     fun repeatedCutsAndFreezesStayWithinTheCap() = runTest {
         val clock = FrozenClock(this)
         var cutCount = 0L
         var drops = 0
         var droppedAt = -1L
-        var frozenTotal = 0L
-        val round: suspend () -> Unit = {
-            cutCount++
-            clock.jumpedMs += 300_000
-            frozenTotal += 300_000
-        }
+        val round: suspend () -> Unit = { cutCount++ } // a cut at every step
         TransferInResume.atDeadline(
             { false }, {}, { drops++; droppedAt = clock.now() }, settle = timingWith(clock, maxExtraMs = 20_000), awaitRound = round,
             cuts = { cutCount },
         )
         assertEquals(1, drops)
-        val awake = droppedAt - frozenTotal
-        assertTrue("awake time $awake within first end + cap (+ a step's bounds)", awake <= 90_000 + 20_000 + 55_000)
+        assertTrue("dropped at the cap, first end + 20 s: $droppedAt", droppedAt in 110_000..111_000)
     }
 
     /** No cut and no freeze: the window behaves as before (dropped exactly at its end). */

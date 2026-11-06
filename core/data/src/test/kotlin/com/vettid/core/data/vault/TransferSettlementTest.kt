@@ -38,6 +38,7 @@ class TransferSettlementTest {
         override var deviceId: String? = null
         override var collecting = false
         override var collectorCuts = 0L
+        override var collectorRequestAgeMs: Long? = null
         var visibility: Long? = 60
         var rejected = false
         var pairedAtMs: Long? = null

@@ -4341,6 +4341,7 @@ class VaultManager(
         override val deviceId get() = d.deviceId
         override val collecting get() = d.collecting
         override val collectorCuts get() = d.collectorCuts
+        override val collectorRequestAgeMs get() = d.collectRequestAgeMs
 
         override suspend fun relayVisibilitySeconds(): Long? = d.relayLimits().visibilityTimeoutSeconds
 

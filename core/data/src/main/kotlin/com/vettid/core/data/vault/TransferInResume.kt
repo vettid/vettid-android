@@ -90,8 +90,14 @@ internal object TransferInResume {
     /** See [Settle.heartbeatMs]. */
     const val HEARTBEAT_MS = 1_000L
 
-    /** The most that abandoned requests can move the end of the window out by (by default one visibility timeout). */
-    const val SETTLE_MAX_EXTRA_MS = DEFAULT_VISIBILITY_S * MS
+    /**
+     * What the cap adds to a visibility timeout: the long-poll cap (25 s) + the handling margin (5 s) + 5 s. A collector
+     * request can be out up to about 30 s after the window's first end, so a cut then leases past first end + V.
+     */
+    const val CAP_MARGIN_MS = 35_000L
+
+    /** The most that cuts and freezes can move the end of the window out by: V + [CAP_MARGIN_MS] (V at its default). */
+    const val SETTLE_MAX_EXTRA_MS = DEFAULT_VISIBILITY_S * MS + CAP_MARGIN_MS
 
     /** The advertised visibility timeout in ms, kept within 0 to 300 s (60 s when none). */
     fun visibilityMs(visibilitySeconds: Long? = null): Long =
@@ -100,7 +106,7 @@ internal object TransferInResume {
     /**
      * The timing of a settlement, all of it a parameter for tests (which pass [now] from the test scheduler).
      * [now] is a monotonic clock in milliseconds that keeps counting while the phone sleeps (`elapsedRealtime`): a suspend
-     * with a request out then shows as a phase far past its bound (a freeze), where `nanoTime` would not.
+     * with a request out then shows as a gap in the heartbeat (a freeze), where `nanoTime` would not.
      */
     class Settle(
         val windowMs: Long = SETTLE_WINDOW_MS,
@@ -108,7 +114,10 @@ internal object TransferInResume {
         val transportMs: Long = DEADLINE_COLLECT_MS,
         val pollMs: Long = SETTLE_POLL_S * MS,
         val handlingMs: Long = HANDLING_MARGIN_MS,
+        /** The cap: the end never moves past the first end + [maxExtraMs] (V + 35 s), on the window's clock. */
         val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
+        /** V, the (clamped) visibility timeout: a cut or a freeze moves the end to at least now + V. */
+        val visibilityMs: Long = DEFAULT_VISIBILITY_S * MS,
         // A unit test's stub of SystemClock answers 0 (isReturnDefaultValues): a window on that clock would never end, so the
         // default fails loudly there instead of hanging; a test passes its own clock. On a phone it is never 0 (since boot).
         val now: () -> Long = { android.os.SystemClock.elapsedRealtime().also { check(it > 0) { "Settle.now: pass a clock in tests" } } },
@@ -151,27 +160,28 @@ internal object TransferInResume {
 
     /**
      * At the deadline: unless [paired] already, [collect] (given the wait of its request, in ms) and look at [paired]
-     * again, until paired or until [Settle.windowMs] has passed since this step began (§11.14.10 rule 5 erratum, owner
-     * decision a, 2026-11-05). No request that is out at the relay is cancelled while it can hold a message: each is
-     * sized to what is left of the window (its wait is what is left minus [Settle.handlingMs], at most [Settle.pollMs])
-     * and bounded by its wait plus [Settle.transportMs]; one that had to be abandoned may hold a message leased for a
-     * visibility timeout, so the end of the window moves to at least a whole window from then (at most
-     * [Settle.maxExtraMs] past the first end; so does a request that failed with anything but a [RelayException], since
-     * a status means nothing was leased). The window ends with one final `wait=0` collect, itself bounded by
-     * [Settle.transportMs] like every request, before the decision: a relay that hangs longer than that at that point can
-     * still hold a lease past the drop (an accepted trade-off). Waiting for the collection's own round is [awaitRound],
-     * before and after each request and never under the request's bound: it has its own (the poll cap plus the
-     * transport bound), and one that runs out is no abandoned request (nothing of ours was out), so it moves nothing.
-     * The window is also extended, as for an abandoned request, when the collection's in-flight request was cut
-     * ([cuts] counts those: a stop or a reconnect with a request out) and when the heartbeat (a 1 s ticker on the window's
-     * clock, alive only while the window runs) shows a gap of more than [Settle.freezeMarginMs]: a process freeze or a
-     * suspend, whatever phase it falls in (the frozen time itself does not count against the window). The
-     * extension is a whole window from then, capped at [Settle.maxExtraMs] past the (freeze-compensated) first end; and it
-     * is checked after the final collect too.
-     * Between collects [Settle.pauseMs]; after a failure the pause
-     * doubles (up to [MAX_BACKOFF_FACTOR] times). [alive] is false once this transfer was rejected (the member's abandon
-     * and a new code are not offered during the
-     * window) or the session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
+     * again, until paired or until the window ([Settle.windowMs] since this step began, the first end F) has passed
+     * (VAULT-MESSAGING §11.14.10 rule 5, the lead's pending erratum). No request that is out at the relay is cancelled
+     * while it can hold a message: each is sized to what is left of the window (its wait is what is left minus
+     * [Settle.handlingMs], at most [Settle.pollMs]) and bounded by its wait plus [Settle.transportMs].
+     *
+     * **The extension rule.** On a cut or a detected freeze the end moves to `min(max(end, now + V), cap)`, V being
+     * [Settle.visibilityMs] and the cap F + [Settle.maxExtraMs] (V + 35 s), both fixed on the window's clock; nothing
+     * shifts F, the frozen time counts. A cut is: a request of ours abandoned or failed with anything but a relay status,
+     * or the collector's in-flight request cut or lost ([cuts]). A freeze is a gap of more than [Settle.freezeMarginMs]
+     * between the ticks of a 1 s heartbeat that lives only as long as the window. The check is made after the final collect
+     * too, so a cut or a freeze just before the end extends and loops instead of dropping.
+     *
+     * **Waking at or past the cap.** A request sent at s leases until s + V. After a freeze that wakes at or past the cap,
+     * the final `wait=0` collect goes at `max(now, s + V + 5 s)`, s being the send time of the latest request that was out
+     * when the freeze began ([collectorAge] for the collector's, ours too), or at once when none was; then the drop (not
+     * when paired, not when the end moved past now: it cannot pass the cap). At most cap + V + 5 s in all.
+     *
+     * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
+     * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
+     * Between collects [Settle.pauseMs]; after a failure the pause doubles (up to [MAX_BACKOFF_FACTOR] times). [alive] is
+     * false once this transfer was rejected (the member's abandon and a new code are not offered during the window) or the
+     * session is gone: the step ends at once and nothing is dropped here. True when paired; otherwise [drop] ran once the
      * window had passed. Cancellation propagates, with no drop.
      */
     suspend fun atDeadline(
@@ -182,9 +192,10 @@ internal object TransferInResume {
         settle: Settle = Settle(),
         awaitRound: suspend () -> Unit = {},
         cuts: () -> Long = { 0L },
+        collectorAge: () -> Long? = { null },
     ): Boolean {
         if (paired()) return true
-        val out = Requests(settle, collect, awaitRound, cuts)
+        val out = Requests(settle, collect, awaitRound, cuts, collectorAge)
         // The heartbeat lives only as long as the window: cancelled when the loop ends, however it ends.
         coroutineScope {
             val beat = launch { out.heartbeat() }
@@ -195,8 +206,10 @@ internal object TransferInResume {
                         out.send((out.left() - settle.handlingMs).coerceIn(0L, settle.pollMs))
                         if (alive() && !paired()) out.pause()
                     } else {
-                        // The window's end: one final wait=0 collect. A cut or a freeze during it extends the end (left() > 0
-                        // again) and the loop goes on, instead of dropping with a message that may be leased.
+                        // The window's end: one final wait=0 collect (after a freeze past the cap, not before the lease of the
+                        // request that was out has run out). A cut or a freeze during it extends the end (left() > 0 again)
+                        // and the loop goes on, instead of dropping with a message that may be leased.
+                        out.awaitFinalNotBefore()
                         out.send(0L)
                         out.look()
                         if (out.left() <= 0) break
@@ -212,18 +225,29 @@ internal object TransferInResume {
         return paired()
     }
 
-    /** The requests of one settlement: its window's end (which abandoned requests and freezes move) and its failures. */
+    /** The requests of one settlement: its window's end (which cuts and freezes move, within the cap) and its failures. */
     private class Requests(
         private val settle: Settle,
         private val collect: suspend (waitMs: Long) -> Unit,
         private val round: suspend () -> Unit,
         private val cuts: () -> Long,
+        private val collectorAge: () -> Long?,
     ) {
-        @Volatile private var firstEnd = settle.now() + settle.windowMs
+        private val firstEnd = settle.now() + settle.windowMs
+        private val cap = firstEnd + settle.maxExtraMs
 
         @Volatile private var endAt = firstEnd
 
         @Volatile private var lastTick = settle.now()
+
+        /** The send time (window clock) of the latest request out at the last tick: the freeze's lease, if one comes. */
+        @Volatile private var outSince: Long? = null
+
+        /** The send time of our own request while it is out. */
+        @Volatile private var ourOutSince: Long? = null
+
+        /** After a freeze past the cap: the final collect goes not before this (window clock). */
+        @Volatile private var finalNotBefore = 0L
         private var failures = 0
         private var seenCuts = cuts()
 
@@ -236,10 +260,16 @@ internal object TransferInResume {
             look()
         }
 
-        /** A request that may have been taken up at the relay and its answer lost: the message may be leased for a while. */
+        /** After a freeze past the cap: waits until the lease of the request that was out has run out. */
+        suspend fun awaitFinalNotBefore() {
+            val w = finalNotBefore - settle.now()
+            if (w > 0) delay(w)
+        }
+
+        /** A cut or a freeze: the message may be leased for a visibility timeout from now. Never past the cap. */
         @Synchronized
         private fun mayHoldLease() {
-            endAt = minOf(maxOf(endAt, settle.now() + settle.windowMs), firstEnd + settle.maxExtraMs)
+            endAt = minOf(maxOf(endAt, settle.now() + settle.visibilityMs), cap)
         }
 
         /** The ticker: marks the window's clock every [Settle.heartbeatMs] and looks at the gap since the last mark. */
@@ -252,22 +282,23 @@ internal object TransferInResume {
 
         /**
          * A tick, or a look from the loop: if the window's clock moved on by more than [Settle.freezeMarginMs] since the last
-         * tick, the process was frozen meanwhile (see [Settle.freezeMarginMs]). The frozen time does not count against the
-         * window (both ends move by it, so the cap stays at the same awake time), and the end is extended as for an
-         * abandoned request. The loop looks too, so a freeze is seen before a drop whatever the order the ticker and the
-         * loop wake up in.
+         * tick, the process was frozen meanwhile (see [Settle.freezeMarginMs]) and the end is extended (never past the cap).
+         * Waking at or past the cap, the final collect is held until the lease of the request that was out at the last tick
+         * (sent at s) has run out, s + V + the handling margin. The loop looks too, so a freeze is seen before a drop
+         * whatever the order the ticker and the loop wake up in.
          */
         @Synchronized
         private fun tick() {
             val n = settle.now()
             val gap = n - lastTick
+            val before = outSince
             lastTick = n
             if (gap > settle.freezeMarginMs) {
-                val frozen = gap - settle.heartbeatMs
-                firstEnd += frozen
-                endAt += frozen
                 mayHoldLease()
+                if (n >= cap) finalNotBefore = before?.let { maxOf(n, it + settle.visibilityMs + settle.handlingMs) } ?: n
             }
+            val theirs = collectorAge()?.let { n - it }
+            outSince = listOfNotNull(theirs, ourOutSince).maxOrNull()
         }
 
         /** Looks for a freeze and for a cut collector request (it was stopped or restarted with a request out). */
@@ -305,6 +336,7 @@ internal object TransferInResume {
         private suspend fun request(waitMs: Long) {
             val bound = waitMs + settle.transportMs
             try {
+                ourOutSince = settle.now()
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
                 if (withTimeoutOrNull(bound) { collect(waitMs) } == null) {
                     failures++
@@ -312,12 +344,15 @@ internal object TransferInResume {
                 } else {
                     failures = 0
                 }
+                ourOutSince = null
                 look()
             } catch (e: CancellationException) {
                 throw e
             } catch (_: RelayException) {
+                ourOutSince = null
                 failures++ // a status came back: nothing was leased; tried again with backoff
             } catch (_: Exception) {
+                ourOutSince = null
                 failures++ // e.g. a body that could not be read: it may have been answered and leased
                 mayHoldLease()
             }
@@ -364,8 +399,9 @@ internal object TransferInResume {
             settle: Settle = Settle(),
             awaitRound: suspend () -> Unit = {},
             cuts: () -> Long = { 0L },
+            collectorAge: () -> Long? = { null },
         ): Boolean = lock.withLock {
-            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts) else paired()
+            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts, collectorAge) else paired()
         }
     }
 }

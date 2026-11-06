@@ -370,6 +370,9 @@ class VaultDevice private constructor(
      */
     val collectorCuts: Long get() = cuts.get()
 
+    /** How long ago the collection's in-flight request went out (ms), null while none is out. */
+    val collectRequestAgeMs: Long? get() = collectRequestSince?.let { (System.nanoTime() - it) / NANOS_PER_MS_AGE }
+
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
 
@@ -2194,6 +2197,7 @@ class VaultDevice private constructor(
         private const val OPEN_TOKEN_MINUTES = 10L
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L
+        private const val NANOS_PER_MS_AGE = 1_000_000L
         private val SEEN_RETENTION: Duration = Duration.ofDays(16)
 
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
