@@ -86,8 +86,10 @@ internal object TransferInResume {
     const val HANDLING_MARGIN_MS = 5_000L
 
     /**
-     * What the held last collect adds to a lease's end: 15 s. The send time of a request is noted before the client's
-     * transport retry and its connect, so the request may reach the relay (and its lease start) some seconds later.
+     * What the held last collect adds to a lease's end: 15 s. The device stamps each send as it is written (OkHttp's
+     * `requestHeadersStart`), so this covers the network between that write and the relay, and the one send still noted
+     * before the transport retry and the connect: our own request's `sentAt`, whose cut or failure never leases earlier
+     * than its notice anyway.
      */
     const val HOLD_MARGIN_MS = 15_000L
 
