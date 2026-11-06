@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -177,14 +178,18 @@ internal object TransferInResume {
      *
      * **The extension rule.** On a cut or a detected freeze the end moves to `min(max(end, lease end + 15 s), cap)`, the
      * cap being F + [Settle.maxExtraMs] (V + 35 s, V = [Settle.visibilityMs]), fixed on the window's clock; nothing shifts F,
-     * the frozen time counts (a freeze also moves the end to at least the wake + V). A lease runs to s + w + V, s being the
-     * send time and w the long-poll wait of the request that may hold it (the relay can hand a parked long poll a message up
-     * to w after the send, also after a failure on our side): for a cut, the cut request's own (ours, or [cutLeases] for the
-     * collector's, only the cuts [cuts] counted since the window began; one not described is taken as now + the long-poll
-     * cap); for a freeze, the latest request sent at or before it began, ours or the collector's, kept after the request
-     * ended ([collectorAge], [collectorSends]). A cut of a request sent at or before a freeze therefore leases within the
-     * freeze's lease: it belongs to the freeze and moves nothing. Our own requests are recorded with the wait they were sent
-     * with ([sentWait]: 0 while the collection runs). A cut is: a request of ours abandoned or failed with anything but a
+     * the frozen time counts (a freeze also moves the end to at least the wake + V). A lease runs from its start + V, the
+     * start being s + w, s the send time and w the long-poll wait of the request that may hold it (the relay can hand a
+     * parked long poll a message up to w after the send, also after a failure on our side). The collector's sends are stamped
+     * as each attempt is written (OkHttp's `requestHeadersStart`, after any wait for the network and the connect, retries
+     * included). For a cut the start is never earlier than the notice, `max(s + w, notice)`, since a request may reach the
+     * relay as late as its failure is seen: ours (abandoned or failed: `max(now, s + w)`), or the collector's ([cutLeases],
+     * only the cuts [cuts] counted since the window began; one not described is taken as now + the long-poll cap). For a
+     * freeze it is s + w of the latest request sent at or before the freeze began, ours or the collector's, kept after the
+     * request ended ([collectorAge], [collectorSends]). A cut of a request written at or before a freeze belongs to the
+     * freeze: it reached the relay before it, so its lease starts by its s + w, within the freeze's own, and it moves nothing
+     * (call C). Our own requests are recorded with the wait they were sent with ([sentWait]: 0 while the collection runs).
+     * A cut is: a request of ours abandoned or failed with anything but a
      * relay status, or the collector's in-flight request cut or lost. A freeze is a gap of more than [Settle.freezeMarginMs]
      * between the ticks of a 1 s heartbeat that lives only as long as the window. The check is made after the final collect
      * too, so a cut or a freeze just before the end extends and loops instead of dropping.
@@ -203,7 +208,8 @@ internal object TransferInResume {
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
      * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 40 s more
-     * (the lease starts by s + w, w up to 25 s, the long-poll cap, ours and the collector's; then the 15 s margin); the final
+     * (the lease starts by max(s + w, notice), at most the notice + 25 s, w being up to 25 s, the long-poll cap, ours and the
+     * collector's; then the 15 s margin); the final
      * send takes at most 140 s (55 + 30 + 55); the extra (a hold move, a second held collect after the first send, or a
      * refused collect's `retry_after`, at most V) is at most V + 40 s more, and a second final send 140 s; the one look after
      * a freeze in the last send 140 s: at most cap + 2V + 648 s in all (cap + 768 s at the default V), plus any frozen time.
@@ -225,7 +231,7 @@ internal object TransferInResume {
         cuts: () -> Long = { 0L },
         collectorAge: () -> Long? = { null },
         collectorSends: () -> List<Pair<Long, Long>> = { emptyList() },
-        cutLeases: () -> List<Pair<Long, Long>> = { emptyList() },
+        cutLeases: () -> List<CollectorCut> = { emptyList() },
         sentWait: (waitMs: Long) -> Long = { it },
     ): Boolean {
         if (paired()) return true
@@ -271,7 +277,7 @@ internal object TransferInResume {
         private val cuts: () -> Long,
         private val collectorAge: () -> Long?,
         private val collectorSends: () -> List<Pair<Long, Long>>,
-        private val cutLeases: () -> List<Pair<Long, Long>>,
+        private val cutLeases: () -> List<CollectorCut>,
         private val sentWait: (waitMs: Long) -> Long,
     ) {
         private val firstEnd = settle.now() + settle.windowMs
@@ -301,6 +307,9 @@ internal object TransferInResume {
 
         /** The extra's own hold: a refused last collect's `retry_after`, or a lease that ended during the last send. */
         @Volatile private var notBefore = 0L
+
+        /** The latest send (window clock) a freeze seen took into its lease: sends at or before it belong to that freeze. */
+        @Volatile private var freezeCovers = Long.MIN_VALUE
 
         /** The wake (window clock) of the latest freeze seen, 0 when none. */
         @Volatile private var lastWake = 0L
@@ -430,6 +439,7 @@ internal object TransferInResume {
             val latest = sends.maxOfOrNull { it.first + it.second }
             if (gap > settle.freezeMarginMs) {
                 lastWake = n
+                freezeCovers = maxOf(freezeCovers, froze, n - settle.freezeMarginMs)
                 // s: the lease start of the latest send at or before the freeze began: the last tick's sample, or a later send
                 // up to a tick after it, or one older than the margin before the wake (per send: a restart right after the wake
                 // does not hide the send before the freeze).
@@ -453,12 +463,23 @@ internal object TransferInResume {
             val c = cuts()
             if (c != seenCuts) {
                 val n = settle.now()
-                val fresh = cutLeases().filter { it.first > seenCuts && it.first <= c }.map { n - it.second }
+                val fresh = cutLeases().filter { it.number in (seenCuts + 1)..c }.map { cutLeaseStart(it, n) }
                 val described = fresh.size.toLong() >= c - seenCuts
                 seenCuts = c
                 val start = if (described) fresh.max() else maxOf(fresh.maxOrNull() ?: Long.MIN_VALUE, n + settle.pollMs)
                 mayHoldLease(start)
             }
+        }
+
+        /**
+         * A cut's lease start: by its request's send + wait (a request cut on our side may still be parked at the relay), and
+         * no earlier than the notice [n] (a request may reach the relay as late as the failure is seen). A request written at
+         * or before a freeze belongs to the freeze: it reached the relay before it, so it leases by s + w, within the
+         * freeze's own lease (s + w of the latest such send), and moves nothing (call C).
+         */
+        private fun cutLeaseStart(cut: CollectorCut, n: Long): Long {
+            val sent = n - cut.sentAgoMs
+            return if (sent <= freezeCovers) sent + cut.waitMs else maxOf(sent + cut.waitMs, n)
         }
 
         /** One step of the window: the collection's round, our request, the collection's round again. */
@@ -498,7 +519,8 @@ internal object TransferInResume {
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
                 if (withTimeoutOrNull(bound) { collect(waitMs) } == null) {
                     failures++
-                    mayHoldLease(leaseStart)
+                    // It may have reached the relay, and been answered, as late as it was abandoned.
+                    mayHoldLease(maxOf(settle.now(), leaseStart))
                 } else {
                     failures = 0
                 }
@@ -510,8 +532,8 @@ internal object TransferInResume {
                 // The relay refused to look (rate limited, or a signature it found stale): at the end, one more look.
                 if (e.status == RelayException.HTTP_TOO_MANY || e.staleSignature) refusedRetryMs = e.retryAfterSeconds * MS
             } catch (_: Exception) {
-                failures++ // e.g. a body that could not be read: it may have been answered and leased
-                mayHoldLease(leaseStart)
+                failures++ // e.g. a body that could not be read: it may have been answered and leased, as late as now
+                mayHoldLease(maxOf(settle.now(), leaseStart))
             }
         }
     }
@@ -558,7 +580,7 @@ internal object TransferInResume {
             cuts: () -> Long = { 0L },
             collectorAge: () -> Long? = { null },
             collectorSends: () -> List<Pair<Long, Long>> = { emptyList() },
-            cutLeases: () -> List<Pair<Long, Long>> = { emptyList() },
+            cutLeases: () -> List<CollectorCut> = { emptyList() },
             sentWait: (waitMs: Long) -> Long = { it },
         ): Boolean = lock.withLock {
             if (due()) {

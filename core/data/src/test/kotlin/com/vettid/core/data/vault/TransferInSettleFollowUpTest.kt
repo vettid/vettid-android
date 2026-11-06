@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.CollectorCut
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -27,7 +28,7 @@ class TransferInSettleFollowUpTest {
     private fun timingWith(clock: FrozenClock) = TransferInResume.Settle(now = clock::now)
 
     /**
-     * (Call A) A cut leases from its request's send + wait, not from the notice: a request sent at 98 s with a 25 s wait is
+     * (Call A) A cut leases from its request's send + wait when that is after the notice: a request sent at 98 s with a 25 s wait is
      * cut on our side at 98.5 s while the relay still has it parked; the relay hands it the message at 123 s and leases it
      * to 183 s. The hold goes at 198 s (+ 15 s) and gathers it; from the notice (99 s + V) it would go at 174 s and drop.
      */
@@ -50,7 +51,7 @@ class TransferInSettleFollowUpTest {
         assertTrue(
             TransferInResume.atDeadline(
                 { isPaired }, collect, { drops++ }, settle = settle, cuts = { if (cut) 1L else 0L },
-                cutLeases = { if (cut) listOf(1L to clock.now() - 123_000) else emptyList() },
+                cutLeases = { if (cut) listOf(CollectorCut(1L, clock.now() - 98_000, 25_000)) else emptyList() },
             ),
         )
         assertEquals(0, drops)
@@ -133,14 +134,15 @@ class TransferInSettleFollowUpTest {
     /**
      * (Call C) A cut of a request sent at or before a freeze belongs to the freeze: its lease is within the freeze's, so it
      * moves nothing and the one extra stays unused. The collector sends at 85 s (wait 25 s), freezes 12 s; the freeze's
-     * lease runs to 170 s, the hold to 185 s. The cut of that request is counted at 120 s (lease start 110 s): no move.
+     * lease runs to 170 s, the hold to 185 s. The cut of that request is counted at 120 s, after the wake: it was written
+     * before the freeze, so its lease starts by 110 s, not at the notice (120 s, which would hold to 195 s): no move.
      * A cut during the last collect at 185 s (lease to 245 s) then still gets the extra: a held re-look at 260 s.
      */
     @Test
     fun aCutOfARequestSentBeforeAFreezeBelongsToTheFreeze() = runTest {
         val clock = FrozenClock(this)
         val sends = mutableListOf<Pair<Long, Long>>()
-        val leases = mutableListOf<Pair<Long, Long>>() // (cut number, lease start)
+        val leases = mutableListOf<Triple<Long, Long, Long>>() // (cut number, send, wait)
         val finals = mutableListOf<Long>()
         val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
         launch {
@@ -149,19 +151,19 @@ class TransferInSettleFollowUpTest {
             delay(100)
             clock.jumpedMs += 12_000 // frozen with the collector's request out; wakes at 97.1 s
             delay(22_900)
-            leases += 1L to 110_000L // its cut, seen on the wake's side at 120 s
+            leases += Triple(1L, 85_000L, 25_000L) // its cut, seen on the wake's side at 120 s
         }
         val collect: suspend (Long) -> Unit = { w ->
             if (w == 0L && clock.now() >= 185_000) {
                 finals += clock.now()
-                if (finals.size == 1) leases += 2L to clock.now() // cut during the last collect
+                if (finals.size == 1) leases += Triple(2L, clock.now(), 0L) // cut during the last collect
             }
         }
         assertFalse(
             TransferInResume.atDeadline(
                 { false }, collect, {}, settle = settle, cuts = { leases.size.toLong() },
                 collectorSends = { sends.map { (clock.now() - it.first) to it.second } },
-                cutLeases = { leases.map { it.first to clock.now() - it.second } },
+                cutLeases = { leases.map { CollectorCut(it.first, clock.now() - it.second, it.third) } },
             ),
         )
         assertEquals(listOf(185_000L, 260_000L), finals)
@@ -169,8 +171,9 @@ class TransferInSettleFollowUpTest {
 
     /**
      * (iOS a) A cut during the last look whose lease ends within the cap, but after the look began: the extra (a held
-     * re-look), not the drop. The last collect starts at 100 s; the collector's request (sent at 100 s, wait 0) is cut then
-     * and the round takes 40 s; the lease ends at 160 s, the end moves to 175 s, and the look ends at 180 s, past it.
+     * re-look), not the drop. The last collect starts at 100 s; the collector's request (sent at 100 s, wait 0) is cut then and
+     * seen at 101 s: the lease ends at 161 s, the end moves to 176 s. Our request takes 29 s and the round after it 50 s: the
+     * look ends at 180 s, past the end.
      */
     @Test
     fun aCutDuringTheLastLookWithinTheCapGetsAHeldReLook() = runTest {
@@ -178,29 +181,40 @@ class TransferInSettleFollowUpTest {
         var cut = false
         var isPaired = false
         var drops = 0
-        var slow = 0
+        var rounds = 0
+        var slowed = false
         val settle = TransferInResume.Settle(windowMs = 100_000, now = clock::now) // the cap 195 s
         val round: suspend () -> Unit = {
-            if (clock.now() >= 100_000 && slow < 2) {
-                slow++
-                cut = true
-                delay(40_000)
+            if (clock.now() >= 100_000 && rounds < 2) {
+                if (rounds++ == 0) {
+                    cut = true
+                    delay(1_000)
+                } else {
+                    delay(50_000)
+                }
             }
         }
-        val collect: suspend (Long) -> Unit = { if (clock.now() >= 160_000) isPaired = true }
+        val collect: suspend (Long) -> Unit = {
+            if (clock.now() >= 161_000) {
+                isPaired = true
+            } else if (clock.now() >= 100_000 && !slowed) {
+                slowed = true
+                delay(29_000)
+            }
+        }
         assertTrue(
             TransferInResume.atDeadline(
                 { isPaired }, collect, { drops++ }, settle = settle, awaitRound = round, cuts = { if (cut) 1L else 0L },
-                cutLeases = { if (cut) listOf(1L to clock.now() - 100_000) else emptyList() },
+                cutLeases = { if (cut) listOf(CollectorCut(1L, clock.now() - 100_000, 0)) else emptyList() },
             ),
         )
         assertEquals(0, drops)
-        assertTrue("re-looked after the look: ${clock.now()}", clock.now() >= 180_000)
+        assertEquals("re-looked at the end of the look", 180_000L, clock.now())
     }
 
     /**
      * (iOS d) Cuts counted before the window began are not the window's: the device's cut 5 (from before) leases far ahead,
-     * and is ignored; the window's own cut 6 (at 49.5 s, lease start 49 s) moves the end to 124 s, where it drops.
+     * and is ignored; the window's own cut 6 (sent at 49 s, wait 0, seen at 50 s) moves the end to 125 s, where it drops.
      */
     @Test
     fun cutsCountedBeforeTheWindowBeganDoNotCount() = runTest {
@@ -211,15 +225,16 @@ class TransferInSettleFollowUpTest {
             delay(49_500)
             count = 6L
         }
-        val leases: () -> List<Pair<Long, Long>> = {
-            listOf(5L to clock.now() - 1_000_000L) + if (count == 6L) listOf(6L to clock.now() - 49_000L) else emptyList()
+        val leases: () -> List<CollectorCut> = {
+            val before = CollectorCut(5L, 0, 1_000_000L) // from before the window: its lease far ahead
+            listOf(before) + if (count == 6L) listOf(CollectorCut(6L, clock.now() - 49_000L, 0)) else emptyList()
         }
         assertFalse(
             TransferInResume.atDeadline(
                 { false }, {}, { droppedAt = clock.now() }, settle = timingWith(clock), cuts = { count }, cutLeases = leases,
             ),
         )
-        assertEquals(124_000L, droppedAt)
+        assertEquals(125_000L, droppedAt)
     }
 
     /**
@@ -285,5 +300,72 @@ class TransferInSettleFollowUpTest {
         assertFalse(TransferInResume.atDeadline({ false }, collect, { droppedAt = clock.now() }, settle = settle, cuts = { cutCount }))
         assertEquals(listOf(299_000L, 329_100L), finals)
         assertEquals(329_100L, droppedAt)
+    }
+
+    /**
+     * (Review F1) A cut never leases from its send alone: a request written at 50 s (wait 0) whose cut is seen at 99 s may have
+     * reached the relay, and been answered, as late as that. The lease runs from 99 s to 159 s; the hold goes at 174 s, not
+     * at 50 + 60 + 15 = 125 s.
+     */
+    @Test
+    fun aCutLeasesNoEarlierThanItsNotice() = runTest {
+        val clock = FrozenClock(this)
+        var cut = false
+        val finals = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 100_000, maxExtraMs = 5_000, now = clock::now)
+        launch {
+            delay(98_500)
+            cut = true
+        }
+        val collect: suspend (Long) -> Unit = { w -> if (w == 0L && clock.now() >= 105_000) finals += clock.now() }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = settle, cuts = { if (cut) 1L else 0L },
+                cutLeases = { if (cut) listOf(CollectorCut(1L, clock.now() - 50_000, 0)) else emptyList() },
+            ),
+        )
+        assertEquals(listOf(174_000L), finals)
+    }
+
+    /**
+     * (Review F1) Our last collect goes out at 185 s (F = the cap) and hangs; it is abandoned at its bound, 215 s. It may have
+     * reached the relay (after a wait for the network and a slow connect) and been handed the message as late as 215 s: the
+     * one extra re-collects at 215 + V + 15 = 290 s, not at the send's 185 + V + 15 = 260 s.
+     */
+    @Test
+    fun anAbandonedLastCollectLeasesFromTheAbandon() = runTest {
+        val clock = FrozenClock(this)
+        val finals = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 185_000, maxExtraMs = 0, now = clock::now)
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 185_000) {
+                finals += clock.now()
+                if (finals.size == 1) kotlinx.coroutines.awaitCancellation()
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle))
+        assertEquals(listOf(185_000L, 290_000L), finals)
+    }
+
+    /**
+     * (Review F1) The same for a last collect that fails after 20 s with anything but a relay status (a body that did not
+     * read): it may have been answered as late as 205 s, so the extra re-collects at 205 + V + 15 = 280 s.
+     */
+    @Test
+    fun aFailedLastCollectLeasesFromTheFailure() = runTest {
+        val clock = FrozenClock(this)
+        val finals = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 185_000, maxExtraMs = 0, now = clock::now)
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 185_000) {
+                finals += clock.now()
+                if (finals.size == 1) {
+                    delay(20_000)
+                    error("unreadable")
+                }
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle))
+        assertEquals(listOf(185_000L, 280_000L), finals)
     }
 }

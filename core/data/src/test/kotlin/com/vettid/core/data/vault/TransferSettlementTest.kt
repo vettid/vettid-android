@@ -40,7 +40,7 @@ class TransferSettlementTest {
         override var collectorCuts = 0L
         override var collectorLastSendAgeMs: Long? = null
         override var collectorSendsMs: List<Pair<Long, Long>> = emptyList()
-        override var collectorCutLeasesMs: List<Pair<Long, Long>> = emptyList()
+        override var collectorCutsMs: List<com.vettid.core.vault.CollectorCut> = emptyList()
         var visibility: Long? = 60
         var rejected = false
         var pairedAtMs: Long? = null

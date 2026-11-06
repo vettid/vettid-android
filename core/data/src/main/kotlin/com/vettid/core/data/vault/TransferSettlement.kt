@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -34,11 +35,8 @@ internal interface SettleDevice {
     /** How long ago each of the device's latest requests went out (ms) and the long-poll wait it carried; kept after they ended. */
     val collectorSendsMs: List<Pair<Long, Long>>
 
-    /**
-     * The device's latest cuts: each one's number (as [collectorCuts] counted it) and how long ago (ms) its request's lease
-     * started at the latest (the send + the long-poll wait; negative while that is still ahead).
-     */
-    val collectorCutLeasesMs: List<Pair<Long, Long>>
+    /** The device's latest cuts: each one's number (as [collectorCuts] counted it), when its request was written and its wait. */
+    val collectorCutsMs: List<CollectorCut>
 
     /** The relay's advertised `visibility_timeout_seconds`; may throw. */
     suspend fun relayVisibilitySeconds(): Long?
@@ -124,7 +122,7 @@ internal suspend fun settleTransfer(
         cuts = { d.collectorCuts },
         collectorAge = { d.collectorLastSendAgeMs },
         collectorSends = { d.collectorSendsMs },
-        cutLeases = { d.collectorCutLeasesMs },
+        cutLeases = { d.collectorCutsMs },
         sentWait = run::sentWait,
     )
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())

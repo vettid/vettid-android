@@ -9,6 +9,7 @@ import com.vettid.core.crypto.json.JsonString
 import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.crypto.json.asObject
 import kotlinx.coroutines.delay
+import okhttp3.EventListener
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -183,6 +184,12 @@ class RelayClient(
         val onLostAttempt: (() -> Unit)? = null,
         /** Called when a RETRY attempt of [execute] (not the first) goes out: its send time is a send of its own. */
         val onRetrySent: (() -> Unit)? = null,
+        /**
+         * Called each time an attempt actually starts writing the request (OkHttp's `requestHeadersStart`): after any wait
+         * for the network, connect and retry inside the transport, every attempt of [execute] and of [TransportRetry]. The
+         * time the relay can first see the request, so the one its lease can start from.
+         */
+        val onSent: (() -> Unit)? = null,
     )
 
     private fun backoffMillis(attempt: Int): Long {
@@ -236,7 +243,15 @@ class RelayClient(
         rb.method(c.method, body)
         rb.tag(TransportRetry.Policy::class.java, c.transportRetry)
         val client = if (c.longPoll) pollHttp else http
-        client.newCall(rb.build()).await().use { resp ->
+        val call = client.newCall(rb.build())
+        c.onSent?.let { sent ->
+            call.addEventListener(
+                object : EventListener() {
+                    override fun requestHeadersStart(call: okhttp3.Call) = sent()
+                },
+            )
+        }
+        call.await().use { resp ->
             if (resp.code >= HTTP_ERROR) throw errorOf(resp)
             return read(resp)
         }
@@ -321,9 +336,13 @@ class RelayClient(
         max: Int = DEFAULT_MAX,
         onLostAttempt: (() -> Unit)? = null,
         onRetrySent: (() -> Unit)? = null,
+        onSent: (() -> Unit)? = null,
     ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
-        val call = Call("GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent)
+        val call = Call(
+            "GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent,
+            onSent = onSent,
+        )
         val o = json(call) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }
     }

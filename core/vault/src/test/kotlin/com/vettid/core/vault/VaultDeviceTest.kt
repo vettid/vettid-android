@@ -1743,9 +1743,9 @@ class VaultDeviceTest {
     }
 
     /**
-     * (Call A) Each cut is described for the settlement: its number (as [VaultDevice.collectorCuts] counts it) and its lease
-     * start, the request's send + its long-poll wait (the relay may still hand it a message up to the wait after the send).
-     * The collector's request sent at 1 s (elapsed clock) is lost: its lease starts by 1 s + 25 s, 25 s ahead at 1 s.
+     * (Call A) Each cut is described for the settlement: its number (as [VaultDevice.collectorCuts] counts it), how long ago
+     * its request was written and its long-poll wait (the relay may still hand it a message up to the wait after the send).
+     * The collector's request written at 1 s (elapsed clock) is lost: at 4 s it was written 3 s ago, with a 25 s wait.
      */
     @Test
     fun aCutIsDescribedByItsRequestsSendPlusWait() = runBlocking<Unit> {
@@ -1760,9 +1760,8 @@ class VaultDeviceTest {
             dropNextCollect.set(true)
             d.start(scope)
             while (d.collectorCuts == 0L) kotlinx.coroutines.delay(10)
-            val first = d.collectCutLeasesMs.first()
-            assertEquals(1L, first.first)
-            assertEquals("lease start = send + wait, ahead of now", -RelayClient.DEFAULT_WAIT_S * 1_000, first.second)
+            elapsed = 4_000
+            assertEquals(CollectorCut(1L, 3_000L, RelayClient.DEFAULT_WAIT_S * 1_000), d.collectCutsMs.first())
             scope.cancel()
             elapsed = 0
             serveMailbox = false

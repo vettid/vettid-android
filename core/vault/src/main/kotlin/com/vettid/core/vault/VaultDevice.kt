@@ -374,29 +374,32 @@ class VaultDevice private constructor(
      */
     val collectorCuts: Long get() = cuts.get()
 
-    /** The latest cuts: (number, lease start on [DeviceConfig.elapsedMs]); the number is [collectorCuts] after it. */
-    private val cutLeases = ArrayDeque<Pair<Long, Long>>()
+    /** The latest cuts: (number, send on [DeviceConfig.elapsedMs], wait); the number is [collectorCuts] after it. */
+    private val cutLeases = ArrayDeque<Triple<Long, Long, Long>>()
 
-    /** A cut of a request sent at [sentElapsedMs] with a long-poll wait of [waitMs]: its lease starts by their sum. */
+    /** A cut of a request written at [sentElapsedMs] with a long-poll wait of [waitMs]. */
     private fun noteCut(sentElapsedMs: Long, waitMs: Long) {
         synchronized(cutLeases) {
-            // Described before it is counted: whoever sees the new count finds its lease.
+            // Described before it is counted: whoever sees the new count finds its description.
             val n = cuts.get() + 1
-            cutLeases.addLast(n to sentElapsedMs + waitMs)
+            cutLeases.addLast(Triple(n, sentElapsedMs, waitMs))
             if (cutLeases.size > MAX_COLLECT_SENDS) cutLeases.removeFirst()
             cuts.set(n)
         }
     }
 
     /**
-     * The latest cuts (the last 16, oldest first): each one's number (as [collectorCuts] counted it) and how long ago its
-     * request's lease started at the latest (ms; the send + the long-poll wait, negative while that is still ahead): a
-     * request cut on our side may still be parked at the relay, and be handed a message, up to its wait after the send.
+     * The latest cuts (the last 16, oldest first), each with its number (as [collectorCuts] counted it), how long ago its
+     * request was written (the latest attempt's `requestHeadersStart`) and its long-poll wait: a request cut on our side may
+     * still be parked at the relay, and be handed a message, up to its wait after the send.
      */
-    val collectCutLeasesMs: List<Pair<Long, Long>>
-        get() = synchronized(cutLeases) { cutLeases.map { it.first to (cfg.elapsedMs() - it.second) } }
+    val collectCutsMs: List<CollectorCut>
+        get() = synchronized(cutLeases) { cutLeases.map { CollectorCut(it.first, cfg.elapsedMs() - it.second, it.third) } }
 
-    /** When the collection's latest request went out, on [DeviceConfig.elapsedMs] (through sleep); kept after it ended. */
+    /**
+     * When the collection's latest request was written (its latest attempt's `requestHeadersStart`), on
+     * [DeviceConfig.elapsedMs] (through sleep); kept after it ended.
+     */
     @Volatile
     private var collectLastSendElapsedMs: Long? = null
 
@@ -409,8 +412,7 @@ class VaultDevice private constructor(
 
     private val collectSends = ArrayDeque<Pair<Long, Long>>()
 
-    private fun noteSend(waitMs: Long) {
-        val at = cfg.elapsedMs()
+    private fun noteSend(waitMs: Long, at: Long = cfg.elapsedMs()) {
         synchronized(collectSends) {
             collectSends.addLast(at to waitMs)
             if (collectSends.size > MAX_COLLECT_SENDS) collectSends.removeFirst()
@@ -418,9 +420,10 @@ class VaultDevice private constructor(
     }
 
     /**
-     * Each of the latest requests this device sent to its mailbox (the last 16, oldest first; the collection's rounds, the
-     * retries inside the client's own retries, and the settlement's collects' retries): how long ago it went out and the
-     * long-poll wait it carried (ms). A long poll's lease starts when the relay returns, up to that wait after the send.
+     * Each of the latest requests this device sent to its mailbox (the last 16, oldest first; every attempt of the
+     * collection's rounds and of the settlement's collects, retries included, stamped as it is written: OkHttp's
+     * `requestHeadersStart`, after any wait for the network and the connect): how long ago it went out and the long-poll
+     * wait it carried (ms). A long poll's lease starts when the relay returns, up to that wait after the send.
      */
     val collectSendsMs: List<Pair<Long, Long>>
         get() = synchronized(collectSends) { collectSends.map { (cfg.elapsedMs() - it.first) to it.second } }
@@ -570,11 +573,7 @@ class VaultDevice private constructor(
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
-                        if (out) {
-                            attemptSent.set(cfg.elapsedMs())
-                            collectLastSendElapsedMs = cfg.elapsedMs()
-                            noteSend(cfg.pollWait.toMillis()) // a send of an older collection is still a send
-                        }
+                        if (out) attemptSent.set(cfg.elapsedMs()) // until it is written (onSent)
                         // Under the monitor stop() and start() hold: no stop() and start() can come between the check
                         // and the write (stop() only cancels, it never waits for this, so nothing deadlocks).
                         synchronized(this@VaultDevice) {
@@ -587,9 +586,13 @@ class VaultDevice private constructor(
                     onReached = ::noteReached,
                     // A request lost (an I/O error, cut, a failed batch) may have been handed a message: by its send + wait.
                     onLost = { noteCut(attemptSent.get(), cfg.pollWait.toMillis()) },
-                    onRetrySent = {
-                        attemptSent.set(cfg.elapsedMs())
-                        noteSend(cfg.pollWait.toMillis())
+                    // Each attempt as it is written (after any wait for the network and the connect): the time the relay
+                    // can first see it. A send of an older collection is still a send.
+                    onSent = {
+                        val at = cfg.elapsedMs()
+                        attemptSent.set(at)
+                        collectLastSendElapsedMs = at
+                        noteSend(cfg.pollWait.toMillis(), at)
                     },
                 ).run { handle(it) }
             } catch (e: RelayException) {
@@ -1223,9 +1226,10 @@ class VaultDevice private constructor(
         val msgs = own.collect(
             wait, Int.MAX_VALUE,
             onLostAttempt = { noteCut(attemptSent.get(), wait.toMillis()) },
-            onRetrySent = {
-                attemptSent.set(cfg.elapsedMs())
-                noteSend(wait.toMillis())
+            onSent = {
+                val at = cfg.elapsedMs()
+                attemptSent.set(at)
+                noteSend(wait.toMillis(), at)
             },
         )
         for (m in msgs) {
@@ -2353,3 +2357,9 @@ class VaultDevice private constructor(
         }
     }
 }
+
+/**
+ * A cut collector request, for the transfer's settlement window: its [number] (as `collectorCuts` counted it), how long ago
+ * it was written ([sentAgoMs], on the elapsed clock) and its long-poll wait ([waitMs]).
+ */
+data class CollectorCut(val number: Long, val sentAgoMs: Long, val waitMs: Long)
