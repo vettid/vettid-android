@@ -312,6 +312,17 @@ class VoteScreenTest {
     }
 
     @Test
+    fun aCheckAgainThatEndedUnchangedSaysTheVotesGaveUpLineAgain() {
+        // Review 1, L5: nothing was sent (the same results); the tap is answered with the vote's existing gave_up line.
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.GAVE_UP), canCast = false)
+        val st = state(s, detail(s), hint = VoteHint(gaveUp = com.vettid.core.data.votes.GaveUpWhy.UNPUBLISHED))
+        rule.setContent { VoteScreen(st.copy(checkOutcome = com.vettid.core.data.votes.ResultsOutcome.Unchanged), VoteActions(), now = now) }
+        val line = "The results of this vote were not published within 7 days, so your vote has not been checked."
+        rule.onNodeWithTag("vote_check_unchanged").assertIsDisplayed()
+        assertEquals(2, shownAll(line).fetchSemanticsNodes().size)
+    }
+
+    @Test
     fun theSaveProofWarningIsAConfirmationBeforeTheVaultIsAsked() {
         val s = summary(VoteState.CLOSED, VoteBallot(BallotState.CONFLICT), canCast = false)
         rule.setContent { VoteScreen(state(s, detail(s, choiceId = "yes")).copy(proofWarning = true), VoteActions(), now = now) }

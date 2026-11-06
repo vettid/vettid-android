@@ -147,6 +147,17 @@ class VoteRulesTest {
     }
 
     @Test
+    fun anUnchangedCheckAgainSaysTheChecksOwnLine() {
+        // Review 1, L5: the vote's existing line for its check, nothing new.
+        val gaveUp = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.GAVE_UP))
+        assertEquals(VoteNote.CHECK_GAVE_UP_SITE, VoteRules.unchangedLine(VoteRules.notes(gaveUp, GaveUpWhy.SITE)))
+        assertEquals(VoteNote.CHECK_GAVE_UP, VoteRules.unchangedLine(VoteRules.notes(gaveUp)))
+        val rows = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.GAVE_UP, "rows_unavailable"))
+        assertEquals(VoteNote.CHECK_RESULTS_PROBLEM, VoteRules.unchangedLine(VoteRules.notes(rows)))
+        assertNull(VoteRules.unchangedLine(VoteRules.notes(vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED)))))
+    }
+
+    @Test
     fun theRecheckOnOpenRunsOnlyForAJudgedVoteWithNoVerdictAndItsLineOnlyThere() {
         val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
         val unconfirmed = vote(VoteState.CLOSED, ballot(BallotState.WAITING), check(CheckState.UNCONFIRMED))
