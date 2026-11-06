@@ -433,7 +433,8 @@ The A2 exit test:
   which runs to its end, but a `generation` taken at its start voids it: no hint is written and nothing is submitted after a
   lock or clear, `ResultsOutcome.Voided`), under a lock per vote (one vote's long check holds up no other), and
   compares the vault's own `tally` and `counts` (`vote.get`, when it holds them) too; any exception in the observer's work is an
-  observer failure. It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`
+  observer failure, and so is an `observe` that runs past 60 s in one attempt (`observeLimit`; `withTimeoutOrNull` around
+  the observer alone, so results that keep every signature on the slow path still get submitted, flagged). It **still submits** whenever the inputs above hold (0.83.2): a failure only sets `VoteHint.observerFailed`
   (set before the submit, so a refused or lost one keeps it; an attempt that submits nothing clears it), and a submit the vault
   answered sets `VoteHint.verdict` (`ObserverVerdict`), which nothing else changes. With a `verified` or `unconfirmed` check and
   the flag, the screen shows the state, then `vote_results_dont_add_up` once as a plain note (`VoteNote.RESULTS_DONT_ADD_UP`);

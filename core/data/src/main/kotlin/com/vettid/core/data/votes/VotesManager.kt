@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -252,6 +253,12 @@ class VotesManager(
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     /** Called at each step of that work with "<vote key>:<stage>" (tests watch the thread and cancel through it). */
     private val computeStep: (String) -> Unit = {},
+    /**
+     * At most this long for the observer's check ([PublishedResults.observe]) per attempt (lead review M1): past it the check
+     * is an observer failure and the row is still submitted, so results that keep every signature on the slow path cannot
+     * stop the submit.
+     */
+    private val observeLimit: Duration = OBSERVE_LIMIT,
 ) : VotesRepository {
     private val lock = Any()
     private val votesFlow = MutableStateFlow<List<VoteSummary>>(emptyList())
@@ -783,7 +790,17 @@ class VotesManager(
                 return@withContext null
             }
             step("observe")
-            Examined(own, observerFails(published, proposalId, detail) { step("observe") })
+            // Time-boxed (lead review M1): a check that runs out of time is an observer failure like any other and the row is
+            // still submitted. Only the observer's own scope is cancelled at the limit; a cancellation of the check itself
+            // passes through withTimeoutOrNull as before.
+            val failed = withTimeoutOrNull(observeLimit.toMillis()) {
+                val inner = coroutineContext
+                observerFails(published, proposalId, detail) {
+                    step("observe")
+                    inner.ensureActive()
+                }
+            } ?: true
+            Examined(own, failed)
         } ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
         val own = examined.own
         val ballot = own.ballot
@@ -906,6 +923,8 @@ class VotesManager(
 
     private companion object {
         val SYNC_EVERY: Duration = Duration.ofHours(1)
+        /** The observer's check per attempt (lead review M1). */
+        val OBSERVE_LIMIT: Duration = Duration.ofSeconds(60)
         const val MAX_PAGES = 5
         const val TAG_LEN = 32
         /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */

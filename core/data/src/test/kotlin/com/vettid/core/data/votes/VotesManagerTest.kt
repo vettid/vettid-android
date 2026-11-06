@@ -183,6 +183,7 @@ class VotesManagerTest {
         site: Site = Site(),
         window: Window = Window(),
         compute: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default,
+        observeLimit: Duration = Duration.ofSeconds(60),
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -203,6 +204,7 @@ class VotesManagerTest {
         now = { clock },
         compute = compute,
         computeStep = computeStep,
+        observeLimit = observeLimit,
     )
 
     @Test
@@ -1221,6 +1223,23 @@ class VotesManagerTest {
         job.join()
         assertTrue(job.isCancelled)
         assertTrue(ops.submitted.isEmpty())
+    }
+
+    // ---- Lead review ----
+
+    @Test
+    fun anObserverCheckThatRunsOutOfTimeIsAnObserverFailureAndTheRowIsStillSubmitted() = runTest {
+        val (ops, site) = observedScenario(observed())
+        var observeSteps = 0
+        // The observer's own work (from its first checkpoint) is slower than the limit: results that would pass, given time.
+        val m = manager(ops, site, observeLimit = Duration.ofMillis(100)) {
+            if (it.endsWith(":observe") && ++observeSteps == 2) Thread.sleep(600)
+        }
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, ops.submitted.size)
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue("$CONN/$PID").verdict)
     }
 
     @Test
