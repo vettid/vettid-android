@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +25,18 @@ internal interface SettleDevice {
 
     /** Whether the device's own collection is running (it long-polls already). */
     val collecting: Boolean
+
+    /** How many times the collection's in-flight request was cut (stopped or restarted with a request out). */
+    val collectorCuts: Long
+
+    /** How long ago the collection's latest request went out (ms), kept after it ended; null before any. */
+    val collectorLastSendAgeMs: Long?
+
+    /** How long ago each of the device's latest requests went out (ms) and the long-poll wait it carried; kept after they ended. */
+    val collectorSendsMs: List<Pair<Long, Long>>
+
+    /** The device's latest cuts: each one's number (as [collectorCuts] counted it), when its request was written and its wait. */
+    val collectorCutsMs: List<CollectorCut>
 
     /** The relay's advertised `visibility_timeout_seconds`; may throw. */
     suspend fun relayVisibilitySeconds(): Long?
@@ -88,7 +101,11 @@ internal suspend fun settleTransfer(
     serial: TransferInResume.Serial,
     now: () -> Instant = Instant::now,
     timing: (visibilitySeconds: Long?) -> TransferInResume.Settle = {
-        TransferInResume.Settle(windowMs = TransferInResume.windowMs(it), maxExtraMs = TransferInResume.visibilityMs(it))
+        TransferInResume.Settle(
+            windowMs = TransferInResume.windowMs(it),
+            visibilityMs = TransferInResume.visibilityMs(it),
+            maxExtraMs = TransferInResume.visibilityMs(it) + TransferInResume.CAP_MARGIN_MS,
+        )
     },
 ): Settled {
     val visibility = readVisibility(d)
@@ -102,6 +119,11 @@ internal suspend fun settleTransfer(
         alive = run::alive,
         settle = settle,
         awaitRound = { d.awaitCollectorRound() },
+        cuts = { d.collectorCuts },
+        collectorAge = { d.collectorLastSendAgeMs },
+        collectorSends = { d.collectorSendsMs },
+        cutLeases = { d.collectorCutsMs },
+        sentWait = run::sentWait,
     )
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
     // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.
@@ -141,9 +163,17 @@ private class SettleRun(
         return sessionIsCurrent() && d.transferInPending?.startedAt == started
     }
 
+    /** The wait the next request goes with, decided once by [sentWait] (wait=0 while the collection runs, it long-polls). */
+    private var nextWaitMs: Long? = null
+
+    /** The wait (ms) our next request is actually sent with, for its lease: 0 while the collection runs, else [waitMs]. */
+    fun sentWait(waitMs: Long): Long = (if (d.collecting) 0L else waitMs).also { nextWaitMs = it }
+
     suspend fun collect(waitMs: Long) {
+        val wait = nextWaitMs ?: if (d.collecting) 0L else waitMs
+        nextWaitMs = null
         try {
-            d.collectOnce(if (d.collecting) Duration.ZERO else Duration.ofMillis(waitMs))
+            d.collectOnce(Duration.ofMillis(wait))
         } catch (e: RelayException) {
             if (e.code == RelayException.MAILBOX_UNKNOWN) mailboxGone = true
             throw e

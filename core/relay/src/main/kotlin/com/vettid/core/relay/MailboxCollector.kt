@@ -49,6 +49,21 @@ class MailboxCollector(
      * closed normally. Proof that the mailbox was read after that time (A6 audit N3).
      */
     private val onReached: (Long) -> Unit = {},
+    /**
+     * Called when a collect request ended badly after the relay may have handed it messages (they stay leased to the dead
+     * request for a visibility timeout): an I/O error (a reset, a lost response, a dropped stream; each attempt of the
+     * client's own retries too), a 5xx, a 200 that did not parse, being cancelled with the request out, or, once messages
+     * arrived, a relay status on an ack or anything else that aborted the batch. A 4xx that is the relay's own answer on the
+     * request itself is not this.
+     */
+    private val onLost: () -> Unit = {},
+    /** Called when a retry attempt inside the client's own retries goes out (each is a send of its own, with the same wait). */
+    private val onRetrySent: () -> Unit = {},
+    /**
+     * Called each time a long-poll attempt actually starts writing its request (OkHttp's `requestHeadersStart`, after any
+     * wait for the network and the connect; every attempt, retries included): the send time its lease starts from.
+     */
+    private val onSent: () -> Unit = {},
 ) {
     enum class Mode { LONG_POLL, WEBSOCKET }
 
@@ -76,32 +91,65 @@ class MailboxCollector(
         }
     }
 
-    /** One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. */
+    /**
+     * One collect request (a stream until it closes, or a long-poll round), announced to [onRequest]. A request that ends
+     * badly after it may have been handed messages leaves them leased to the dead request, whatever the failure was: an
+     * I/O error, being cancelled, or (once messages arrived) a relay status on an ack or anything the handler threw; that
+     * is [onLost]. A relay status on the request itself, before any message came, is not.
+     */
+    @Suppress("TooGenericExceptionCaught") // anything that ends the round with messages in hand
     private suspend fun round(useSocket: Boolean, handle: suspend (RelayMessage) -> Unit) {
         val started = System.nanoTime()
+        var got = false
         onRequest(true)
         try {
             if (useSocket) {
-                stream(handle) { onReached(started) }
+                stream(handle, { got = true }) { onReached(started) }
             } else {
-                pollOnce(handle)
+                pollRound(handle, onLost, onRetrySent) { got = true }
                 onReached(started)
             }
+        } catch (e: CancellationException) {
+            onLost() // cut with a request out, whatever came before in this round
+            throw e
+        } catch (e: RelayException) {
+            // Once messages arrived, a status on an ack leaves the rest leased. Before that, a 5xx was counted by the client's
+            // per-attempt callback (a stream has none: counted here); a 4xx that is the relay's own answer handed nothing out.
+            if (got || (useSocket && e.status >= SERVER_ERROR)) onLost()
+            throw e
+        } catch (e: IOException) {
+            // Before messages arrived the client counted each lost attempt of a poll; a stream has no such callback.
+            if (got || useSocket) onLost()
+            throw e
+        } catch (e: Exception) {
+            // Anything else (a 200 whose body did not parse, a checked failure of the handler): always counted, whatever
+            // attempts were lost before in this round.
+            onLost()
+            throw e
         } finally {
             onRequest(false)
         }
     }
 
     /** One long-poll round: collects, handles and acks each message. Returns how many arrived. */
-    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int {
-        val msgs = client.collect(wait)
+    suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int = pollRound(handle, onLost, onRetrySent) {}
+
+    private suspend fun pollRound(
+        handle: suspend (RelayMessage) -> Unit,
+        onAttemptLost: () -> Unit,
+        onRetrySent: () -> Unit,
+        onBatch: () -> Unit,
+    ): Int {
+        // Every attempt that is lost (the transport retries hide it from the round) is a cut too.
+        val msgs = client.collect(wait, onLostAttempt = onAttemptLost, onRetrySent = onRetrySent, onSent = onSent)
+        if (msgs.isNotEmpty()) onBatch()
         for (m in msgs) {
             if (handled(m, handle)) client.ack(m.msgId)
         }
         return msgs.size
     }
 
-    private suspend fun stream(handle: suspend (RelayMessage) -> Unit, reached: () -> Unit) {
+    private suspend fun stream(handle: suspend (RelayMessage) -> Unit, onMessage: () -> Unit, reached: () -> Unit) {
         val s = client.openStream()
         try {
             while (true) {
@@ -111,6 +159,7 @@ class MailboxCollector(
                     reached()
                     return // closed normally: reconnect
                 }
+                onMessage()
                 if (handled(m, handle) && !s.ack(m.msgId)) client.ack(m.msgId)
                 reached()
             }
@@ -134,6 +183,7 @@ class MailboxCollector(
     }
 
     private companion object {
+        const val SERVER_ERROR = 500
         const val BASE_MS = 250L
         const val MAX_SHIFT = 7
         const val MAX_DELAY_MS = 30_000L

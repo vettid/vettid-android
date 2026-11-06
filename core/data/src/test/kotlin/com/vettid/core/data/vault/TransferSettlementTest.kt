@@ -37,6 +37,10 @@ class TransferSettlementTest {
         override val transferInPending get() = pending
         override var deviceId: String? = null
         override var collecting = false
+        override var collectorCuts = 0L
+        override var collectorLastSendAgeMs: Long? = null
+        override var collectorSendsMs: List<Pair<Long, Long>> = emptyList()
+        override var collectorCutsMs: List<com.vettid.core.vault.CollectorCut> = emptyList()
         var visibility: Long? = 60
         var rejected = false
         var pairedAtMs: Long? = null
@@ -44,17 +48,29 @@ class TransferSettlementTest {
         val abandoned = mutableListOf<Instant>()
         var roundMs = 0L
         var mailboxGone = false
+        var leaseEndsAtMs: Long? = null
+        var lostAtMs: Long? = null
 
         override suspend fun relayVisibilitySeconds() = visibility
 
-        override suspend fun awaitCollectorRound() { if (roundMs > 0) delay(roundMs) }
+        override suspend fun awaitCollectorRound() {
+            if (roundMs > 0) delay(roundMs)
+            // The collector's request is lost to an I/O error at lostAtMs: counted once (a cut).
+            val lost = lostAtMs
+            if (lost != null && scope.testScheduler.currentTime >= lost) {
+                lostAtMs = null
+                collectorCuts++
+            }
+        }
 
         override suspend fun collectOnce(wait: Duration) {
             waits += wait
             if (mailboxGone) throw RelayException(404, RelayException.MAILBOX_UNKNOWN, "gone")
             delay(wait.toMillis())
             val p = pairedAtMs
-            if (p != null && scope.testScheduler.currentTime >= p) {
+            val lease = leaseEndsAtMs
+            val free = lease != null && collectorCuts > 0 && scope.testScheduler.currentTime >= lease
+            if (free || (p != null && scope.testScheduler.currentTime >= p)) {
                 pending = pending?.copy(paired = true, userGuid = "m-1")
                 deviceId = "dev-2"
             }
@@ -173,6 +189,18 @@ class TransferSettlementTest {
         assertEquals("not retried until the window's end", 1, d.waits.size)
         assertTrue(testScheduler.currentTime < 1_000)
         assertEquals(listOf(at), d.abandoned)
+    }
+
+    /**
+     * The collector's request fails with a lost response at 70 s (it may have been handed the device.paired, leased until
+     * 130 s, past the window's first end of 90 s): counted as a cut, the window extends and the message is gathered.
+     */
+    @Test
+    fun aCollectorRequestLostToAnIoErrorMidWindowIsStillGathered() = runTest {
+        val d = FakeDevice(shown, this).apply { collecting = true; lostAtMs = 70_000; leaseEndsAtMs = 130_000 }
+        assertTrue(run(d).await() is Settled.Paired)
+        assertTrue(d.abandoned.isEmpty())
+        assertTrue(testScheduler.currentTime >= 130_000)
     }
 
     /** An app stopped during the window runs a full window again at its next start, from that start. */
