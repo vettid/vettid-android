@@ -278,6 +278,24 @@ class VoteRulesTest {
     }
 
     @Test
+    fun aRealChoiceLabelledAbstainIsShownByItsId() {
+        // ANDROID-PLAN 0.1.117 "Abstain" matching: Default_Ignorable and U+2800 removed anywhere, White_Space trimmed, any case.
+        val labels = listOf("Abstain", "abstain", "  ABSTAIN\u00a0", "Ab\u200bstain", "Abs\u2800tain", "\u2800Abstain", "Abst\u00adain")
+        for (l in labels) assertTrue(l, VoteWire.readsAbstain(l))
+        for (l in listOf("Abstain now", "Ab stain", "Abstention", "\u0410bstain")) assertFalse(l, VoteWire.readsAbstain(l))
+        val choices = labels.mapIndexed { i, l -> """{"id":"c$i","label":"$l"}""" }.joinToString(",")
+        val o = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"proposal_id":"P1","connection_id":"C1","title":"A","state":"closed","choices":[$choices,""" +
+                """{"id":"abstain","label":"Abstain"},{"id":"yes","label":"Yes"}]}""",
+        ) as kotlinx.serialization.json.JsonObject
+        val d = VoteWire.detail(o)!!
+        labels.indices.forEach { assertEquals("c$it", d.choices[it].label) }
+        // The reserved choice keeps its label (the app's own words for it need the approved string), and other labels stay.
+        assertEquals("Abstain", d.choices[labels.size].label)
+        assertEquals("Yes", d.choices.last().label)
+    }
+
+    @Test
     fun theWireReadsAListingWithoutTrustingIt() {
         val o = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"votes":[{"proposal_id":"P1","connection_id":"C1","title":"A","state":"newstate","ballot":{"state":"x"},"check":{"state":"y"},"site":"z"},{"connection_id":"C2"},"junk"],"dropped":[{"count":2}],"problems":[],"reconnect":[{"connection_id":"C9","service_id":"s","name":"N"}],"list_version":4,"list_sha256":"AA"}""",
