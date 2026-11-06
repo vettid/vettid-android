@@ -360,6 +360,10 @@ class VaultDevice private constructor(
     var collectRequestSince: Long? = null
         private set
 
+    /** The number of the latest [start] (and [stop]): only the current collection's rounds set [collectRequestSince]. */
+    @Volatile
+    private var collectGen = 0L
+
     private val cuts = java.util.concurrent.atomic.AtomicLong()
 
     /**
@@ -533,18 +537,23 @@ class VaultDevice private constructor(
         collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
+        // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
+        // start()) must not clear the new round's request or count as the new collection's round ending.
+        val gen = ++collectGen
         val job = scope.launch {
             launch { flushOutbox() }
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
                     onRequest = { out ->
-                        collectRequestSince = if (out) System.nanoTime() else null
                         if (out) {
                             collectLastSendElapsedMs = cfg.elapsedMs()
-                            noteSend(cfg.pollWait.toMillis())
+                            noteSend(cfg.pollWait.toMillis()) // a send of an older collection is still a send
                         }
-                        if (!out) roundsEnded.incrementAndGet()
+                        if (gen == collectGen) {
+                            collectRequestSince = if (out) System.nanoTime() else null
+                            if (!out) roundsEnded.incrementAndGet()
+                        }
                     },
                     onReached = ::noteReached,
                     onLost = { cuts.incrementAndGet() }, // a request lost to an I/O error may have been handed a message
@@ -619,6 +628,7 @@ class VaultDevice private constructor(
     @Synchronized
     fun stop() {
         collectScope = null
+        collectGen++ // what the stopped collection's rounds still report is theirs, not the next one's
         // A request that is out at the relay is cut by this; the cancelled round counts it (once) as lost.
         collector?.cancel()
         collector = null

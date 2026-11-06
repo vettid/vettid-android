@@ -41,6 +41,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -1651,6 +1652,57 @@ class VaultDeviceTest {
             elapsed = before
             leaseGate!!.countDown()
             scope.cancel()
+            leaseGate = null
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * (#307 follow-up 3) After stop() and start(), the stopped collection's round ends late (its `finally` runs after the new
+     * round went out): it must not clear the new round's request ([VaultDevice.collectRequestSince]) or count as the new
+     * collection's round ending, or the settlement would stop waiting for a round that may hold the device.paired. The old
+     * collection runs on a thread held busy until the new round is out, so its end comes last.
+     */
+    @Test
+    fun aStoppedCollectionsRoundEndingLateDoesNotClearTheNewRound() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            leaseGate = java.util.concurrent.CountDownLatch(1)
+            val oldThread = java.util.concurrent.Executors.newSingleThreadExecutor()
+            val oldScope = CoroutineScope(SupervisorJob() + oldThread.asCoroutineDispatcher())
+            val newScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            queued.add(v.seal("test.noop", "{}"))
+            val old = d.start(oldScope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the old round is out, holding a message
+            assertNotNull(d.collectRequestSince)
+            val busy = java.util.concurrent.CountDownLatch(1)
+            val held = java.util.concurrent.CountDownLatch(1)
+            oldThread.execute {
+                held.countDown()
+                busy.await(10, TimeUnit.SECONDS)
+            }
+            held.await(10, TimeUnit.SECONDS)
+            d.stop() // the old round's end is queued behind the busy thread
+            queued.add(v.seal("test.noop", "{}"))
+            d.start(newScope)
+            while (queued.isNotEmpty()) kotlinx.coroutines.delay(10) // the new round is out, holding a message
+            assertNotNull(d.collectRequestSince)
+            busy.countDown()
+            old.join() // the old round's finally ran: onRequest(false), late
+            assertNotNull("the new round is still out", d.collectRequestSince)
+            assertNull(
+                "the settlement still waits for the new round",
+                kotlinx.coroutines.withTimeoutOrNull(300) { d.awaitCollectorRound() },
+            )
+            leaseGate!!.countDown()
+            d.stop()
+            newScope.cancel()
+            oldScope.cancel()
+            oldThread.shutdown()
             leaseGate = null
             serveMailbox = false
         }
