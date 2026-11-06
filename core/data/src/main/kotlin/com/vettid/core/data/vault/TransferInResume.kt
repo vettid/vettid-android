@@ -188,10 +188,10 @@ internal object TransferInResume {
      * relay as late as its failure is seen: ours (abandoned or failed: `max(now, s + w)`), or the collector's ([cutLeases],
      * only the cuts [cuts] counted since the window began; one not described is taken as now + the long-poll cap). For a
      * freeze it is s + w of the latest request sent at or before the freeze began, ours or the collector's, kept after the
-     * request ended ([collectorAge], [collectorSends]); for a send since the last heartbeat tick before the freeze it is the
-     * wake + w (its bytes may reach the relay only at the wake, which parks it for its wait: the lead's call R2). A cut of
-     * a request written at or before a freeze belongs to the freeze: the freeze's lease already covers it (s + w, or the
-     * wake + w for a send since the last tick), so it is taken as its s + w and moves nothing (call C). Our own requests
+     * request ended ([collectorAge], [collectorSends]); for a send since one heartbeat before the last tick before the
+     * freeze it is the wake + w (its bytes may reach the relay only at the wake, which parks it for its wait: the lead's call
+     * R2). A cut of a request written at or before a freeze belongs to the freeze: the freeze's lease already covers it
+     * (s + w, or the wake + w for such a send), so it is taken as its s + w and moves nothing (call C). Our own requests
      * are recorded with the wait they were sent with ([sentWait]: 0 while the collection runs). A cut is: a request of ours
      * abandoned or failed with anything but a relay status, or the collector's in-flight request cut or lost. A freeze is
      * a gap of more than [Settle.freezeMarginMs] between the ticks of a 1 s heartbeat that lives only as long as the window.
@@ -471,11 +471,12 @@ internal object TransferInResume {
                 freezeCovers = maxOf(freezeCovers, froze, n - settle.freezeMarginMs)
                 // s: the lease start of the latest send at or before the freeze began: the last tick's sample, or a later send
                 // up to a tick after it, or one older than the margin before the wake (per send: a restart right after the wake
-                // does not hide the send before the freeze). A send since the last tick before the freeze may not have left the
-                // phone before it froze: its bytes can reach the relay at the wake, which parks it for its wait, so its lease
-                // starts by the wake + w (the lead's call R2; the wake is this freeze's notice, so still the notice + 25 s).
+                // does not hide the send before the freeze). A send since one heartbeat before the last tick before the freeze
+                // may not have left the phone before it froze (a tick can fall between the send and the freeze): its bytes can
+                // reach the relay at the wake, which parks it for its wait, so its lease starts by the wake + w (the lead's call
+                // R2; the wake is this freeze's notice, so still the notice + 25 s).
                 val eligible = sends.filter { it.first <= froze || it.first <= n - settle.freezeMarginMs }
-                    .map { (sent, w) -> if (sent >= prevTick) n + w else sent + w }
+                    .map { (sent, w) -> if (sent >= prevTick - settle.heartbeatMs) n + w else sent + w }
                 val s = (eligible + listOfNotNull(before)).maxOrNull()
                 if (s != null) mayHoldLease(s) // the lease of the request that was out
                 endAt = minOf(maxOf(endAt, n + settle.visibilityMs), cap)

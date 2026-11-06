@@ -549,4 +549,43 @@ class TransferInSettleFollowUpTest {
         )
         assertEquals(listOf(91_000L, 295_000L), lasts)
     }
+
+    /**
+     * (Recheck 4, R2 edge) The lead's own timeline: the freeze at exactly 95 s, so the tick of 95 s falls between the poll
+     * (94.5 s) and the freeze. A send since one heartbeat before that last tick still leases from the wake: 195 + 25 + 60 =
+     * 280 s, and the look is held to 295 s.
+     */
+    @Test
+    fun theLookAfterAFreezeAtExactly95sAfterAnEarlyExtraGetsTheFreeLeaseHold() = runTest {
+        val clock = FrozenClock(this)
+        val sends = mutableListOf<Pair<Long, Long>>()
+        var refused = false
+        var froze = false
+        val lasts = mutableListOf<Long>()
+        val round: suspend () -> Unit = {
+            if (refused && !froze && lasts.isNotEmpty()) {
+                froze = true
+                delay(3_500)
+                sends += clock.now() to 25_000L // the collector's poll, written at 94.5 s
+                delay(500)
+                clock.jumpedMs += 100_000 // frozen 95 s to 195 s, after the tick of 95 s
+            }
+        }
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 90_000) {
+                if (!refused) {
+                    refused = true
+                    throw RelayException(429, RelayException.RATE_LIMITED, "", retryAfterSeconds = 1)
+                }
+                lasts += clock.now()
+            }
+        }
+        assertFalse(
+            TransferInResume.atDeadline(
+                { false }, collect, {}, settle = timingWith(clock), awaitRound = round,
+                collectorSends = { sends.map { (clock.now() - it.first) to it.second } },
+            ),
+        )
+        assertEquals(listOf(91_000L, 295_000L), lasts)
+    }
 }
