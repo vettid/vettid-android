@@ -575,9 +575,13 @@ class VaultDevice private constructor(
                             collectLastSendElapsedMs = cfg.elapsedMs()
                             noteSend(cfg.pollWait.toMillis()) // a send of an older collection is still a send
                         }
-                        if (gen == collectGen) {
-                            collectRequestSince = if (out) System.nanoTime() else null
-                            if (!out) roundsEnded.incrementAndGet()
+                        // Under the monitor stop() and start() hold: no stop() and start() can come between the check
+                        // and the write (stop() only cancels, it never waits for this, so nothing deadlocks).
+                        synchronized(this@VaultDevice) {
+                            if (gen == collectGen) {
+                                collectRequestSince = if (out) System.nanoTime() else null
+                                if (!out) roundsEnded.incrementAndGet()
+                            }
                         }
                     },
                     onReached = ::noteReached,

@@ -1709,6 +1709,40 @@ class VaultDeviceTest {
     }
 
     /**
+     * (#307 review F3) A round's end writes [VaultDevice.collectRequestSince] under the monitor stop() and start() hold, so no
+     * stop() and start() can come between its collection-number check and its write. While the test holds that monitor, a
+     * round that is out and fails (a lost response, then the client's retries) cannot clear the request.
+     */
+    @Test
+    fun aRoundsEndWritesTheRequestUnderTheDevicesMonitor() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            dropCollect = true
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            var checked = false
+            while (!checked) {
+                while (d.collectRequestSince == null) kotlinx.coroutines.delay(5)
+                synchronized(d) {
+                    if (d.collectRequestSince != null) {
+                        Thread.sleep(3_000) // the round fails meanwhile (lost response and retries): its end waits for us
+                        assertNotNull("written under the device's monitor", d.collectRequestSince)
+                        checked = true
+                    }
+                }
+            }
+            dropCollect = false
+            d.stop()
+            scope.cancel()
+            serveMailbox = false
+        }
+    }
+
+    /**
      * (Call A) Each cut is described for the settlement: its number (as [VaultDevice.collectorCuts] counts it) and its lease
      * start, the request's send + its long-poll wait (the relay may still hand it a message up to the wait after the send).
      * The collector's request sent at 1 s (elapsed clock) is lost: its lease starts by 1 s + 25 s, 25 s ahead at 1 s.
