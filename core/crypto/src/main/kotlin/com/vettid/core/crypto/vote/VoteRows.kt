@@ -4,6 +4,8 @@ import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Ed25519
 import com.vettid.core.crypto.json.JsonNull
+import com.vettid.core.crypto.json.JsonNumber
+import com.vettid.core.crypto.json.JsonString
 import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.crypto.json.asObject
@@ -26,6 +28,7 @@ class ResultsProblem(val reason: String) : Exception(reason)
  */
 class PublishedResults internal constructor(
     private val results: JsonObject,
+    private val rowsDoc: JsonObject,
     private val tags: List<ByteArray>,
     private val ballots: List<JsonObject?>,
     private val leaves: List<ByteArray>,
@@ -46,8 +49,17 @@ class PublishedResults internal constructor(
      * [ResultsProblem] at the first difference, cheapest first and the signatures last. The signatures, the anchors and the
      * proposal's own checks are the vault's (§10.19.6 step 2); this never decides anything for it.
      */
-    @Suppress("ThrowsCount", "CyclomaticComplexMethod")
-    fun observe() {
+    @Suppress("ThrowsCount", "CyclomaticComplexMethod", "LongMethod")
+    fun observe(proposalId: String) {
+        // Only reported, never a reason not to submit (§10.19.6 step 1): the documents name this proposal, and rows.json is
+        // exactly {v: 1, proposal_id, rows}.
+        if ((results["proposal_id"] as? JsonString)?.value != proposalId) throw ResultsProblem("proposal_id")
+        val v = rowsDoc["v"]
+        if (rowsDoc.members.keys != ROWS_MEMBERS || v !is JsonNumber || v.raw != "1" ||
+            (rowsDoc["proposal_id"] as? JsonString)?.value != proposalId
+        ) {
+            throw ResultsProblem("rows_shape")
+        }
         val proposalBytes: ByteArray
         val choices: Set<String>
         val recordRoot: ByteArray
@@ -101,7 +113,30 @@ class PublishedResults internal constructor(
             }
         }
     }
+
+    /** The published `tally`, to compare with the vault's own (`vote.get`). Throws [ResultsProblem] when it does not read. */
+    fun tally(): Map<String, Long> = try {
+        results.obj("tally").members.mapValues { it.value.asUint(0, VoteRows.MAX_ROWS.toLong()) }
+    } catch (_: CryptoException) {
+        throw ResultsProblem("tally")
+    }
+
+    /** The published `counts` (eligible, ballots, removed, unhandled). Throws [ResultsProblem] when they do not read. */
+    fun counts(): PublishedCounts = try {
+        val c = results.obj("counts")
+        val max = StrictJson.MAX_SAFE_INTEGER
+        PublishedCounts(c.uint("eligible", 0, max), c.uint("ballots", 0, max), c.uint("removed", 0, max), c.uint("unhandled", 0, max))
+    } catch (_: CryptoException) {
+        throw ResultsProblem("counts")
+    }
+
+    private companion object {
+        val ROWS_MEMBERS = setOf("v", "proposal_id", "rows")
+    }
 }
+
+/** The `counts` of `results.json` (BALLOT-PROTOCOL §8.5). */
+data class PublishedCounts(val eligible: Long, val ballots: Long, val removed: Long, val unhandled: Long)
 
 /**
  * The part of the observer's check (BALLOT-PROTOCOL §8.4) the app does from the site's bytes for `vote.results.submit`
@@ -116,6 +151,26 @@ object VoteRows {
     /** The decoded proposal is at most 65,536 bytes, with at most 17 choices (§10.19.4 step 2). */
     internal const val MAX_PROPOSAL = 65_536
     internal const val MAX_CHOICES = 17
+
+    /**
+     * The most bytes of `rows.json` (VAULT-MESSAGING 0.86.4 §10.19.6 step 1): 512 bytes a row of `counts.eligible` plus 4,096,
+     * never more than [ROWS_CAP_MAX]. The download is capped the same way.
+     */
+    fun rowsCap(eligible: Long): Long = minOf(ROW_BYTES * eligible.coerceIn(0, MAX_ROWS.toLong()) + ROWS_SLACK, ROWS_CAP_MAX)
+
+    /** [rowsCap] for the `counts.eligible` of [resultsBytes]; null when it does not read (the results are then a problem). */
+    fun rowsCap(resultsBytes: ByteArray): Long? = try {
+        rowsCap(StrictJson.parseObject(resultsBytes).obj("counts").uint("eligible", 1, MAX_ROWS.toLong()))
+    } catch (_: CryptoException) {
+        null
+    }
+
+    private const val ROW_BYTES = 512L
+    private const val ROWS_SLACK = 4_096L
+    const val ROWS_CAP_MAX = 51_204_096L
+
+    /** rows.json is nested at most 4 deep (§10.19.6 step 1): the document, `rows`, a row, its ballot. */
+    private const val ROWS_DEPTH = 4
 
     /** `"vettid/vote/1/ballot\x00"` (BALLOT-PROTOCOL §5). */
     internal const val BALLOT_LABEL = "vettid/vote/1/ballot\u0000"
@@ -146,12 +201,15 @@ object VoteRows {
         } catch (_: CryptoException) {
             throw ResultsProblem("results")
         }
+        if (rowsBytes.size > rowsCap(eligible)) throw ResultsProblem("rows_size")
         if (!Bytes.constantTimeEquals(Bytes.sha256(rowsBytes), rowsHash)) throw ResultsProblem("rows_hash")
         val tags = ArrayList<ByteArray>()
         val ballots = ArrayList<JsonObject?>()
         val leaves = ArrayList<ByteArray>()
+        val rowsDoc: JsonObject
         try {
-            val rows = StrictJson.parseObject(rowsBytes).array("rows")
+            rowsDoc = StrictJson.parseObject(rowsBytes, ROWS_DEPTH)
+            val rows = rowsDoc.array("rows")
             if (rows.size.toLong() != eligible) throw ResultsProblem("rows_count")
             var previous: ByteArray? = null
             for (e in rows) {
@@ -170,7 +228,7 @@ object VoteRows {
             throw ResultsProblem("rows")
         }
         if (!Bytes.constantTimeEquals(VoteMerkle.root(leaves), rowsRoot)) throw ResultsProblem("rows_root")
-        return PublishedResults(results, tags, ballots, leaves)
+        return PublishedResults(results, rowsDoc, tags, ballots, leaves)
     }
 
     /** `ballot_leaf` (§5): `record_tag || lp(vk) || lp(choice_id) || lp(ballot_sig)`, `lp(x) = u16(len x) || x`. */

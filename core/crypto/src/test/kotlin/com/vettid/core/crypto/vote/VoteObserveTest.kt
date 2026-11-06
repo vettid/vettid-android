@@ -27,6 +27,11 @@ class VoteObserveTest {
     private val proposalHash = Bytes.sha256(proposalDoc)
     private val label = "vettid/vote/1/ballot\u0000"
 
+    private companion object {
+        const val PID = "01JBQZ0000000000000000000A"
+        const val OTHER = "01JBQZ0000000000000000000B"
+    }
+
     /** A row as the test builds it: the tag and the ballot (null for an empty row). */
     private data class Row(val tag: ByteArray, val vk: ByteArray?, val choice: String?, val sig: ByteArray?)
 
@@ -86,7 +91,7 @@ class VoteObserveTest {
     private fun observe(rows: List<Row>, tally: Map<String, Long> = defaultTally, ballots: Long? = null) {
         val rowsBytes = rowsJson(rows)
         val res = if (ballots == null) resultsJson(rows, rowsBytes, tally) else resultsJson(rows, rowsBytes, tally, ballots)
-        VoteRows.read(res, rowsBytes).observe()
+        VoteRows.read(res, rowsBytes).observe(PID)
     }
 
     private fun reason(block: () -> Unit): String = assertThrows(ResultsProblem::class.java) { block() }.reason
@@ -102,7 +107,7 @@ class VoteObserveTest {
 
     @Test
     fun theSharedResultsPassTheWholeCheck() {
-        VoteRows.read(docs.str("results").toByteArray(), docs.str("rows").toByteArray()).observe()
+        VoteRows.read(docs.str("results").toByteArray(), docs.str("rows").toByteArray()).observe(PID)
         // The rebuilt documents of the unchanged rows pass too: the builder adds nothing of its own.
         observe(vectorRows)
         // A ballot re-signed by another key, for the same choice, is as good.
@@ -194,6 +199,52 @@ class VoteObserveTest {
         assertEquals("ballot_sig", reason { observe(listOf(base.copy(sig = sigWhere(false)), vectorRows[1], vectorRows[2])) })
         // §2 accepts a mixed-order key whose equation holds without the factor 8: so does the observer.
         observe(listOf(base.copy(sig = sigWhere(true)), vectorRows[1], vectorRows[2]))
+    }
+
+    /** Observes [rowsBytes] as given (rebuilt results around them): for the shape of rows.json itself. */
+    private fun observeRaw(rowsBytes: ByteArray, resultsEdit: (String) -> String = { it }) {
+        val res = String(resultsJson(vectorRows, rowsBytes))
+        VoteRows.read(resultsEdit(res).toByteArray(), rowsBytes).observe(PID)
+    }
+
+    @Test
+    fun rowsThatAreNotExactlyTheDocumentOrNameAnotherProposalAreReported() {
+        val rows = String(rowsJson(vectorRows))
+        observeRaw(rows.toByteArray())
+        // Another proposal named by rows.json, or by results.json.
+        assertEquals("rows_shape", reason { observeRaw(rows.replace(PID, OTHER).toByteArray()) })
+        assertEquals("proposal_id", reason { observeRaw(rows.toByteArray()) { it.replace(PID, OTHER) } })
+        // A member too many, one missing, or v not 1.
+        assertEquals("rows_shape", reason { observeRaw(rows.replace(",\"v\":1}", ",\"v\":1,\"x\":0}").toByteArray()) })
+        assertEquals("rows_shape", reason { observeRaw(rows.replace(",\"v\":1}", "}").toByteArray()) })
+        assertEquals("rows_shape", reason { observeRaw(rows.replace(",\"v\":1}", ",\"v\":2}").toByteArray()) })
+        assertEquals("rows_shape", reason { observeRaw(rows.replace(",\"v\":1}", ",\"v\":\"1\"}").toByteArray()) })
+    }
+
+    @Test
+    fun rowsOverTheCapOrNestedTooDeepAreNotRead() {
+        assertEquals(3 * 512L + 4_096, VoteRows.rowsCap(3))
+        assertEquals(VoteRows.ROWS_CAP_MAX, VoteRows.rowsCap(100_000))
+        assertEquals(51_204_096L, VoteRows.rowsCap(VoteRows.MAX_ROWS.toLong()))
+        assertEquals(3 * 512L + 4_096, VoteRows.rowsCap(docs.str("results").toByteArray()))
+        assertEquals(null, VoteRows.rowsCap("{}".toByteArray()))
+        // White space is allowed (rows.json need not be JCS): padded to one byte over the cap, it is not read.
+        val rows = String(rowsJson(vectorRows))
+        val cap = VoteRows.rowsCap(vectorRows.size.toLong()).toInt()
+        val atCap = rows.dropLast(1) + " ".repeat(cap - rows.length) + "}"
+        observeRaw(atCap.toByteArray())
+        val over = rows.dropLast(1) + " ".repeat(cap - rows.length + 1) + "}"
+        assertEquals("rows_size", reason { observeRaw(over.toByteArray()) })
+        // A fifth level of nesting (an object inside a ballot) is not read.
+        val deep = rows.replace("\"choice_id\":\"yes\"", "\"choice_id\":\"yes\",\"x\":{}")
+        assertEquals("rows", reason { observeRaw(deep.toByteArray()) })
+    }
+
+    @Test
+    fun thePublishedTallyAndCountsAreReadForTheVaultsComparison() {
+        val p = VoteRows.read(docs.str("results").toByteArray(), docs.str("rows").toByteArray())
+        assertEquals(mapOf("abstain" to 0L, "no" to 1L, "yes" to 1L), p.tally())
+        assertEquals(PublishedCounts(eligible = 3, ballots = 2, removed = 1, unhandled = 0), p.counts())
     }
 
     @Test
