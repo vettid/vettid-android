@@ -1207,10 +1207,15 @@ class VotesManager(
     private suspend fun <T> withAttempts(epoch: Int? = null, block: (List<ResultsAttempt>) -> Pair<List<ResultsAttempt>?, T>): T =
         withContext(io) {
             synchronized(attemptsSync) {
-                val held = attemptsHeld ?: runCatching { attempts.load() }.getOrDefault(emptyList()).also { attemptsHeld = it }
+                // A store that cannot be read now ([StoreUnavailable], #322) is not taken as empty: nothing is kept in
+                // memory and nothing written over the file, and the next access reads it again. Meanwhile it counts as
+                // empty for this decision (fails toward one more check). A corrupt file loads as empty and is replaced.
+                val loaded = attemptsHeld ?: runCatching { attempts.load() }.getOrNull()?.also { attemptsHeld = it }
+                val held = loaded.orEmpty()
                 val (next, out) = block(held)
-                val current = epoch == null || epoch == storeEpoch
-                if (next != null && next != held && current) {
+                // Written only over a file that was read, and while no wipe happened since [epoch].
+                val writable = loaded != null && (epoch == null || epoch == storeEpoch)
+                if (writable && next != null && next != held) {
                     attemptsHeld = next
                     // A store that cannot be written keeps the memory copy: the daily limit then holds until a restart.
                     runCatching { attempts.save(next) }
@@ -1222,16 +1227,22 @@ class VotesManager(
     /**
      * The vault's data goes from this phone (a wipe, a sign-out, a deletion; review 1, M1): the kept attempts are forgotten
      * in memory and on disk, and a write still on its way is dropped. Called after [clear] on those paths, before the
-     * files are erased. Not at a lock.
+     * files are erased. Not at a lock. A file that could not be deleted (its old stamps would come back) is reported by
+     * throwing once both were tried (#322): the wipe's [com.vettid.core.data.vault.ClearSteps] runs on and reports it, and
+     * `LocalWipe` erases the directory after. The exception names the file, nothing of its content.
      */
     fun forgetStored() {
         synchronized(attemptsSync) {
             storeEpoch++
             // Under the same lock as [stampRecheckRows]' test: a chunk still arriving after this stamps nothing.
             recheckRowsAt = HashMap()
-            runCatching { stamps.save(emptyList()) }
             attemptsHeld = emptyList()
-            runCatching { attempts.save(emptyList()) }
+            val failed = listOf(runCatching { stamps.save(emptyList()) }, runCatching { attempts.save(emptyList()) })
+                .mapNotNull { it.exceptionOrNull() }
+            failed.firstOrNull()?.let { first ->
+                failed.drop(1).forEach(first::addSuppressed)
+                throw first
+            }
         }
     }
 
@@ -1369,22 +1380,26 @@ class VotesManager(
         rechecked(key, passed, gen)
     }
 
-    /** [recheckRowsAt], read from [stamps] the first time (under [attemptsSync]). */
-    private fun recheckStampsLocked(): MutableMap<String, Long> = recheckRowsAt
-        ?: runCatching { stamps.load() }.getOrDefault(emptyList()).associateTo(HashMap()) { it.key to it.atMs }.also { recheckRowsAt = it }
+    /**
+     * [recheckRowsAt], read from [stamps] the first time (under [attemptsSync]); null while the store cannot be read now
+     * ([StoreUnavailable], #322): nothing is kept then, and nothing written over the file, and the next access reads it again.
+     * A corrupt file loads as empty and is replaced.
+     */
+    private fun recheckStampsLocked(): MutableMap<String, Long>? = recheckRowsAt
+        ?: runCatching { stamps.load() }.getOrNull()?.associateTo(HashMap()) { it.key to it.atMs }?.also { recheckRowsAt = it }
 
     private fun saveStampsLocked(map: Map<String, Long>) {
         runCatching { stamps.save(map.map { (k, v) -> RecheckStamp(k, v) }) }
     }
 
     /** The recheck's last rows download for [key], if any. */
-    private fun recheckStampOf(key: String): Long? = synchronized(attemptsSync) { recheckStampsLocked()[key] }
+    private fun recheckStampOf(key: String): Long? = synchronized(attemptsSync) { recheckStampsLocked()?.get(key) }
 
     /** [recheckRowsAt] for [key], kept on disk, only while the store's epoch is still [epoch] (no wipe since the recheck began). */
     private fun stampRecheckRows(key: String, at: Long, epoch: Int) {
         synchronized(attemptsSync) {
             if (epoch != storeEpoch) return
-            val map = recheckStampsLocked()
+            val map = recheckStampsLocked() ?: return // not readable now: this stamp is dropped, not written over the file
             map[key] = at
             saveStampsLocked(map)
         }
@@ -1395,7 +1410,7 @@ class VotesManager(
         withContext(io) {
             synchronized(attemptsSync) {
                 if (epoch != storeEpoch) return@synchronized
-                val map = recheckStampsLocked()
+                val map = recheckStampsLocked() ?: return@synchronized
                 if (map.keys.retainAll(listed)) saveStampsLocked(map)
             }
         }

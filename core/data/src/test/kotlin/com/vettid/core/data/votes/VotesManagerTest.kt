@@ -2661,4 +2661,139 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
         assertEquals(1, site.rowsReads())
     }
+
+    // ---- #322: a Keystore not usable now neither caches the kept stores as empty nor writes over them ----
+
+    @get:org.junit.Rule
+    val dir = org.junit.rules.TemporaryFolder()
+
+    /**
+     * A real sealed file store whose key cannot be used for reads while [readsUnavailable] (a `ProviderException`, as a
+     * Keystore not ready throws), and works for writes: a Keystore that comes back between a read and a write.
+     */
+    private class SealedFile(f: java.io.File, purpose: String) {
+        var readsUnavailable = false
+        private var keyBroken = false
+        private val real = com.vettid.core.data.KeystoreFileStore(f, purpose) {
+            if (keyBroken) throw java.security.ProviderException("Keystore not ready")
+            javax.crypto.spec.SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
+        }
+        val store = object : com.vettid.core.vault.DeviceStateStore by real {
+            override fun load(): ByteArray? {
+                keyBroken = readsUnavailable
+                try {
+                    return real.load()
+                } finally {
+                    keyBroken = false
+                }
+            }
+        }
+    }
+
+    /** Bytes no key opens: malformed, then the right format sealed under another key (the tag fails). */
+    private fun corruptBlobs(): List<ByteArray> {
+        val other = com.vettid.core.data.KeystoreFileStore(dir.newFile(), "vote-attempts") {
+            javax.crypto.spec.SecretKeySpec(ByteArray(32) { 7 }, "AES")
+        }
+        return listOf("not a sealed file".toByteArray(), other.seal("[]".toByteArray()))
+    }
+
+    @Test
+    fun aCorruptAttemptsFileCountsAsEmptyAndTheNextAttemptReplacesIt() = runTest {
+        for (blob in corruptBlobs()) {
+            val f = java.io.File(dir.newFolder(), "vote-attempts.bin").apply { writeBytes(blob) }
+            val sealed = SealedFile(f, "vote-attempts")
+            val store = KeystoreResultsAttemptStore(sealed.store)
+            assertTrue(store.load().isEmpty())
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(gaveUp())
+            ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+            manager(ops, site, attempts = store).syncOnce()
+            assertEquals(1, ops.submitted.size)
+            assertEquals(listOf("$CONN/$PID"), store.load().map { it.key })
+        }
+    }
+
+    @Test
+    fun anUnavailableKeystoreNeitherCachesNorOverwritesTheAttempts() = runTest {
+        val f = java.io.File(dir.root, "vote-attempts.bin")
+        val sealed = SealedFile(f, "vote-attempts")
+        val store = KeystoreResultsAttemptStore(sealed.store)
+        val original = ResultsAttempt(key = "$CONN/$PID", atMs = clock.minus(Duration.ofHours(1)).toEpochMilli())
+        store.save(listOf(original))
+        val onDisk = f.readBytes()
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        fun resultsReads() = site.reads.count { it == "p/$PID/results.json" }
+        sealed.readsUnavailable = true
+        assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
+        // A KeyStoreException at the key (wrapped by the file store with the decrypt failures) is "unavailable" too.
+        val keyStoreDown = com.vettid.core.data.KeystoreFileStore(f, "vote-attempts") { throw java.security.KeyStoreException("busy") }
+        assertTrue(runCatching { KeystoreResultsAttemptStore(keyStoreDown).load() }.exceptionOrNull() is StoreUnavailable)
+        val m = manager(ops, site, attempts = store)
+        m.syncOnce()
+        assertEquals("not readable: the re-check runs (counts as none)", 1, resultsReads())
+        assertTrue("the attempt is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
+        // The Keystore is back: the same manager reads the file again (nothing was cached) and the daily limit holds.
+        sealed.readsUnavailable = false
+        m.syncOnce()
+        assertEquals("the original attempt, read again, holds the re-check", 1, resultsReads())
+        assertEquals(listOf(original), store.load())
+    }
+
+    @Test
+    fun aCorruptRecheckFileCountsAsEmptyAndTheNextStampReplacesIt() = runTest {
+        for (blob in corruptBlobs()) {
+            val f = java.io.File(dir.newFolder(), "vote-rechecks.bin").apply { writeBytes(blob) }
+            val store = KeystoreRecheckStampStore(SealedFile(f, "vote-rechecks").store)
+            assertTrue(store.load().isEmpty())
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+            val m = manager(ops, site, unmetered = { false }, stamps = store)
+            m.refresh()
+            assertEquals(checked, m.recheck(CONN, PID))
+            assertEquals(listOf(RecheckStamp("$CONN/$PID", clock.toEpochMilli())), store.load())
+        }
+    }
+
+    @Test
+    fun anUnavailableKeystoreNeitherCachesNorOverwritesTheRecheckStamps() = runTest {
+        val f = java.io.File(dir.root, "vote-rechecks.bin")
+        val sealed = SealedFile(f, "vote-rechecks")
+        val store = KeystoreRecheckStampStore(sealed.store)
+        // A download a day ago, after the 7 days from the close: the weekly rule holds the next one on mobile data.
+        val original = RecheckStamp("$CONN/$PID", clock.minus(Duration.ofDays(1)).toEpochMilli())
+        store.save(listOf(original))
+        val onDisk = f.readBytes()
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        sealed.readsUnavailable = true
+        assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
+        val m = manager(ops, site, unmetered = { false }, stamps = store)
+        m.refresh()
+        assertEquals("not readable: counts as none", checked, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        assertTrue("the stamp is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
+        // The Keystore is back: the same manager reads the file again (nothing was cached) and the original stamp holds.
+        sealed.readsUnavailable = false
+        assertEquals("the original stamp, read again, holds the recheck", held, m.reopen())
+        assertEquals(1, site.rowsReads())
+        assertEquals(listOf(original), store.load())
+    }
+
+    @Test
+    fun aFailedDeleteAtTheWipeIsReportedAfterBothAreTried() = runTest {
+        val attempts = MemoryResultsAttemptStore().apply { save(listOf(ResultsAttempt(key = "$CONN/$PID", atMs = 1))) }
+        val stamps = object : RecheckStampStore {
+            override fun load() = listOf(RecheckStamp("$CONN/$PID", 1))
+
+            override fun save(stamps: List<RecheckStamp>) = throw java.io.IOException("could not delete vote-rechecks.bin")
+        }
+        val m = manager(Ops(), attempts = attempts, stamps = stamps)
+        val failure = runCatching { m.forgetStored() }.exceptionOrNull()
+        assertTrue("reported to the wipe's steps: $failure", failure is java.io.IOException)
+        assertEquals("names the file only", "could not delete vote-rechecks.bin", failure?.message)
+        assertTrue("the other store is still erased", attempts.load().isEmpty())
+    }
 }
