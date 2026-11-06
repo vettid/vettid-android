@@ -1254,6 +1254,27 @@ class OwnerCheckManagerTest {
         RelayReads.keysReplaced(m) // no exception
     }
 
+    /**
+     * Lead's review of #301: clearing the relay notice moves only the relay's own epoch. A probe in flight when an unlock
+     * attempt starts ([OwnerCheckManager.unlockStarting]) still returns its answer, not NO_ANSWER (as on master); its relay
+     * value is dropped.
+     */
+    @Test
+    fun aProbeAcrossAnUnlockAttemptIsUnaffectedByTheRelayClear() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            relayRefused = true
+            statusGate = kotlinx.coroutines.CompletableDeferred()
+        }
+        val m = manager(ops)
+        val probe = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        awaitReads(ops, 1)
+        m.unlockStarting()
+        ops.statusGate!!.complete(Unit)
+        assertEquals(VaultProbe.OPEN, probe.await())
+        assertFalse("the relay value of a read that spans the clear is dropped", m.relayRefused.value)
+    }
+
     /** The re-read is cancelled by a lock. */
     @Test
     fun theRelayRereadIsCancelledAtLock() = runTest {

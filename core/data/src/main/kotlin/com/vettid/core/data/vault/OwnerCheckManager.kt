@@ -108,6 +108,13 @@ class OwnerCheckManager(
     private val readSeq = java.util.concurrent.atomic.AtomicLong()
     private var relayAppliedSeq = 0L
 
+    /**
+     * (0.84.0) Counts the clears of the relay notice ([clearRelay]: every lock, sign-out, wipe and unlock attempt) that a
+     * status read must not span; the relay's own, as vettid-ios #221's `relayEpoch`, so that clearing the notice never
+     * moves the shared [epoch] a probe or an unlock's count depends on.
+     */
+    private val relayEpoch = java.util.concurrent.atomic.AtomicInteger()
+
     /** Feed items of `identity.rotation_failed` already acted on (memory only). */
     private val rotationFailedSeen = HashSet<String>()
 
@@ -117,7 +124,7 @@ class OwnerCheckManager(
 
     /** Takes the relay notice away at a lock, sign-out or wipe: reads that began before are dropped, the re-read is cancelled. */
     private fun clearRelay() {
-        epoch.incrementAndGet()
+        relayEpoch.incrementAndGet()
         synchronized(relayLock) {
             relayFlow.value = false
             relayRecheck?.cancel()
@@ -127,26 +134,32 @@ class OwnerCheckManager(
     }
 
     /**
-     * (0.84.0) A `vault.status` read about to be sent, for [noteRelay]: its number and the count of locks, unlocks and wipes
-     * when it began. Every status read of the open vault takes one (the owner check's here, the Settings overview's in
-     * `VaultManager.overview`), as vettid-ios #221 hears every status.
+     * (0.84.0) A `vault.status` read about to be sent, for [noteRelay]: its number and the count of relay clears
+     * ([relayEpoch]) when it began. Every status read of the open vault takes one (the owner check's here, the Settings
+     * overview's in `VaultManager.overview`), as vettid-ios #221 hears every status.
      */
     class StatusStamp internal constructor(internal val seq: Long, internal val epoch: Int)
 
     /** Takes the stamp of a `vault.status` read about to be sent. */
     fun beginStatusRead(): StatusStamp {
-        val e = epoch.get()
+        val e = relayEpoch.get()
         return StatusStamp(readSeq.incrementAndGet(), e)
     }
 
     /**
      * (0.84.0) The answer of the read [stamp] began: `relay` absent (or any value but `"refused"`) takes the notice away. The
-     * latest answer decides: applied under the lock only if no lock, unlock or wipe came since the read began and no newer
-     * read was applied already. A status that says refused schedules the one re-read of this unlock.
+     * latest answer decides: applied under the lock only if no relay clear (a lock, sign-out, wipe or unlock attempt) came
+     * since the read began and no newer read was applied already. A status that says refused schedules the one re-read of
+     * this unlock.
+     *
+     * Why the epoch and not a phase check, as iOS's `phase == .unlocked`: this manager has no phase of its own, and every
+     * way the open vault closes reaches [clearRelay] before anything else can read (the lock signals here, and
+     * [unlockStarting] for a lock it never heard of), so a read that spans a close is dropped by [relayEpoch]. The one
+     * reader that has the phase, the Settings overview, also checks it before applying (`RelayReads.read`).
      */
     fun noteRelay(stamp: StatusStamp, refused: Boolean) {
         synchronized(relayLock) {
-            if (epoch.get() != stamp.epoch || stamp.seq <= relayAppliedSeq) return
+            if (relayEpoch.get() != stamp.epoch || stamp.seq <= relayAppliedSeq) return
             relayAppliedSeq = stamp.seq
             relayFlow.value = refused
             if (refused) scheduleRelayRecheck()
@@ -266,7 +279,7 @@ class OwnerCheckManager(
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
         causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true
-        // Also bumps the epoch, so a status read that began before this lock is dropped (a probe's own check ran before this).
+        // Also bumps the relay epoch, so a status read that began before this lock does not bring the notice back.
         clearRelay() // a lock found by a probe or by ten failed checks
     }
 
