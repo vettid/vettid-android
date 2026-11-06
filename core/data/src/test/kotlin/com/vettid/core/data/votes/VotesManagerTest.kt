@@ -2715,7 +2715,7 @@ class VotesManagerTest {
     }
 
     @Test
-    fun anUnavailableKeystoreNeitherCachesNorOverwritesTheAttempts() = runTest {
+    fun anUnavailableAttemptsStoreHoldsTheDailyReCheckAndIsNeitherCachedNorOverwritten() = runTest {
         val f = java.io.File(dir.root, "vote-attempts.bin")
         val sealed = SealedFile(f, "vote-attempts")
         val store = KeystoreResultsAttemptStore(sealed.store)
@@ -2733,7 +2733,11 @@ class VotesManagerTest {
         assertTrue(runCatching { KeystoreResultsAttemptStore(keyStoreDown).load() }.exceptionOrNull() is StoreUnavailable)
         val m = manager(ops, site, attempts = store)
         m.syncOnce()
-        assertEquals("not readable: the re-check runs (counts as none)", 1, resultsReads())
+        assertEquals("not readable: the daily re-check waits (iOS #222)", 0, resultsReads())
+        assertTrue(ops.submitted.isEmpty())
+        // The member's Check again is not held; its attempt is dropped, not written over the file.
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, resultsReads())
         assertTrue("the attempt is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
         // The Keystore is back: the same manager reads the file again (nothing was cached) and the daily limit holds.
         sealed.readsUnavailable = false
@@ -2758,7 +2762,7 @@ class VotesManagerTest {
     }
 
     @Test
-    fun anUnavailableKeystoreNeitherCachesNorOverwritesTheRecheckStamps() = runTest {
+    fun anUnavailableRecheckStoreHoldsTheMeteredDownloadAndIsNeitherCachedNorOverwritten() = runTest {
         val f = java.io.File(dir.root, "vote-rechecks.bin")
         val sealed = SealedFile(f, "vote-rechecks")
         val store = KeystoreRecheckStampStore(sealed.store)
@@ -2770,12 +2774,19 @@ class VotesManagerTest {
         ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
         sealed.readsUnavailable = true
         assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
-        val m = manager(ops, site, unmetered = { false }, stamps = store)
+        var wifi = false
+        val m = manager(ops, site, unmetered = { wifi }, stamps = store)
         m.refresh()
-        assertEquals("not readable: counts as none", checked, m.recheck(CONN, PID))
+        assertEquals("not readable, on mobile data: the download waits (iOS #222)", held, m.recheck(CONN, PID))
+        assertEquals(0, site.rowsReads())
+        // On Wi-Fi (never capped) it downloads; its stamp is dropped, not written over the file.
+        wifi = true
+        assertEquals(checked, m.reopen())
         assertEquals(1, site.rowsReads())
         assertTrue("the stamp is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
-        // The Keystore is back: the same manager reads the file again (nothing was cached) and the original stamp holds.
+        // The Keystore is back, on mobile data: the same manager reads the file again (nothing was cached) and the
+        // original stamp holds.
+        wifi = false
         sealed.readsUnavailable = false
         assertEquals("the original stamp, read again, holds the recheck", held, m.reopen())
         assertEquals(1, site.rowsReads())
@@ -2783,7 +2794,7 @@ class VotesManagerTest {
     }
 
     @Test
-    fun aFailedDeleteAtTheWipeIsReportedAfterBothAreTried() = runTest {
+    fun aFailedDeleteAtTheWipeIsLoggedByNameAndTheWipeGoesOn() = runTest {
         val attempts = MemoryResultsAttemptStore().apply { save(listOf(ResultsAttempt(key = "$CONN/$PID", atMs = 1))) }
         val stamps = object : RecheckStampStore {
             override fun load() = listOf(RecheckStamp("$CONN/$PID", 1))
@@ -2791,9 +2802,10 @@ class VotesManagerTest {
             override fun save(stamps: List<RecheckStamp>) = throw java.io.IOException("could not delete vote-rechecks.bin")
         }
         val m = manager(Ops(), attempts = attempts, stamps = stamps)
-        val failure = runCatching { m.forgetStored() }.exceptionOrNull()
-        assertTrue("reported to the wipe's steps: $failure", failure is java.io.IOException)
-        assertEquals("names the file only", "could not delete vote-rechecks.bin", failure?.message)
+        org.robolectric.shadows.ShadowLog.clear()
+        m.forgetStored() // does not throw: LocalWipe erases the directory after
+        val logged = org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg }
+        assertEquals(listOf("could not erase vote-rechecks at the wipe (IOException)"), logged)
         assertTrue("the other store is still erased", attempts.load().isEmpty())
     }
 }

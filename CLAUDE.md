@@ -472,13 +472,16 @@ The A2 exit test:
   voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). The entry goes
   when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
   after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
-  does not touch them. A file it could not delete is reported: `forgetStored` tries both files, then throws the first
-  failure (naming the file only), which the wipe's `ClearSteps` keeps and reports (#322). **Unreadable vs unavailable**
+  does not touch them. A file it could not delete is logged (`VotesManager` tag, the file's name and the exception type
+  only) and the wipe goes on; `LocalWipe` erases the no-backup directory after (#322). **Unreadable vs unavailable**
   (#322, iOS #222's rule; both this store and `vote-rechecks.bin`, through `readKept`): a corrupt or undecryptable file
   (`KeystoreFileStore.isCorrupt`: malformed, or an AES-GCM tag failure; or JSON that does not parse) loads as empty and the
   next write replaces it; any other failure (a `KeyStoreException`, a `ProviderException`, a key not usable now, the file
-  not read) throws `StoreUnavailable`: `VotesManager` then neither caches it as empty nor writes over it (that access
-  counts it as empty and its new attempt or stamp is dropped), and the next access reads the file again. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
+  not read) throws `StoreUnavailable`: `VotesManager` then neither caches it nor writes over it, and the next access
+  reads the file again. Meanwhile it **waits**, as iOS #222 does: the automatic daily re-check of a `gave_up` record is not
+  due (`dailyDue`: no fetch, no submit), and the recheck on open downloads no rows.json on a metered or unknown network
+  (`recheckRowsWait`: the not-rechecked line), only on Wi-Fi; a Check again runs as always, reading the store as empty,
+  and its attempt and stamp are dropped. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
   before the fallback to `rows_unavailable` (L3). **Wi-Fi only after a week** (#314 item 1, owner decision a, thread
   01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`; a check back in `pending` starts
   them again, #319 item 3; the `vote.list` summary carries no give-up time, only `check.due_at`, which a `gave_up` check

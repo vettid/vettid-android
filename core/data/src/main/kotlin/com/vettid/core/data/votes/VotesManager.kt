@@ -1201,6 +1201,13 @@ class VotesManager(
     private fun storeEpochNow(): Int = synchronized(attemptsSync) { storeEpoch }
 
     /**
+     * The kept attempts, read from [attempts] the first time (under [attemptsSync]); null while the store cannot be read
+     * now ([StoreUnavailable], #322): nothing is kept then, and the next access reads it again. A corrupt file loads as empty.
+     */
+    private fun attemptsLocked(): List<ResultsAttempt>? =
+        attemptsHeld ?: runCatching { attempts.load() }.getOrNull()?.also { attemptsHeld = it }
+
+    /**
      * Reads the kept attempts and, with [block]'s new list, writes them; with [epoch], only while no wipe happened since it
      * was taken (the test and the write are one step under [attemptsSync], so a write racing [forgetStored] is dropped).
      */
@@ -1208,9 +1215,9 @@ class VotesManager(
         withContext(io) {
             synchronized(attemptsSync) {
                 // A store that cannot be read now ([StoreUnavailable], #322) is not taken as empty: nothing is kept in
-                // memory and nothing written over the file, and the next access reads it again. Meanwhile it counts as
-                // empty for this decision (fails toward one more check). A corrupt file loads as empty and is replaced.
-                val loaded = attemptsHeld ?: runCatching { attempts.load() }.getOrNull()?.also { attemptsHeld = it }
+                // memory and nothing written over the file, and the next access reads it again. The daily re-check waits
+                // meanwhile ([dailyDue]); a Check again reads it as empty and its attempt is dropped.
+                val loaded = attemptsLocked()
                 val held = loaded.orEmpty()
                 val (next, out) = block(held)
                 // Written only over a file that was read, and while no wipe happened since [epoch].
@@ -1227,9 +1234,8 @@ class VotesManager(
     /**
      * The vault's data goes from this phone (a wipe, a sign-out, a deletion; review 1, M1): the kept attempts are forgotten
      * in memory and on disk, and a write still on its way is dropped. Called after [clear] on those paths, before the
-     * files are erased. Not at a lock. A file that could not be deleted (its old stamps would come back) is reported by
-     * throwing once both were tried (#322): the wipe's [com.vettid.core.data.vault.ClearSteps] runs on and reports it, and
-     * `LocalWipe` erases the directory after. The exception names the file, nothing of its content.
+     * files are erased. Not at a lock. A file that could not be deleted (its old records could come back) is logged, by
+     * its name only, and the wipe goes on (#322): `LocalWipe` erases the no-backup directory after.
      */
     fun forgetStored() {
         synchronized(attemptsSync) {
@@ -1237,22 +1243,26 @@ class VotesManager(
             // Under the same lock as [stampRecheckRows]' test: a chunk still arriving after this stamps nothing.
             recheckRowsAt = HashMap()
             attemptsHeld = emptyList()
-            val failed = listOf(runCatching { stamps.save(emptyList()) }, runCatching { attempts.save(emptyList()) })
-                .mapNotNull { it.exceptionOrNull() }
-            failed.firstOrNull()?.let { first ->
-                failed.drop(1).forEach(first::addSuppressed)
-                throw first
-            }
+            runCatching { stamps.save(emptyList()) }.onFailure { notErased("vote-rechecks", it) }
+            runCatching { attempts.save(emptyList()) }.onFailure { notErased("vote-attempts", it) }
         }
+    }
+
+    /** A kept file [forgetStored] could not erase: its name and the failure's type, nothing of its content. */
+    private fun notErased(file: String, e: Throwable) {
+        android.util.Log.w(LOG_TAG, "could not erase $file at the wipe (${e.javaClass.simpleName})")
     }
 
     private suspend fun attemptOf(key: String): ResultsAttempt? = withAttempts { list -> null to list.firstOrNull { it.key == key } }
 
-    /** A `gave_up` check is run again at most once a day per record (§10.19.6); a clock set back does not hold it up. */
+    /**
+     * A `gave_up` check is run again at most once a day per record (§10.19.6); a clock set back does not hold it up. While
+     * the kept attempts cannot be read ([StoreUnavailable], #322; iOS #222) it is not due: the next run tries again.
+     */
     private suspend fun dailyDue(key: String, at: Instant): Boolean {
-        val last = attemptOf(key) ?: return true
-        val since = at.toEpochMilli() - last.atMs
-        return since < 0 || since >= RECHECK_EVERY.toMillis()
+        val kept = withContext(io) { synchronized(attemptsSync) { attemptsLocked() } } ?: return false
+        val since = kept.firstOrNull { it.key == key }?.let { at.toEpochMilli() - it.atMs }
+        return since == null || since < 0 || since >= RECHECK_EVERY.toMillis()
     }
 
     private suspend fun recordAttempt(key: String, epoch: Int, trace: Trace, out: ResultsOutcome?, due: Boolean) {
@@ -1392,8 +1402,6 @@ class VotesManager(
         runCatching { stamps.save(map.map { (k, v) -> RecheckStamp(k, v) }) }
     }
 
-    /** The recheck's last rows download for [key], if any. */
-    private fun recheckStampOf(key: String): Long? = synchronized(attemptsSync) { recheckStampsLocked()?.get(key) }
 
     /** [recheckRowsAt] for [key], kept on disk, only while the store's epoch is still [epoch] (no wipe since the recheck began). */
     private fun stampRecheckRows(key: String, at: Long, epoch: Int) {
@@ -1419,16 +1427,17 @@ class VotesManager(
     /**
      * The recheck's rows.json waits (#319 item 2, the lead's (a)): on a network not known unmetered, downloaded for [key] less
      * than a day ago while within 7 days of the vote's close (as extended), or less than a week ago after (or with no close
-     * known).
+     * known). While the stamps cannot be read ([StoreUnavailable], #322; iOS #222) it waits, unless unmetered.
      */
     private fun recheckRowsWait(key: String, at: Long): Boolean {
-        val lastRows = recheckStampOf(key) ?: return false
+        val kept = synchronized(attemptsSync) { recheckStampsLocked() } ?: return unmetered() != true
+        val lastRows = kept[key]
         // The lead's call on #319 item 2 (a): for 7 days after the vote's close (as extended) at most daily, then weekly; a vote
         // without a known close, weekly. Wi-Fi is never capped.
         val closesAt = votesFlow.value.firstOrNull { it.key == key }?.closesAt?.toEpochMilli()
         val early = closesAt != null && at < closesAt + RECHECK_DAILY_FOR.toMillis()
         val every = if (early) RECHECK_EARLY_EVERY else METERED_ROWS_EVERY
-        return at - lastRows in 0 until every.toMillis() && unmetered() != true
+        return lastRows != null && at - lastRows in 0 until every.toMillis() && unmetered() != true
     }
 
     private fun rechecked(key: String, passed: Boolean, gen: Int): ResultsOutcome {
@@ -1546,6 +1555,7 @@ class VotesManager(
         }
         const val MAX_PAGES = 5
         const val TAG_LEN = 32
+        private const val LOG_TAG = "VotesManager"
         /** A failure that says the vault did not open the window (it refused); any other may have followed the opening. */
         val DEFINITE_REFUSALS = setOf(
             FailureKind.BAD_PASSWORD, FailureKind.BACKOFF, FailureKind.CREDENTIAL_FROZEN, FailureKind.ROTATION_REQUIRED,
