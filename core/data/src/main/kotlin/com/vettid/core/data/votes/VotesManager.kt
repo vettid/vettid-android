@@ -823,7 +823,7 @@ class VotesManager(
             var out: ResultsOutcome? = null
             var cancelled = false
             try {
-                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, trace, due) }.also { out = it }
+                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, epoch, trace, due) }.also { out = it }
             } catch (e: CancellationException) {
                 cancelled = true
                 throw e
@@ -904,6 +904,7 @@ class VotesManager(
         connectionId: String,
         proposalId: String,
         gen: Int,
+        epoch: Int,
         trace: Trace,
         /** The automatic re-check ([checkDue]); false for the member's Check again, which the network cap does not hold. */
         due: Boolean,
@@ -981,8 +982,17 @@ class VotesManager(
         }
         // Any bytes of rows.json received count toward the weekly cap, also of a download cut off partway (#319 item 1).
         var rowsBytes = false
+        // The download counts for the recheck on open too (#321 L3: the two paths do not add up); once, at the first bytes,
+        // under the store epoch the attempt began in.
+        val rowsAt = now().toEpochMilli()
         val rows = rowsCap?.let { cap ->
-            when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n -> if (n > 0) rowsBytes = true }) {
+            val stamp = { n: Long ->
+                if (n > 0 && !rowsBytes) {
+                    rowsBytes = true
+                    stampRecheckRows(key, rowsAt, epoch)
+                }
+            }
+            when (val a = site.getCounted("p/$proposalId/rows.json", cap, stamp)) {
                 is SiteAnswer.Found -> a.bytes
                 SiteAnswer.Absent -> null
                 SiteAnswer.TooLarge -> {

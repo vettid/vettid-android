@@ -2646,4 +2646,19 @@ class VotesManagerTest {
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
         assertEquals(1, saves)
     }
+
+    @Test
+    fun aCheckAgainDownloadCountsForTheRecheckOnOpen() = runTest {
+        // L3: a manual Check again's rows download stamps the recheck's cap: an open right after on mobile data is held.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        val m = manager(ops, site, unmetered = { false })
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, site.rowsReads())
+        m.clear()
+        m.refresh()
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+    }
 }

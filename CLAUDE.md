@@ -496,7 +496,8 @@ The A2 exit test:
   (as extended), then at most weekly, and weekly when the close is not known (`recheckRowsWait`, `recheckRowsAt`: kept on
   disk in `vote-rechecks.bin` (`RecheckStamp`: a key and a time; `KeystoreRecheckStampStore`, no-backup dir; #321 M1, so a
   cold start does not reset the cap), kept across a lock, pruned with the list, cleared by a wipe, a stamp only under the
-  store epoch it began in; #319 item 2, the lead's
+  store epoch it began in, once per download at its first bytes and whatever the job's state (a lock partway still spent
+  them, #321 L1); a results check's rows download (Check again, the daily re-check) stamps it too, #321 L3; #319 item 2, the lead's
   call (a): the verdict is forgotten at every lock, so each open would download again); on Wi-Fi every open downloads;
   behind the cap the not-rechecked line and no number, and a
   site that cannot be
