@@ -15,7 +15,8 @@ import org.robolectric.annotation.Config
 
 /**
  * The lasting notice of a refused relay key (VAULT-MESSAGING 0.84.0 §3.4; owner decision a, 2026-11-05; the texts are
- * NEW, for owner approval): its three texts, and an action that opens the existing key replacement.
+ * NEW, approved by the owner 2026-11-06, GC thread 01M6RZBVG54W7FXPVHKHF2GVGE, with vettid-ios #221): its three texts,
+ * and an action that opens the existing key replacement.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)

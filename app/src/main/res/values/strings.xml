@@ -122,7 +122,7 @@
     <string name="release_banner_ending_soon">Your vault\'s release is ending. Update now to keep your vault.</string>
     <string name="release_banner_ended">Your vault\'s release has ended. Update now to keep your vault.</string>
     <string name="release_banner_update">Update now</string>
-    <!-- NEW (VAULT-MESSAGING 0.84.0 §3.4; owner decision a, 2026-11-05), wording for owner approval: the lasting notice while vault.status has relay "refused". The action opens the existing key replacement (credential.rotate). -->
+    <!-- NEW (VAULT-MESSAGING 0.84.0 §3.4; owner decision a, 2026-11-05), approved by the owner 2026-11-06 (GC thread 01M6RZBVG54W7FXPVHKHF2GVGE, with vettid-ios #221): the lasting notice while vault.status has relay "refused". The action opens the existing key replacement (credential.rotate). -->
     <string name="relay_refused_title">Your vault couldn\'t move to its new address</string>
     <string name="relay_refused_body">Your vault may not receive messages until its keys are replaced.</string>
     <string name="relay_refused_action">Replace your vault\'s keys</string>
