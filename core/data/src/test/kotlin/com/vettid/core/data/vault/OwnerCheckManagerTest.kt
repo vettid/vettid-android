@@ -14,6 +14,7 @@ import com.vettid.core.vault.VaultStateException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -1059,9 +1060,11 @@ class OwnerCheckManagerTest {
         assertEquals(before + 2, ops.reads)
         val reads = ops.reads
         // The same item again (the feed list changed for another reason) does not read again; a read item is not new.
+        // Deterministic: a read would be a coroutine launched in this scope by onFeed itself, before anything runs.
+        val launched = coroutineContext.job.children.count()
         m.onFeed(listOf(item, FeedItem("m1", 2, "message.received", "2026-11-05T10:01:00Z", "active")))
+        assertEquals("no read is launched for an item already seen", launched, coroutineContext.job.children.count())
         advanceUntilIdle()
-        Thread.sleep(300)
         assertEquals(reads, ops.reads)
         // A wipe forgets the ids.
         m.clear()
@@ -1237,6 +1240,11 @@ class OwnerCheckManagerTest {
         val m = manager(ops)
         m.refreshOwnerCheck()
         assertTrue(m.relayRefused.value)
+        // Let the one re-read that refused status scheduled run first: under runTest, a read that waits on IO lets the
+        // virtual clock run to it, which would count one read more here.
+        val first = ops.reads
+        advanceTimeBy(61_000)
+        settle { ops.reads > first }
         ops.relayRefused = false
         val reads = ops.reads
         RelayReads.keysReplaced(m)
