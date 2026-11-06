@@ -737,7 +737,7 @@ class VotesManager(
         }
         val ballot = own.ballot
         // (0.81.6) A choice id the vault would refuse (and with it the whole submission) is the site's problem: not submitted.
-        if (ballot != null && !VoteSync.validChoiceId(ballot.string("choice_id"))) return@withLock fail(key, ResultsOutcome.Problem)
+        if (ballot != null && !VoteSync.validChoiceId(ballot.choice)) return@withLock fail(key, ResultsOutcome.Problem)
         val body = buildJsonObject {
             put("connection_id", connectionId)
             put("proposal_id", proposalId)
@@ -753,9 +753,10 @@ class VotesManager(
                         put(
                             "ballot",
                             buildJsonObject {
-                                put("vk", ballot.string("vk"))
-                                put("choice_id", ballot.string("choice_id"))
-                                put("ballot_sig", ballot.string("ballot_sig"))
+                                // Canonical base64 decodes and encodes back to the same text: these are the site's bytes.
+                                put("vk", Base64s.encodeStd(ballot.vk))
+                                put("choice_id", ballot.choice)
+                                put("ballot_sig", Base64s.encodeStd(ballot.ballotSig))
                             },
                         )
                     }

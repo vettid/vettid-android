@@ -3,8 +3,6 @@ package com.vettid.core.crypto.vote
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Ed25519
-import com.vettid.core.crypto.json.JsonNull
-import com.vettid.core.crypto.json.JsonNumber
 import com.vettid.core.crypto.json.JsonString
 import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.StrictJson
@@ -12,54 +10,62 @@ import com.vettid.core.crypto.json.asObject
 import com.vettid.core.crypto.json.asUint
 
 /**
- * A member's row of a vote's published results (BALLOT-PROTOCOL §8.2, §8.5): the row `rows.json` holds under the
- * member's record tag, with its inclusion proof to the results' `rows_root`. [ballot] is the row's `ballot` object as
- * the site has it (`vk`, `choice_id`, `ballot_sig`), or null for an empty row.
+ * A member's row of a vote's published results (BALLOT-PROTOCOL §8.2, §8.5): the first row `rows.json` holds under the
+ * member's record tag, with its inclusion proof to the results' `rows_root`. [ballot] is the row's ballot as the site has
+ * it, or null for an empty row.
  */
-class OwnRow(val ballot: JsonObject?, val index: Long, val treeSize: Long, val path: List<ByteArray>)
+class OwnRow(val ballot: OwnBallot?, val index: Long, val treeSize: Long, val path: List<ByteArray>)
+
+/** A row's ballot, decoded: `vk`, `choice_id` (its UTF-8 bytes) and `ballot_sig`. */
+class OwnBallot(val vk: ByteArray, val choiceId: ByteArray, val ballotSig: ByteArray) {
+    val choice: String get() = String(choiceId, Charsets.UTF_8)
+}
 
 /** Why the site's results could not be taken as they are: said to the member as a problem with the published results. */
 class ResultsProblem(val reason: String) : Exception(reason)
 
 /**
- * A vote's published results read from the site's bytes ([VoteRows.read]): `results.json` and `rows.json`, with the hash
- * of `rows.json`, the rows in tag order and the tree they make against `rows_root` already checked. [ownRow] is the
- * member's row for `vote.results.submit`; [observe] is the rest of the observer's check.
+ * A vote's published results read from the site's bytes ([VoteRows.read]): `results.json` and `rows.json` as [RowsTable]
+ * (no text of rows.json is kept). [ownRow] is the member's row for `vote.results.submit`; [observe] is the rest of the
+ * observer's check.
  */
 class PublishedResults internal constructor(
     private val results: JsonObject,
-    private val rowsDoc: JsonObject,
-    private val tags: List<ByteArray>,
-    private val ballots: List<JsonObject?>,
-    private val leaves: List<ByteArray>,
+    private val rows: RowsTable,
 ) {
-    /** The row of [recordTag] with its proof. Throws [ResultsProblem] (`no_row`) when the tag has no row. */
-    fun ownRow(recordTag: ByteArray): OwnRow {
-        val found = tags.indexOfFirst { Bytes.constantTimeEquals(it, recordTag) }
+    /** The first row of [recordTag] with its proof. Throws [ResultsProblem] (`no_row`) when the tag has no row. */
+    fun ownRow(recordTag: ByteArray, checkpoint: () -> Unit = {}): OwnRow {
+        var found = -1
+        for (i in 0 until rows.count) {
+            if (Bytes.constantTimeEquals(rows.tag(i), recordTag)) {
+                found = i
+                break
+            }
+        }
         if (found < 0) throw ResultsProblem("no_row")
-        val path = VoteMerkle.proof(leaves, found) ?: throw ResultsProblem("rows")
-        return OwnRow(ballots[found], found.toLong(), leaves.size.toLong(), path)
+        val path = VoteMerkle.proofOfHashes(rows.leafHashes, rows.count, found, checkpoint) ?: throw ResultsProblem("rows")
+        val ballot = if (rows.hasBallot(found)) OwnBallot(rows.vk(found), rows.choice(found), rows.sig(found)) else null
+        return OwnRow(ballot, found.toLong(), rows.count.toLong(), path)
     }
+
+    /** The bytes held for the rows (for the memory bound: review 1, finding 2). */
+    fun retainedRowBytes(): Long = rows.retainedBytes()
 
     /**
      * The observer's check of the rows against the proposal the results carry (BALLOT-PROTOCOL §8.4 items 2 to 4; VAULT-
      * MESSAGING 0.86.4 §10.19.6 step 1): the tags number the proposal's `eligible` and reach its `record_root`; every
      * ballot's `choice_id` is one of the proposal's choices and its `ballot_sig` verifies under its `vk` by the four rules
      * of BALLOT-PROTOCOL §2 ([Ed25519.verifyStrict]); the `tally` per choice and `counts.ballots` recompute. Throws
-     * [ResultsProblem] at the first difference, cheapest first and the signatures last. The signatures, the anchors and the
-     * proposal's own checks are the vault's (§10.19.6 step 2); this never decides anything for it.
+     * [ResultsProblem] at the first difference, cheapest first and the signatures last; [checkpoint] is called every 256
+     * rows and tree nodes, so a long check can be cancelled. The signatures, the anchors and the proposal's own checks are
+     * the vault's (§10.19.6 step 2); this never decides anything for it.
      */
     @Suppress("ThrowsCount", "CyclomaticComplexMethod", "LongMethod")
-    fun observe(proposalId: String) {
+    fun observe(proposalId: String, checkpoint: () -> Unit = {}) {
         // Only reported, never a reason not to submit (§10.19.6 step 1): the documents name this proposal, and rows.json is
         // exactly {v: 1, proposal_id, rows}.
         if ((results["proposal_id"] as? JsonString)?.value != proposalId) throw ResultsProblem("proposal_id")
-        val v = rowsDoc["v"]
-        if (rowsDoc.members.keys != ROWS_MEMBERS || v !is JsonNumber || v.raw != "1" ||
-            (rowsDoc["proposal_id"] as? JsonString)?.value != proposalId
-        ) {
-            throw ResultsProblem("rows_shape")
-        }
+        if (!rows.documentExact || rows.proposalId != proposalId) throw ResultsProblem("rows_shape")
         val proposalBytes: ByteArray
         val choices: Set<String>
         val recordRoot: ByteArray
@@ -82,12 +88,12 @@ class PublishedResults internal constructor(
             throw ResultsProblem("proposal")
         }
         // The tags are those the signed proposal fixed before anyone voted: as many, and the same tree (§8.2 record leaf).
-        if (tags.size.toLong() != eligible) throw ResultsProblem("eligible")
+        if (rows.count.toLong() != eligible) throw ResultsProblem("eligible")
         // The choices and the counts, from the rows alone.
         val counted = HashMap<String, Long>()
-        for (b in ballots) {
-            if (b == null) continue
-            val id = b.string("choice_id")
+        for (i in 0 until rows.count) {
+            if (!rows.hasBallot(i)) continue
+            val id = String(rows.choice(i), Charsets.UTF_8)
             if (id !in choices) throw ResultsProblem("choice_id")
             counted[id] = (counted[id] ?: 0L) + 1
         }
@@ -101,16 +107,17 @@ class PublishedResults internal constructor(
             if (n != (counted[id] ?: 0L)) throw ResultsProblem("tally")
         }
         if (ballotsCount != counted.values.sum()) throw ResultsProblem("ballots")
-        if (!Bytes.constantTimeEquals(VoteMerkle.root(tags), recordRoot)) throw ResultsProblem("record_root")
+        val tagHashes = ByteArray(rows.count * VoteMerkle.HASH)
+        for (i in 0 until rows.count) VoteMerkle.leafHash(rows.tag(i)).copyInto(tagHashes, i * VoteMerkle.HASH)
+        val root = VoteMerkle.rootOfHashes(tagHashes, rows.count, checkpoint)
+        if (!Bytes.constantTimeEquals(root, recordRoot)) throw ResultsProblem("record_root")
         // Every ballot under its own key (§5): ballot_msg = proposal_hash || record_tag || lp(choice_id).
         val proposalHash = Bytes.sha256(proposalBytes)
-        for ((i, b) in ballots.withIndex()) {
-            if (b == null) continue
-            val choice = b.string("choice_id").toByteArray(Charsets.UTF_8)
-            val msg = Bytes.concat(proposalHash, tags[i], VoteRows.lp(choice))
-            if (!Ed25519.verifyStrict(b.base64("vk"), VoteRows.BALLOT_LABEL, msg, b.base64("ballot_sig"))) {
-                throw ResultsProblem("ballot_sig")
-            }
+        for (i in 0 until rows.count) {
+            if (i % CHECK_EVERY == 0) checkpoint()
+            if (!rows.hasBallot(i)) continue
+            val msg = Bytes.concat(proposalHash, rows.tag(i), VoteRows.lp(rows.choice(i)))
+            if (!Ed25519.verifyStrict(rows.vk(i), VoteRows.BALLOT_LABEL, msg, rows.sig(i))) throw ResultsProblem("ballot_sig")
         }
     }
 
@@ -131,7 +138,7 @@ class PublishedResults internal constructor(
     }
 
     private companion object {
-        val ROWS_MEMBERS = setOf("v", "proposal_id", "rows")
+        const val CHECK_EVERY = 256
     }
 }
 
@@ -169,9 +176,6 @@ object VoteRows {
     private const val ROWS_SLACK = 4_096L
     const val ROWS_CAP_MAX = 51_204_096L
 
-    /** rows.json is nested at most 4 deep (§10.19.6 step 1): the document, `rows`, a row, its ballot. */
-    private const val ROWS_DEPTH = 4
-
     /** `"vettid/vote/1/ballot\x00"` (BALLOT-PROTOCOL §5). */
     internal const val BALLOT_LABEL = "vettid/vote/1/ballot\u0000"
 
@@ -183,12 +187,14 @@ object VoteRows {
         read(resultsBytes, rowsBytes).ownRow(recordTag)
 
     /**
-     * Reads the published results: `results.json` names `rows_hash`, `rows_root` and `counts.eligible`; `rows.json` hashes
-     * to `rows_hash`, has `counts.eligible` rows sorted by tag, each once and each one that can be made into a leaf, and
-     * its leaves reach `rows_root`. Throws [ResultsProblem] for anything that does not hold.
+     * Reads the published results: `results.json` names `rows_hash`, `rows_root` and `counts.eligible`; `rows.json` is within
+     * [rowsCap], read by [RowsReader] (nested at most 4 deep, `counts.eligible` rows, each one that can be made into a leaf;
+     * no text kept), hashes to `rows_hash`, is sorted by tag with each tag once, has ballots of the protocol's lengths, and its
+     * leaves reach `rows_root`. Throws [ResultsProblem] for anything that does not hold. [checkpoint] is called every 256
+     * rows and tree nodes.
      */
-    @Suppress("ThrowsCount")
-    fun read(resultsBytes: ByteArray, rowsBytes: ByteArray): PublishedResults {
+    @Suppress("ThrowsCount", "CyclomaticComplexMethod")
+    fun read(resultsBytes: ByteArray, rowsBytes: ByteArray, checkpoint: () -> Unit = {}): PublishedResults {
         val results: JsonObject
         val rowsHash: ByteArray
         val rowsRoot: ByteArray
@@ -203,48 +209,25 @@ object VoteRows {
         }
         if (rowsBytes.size > rowsCap(eligible)) throw ResultsProblem("rows_size")
         if (!Bytes.constantTimeEquals(Bytes.sha256(rowsBytes), rowsHash)) throw ResultsProblem("rows_hash")
-        val tags = ArrayList<ByteArray>()
-        val ballots = ArrayList<JsonObject?>()
-        val leaves = ArrayList<ByteArray>()
-        val rowsDoc: JsonObject
-        try {
-            rowsDoc = StrictJson.parseObject(rowsBytes, ROWS_DEPTH)
-            val rows = rowsDoc.array("rows")
-            if (rows.size.toLong() != eligible) throw ResultsProblem("rows_count")
-            var previous: ByteArray? = null
-            for (e in rows) {
-                val row = e.asObject()
-                val tag = row.base64("record_tag", VoteMerkle.HASH)
-                // Sorted by tag, each once (§8.2): another order is not the tree the root was made over.
-                if (previous != null && compare(previous, tag) >= 0) throw ResultsProblem("rows_order")
-                previous = tag
-                val b = row["ballot"]
-                val ballot = if (b == null || b is JsonNull) null else b.asObject()
-                tags += tag
-                ballots += ballot
-                leaves += if (ballot == null) tag else leafOf(tag, ballot)
-            }
-        } catch (_: CryptoException) {
-            throw ResultsProblem("rows")
+        val rows = RowsReader(rowsBytes, eligible.toInt(), checkpoint).read()
+        // Sorted by tag, each once (§8.2): another order is not the tree the root was made over.
+        for (i in 1 until rows.count) if (compare(rows.tags, (i - 1) * KEY, i * KEY) >= 0) throw ResultsProblem("rows_order")
+        for (i in 0 until rows.count) {
+            if (!rows.hasBallot(i)) continue
+            val choice = rows.choice(i).size
+            if (rows.vk(i).size != KEY || rows.sig(i).size != SIG || choice == 0 || choice > MAX_ID) throw ResultsProblem("rows")
         }
-        if (!Bytes.constantTimeEquals(VoteMerkle.root(leaves), rowsRoot)) throw ResultsProblem("rows_root")
-        return PublishedResults(results, rowsDoc, tags, ballots, leaves)
-    }
-
-    /** `ballot_leaf` (§5): `record_tag || lp(vk) || lp(choice_id) || lp(ballot_sig)`, `lp(x) = u16(len x) || x`. */
-    private fun leafOf(tag: ByteArray, b: JsonObject): ByteArray {
-        val vk = b.base64("vk", KEY)
-        val sig = b.base64("ballot_sig", SIG)
-        val choice = b.string("choice_id").toByteArray(Charsets.UTF_8)
-        if (choice.isEmpty() || choice.size > MAX_ID) throw ResultsProblem("rows")
-        return Bytes.concat(tag, lp(vk), lp(choice), lp(sig))
+        val root = VoteMerkle.rootOfHashes(rows.leafHashes, rows.count, checkpoint)
+        if (!Bytes.constantTimeEquals(root, rowsRoot)) throw ResultsProblem("rows_root")
+        return PublishedResults(results, rows)
     }
 
     internal fun lp(x: ByteArray) = Bytes.concat(Bytes.uintBE(x.size.toLong(), 2), x)
 
-    private fun compare(a: ByteArray, b: ByteArray): Int {
-        for (i in a.indices) {
-            val d = (a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)
+    /** The 32 bytes at [x] against those at [y] of [a], unsigned. */
+    private fun compare(a: ByteArray, x: Int, y: Int): Int {
+        for (k in 0 until KEY) {
+            val d = (a[x + k].toInt() and 0xff) - (a[y + k].toInt() and 0xff)
             if (d != 0) return d
         }
         return 0
