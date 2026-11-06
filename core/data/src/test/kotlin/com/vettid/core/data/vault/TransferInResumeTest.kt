@@ -146,7 +146,7 @@ class TransferInResumeTest {
         assertEquals(25_000L, waits[0])
         assertTrue(starts[1] >= 25_000L + 30_000L)
         assertTrue("an abandoned request may hold a lease: the window moved out", droppedAt > TransferInResume.SETTLE_WINDOW_MS)
-        assertEquals(420_000L, droppedAt)
+        assertEquals(360_000L, droppedAt) // an abandoned request's lease runs from its send + wait, not from the abandon
     }
 
     @Test
@@ -288,8 +288,9 @@ class TransferInResumeTest {
         val settle = TransferInResume.Settle(maxExtraMs = 10_000, now = { testScheduler.currentTime })
         TransferInResume.atDeadline({ false }, { CompletableDeferred<Unit>().await() }, { droppedAt = t }, settle = settle)
         // The END stays within first end 90 s + 10 s; the abandoned requests' leases (up to a visibility timeout past their
-        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 321 s here.
-        assertEquals(321_000L, droppedAt)
+        // notice, past the cap) are waited for by the one held last collect, then the drop: bounded, 261 s here
+        // (each abandoned request's lease runs from its send + wait, not from the abandon 30 s later).
+        assertEquals(261_000L, droppedAt)
     }
 
     /**

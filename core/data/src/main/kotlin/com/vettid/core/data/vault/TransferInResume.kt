@@ -124,7 +124,7 @@ internal object TransferInResume {
         val handlingMs: Long = HANDLING_MARGIN_MS,
         /** The cap: the end never moves past the first end + [maxExtraMs] (V + 35 s), on the window's clock. */
         val maxExtraMs: Long = SETTLE_MAX_EXTRA_MS,
-        /** V, the (clamped) visibility timeout: a cut or a freeze moves the end to at least now + V. */
+        /** V, the (clamped) visibility timeout: a cut or a freeze moves the end to at least its lease start + V (+ 15 s). */
         val visibilityMs: Long = DEFAULT_VISIBILITY_S * MS,
         // A unit test's stub of SystemClock answers 0 (isReturnDefaultValues): a window on that clock would never end, so the
         // default fails loudly there instead of hanging; a test passes its own clock. On a phone it is never 0 (since boot).
@@ -175,29 +175,38 @@ internal object TransferInResume {
      * while it can hold a message: each is sized to what is left of the window (its wait is what is left minus
      * [Settle.handlingMs], at most [Settle.pollMs]) and bounded by its wait plus [Settle.transportMs].
      *
-     * **The extension rule.** On a cut or a detected freeze the end moves to `min(max(end, now + V), cap)`, V being
-     * [Settle.visibilityMs] and the cap F + [Settle.maxExtraMs] (V + 35 s), both fixed on the window's clock; nothing
-     * shifts F, the frozen time counts. A cut is: a request of ours abandoned or failed with anything but a relay status,
-     * or the collector's in-flight request cut or lost ([cuts]). A freeze is a gap of more than [Settle.freezeMarginMs]
+     * **The extension rule.** On a cut or a detected freeze the end moves to `min(max(end, lease end + 15 s), cap)`, the
+     * cap being F + [Settle.maxExtraMs] (V + 35 s, V = [Settle.visibilityMs]), fixed on the window's clock; nothing shifts F,
+     * the frozen time counts (a freeze also moves the end to at least the wake + V). A lease runs to s + w + V, s being the
+     * send time and w the long-poll wait of the request that may hold it (the relay can hand a parked long poll a message up
+     * to w after the send, also after a failure on our side): for a cut, the cut request's own (ours, or [cutLeases] for the
+     * collector's, only the cuts [cuts] counted since the window began; one not described is taken as now + the long-poll
+     * cap); for a freeze, the latest request sent at or before it began, ours or the collector's, kept after the request
+     * ended ([collectorAge], [collectorSends]). A cut of a request sent at or before a freeze therefore leases within the
+     * freeze's lease: it belongs to the freeze and moves nothing. Our own requests are recorded with the wait they were sent
+     * with ([sentWait]: 0 while the collection runs). A cut is: a request of ours abandoned or failed with anything but a
+     * relay status, or the collector's in-flight request cut or lost. A freeze is a gap of more than [Settle.freezeMarginMs]
      * between the ticks of a 1 s heartbeat that lives only as long as the window. The check is made after the final collect
      * too, so a cut or a freeze just before the end extends and loops instead of dropping.
      *
-     * **The last collect.** A lease taken by a cut or a freeze (s + w + V for a freeze, s being the send time and w the long-poll wait of
-     * the latest
-     * request
-     * sent at or before it began, ours or the collector's, kept after the request ended via [collectorAge]; the notice time
-     * + V for a cut) that runs past the cap is recorded however and whenever it was noticed (before the cap or after).
-     * The final `wait=0` collect then goes at `max(now, latest lease end + 15 s)` ([HOLD_MARGIN_MS]). The settlement has ONE extra in all: either
-     * the hold target moves once (a cut or freeze noticed during the hold; a later move is ignored, since a collector
-     * failing offline would otherwise move it at every failure for ever), or, after the final send, a lease noticed during it
-     * that outlives its start earns one more held final collect. Then the drop (not when paired, not when the end moved
-     * past now).
+     * **The last collect.** A lease that runs past the cap (its end + 15 s) is recorded however and whenever it was noticed
+     * (before the cap or after). The final `wait=0` collect then goes at `max(now, latest lease end + 15 s)`
+     * ([HOLD_MARGIN_MS]). The settlement has ONE extra in all: the hold target moves once (a cut or freeze noticed during the
+     * hold; setting the first hold is no move; a later move is ignored, since a collector failing offline would otherwise
+     * move it at every failure for ever); or, after the final send, one more held final collect, for a lease noticed during
+     * it that outlives its start (past the cap, or within it but ending after the send began), or for a final collect the
+     * relay refused (429, or 401 with a stale signature: held for its `retry_after`, at most V, and signed afresh; any other
+     * status is no cut). Once the extra is used, nothing raises a hold past what was due when it was taken (a background or a
+     * return grants nothing); but a freeze during the last send (the app in the background) earns one more `wait=0` look, at
+     * once and held for nothing, so the drop never follows only a look made before the freeze. Then the drop (not when
+     * paired, not when the end moved past now).
      *
      * **The bound** (cap = F + V + 35 s): the last ordinary step ends within 148 s of the cap (a round wait 55 s, a request
      * 30 s at wait 0, a round wait 55 s, a pause up to 8 s); its cut is noticed then, so the hold ends within V + 40 s more
      * (the lease starts by s + w, w up to 25 s, the long-poll cap, ours and the collector's; then the 15 s margin); the final
-     * send takes at most 140 s (55 + 30 + 55); the extra (a hold move, or a second held collect after the first send) is at
-     * most V + 40 s more, and a second final send 140 s: at most cap + 2V + 508 s in all (cap + 628 s at the default V).
+     * send takes at most 140 s (55 + 30 + 55); the extra (a hold move, a second held collect after the first send, or a
+     * refused collect's `retry_after`, at most V) is at most V + 40 s more, and a second final send 140 s; the one look after
+     * a freeze in the last send 140 s: at most cap + 2V + 648 s in all (cap + 768 s at the default V), plus any frozen time.
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
@@ -216,9 +225,11 @@ internal object TransferInResume {
         cuts: () -> Long = { 0L },
         collectorAge: () -> Long? = { null },
         collectorSends: () -> List<Pair<Long, Long>> = { emptyList() },
+        cutLeases: () -> List<Pair<Long, Long>> = { emptyList() },
+        sentWait: (waitMs: Long) -> Long = { it },
     ): Boolean {
         if (paired()) return true
-        val out = Requests(settle, collect, awaitRound, cuts, collectorAge, collectorSends)
+        val out = Requests(settle, collect, awaitRound, cuts, collectorAge, collectorSends, cutLeases, sentWait)
         // The heartbeat lives only as long as the window: cancelled when the loop ends, however it ends.
         coroutineScope {
             val beat = launch { out.heartbeat() }
@@ -232,12 +243,13 @@ internal object TransferInResume {
                         // The window's end: one final wait=0 collect, held until every lease that runs past the cap has
                         // run out (max(now, s + w + V + 15 s), however and whenever the cut or freeze was noticed). A cut or a
                         // freeze during the hold moves it. One that is noticed during the send itself, with a lease
-                        // beyond its start, earns ONE more held final collect in all, then the drop.
+                        // beyond its start, or a refused last collect, earns ONE more held final collect in all; a freeze
+                        // during the last send after that earns one more look, held for nothing; then the drop.
                         out.awaitHold()
                         val sentAt = settle.now()
                         out.send(0L)
                         out.look()
-                        if (out.left() <= 0 && !out.takeExtraAfterSend(sentAt)) break
+                        if (out.left() <= 0 && !out.againAfterLastSend(sentAt)) break
                     }
                 }
             } finally {
@@ -251,6 +263,7 @@ internal object TransferInResume {
     }
 
     /** The requests of one settlement: its window's end (which cuts and freezes move, within the cap) and its failures. */
+    @Suppress("LongParameterList", "TooManyFunctions")
     private class Requests(
         private val settle: Settle,
         private val collect: suspend (waitMs: Long) -> Unit,
@@ -258,6 +271,8 @@ internal object TransferInResume {
         private val cuts: () -> Long,
         private val collectorAge: () -> Long?,
         private val collectorSends: () -> List<Pair<Long, Long>>,
+        private val cutLeases: () -> List<Pair<Long, Long>>,
+        private val sentWait: (waitMs: Long) -> Long,
     ) {
         private val firstEnd = settle.now() + settle.windowMs
         private val cap = firstEnd + settle.maxExtraMs
@@ -269,14 +284,32 @@ internal object TransferInResume {
         /** The latest send (window clock) of any request, ours or the collector's, as of the last tick; kept after it ends. */
         @Volatile private var sampledSend: Long? = null
 
-        /** The send times of our own latest requests (the last few); kept after they end. */
+        /** The send times of our own latest requests (the last few) and the wait each carried; kept after they end. */
         private val ourSends = ArrayDeque<Pair<Long, Long>>()
 
         /** The latest end of a lease that runs past the cap (window clock), 0 when none: the last collect holds for it. */
         @Volatile private var maxLeaseEnd = 0L
 
-        /** The one extra held final collect has been used. */
+        /** The latest end of any lease noticed (window clock), 0 when none. */
+        @Volatile private var latestLeaseEnd = 0L
+
+        /** The one extra of the settlement has been used. */
         @Volatile private var extraUsed = false
+
+        /** Once the extra is used, no hold goes past this (what was due when it was taken): nothing grants a new hold. */
+        @Volatile private var ceiling = Long.MAX_VALUE
+
+        /** The extra's own hold: a refused last collect's `retry_after`, or a lease that ended during the last send. */
+        @Volatile private var notBefore = 0L
+
+        /** The wake (window clock) of the latest freeze seen, 0 when none. */
+        @Volatile private var lastWake = 0L
+
+        /** The one look given after the extra, for a freeze during the last send, has been used. */
+        private var lastLookUsed = false
+
+        /** The latest request of ours was refused with 429 or a stale signature: its `retry_after` in ms (0 when none). */
+        private var refusedRetryMs: Long? = null
         private var failures = 0
         private var seenCuts = cuts()
 
@@ -293,41 +326,76 @@ internal object TransferInResume {
          * Before the last collect: waits until every lease that runs past the cap has run out (+ [Settle.holdMarginMs]). The
          * target may move ONCE (a cut or freeze noticed during the wait, which uses up the one extra of the settlement); a
          * later move is ignored, so the hold, and the pin, cannot go on for ever (a collector failing offline moves it at every
-         * failure).
+         * failure). Once the extra is used, nothing raises the target past what was due when it was taken.
          */
         suspend fun awaitHold() {
             look()
-            var target = holdTarget()
+            var target = holdDue()
             while (true) {
                 val w = target - settle.now()
                 if (w > 0) delay(w)
                 look()
-                val moved = holdTarget()
+                val moved = holdDue()
                 if (moved <= target) return
                 // The first hold, set while nothing was due yet, is not a move: it does not use up the extra.
-                if (target != 0L && !takeExtra()) return
+                if (target != 0L && !takeExtra(moved)) return
                 target = moved
             }
         }
 
         private fun holdTarget(): Long = if (maxLeaseEnd == 0L) 0L else maxLeaseEnd + settle.holdMarginMs
 
-        /** The one extra of the settlement: a move of the hold target, or another held final collect after the send. */
+        private fun holdDue(): Long = minOf(maxOf(holdTarget(), notBefore), ceiling)
+
+        /**
+         * The one extra of the settlement: a move of the hold target, or another held final collect after the send. [due]
+         * is the hold it grants: no later hold goes past it.
+         */
         @Synchronized
-        private fun takeExtra(): Boolean {
+        private fun takeExtra(due: Long): Boolean {
             if (extraUsed) return false
             extraUsed = true
+            ceiling = due
             return true
         }
 
-        /** After the last collect: a lease noticed during it that outlives its start earns the one extra, if still unused. */
-        fun takeExtraAfterSend(sentAt: Long): Boolean = holdTarget() > sentAt && takeExtra()
+        /**
+         * After the last collect, at the end: whether to look once more. A lease noticed during it that outlives its start (one
+         * past the cap, or one within it that ended during the send), or a last collect the relay refused (429, a stale
+         * signature: nothing was looked at; held for its `retry_after`, at most V, and signed afresh), earns the one extra, if
+         * still unused. Once it is used, a freeze during the last send (the app was in the background) earns one more look,
+         * at once and held for nothing, so the drop never follows a look made before the freeze.
+         */
+        fun againAfterLastSend(sentAt: Long): Boolean {
+            val n = settle.now()
+            val refused = refusedRetryMs
+            val leases = maxOf(holdTarget(), if (latestLeaseEnd == 0L) 0L else latestLeaseEnd + settle.holdMarginMs)
+            val due = if (refused != null) maxOf(leases, n + minOf(refused, settle.visibilityMs)) else leases
+            val again = when {
+                (refused != null || due > sentAt) && takeExtra(due) -> {
+                    notBefore = due
+                    true
+                }
+                extraUsed && !lastLookUsed && lastWake > sentAt -> {
+                    lastLookUsed = true
+                    true
+                }
+                else -> false
+            }
+            return again
+        }
 
-        /** A cut or a freeze: the message may be leased for a visibility timeout from [from]. The end never passes the cap. */
+        /**
+         * A cut or a freeze: the message may be leased for a visibility timeout from [leaseStart] (a request's send + its
+         * long-poll wait). The end moves to the lease's end + [Settle.holdMarginMs], never past the cap; a lease that runs
+         * past the cap is recorded for the held last collect.
+         */
         @Synchronized
-        private fun mayHoldLease(from: Long = settle.now()) {
-            endAt = minOf(maxOf(endAt, from + settle.visibilityMs), cap)
-            if (from + settle.visibilityMs > cap) maxLeaseEnd = maxOf(maxLeaseEnd, from + settle.visibilityMs)
+        private fun mayHoldLease(leaseStart: Long) {
+            val leaseEnd = leaseStart + settle.visibilityMs
+            latestLeaseEnd = maxOf(latestLeaseEnd, leaseEnd)
+            endAt = minOf(maxOf(endAt, leaseEnd + settle.holdMarginMs), cap)
+            if (leaseEnd + settle.holdMarginMs > cap) maxLeaseEnd = maxOf(maxLeaseEnd, leaseEnd)
         }
 
         /** The ticker: marks the window's clock every [Settle.heartbeatMs] and looks at the gap since the last mark. */
@@ -342,10 +410,9 @@ internal object TransferInResume {
          * A tick, or a look from the loop: if the window's clock moved on by more than [Settle.freezeMarginMs] since the last
          * tick, the process was frozen meanwhile (see [Settle.freezeMarginMs]). The lease is that of the latest request sent
          * at or before the freeze began (s: the last tick's sample, or a later send up to a tick after it, or one older than
-         * the margin before the wake; it is kept after the request ended): it runs to s + w + V (the relay hands a message out up to w
-         * after
-         * the send). The end is extended, and a lease
-         * past the cap is recorded for the last collect to hold for, whether the wake was before the cap or after it.
+         * the margin before the wake; it is kept after the request ended): it runs to s + w + V (the relay hands a message
+         * out up to w after the send). The end is extended, and a lease past the cap is recorded for the last collect to hold
+         * for, whether the wake was before the cap or after it.
          */
         @Synchronized
         private fun tick() {
@@ -362,6 +429,7 @@ internal object TransferInResume {
                 ourSends.toList()
             val latest = sends.maxOfOrNull { it.first + it.second }
             if (gap > settle.freezeMarginMs) {
+                lastWake = n
                 // s: the lease start of the latest send at or before the freeze began: the last tick's sample, or a later send
                 // up to a tick after it, or one older than the margin before the wake (per send: a restart right after the wake
                 // does not hide the send before the freeze).
@@ -373,13 +441,23 @@ internal object TransferInResume {
             sampledSend = latest
         }
 
-        /** Looks for a freeze and for a cut collector request (it was stopped or restarted with a request out). */
+        /**
+         * Looks for a freeze and for cut collector requests (stopped, restarted or lost with a request out). A cut's lease
+         * starts by its request's send + wait ([cutLeases]: the device's latest cuts, numbered as [cuts] counts them; only
+         * those counted since the window began, or since the last look, are new). A cut the device did not describe is taken
+         * as now + the long-poll cap. A cut of a request sent at or before a freeze has a lease within the freeze's, so it
+         * moves nothing: it belongs to the freeze.
+         */
         fun look() {
             tick()
             val c = cuts()
             if (c != seenCuts) {
+                val n = settle.now()
+                val fresh = cutLeases().filter { it.first > seenCuts && it.first <= c }.map { n - it.second }
+                val described = fresh.size.toLong() >= c - seenCuts
                 seenCuts = c
-                mayHoldLease()
+                val start = if (described) fresh.max() else maxOf(fresh.maxOrNull() ?: Long.MIN_VALUE, n + settle.pollMs)
+                mayHoldLease(start)
             }
         }
 
@@ -407,26 +485,33 @@ internal object TransferInResume {
         @Suppress("TooGenericExceptionCaught") // whatever ends a collect, the next one follows
         private suspend fun request(waitMs: Long) {
             val bound = waitMs + settle.transportMs
+            refusedRetryMs = null
+            val sentAt = settle.now()
+            // The lease of this request starts by its send + the wait it is actually sent with (wait=0 while the collection
+            // runs), at most the one asked.
+            val leaseStart = sentAt + minOf(sentWait(waitMs), waitMs)
             try {
                 synchronized(this) {
-                    ourSends.addLast(settle.now() to waitMs)
+                    ourSends.addLast(sentAt to leaseStart - sentAt)
                     if (ourSends.size > MAX_SENDS) ourSends.removeFirst()
                 }
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
                 if (withTimeoutOrNull(bound) { collect(waitMs) } == null) {
                     failures++
-                    mayHoldLease()
+                    mayHoldLease(leaseStart)
                 } else {
                     failures = 0
                 }
                 look()
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: RelayException) {
+            } catch (e: RelayException) {
                 failures++ // a status came back: nothing was leased; tried again with backoff
+                // The relay refused to look (rate limited, or a signature it found stale): at the end, one more look.
+                if (e.status == RelayException.HTTP_TOO_MANY || e.staleSignature) refusedRetryMs = e.retryAfterSeconds * MS
             } catch (_: Exception) {
                 failures++ // e.g. a body that could not be read: it may have been answered and leased
-                mayHoldLease()
+                mayHoldLease(leaseStart)
             }
         }
     }
@@ -473,8 +558,14 @@ internal object TransferInResume {
             cuts: () -> Long = { 0L },
             collectorAge: () -> Long? = { null },
             collectorSends: () -> List<Pair<Long, Long>> = { emptyList() },
+            cutLeases: () -> List<Pair<Long, Long>> = { emptyList() },
+            sentWait: (waitMs: Long) -> Long = { it },
         ): Boolean = lock.withLock {
-            if (due()) atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts, collectorAge, collectorSends) else paired()
+            if (due()) {
+                atDeadline(paired, collect, drop, alive, settle, awaitRound, cuts, collectorAge, collectorSends, cutLeases, sentWait)
+            } else {
+                paired()
+            }
         }
     }
 }

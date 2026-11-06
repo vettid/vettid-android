@@ -4343,6 +4343,7 @@ class VaultManager(
         override val collectorCuts get() = d.collectorCuts
         override val collectorLastSendAgeMs get() = d.collectLastSendAgeMs
         override val collectorSendsMs get() = d.collectSendsMs
+        override val collectorCutLeasesMs get() = d.collectCutLeasesMs
 
         override suspend fun relayVisibilitySeconds(): Long? = d.relayLimits().visibilityTimeoutSeconds
 

@@ -18,9 +18,9 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class TransferInSettleFreezeTest {
     private companion object {
-        const val EXPECTED_OFFLINE_DROP = 240_000L
-        const val EXPECTED_CUTS_DROP = 259_000L
-        const val FIX3_FINAL = 250_000L
+        const val EXPECTED_OFFLINE_DROP = 290_000L
+        const val EXPECTED_CUTS_DROP = 309_000L
+        const val FIX3_FINAL = 300_000L
     }
 
     // --- the collector's own request cut, or a process freeze, during the window ---
@@ -403,7 +403,8 @@ class TransferInSettleFreezeTest {
     }
 
     /**
-     * (round 3, M2) A freeze in every final send never earns more than ONE extra held final collect: two in all, then the drop.
+     * (round 3, M2) A freeze in every final send never earns more than ONE extra held final collect; after it, the freeze in the
+     * last send earns one more look, held for nothing (item 8): three in all, then the drop.
      */
     @Test
     fun atMostOneExtraHeldFinalCollectPerSettlement() = runTest {
@@ -422,7 +423,7 @@ class TransferInSettleFreezeTest {
         }
         assertFalse(TransferInResume.atDeadline({ false }, collect, { drops++ }, settle = settle))
         assertEquals(1, drops)
-        assertEquals("one final collect and one extra, no more", 2, finals)
+        assertEquals("one final collect, one extra and the one look after the freeze, no more", 3, finals)
     }
 
     /**
@@ -454,7 +455,8 @@ class TransferInSettleFreezeTest {
 
     /**
      * (iOS point 1) A cut during the hold moves the hold: the last collect goes once, after the new lease. Cuts at 98 s (lease
-     * 158 s, hold 173 s) and 150 s, during the hold (noticed at 173 s: lease 233 s, hold 248 s).
+     * 183 s, hold 198 s) and 150 s, during the hold (noticed at 198 s: lease 283 s, hold 298 s); undescribed cuts lease from
+     * their notice + the long-poll cap.
      */
     @Test
     fun aCutDuringTheHoldMovesTheHold() = runTest {
@@ -477,10 +479,10 @@ class TransferInSettleFreezeTest {
         assertTrue(TransferInResume.atDeadline({ isPaired }, collect, { drops++ }, settle = settle, cuts = { cutCount }))
         assertEquals(0, drops)
         assertEquals("one final collect, after the new lease: $finalTimes", 1, finalTimes.size)
-        assertTrue(finalTimes[0] >= 248_000) // the notice is at the look after the first hold (173 s): 173 + 60 + 15
+        assertTrue(finalTimes[0] >= 298_000) // the notice is at the look after the first hold (198 s): 198 + 25 + 60 + 15
     }
 
-    /** (R1) A second move of the hold is ignored: cuts at 98, 150 and 200 s; the hold moves once (to 248 s), then the drop. */
+    /** (R1) A second move of the hold is ignored: cuts at 98, 150 and 200 s; the hold moves once (to 298 s), then the drop. */
     @Test
     fun aSecondMoveOfTheHoldIsIgnored() = runTest {
         val clock = FrozenClock(this)
@@ -502,7 +504,7 @@ class TransferInSettleFreezeTest {
             ),
         )
         assertEquals(1, drops)
-        assertEquals("one move of the hold, then the drop", 248_000L, droppedAt)
+        assertEquals("one move of the hold, then the drop", 298_000L, droppedAt)
     }
 
     /**
@@ -586,8 +588,9 @@ class TransferInSettleFreezeTest {
      * (Fix 3) The first hold, set while nothing was due yet, is not a move. A cut is recorded between the two looks at the
      * start of the hold (the cuts lambda flips on its 4th read at the end: the pause's look, the loop's, and the hold's two):
      * the hold adopts it without using up the one extra. A later cut during the hold then still moves it (once).
-     * F = 100 s, the cap 105 s. The first cut, noticed at 100 s, leases to 160 s: the hold is 175 s. The second, at 130 s, is
-     * noticed at 175 s and leases to 235 s: the hold moves to 250 s, where the one final collect goes.
+     * F = 100 s, the cap 105 s. The cuts are not described, so each lease starts by its notice + the long-poll cap (25 s). The
+     * first cut, noticed at 100 s, leases to 185 s: the hold is 200 s. The second, at 130 s, is noticed at 200 s and leases to
+     * 285 s: the hold moves to 300 s, where the one final collect goes.
      */
     @Test
     fun aLeaseRecordedBetweenTheHoldsTwoLooksIsNotAMove() = runTest {
