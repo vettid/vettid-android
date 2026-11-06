@@ -223,8 +223,8 @@ internal object TransferInResume {
      * refused collect's `retry_after`, at most V) is at most V + 40 s more, and a second final send 140 s; the one look after
      * a freeze in the last send 140 s, at once (held for nothing): at most cap + 2V + 648 s in all (cap + 768 s at the
      * default V), plus any frozen time, for every V. An extra taken before the cap ends before it, so its `retry_after` hold
-     * ends by cap + V; then the free first lease hold (V + 40 s), the last send (140 s) and the look (140 s): at most
-     * cap + 2V + 320 s.
+     * ends by cap + V; then the free first lease hold (V + 40 s), the last send (140 s) and the look (140 s), or, if a cut
+     * moved the end again, ordinary steps to the cap (148 s) and the same: at most cap + max(2V + 320, V + 468) s.
      *
      * Waiting for the collection's own round is [awaitRound], before and after each request and never under the request's
      * bound: it has its own (the poll cap plus the transport bound), and one that runs out is no abandoned request.
