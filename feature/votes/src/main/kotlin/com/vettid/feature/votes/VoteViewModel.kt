@@ -300,6 +300,10 @@ class VoteViewModel @Inject constructor(
                 local.update { it.copy(checking = false, checkOutcome = out) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(checking = false, checkProblem = problem(e)) }
+            } finally {
+                // A check that ends any other way (cancelled, or a failure that is not the vault's) never leaves the button
+                // disabled (lead review L2).
+                local.update { if (it.checking) it.copy(checking = false) else it }
             }
         }
     }

@@ -34,6 +34,10 @@ robolectricAndroidAll = "16-robolectric-13921718-i7"
 # pure-Java low-level APIs (no JCA provider is registered). 1.86 is the first
 # release verified against the vettid-vault §16 vectors (ANDROID-PLAN §8 risk 1).
 bouncycastle = "1.86"
+# Tink (tink-android, Apache-2.0, pure Java; no Google Play services or Firebase): only its Ed25519 verify
+# (subtle.Ed25519Verify), the cofactorless equation of BALLOT-PROTOCOL §2 in Ed25519.verifyStrict (owner decision a,
+# 2026-11-06, #310). Pinned exactly; it brings gson, jsr305, error_prone_annotations and androidx annotation-jvm.
+tink = "1.24.0"
 # OkHttp: HTTP and WebSocket for the relay and the member API (ANDROID-PLAN §5).
 okhttp = "5.5.0"
 # QR codes (ANDROID-PLAN §4 Connections): ZXing core (Apache-2.0, pure Java) draws and
@@ -108,6 +112,7 @@ androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espres
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
 
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 libphonenumber = { group = "com.googlecode.libphonenumber", name = "libphonenumber", version.ref = "libphonenumber" }
