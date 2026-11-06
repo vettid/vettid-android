@@ -1774,7 +1774,7 @@ class VotesManagerTest {
     fun theRecheckOnOpenSetsAVerdictAndNeverSubmits() = runTest {
         val (ops, site) = observedScenario(observed())
         ops.list = listing(verifiedVote())
-        val m = manager(ops, site)
+        val m = manager(ops, site, unmetered = { true })
         m.refresh()
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
         assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
@@ -1830,7 +1830,7 @@ class VotesManagerTest {
         val steps = java.util.Collections.synchronizedList(mutableListOf<String>())
         var m: VotesManager? = null
         var lockedAt = -1
-        m = manager(ops, site) {
+        m = manager(ops, site, unmetered = { true }) {
             steps += it.substringAfterLast(':')
             if (it.endsWith(":observe") && lockedAt < 0) {
                 lockedAt = steps.size
@@ -2313,5 +2313,46 @@ class VotesManagerTest {
         clock = day0.plus(Duration.ofDays(8))
         m2.checkDue(CONN, PID)
         assertEquals(day0.toEpochMilli(), store2.load().single().lastRowsMs)
+    }
+
+    @Test
+    fun theRecheckOnOpenDownloadsRowsAtMostWeeklyOnMobileData() = runTest {
+        // Item 2: the verdict is memory only, so every open after a lock rechecks; on mobile data rows.json at most weekly.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        var net: Boolean? = false
+        val m = manager(ops, site, unmetered = { net })
+        m.refresh()
+        val day0 = clock
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        // A lock (the verdict forgotten), the next open on mobile data the same week: not rechecked, no download, no number.
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(3))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        assertTrue(m.hints.value.getValue("$CONN/$PID").notRechecked)
+        // On Wi-Fi it downloads; and on mobile again (or an unknown network) a week after the last download.
+        net = true
+        m.clear()
+        m.refresh()
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        net = null
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(10))
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(3, site.rowsReads())
+        // Never submitted.
+        assertTrue(ops.submitted.isEmpty())
+        // A wipe forgets it.
+        m.clear()
+        m.forgetStored()
+        m.refresh()
+        net = false
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(4, site.rowsReads())
     }
 }

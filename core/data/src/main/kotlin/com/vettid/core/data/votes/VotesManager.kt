@@ -329,6 +329,13 @@ class VotesManager(
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
 
+    /**
+     * When the recheck on open last downloaded rows.json for a vote (epoch ms, by [VoteKeys.of]; #319 item 2). Memory only and
+     * not cleared by a lock (that is when the recheck runs again); a wipe ([forgetStored]) and the process end clear it.
+     * Holds no choice and no verdict.
+     */
+    private val recheckRowsAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /** The results checks in flight (under [lock]): [clear] cancels them (lead review L2). */
     private val checks = HashSet<Job>()
 
@@ -1199,6 +1206,7 @@ class VotesManager(
      * files are erased. Not at a lock.
      */
     fun forgetStored() {
+        recheckRowsAt.clear()
         synchronized(attemptsSync) {
             storeEpoch++
             attemptsHeld = emptyList()
@@ -1280,7 +1288,7 @@ class VotesManager(
     }
 
     /** The observer's check alone, on the published results as they are now; nothing is submitted or kept on disk. */
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one early return per reason it could not check
     private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int): ResultsOutcome = run {
         if (!site.configured) return@run notRechecked(key, gen)
         val detail = get(connectionId, proposalId)
@@ -1296,7 +1304,12 @@ class VotesManager(
             computeStep("$key:cap")
             VoteRows.rowsCap(doc)
         } ?: return@run notRechecked(key, gen)
-        val rows = when (val a = site.get("p/$proposalId/rows.json", cap)) {
+        // On a metered (or unknown) network, rows.json at most weekly per vote for the recheck (#319 item 2): without it every
+        // open after a lock would download it again (the verdict is memory only and a lock forgets it). Until then the
+        // existing not-rechecked line, and no number.
+        val at = now().toEpochMilli()
+        if (recheckRowsWait(key, at)) return@run notRechecked(key, gen)
+        val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n -> if (n > 0) recheckRowsAt[key] = at }) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge -> return@run rechecked(key, passed = false, gen)
             SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
@@ -1317,6 +1330,12 @@ class VotesManager(
             }
         }
         rechecked(key, passed, gen)
+    }
+
+    /** The recheck's rows.json waits: downloaded for [key] less than a week ago, on a network not known unmetered (#319 2). */
+    private fun recheckRowsWait(key: String, at: Long): Boolean {
+        val lastRows = recheckRowsAt[key] ?: return false
+        return at - lastRows in 0 until METERED_ROWS_EVERY.toMillis() && unmetered() != true
     }
 
     private fun rechecked(key: String, passed: Boolean, gen: Int): ResultsOutcome {

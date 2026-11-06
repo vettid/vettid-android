@@ -488,7 +488,10 @@ The A2 exit test:
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
-  verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4), and a
+  verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4); on a
+  metered or unknown network it downloads rows.json at most weekly per vote (`recheckRowsAt`, memory only, kept across a
+  lock, cleared by a wipe; #319 item 2: the verdict is forgotten at every lock, so each open would download again), else
+  the not-rechecked line and no number, and a
   site that cannot be
   reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03), as does a recheck that could
   check nothing (no `record_tag`, results.json over its limit, a `counts.eligible` cap that does not read; #314 item 2):
