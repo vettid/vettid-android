@@ -2466,4 +2466,25 @@ class VotesManagerTest {
         assertEquals("not held: nothing was stamped", ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
         assertEquals(2, site.rowsReads())
     }
+
+    @Test
+    fun theRechecksWeeklyCapAtItsBoundary() = runTest {
+        // The recheck's own cap (recheckRowsWait) on mobile data: 1 ms before 7 days held, at 7 days it downloads.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        val m = manager(ops, site, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        m.recheck(CONN, PID)
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(7)).minus(Duration.ofMillis(1))
+        assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
+        assertEquals(1, site.rowsReads())
+        m.clear()
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(7))
+        assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+    }
 }
