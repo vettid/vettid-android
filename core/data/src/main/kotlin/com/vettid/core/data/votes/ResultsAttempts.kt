@@ -26,6 +26,12 @@ data class ResultsAttempt(
     /** The vault left the check for a reason of its own side (`trust_root`, `service_list`, `clock`). */
     val vaultSide: Boolean = false,
 ) {
+    /**
+     * Whether a `gave_up` re-check that read results.json of [sha256] skips rows.json and sends nothing (0.84.1 §10.19.6): the
+     * same results as this attempt, which had rows.json and did not end on the vault's side.
+     */
+    fun skipsRows(sha256: String?): Boolean = sha256 != null && sha256 == resultsSha256 && rowsFetched && !vaultSide
+
     override fun toString() = "ResultsAttempt"
 }
 

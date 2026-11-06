@@ -198,6 +198,7 @@ class VoteViewModel @Inject constructor(
      * published results checked again by the observer, nothing submitted. Leaving the screen, the background or a lock
      * cancels it (a lock voids it in the repository); it runs again on return while there is still no verdict.
      */
+    @Suppress("ReturnCount")
     private fun maybeRecheck() {
         if (!visible || recheckJob?.isActive == true) return
         val s = repo.votes.value.firstOrNull { it.connectionId == connectionId && it.proposalId == proposalId } ?: return

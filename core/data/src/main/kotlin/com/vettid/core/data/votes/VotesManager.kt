@@ -263,7 +263,8 @@ internal class VaultVoteOps(private val api: VaultApi) : VoteOps {
  * lock, at the hold, on a wipe and with the process (ANDROID-PLAN 0.1.102). The list is read on open and return, and
  * again after a `vote.event`. The hourly work with the site ([startSync]) runs only while the vault is open and unlocked.
  */
-@Suppress("TooManyFunctions", "LongParameterList")
+// LargeClass: the 0.83.6 results work (rows, attempts, recheck) joined the one manager; splitting it is for the rebase.
+@Suppress("TooManyFunctions", "LongParameterList", "LargeClass")
 class VotesManager(
     private val scope: CoroutineScope,
     private val ops: suspend () -> VoteOps,
@@ -870,8 +871,7 @@ class VotesManager(
         // A `gave_up` check run again (0.84.1 §10.19.6): with the same results.json as the last attempt, which had rows.json
         // and did not end on the vault's side, rows.json is not downloaded again and nothing is sent.
         if (votesFlow.value.firstOrNull { it.key == key }?.check?.state == CheckState.GAVE_UP) {
-            val last = attemptOf(key)
-            if (last != null && last.resultsSha256 == trace.resultsSha256 && last.rowsFetched && !last.vaultSide) {
+            if (attemptOf(key)?.skipsRows(trace.resultsSha256) == true) {
                 trace.rowsFetched = true
                 return@run ResultsOutcome.Unchanged
             }

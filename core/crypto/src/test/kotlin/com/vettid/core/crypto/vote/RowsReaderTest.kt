@@ -179,8 +179,10 @@ class RowsReaderTest {
         // whatever their lengths, so that the vault can make their leaves.
         val own = ByteArray(32) { 1 }
         val other = ByteArray(32) { 2 }
-        fun row(tag: ByteArray, vk: Int?) =
-            """{"ballot":${vk?.let { """{"ballot_sig":"${Base64s.encodeStd(ByteArray(64) { 4 })}","choice_id":"yes","vk":"${Base64s.encodeStd(ByteArray(it) { 3 })}"}""" } ?: "null"},"record_tag":"${Base64s.encodeStd(tag)}"}"""
+        val sig = Base64s.encodeStd(ByteArray(64) { 4 })
+        fun ballot(vk: Int?) =
+            vk?.let { """{"ballot_sig":"$sig","choice_id":"yes","vk":"${Base64s.encodeStd(ByteArray(it) { 3 })}"}""" } ?: "null"
+        fun row(tag: ByteArray, vk: Int?) = """{"ballot":${ballot(vk)},"record_tag":"${Base64s.encodeStd(tag)}"}"""
         val rows = listOf(row(other, null), row(own, 32), row(own, 33), row(own, null)) + List(4) { row(own, 32) }
         val text = """{"proposal_id":"P","rows":[${rows.joinToString(",")}],"v":1}"""
         val t = RowsReader(text.toByteArray(), rows.size, own) {}.read()

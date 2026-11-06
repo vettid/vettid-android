@@ -108,9 +108,12 @@ class VoteRowsTest {
     fun otherRowsUnderTheOwnTagComeWithProofsToRowsRoot() {
         val tags = (1..3).map { n -> ByteArray(32) { n.toByte() } }
         val order = listOf(tags[0], tags[1], tags[1], tags[2], tags[1])
-        val rowsText = """{"proposal_id":"$PID","rows":[${order.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }}],"v":1}"""
+        val rowList = order.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }
+        val rowsText = """{"proposal_id":"$PID","rows":[$rowList],"v":1}"""
         val root = VoteMerkle.root(order)
-        val results = """{"counts":{"ballots":0,"eligible":5,"removed":0,"unhandled":0},"proposal_id":"$PID","rows_hash":"${Base64s.encodeStd(Bytes.sha256(rowsText.toByteArray()))}","rows_root":"${Base64s.encodeStd(root)}"}"""
+        val hash = Base64s.encodeStd(Bytes.sha256(rowsText.toByteArray()))
+        val counts = """{"ballots":0,"eligible":5,"removed":0,"unhandled":0}"""
+        val results = """{"counts":$counts,"proposal_id":"$PID","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(root)}"}"""
         val p = VoteRows.read(results.toByteArray(), rowsText.toByteArray(), tags[1])
         assertEquals(1L, p.ownRow(tags[1]).index)
         val others = p.otherRows()

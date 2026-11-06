@@ -11,8 +11,8 @@ import java.security.MessageDigest
  * `choiceStart`, `sigStart`, `end` per row; `vkStart` [EMPTY] for an empty row, [NOT_KEPT] for a ballot whose lengths are
  * not the protocol's: only [lengthsMatch] says so, recheck 1, R1-3). The member's own row (the first under the tag the
  * reader was given) keeps its ballot whatever its lengths ([ownIndex], [ownBallot]), and so do the next four rows under
- * that tag ([ownExtras]). At most 32 + 32 + 16 + 32 + 32 + 64 = 208 bytes a row whatever the input, besides those five. The shape flags are what the observer only reports (VAULT-MESSAGING 0.86.4 §10.19.6
- * step 1).
+ * that tag ([ownExtras]). At most 32 + 32 + 16 + 32 + 32 + 64 = 208 bytes a row whatever the input, besides those five.
+ * The shape flags are what the observer only reports (VAULT-MESSAGING 0.86.4 §10.19.6 step 1).
  */
 internal class RowsTable(
     val count: Int,
