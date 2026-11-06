@@ -45,8 +45,9 @@ class Ed25519StrictTest {
     }
 
     @Test
-    fun anROfSmallOrderIsRefused() {
-        // R = the identity, S = k·a: [S]B = R + [k]A holds without the factor 8, and Bouncy Castle accepts it.
+    fun theIdentityAsRIsRefused() {
+        // R = the identity, S = k·a: [S]B = R + [k]A holds without the factor 8, and Bouncy Castle accepts it. Both the table
+        // and the exact path (x = 0 does not map) refuse it; aSmallOrderRWithAMixedKeyIsRefusedByTheTableAlone pins the table.
         val sig = Edwards.sign(a, pub, lm, BigInteger.ZERO, Edwards.IDENTITY)
         assertTrue("the library alone accepts it", Ed25519.verifyRaw(pub, lm, sig))
         assertFalse(Ed25519.verifyStrict(pub, label, m, sig))
@@ -115,4 +116,34 @@ class Ed25519StrictTest {
     /** A point of order 8, taken from the shared vectors' small-order keys (no literal here). */
     private fun order8Key(): String = v.o.array("ed25519").map { it.asObject() }
         .first { it.string("case") == "small-order key and R 3" }.string("key")
+
+    @Test
+    fun anRWithYNotBelowPIsRefused() {
+        // y = p + k for a few small k, with and without the sign bit: never a canonical encoding.
+        val p = Edwards.P
+        for (k in listOf(0L, 1L, 5L, 18L)) {
+            for (sign in listOf(0, 1)) {
+                val enc = Edwards.le(if (sign == 1) p.add(BigInteger.valueOf(k)).setBit(255) else p.add(BigInteger.valueOf(k)))
+                assertFalse("y = p + $k, sign $sign", Ed25519.strictPoint(enc))
+                val sig = enc + Edwards.le(BigInteger.valueOf(7))
+                assertFalse(Ed25519.verifyStrict(pub, label, m, sig))
+            }
+        }
+        // 2^255 - 1 with the sign bit cleared (the largest y an encoding can carry).
+        assertFalse(Ed25519.strictPoint(ByteArray(32) { 0xff.toByte() }.also { it[31] = 0x7f }))
+    }
+
+    @Test
+    fun aMixedOrderRWithAPrimeOrderKeyIsRefused() {
+        // R' = [r]B + T (T of order 8), S = r + k·a with k over R': cofactored the equation holds (Bouncy Castle accepts),
+        // cofactorless it is off by T, so only the exact path refuses it.
+        val t8 = Edwards.decode(Bytes.unhex(order8Key()))!!
+        val r = BigInteger.valueOf(4242)
+        val rPoint = Edwards.add(Edwards.mul(r, Edwards.BASE), t8)
+        val sig = Edwards.sign(a, pub, lm, r, rPoint)
+        assertTrue("R itself is not of small order", Ed25519.strictPoint(sig.copyOf(32)))
+        assertTrue("the library (cofactored) accepts it", Ed25519.verifyRaw(pub, lm, sig))
+        assertFalse(Ed25519Exact.cofactorless(pub, lm, sig))
+        assertFalse(Ed25519.verifyStrict(pub, label, m, sig))
+    }
 }
