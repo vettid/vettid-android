@@ -1182,6 +1182,8 @@ class VotesManager(
     override suspend fun recheck(connectionId: String, proposalId: String): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
         return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
+            // Queued behind a check that has since set a verdict (review 1, L4): nothing to download again.
+            hintsFlow.value[key]?.verdict?.let { return@withLock ResultsOutcome.Rechecked(it == ObserverVerdict.PASSED) }
             // A child job as a results check is (lead review L2): a lock cancels it and it is void.
             val gen = synchronized(lock) { generation }
             asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen) }

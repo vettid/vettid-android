@@ -14,6 +14,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1768,7 +1769,8 @@ class VotesManagerTest {
         assertEquals(ObserverVerdict.PASSED, m.hints.value.getValue("$CONN/$PID").verdict)
         assertTrue(ops.submitted.isEmpty())
         assertFalse(site.reads.any { it.endsWith(".sig") || it.endsWith("sigstore.json") })
-        // Results that do not add up: a failed verdict and the line.
+        // Results that do not add up (a new process, no verdict in memory): a failed verdict and the line.
+        m.hint("$CONN/$PID") { it.copy(verdict = null) }
         val bad = observed(tally = """{"abstain":0,"no":1,"yes":0}""")
         site.answers["p/$PID/results.json"] = ok(bad.results)
         assertEquals(ResultsOutcome.Rechecked(passed = false), m.recheck(CONN, PID))
@@ -2021,5 +2023,32 @@ class VotesManagerTest {
         val (ops2, site2) = observedScenario(Observed(rowsJson2, results2, t2))
         manager(ops2, site2, voteRows = true).let { it.refresh(); it.checkResults(CONN, PID) }
         assertRowsUnavailable(ops2.submitted.single())
+    }
+
+    @Test
+    fun aRecheckQueuedBehindACheckThatSetAVerdictDownloadsNothing() = runTest {
+        // Review 1, L4: the recheck looks at the verdict again once it holds the vote's lock.
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVote())
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        var first = true
+        // A check holds the vote's lock (its first compute step waits) and then sets a verdict; a recheck queues behind it.
+        val m = manager(ops, site) {
+            if (first && it.endsWith(":cap")) {
+                first = false
+                entered.complete(Unit)
+                runBlocking { gate.await() }
+            }
+        }
+        m.refresh()
+        val check = async(Dispatchers.Default) { m.checkResults(CONN, PID) }
+        withContext(Dispatchers.Default) { entered.await() }
+        val recheck = async(Dispatchers.Default) { m.recheck(CONN, PID) }
+        withContext(Dispatchers.Default) { delay(200) }
+        gate.complete(Unit)
+        assertTrue(check.await() is ResultsOutcome.Submitted)
+        assertEquals(ResultsOutcome.Rechecked(passed = true), recheck.await())
+        assertEquals("one download: the recheck made none", 1, site.reads.count { it == "p/$PID/rows.json" })
     }
 }
