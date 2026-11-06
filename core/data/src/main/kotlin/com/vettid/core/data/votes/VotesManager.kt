@@ -2,6 +2,7 @@ package com.vettid.core.data.votes
 
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.ClaimBlob
+import com.vettid.core.crypto.vote.PublishedResults
 import com.vettid.core.crypto.vote.ResultsProblem
 import com.vettid.core.crypto.vote.VoteRows
 import com.vettid.core.data.items.ListLoad
@@ -24,6 +25,7 @@ import com.vettid.core.vault.voteSiteSync
 import com.vettid.core.vault.voteSiteSyncBlob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -58,6 +60,13 @@ data class VoteHint(
     val resultsProblem: Boolean = false,
     /** The site's results are larger than the vault could ever take: no retry will help. */
     val resultsTooLarge: Boolean = false,
+    /**
+     * The app's own observer check of the last results it submitted failed outside the four inputs the vault checks
+     * (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, ANDROID-PLAN 0.1.116): the row was still submitted; with a `verified` or
+     * `unconfirmed` check no number is shown and "don't add up" is said. A refused or lost submission keeps it; an attempt
+     * that submits nothing clears it.
+     */
+    val observerFailed: Boolean = false,
     /** When the app first saw the vote missing from the public site. */
     val notListedSince: Instant? = null,
 ) {
@@ -706,7 +715,9 @@ class VotesManager(
         if (doc == null) return@withLock unavailable(key, siteDown)
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
-        val rows = fetch("rows.json", ROWS_MAX)
+        // The download cap of rows.json follows counts.eligible (§10.19.6 step 1); results whose counts do not read are a problem.
+        val rowsCap = VoteRows.rowsCap(doc) ?: return@withLock fail(key, ResultsOutcome.Problem)
+        val rows = fetch("rows.json", rowsCap)
         if (tooLarge) return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
         if (sig == null || bundleBytes == null || rows == null) {
             return@withLock unavailable(key, siteDown)
@@ -714,8 +725,13 @@ class VotesManager(
         // (0.81.5) Results the vault would refuse as a whole are never submitted: the existing problem hint says so.
         if (!VoteSync.submittable(doc, sig)) return@withLock fail(key, ResultsOutcome.Problem)
         val bundle = VoteSync.jsonObject(bundleBytes, VoteSync.RESULTS_BUNDLE_DEPTH) ?: return@withLock fail(key, ResultsOutcome.Problem)
+        val published = try {
+            VoteRows.read(doc, rows)
+        } catch (_: ResultsProblem) {
+            return@withLock fail(key, ResultsOutcome.Problem)
+        }
         val own = try {
-            VoteRows.ownRow(doc, rows, tag)
+            published.ownRow(tag)
         } catch (_: ResultsProblem) {
             return@withLock fail(key, ResultsOutcome.Problem)
         }
@@ -761,6 +777,10 @@ class VotesManager(
             VoteSync.Inline.TOO_LARGE -> return@withLock fail(key, ResultsOutcome.Problem, tooLarge = true)
             VoteSync.Inline.OTHER -> return@withLock fail(key, ResultsOutcome.Problem)
         }
+        // The rest of the observer's check: shown to the member, never a reason not to submit (0.83.2). Off the main thread.
+        val observerFailed = withContext(Dispatchers.Default) { observerFails(published, proposalId, detail) }
+        // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
+        hint(key) { it.copy(observerFailed = observerFailed) }
         val answer = vaultGuard { ops().submit(body) }
         val check = answer["check"] as? JsonObject
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
@@ -769,6 +789,21 @@ class VotesManager(
         hint(key) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false) }
         refreshQuietly()
         ResultsOutcome.Submitted(state)
+    }
+
+    /**
+     * Whether the observer's check fails ([com.vettid.core.crypto.vote.PublishedResults.observe]), counting also what is only
+     * reported: the documents naming another proposal or rows.json not exactly `{v, proposal_id, rows}`, and a `tally` or
+     * `counts` other than the vault's own (`vote.get`, when it holds them).
+     */
+    private fun observerFails(published: PublishedResults, proposalId: String, detail: VoteDetail): Boolean = try {
+        published.observe(proposalId)
+        val tallyDiffers = detail.tally != null && detail.tally != published.tally()
+        val c = published.counts()
+        val countsDiffer = detail.counts != null && detail.counts != VoteCounts(c.eligible, c.ballots, c.removed, c.unhandled)
+        tallyDiffers || countsDiffer
+    } catch (_: ResultsProblem) {
+        true
     }
 
     /** The site could not be reached, or had no results (yet): which of the two is what a `gave_up` check will say. */
@@ -781,7 +816,13 @@ class VotesManager(
 
     private fun fail(key: String, outcome: ResultsOutcome, why: GaveUpWhy? = null, tooLarge: Boolean = false): ResultsOutcome {
         hint(key) {
-            it.copy(gaveUp = why ?: it.gaveUp, resultsProblem = outcome == ResultsOutcome.Problem, resultsTooLarge = tooLarge)
+            // An attempt that submits nothing clears the observer's flag (ANDROID-PLAN 0.1.117).
+            it.copy(
+                gaveUp = why ?: it.gaveUp,
+                resultsProblem = outcome == ResultsOutcome.Problem,
+                resultsTooLarge = tooLarge,
+                observerFailed = false,
+            )
         }
         return outcome
     }
@@ -810,9 +851,8 @@ class VotesManager(
         const val CODE_TOO_LARGE = "payload_too_large"
         const val SIG_MAX = 256L
         const val BUNDLE_MAX = 64L * 1024
-        /** The vault's `MaxResultsDoc`; rows.json is bounded by the rows the app reads (about 256 bytes a row). */
+        /** The vault's `MaxResultsDoc`; rows.json is capped by `counts.eligible` ([VoteRows.rowsCap]). */
         const val RESULTS_MAX = 196_608L
-        const val ROWS_MAX = VoteRows.MAX_ROWS * 256L
         const val INDEX_MAX = 8L shl 20
         const val UPLOAD_TRIES = 2
         const val UPLOAD_WAIT_MS = 5_000L

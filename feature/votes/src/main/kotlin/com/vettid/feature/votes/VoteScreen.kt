@@ -243,6 +243,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             resultsProblem = state.hint.resultsProblem,
             notListedLate = state.hint.notListedLate(now),
             resultsTooLarge = state.hint.resultsTooLarge,
+            observerFailed = state.hint.observerFailed,
         )
         val time = s.opensAt?.let { Times.full(it) }.orEmpty()
         Column(
@@ -277,7 +278,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                 )
             }
             if (state.alreadyVoted) {
-                val label = AccountNames.isolateOrNull(state.choiceLabel)
+                val label = AccountNames.isolateOrNull(VoteTexts.choiceLabel(resources, d?.choiceId, state.choiceLabel))
                 val text = when (label) {
                     null -> stringResource(R.string.vote_already_voted_any)
                     else -> stringResource(R.string.vote_already_voted, label)
@@ -310,7 +311,7 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
             }
         }
         if (d != null) {
-            state.choiceLabel?.let { label ->
+            VoteTexts.choiceLabel(resources, d.choiceId, state.choiceLabel)?.let { label ->
                 Text(
                     stringResource(R.string.vote_your_choice, AccountNames.isolateOrNull(label).orEmpty()),
                     style = MaterialTheme.typography.bodyLarge,
@@ -318,7 +319,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                     modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("vote_your_choice"),
                 )
             }
-            Results(d, service)
+            // No number unless the vault's check is verified or unconfirmed and the app's observer check passed (0.1.117).
+            if (VoteRules.showNumbers(s, state.hint.observerFailed)) Results(d, service, resources)
         }
         if (d != null && VoteRules.choosing(s)) {
             Choices(d, state, actions)
@@ -416,7 +418,7 @@ private fun ProposalBody(d: VoteDetail, service: String, closes: String?, state:
     }
 }
 
-/** The choices in the order sent, each with its label as sent (the reserved `abstain` too), as one radio group. */
+/** The choices in the order sent, each with its label as sent (the reserved `abstain` as "Abstain"), as one radio group. */
 @Composable
 private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
     val enabled = state.cast == CastStep.NONE && state.summary?.let { VoteRules.castAllowed(it) } == true
@@ -428,7 +430,7 @@ private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
         )
         Column(Modifier.selectableGroup()) {
             for (c in d.choices) {
-                val label = AccountNames.isolateOrNull(c.label) ?: c.id
+                val label = AccountNames.isolateOrNull(VoteTexts.choiceLabel(rememberResources(), c.id, c.label)) ?: c.id
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -455,6 +457,11 @@ private fun Choices(d: VoteDetail, state: VoteUiState, actions: VoteActions) {
 private fun NoteView(n: VoteNote, resources: android.content.res.Resources, service: String, time: String, rejectedReason: String?) {
     val why = VoteRules.rejectedWhy(rejectedReason)
     val body = VoteTexts.text(resources, n, service, time, if (n == VoteNote.REJECTED) why else null)
+    if (n == VoteNote.RESULTS_DONT_ADD_UP) {
+        // A plain note under the state line, once, with no error colour (ANDROID-PLAN 0.1.117).
+        Text(body, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vote_note_${n.name}"))
+        return
+    }
     if (n == VoteNote.IN_RESULTS_CONFLICT) {
         // "Your vote is in the published results." (bold) and what else the service showed: no error colour.
         Text(boldMarked(body), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vote_note_${n.name}"))
@@ -520,7 +527,7 @@ private fun CastProblem(p: VoteProblem, onDismiss: () -> Unit, resources: androi
 
 /** The results (screen 5): only from the verified results; before that, no number at all. */
 @Composable
-private fun Results(d: VoteDetail, service: String) {
+private fun Results(d: VoteDetail, service: String, resources: android.content.res.Resources) {
     val tally = d.tally ?: return
     val counts = d.counts
     Column(Modifier.padding(horizontal = Spacing.gutter).testTag("vote_results"), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
@@ -532,7 +539,11 @@ private fun Results(d: VoteDetail, service: String) {
         for (c in d.choices) {
             val n = tally[c.id] ?: continue
             Text(
-                stringResource(R.string.vote_results_row, AccountNames.isolateOrNull(c.label) ?: c.id, n),
+                stringResource(
+                    R.string.vote_results_row,
+                    AccountNames.isolateOrNull(VoteTexts.choiceLabel(resources, c.id, c.label)) ?: c.id,
+                    n,
+                ),
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
@@ -563,7 +574,8 @@ private fun Results(d: VoteDetail, service: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConfirmSheet(state: VoteUiState, actions: VoteActions) {
-    val label = state.detail?.choices?.firstOrNull { it.id == state.selected }?.label
+    val sent = state.detail?.choices?.firstOrNull { it.id == state.selected }?.label
+    val label = VoteTexts.choiceLabel(rememberResources(), state.selected, sent)
     val service = AccountNames.isolateOrNull(state.serviceName) ?: stringResource(R.string.vote_service_fallback)
     val focus = remember { FocusRequester() }
     val sending = state.cast == CastStep.SENDING
@@ -671,7 +683,8 @@ private fun PasswordSheet(state: VoteUiState, actions: VoteActions, now: Instant
 @Composable
 private fun RestoreDialog(state: VoteUiState, actions: VoteActions) {
     val service = AccountNames.isolateOrNull(state.serviceName) ?: stringResource(R.string.vote_service_fallback)
-    val choice = AccountNames.isolateOrNull(state.restoreLabel).orEmpty()
+    val restored = VoteTexts.choiceLabel(rememberResources(), state.detail?.serviceBallotChoiceId, state.restoreLabel)
+    val choice = AccountNames.isolateOrNull(restored).orEmpty()
     val title = AccountNames.isolateOrNull(state.summary?.title).orEmpty()
     AlertDialog(
         // Back and the scrim close it for this visit, also offline, when neither answer can reach the vault (A6 audit E25).

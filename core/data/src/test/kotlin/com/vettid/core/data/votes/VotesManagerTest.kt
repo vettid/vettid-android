@@ -152,10 +152,14 @@ class VotesManagerTest {
     private class Site(var hasSite: Boolean = true) : VoteSite {
         val answers = mutableMapOf<String, SiteAnswer>()
         val reads = mutableListOf<String>()
+        val maxes = mutableMapOf<String, Long>()
         override val configured: Boolean get() = hasSite
 
         override suspend fun get(path: String, maxBytes: Long): SiteAnswer {
-            synchronized(this) { reads += path }
+            synchronized(this) {
+                reads += path
+                maxes[path] = maxBytes
+            }
             return answers[path] ?: SiteAnswer.Absent
         }
     }
@@ -988,5 +992,120 @@ class VotesManagerTest {
         assertTrue(m.hints.value.getValue("$CONN/$PID").resultsTooLarge)
         assertTrue(m.hints.value.getValue("$CONN/$PID").resultsProblem)
         assertTrue(ops.submitted.isEmpty())
+    }
+
+    // ---- The observer's check (VAULT-MESSAGING 0.86.4 §10.19.6 step 1, ANDROID-PLAN 0.1.116/0.1.117) ----
+
+    /**
+     * Results that pass the app's whole observer check: a proposal naming three choices, the tags' record root and three
+     * eligible members, rows.json exactly `{v, proposal_id, rows}` with three empty rows, and a tally of zeros.
+     */
+    private class Observed(val rowsJson: String, val results: String, val tags: List<ByteArray>)
+
+    private fun observed(proposalIdInResults: String = PID, tally: String = """{"abstain":0,"no":0,"yes":0}"""): Observed {
+        val tags = (1..3).map(::tagOf)
+        val rowsJson = """{"proposal_id":"$PID","rows":[${tags.joinToString(",") { """{"ballot":null,"record_tag":"${Base64s.encodeStd(it)}"}""" }}],"v":1}"""
+        val proposal = """{"choices":[{"id":"yes","label":"Yes"},{"id":"no","label":"No"},{"id":"abstain","label":"Abstain"}],"eligible":3,"record_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}"}"""
+        val hash = Base64s.encodeStd(Bytes.sha256(rowsJson.toByteArray()))
+        val results = """{"counts":{"ballots":0,"eligible":3,"removed":0,"unhandled":0},"extensions":[],"proposal":{"doc":"${Base64s.encodeStd(proposal.toByteArray())}","sig":"AA=="},"proposal_id":"$proposalIdInResults","rows_hash":"$hash","rows_root":"${Base64s.encodeStd(VoteMerkle.root(tags))}","tally":$tally,"v":1}"""
+        return Observed(rowsJson, results, tags)
+    }
+
+    private fun observedScenario(o: Observed, detailExtra: String = ""): Pair<Ops, Site> {
+        val ops = Ops().apply {
+            list = listing(closedWithPendingCheck())
+            detail = obj("""{"proposal_id":"$PID","connection_id":"$CONN","title":"T","state":"closed","record_tag":"${Base64s.encodeStd(o.tags[1])}"$detailExtra}""")
+        }
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            answers["p/$PID/results.json"] = ok(o.results)
+            answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(64) { 9 })
+            answers["p/$PID/results.json.sigstore.json"] = ok("""{"mediaType":"x"}""")
+            answers["p/$PID/rows.json"] = ok(o.rowsJson)
+        }
+        return ops to site
+    }
+
+    private suspend fun TestScope.observedFlag(ops: Ops, site: Site): Boolean {
+        val m = manager(ops, site)
+        m.refresh()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals("submitted whatever the observer found", 1, ops.submitted.size)
+        return m.hints.value["$CONN/$PID"]?.observerFailed == true
+    }
+
+    @Test
+    fun resultsThatPassTheObserversCheckAreSubmittedWithoutTheFlag() = runTest {
+        val (ops, site) = observedScenario(observed())
+        assertFalse(observedFlag(ops, site))
+        // The vault's own tally and counts, when it holds them, agree too.
+        val (ops2, site2) = observedScenario(
+            observed(),
+            ""","tally":{"abstain":0,"no":0,"yes":0},"counts":{"eligible":3,"ballots":0,"removed":0,"unhandled":0}""",
+        )
+        assertFalse(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun aFailedObserverCheckStillSubmitsAndSetsTheFlag() = runTest {
+        // A tally that does not recompute.
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        assertTrue(observedFlag(ops, site))
+    }
+
+    @Test
+    fun whatIsOnlyReportedSetsTheFlagAndStillSubmits() = runTest {
+        // results.json names another proposal.
+        val (ops, site) = observedScenario(observed(proposalIdInResults = "01JBQZ0000000000000000000Z"))
+        assertTrue(observedFlag(ops, site))
+        // rows.json is not exactly {v, proposal_id, rows} (rebuilt without v, with its own hash).
+        val o = observed()
+        val noV = o.rowsJson.replace(""","v":1""", "")
+        val results = o.results.replace(Base64s.encodeStd(Bytes.sha256(o.rowsJson.toByteArray())), Base64s.encodeStd(Bytes.sha256(noV.toByteArray())))
+        val (ops2, site2) = observedScenario(Observed(noV, results, o.tags))
+        assertTrue(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun aTallyOrCountsOtherThanTheVaultsSetTheFlag() = runTest {
+        val (ops, site) = observedScenario(observed(), ""","tally":{"abstain":0,"no":0,"yes":1}""")
+        assertTrue(observedFlag(ops, site))
+        val (ops2, site2) = observedScenario(observed(), ""","counts":{"eligible":3,"ballots":0,"removed":1,"unhandled":0}""")
+        assertTrue(observedFlag(ops2, site2))
+    }
+
+    @Test
+    fun anAttemptThatSubmitsNothingClearsTheFlagAndALostSubmissionKeepsIt() = runTest {
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        val m = manager(ops, site)
+        m.refresh()
+        // A submission the vault refuses: the flag stays (ANDROID-PLAN 0.1.117).
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        assertTrue(m.hints.value.getValue("$CONN/$PID").observerFailed)
+        // An attempt that submits nothing (the signature is not 64 bytes): the flag goes.
+        ops.refuse.clear()
+        site.answers["p/$PID/results.json.sig"] = SiteAnswer.Found(ByteArray(63))
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertFalse(m.hints.value.getValue("$CONN/$PID").observerFailed)
+    }
+
+    @Test
+    fun rowsJsonIsDownloadedUpToItsCapForTheEligibleCount() = runTest {
+        val (ops, site) = observedScenario(observed())
+        observedFlag(ops, site)
+        assertEquals(3 * 512L + 4_096, site.maxes["p/$PID/rows.json"])
+        // Results whose counts do not read: a problem, and rows.json is not fetched.
+        val (ops2, site2) = observedScenario(observed())
+        site2.answers["p/$PID/results.json"] = ok("""{"counts":{"eligible":0}}""")
+        val m = manager(ops2, site2)
+        m.refresh()
+        assertEquals(ResultsOutcome.Problem, m.checkResults(CONN, PID))
+        assertFalse(site2.reads.contains("p/$PID/rows.json"))
+        assertTrue(ops2.submitted.isEmpty())
     }
 }

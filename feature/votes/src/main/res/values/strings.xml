@@ -66,6 +66,9 @@
     <string name="vote_results_unhandled">%1$d messages sent to %2$s during the vote were not handled; any vote among them was not counted.</string>
     <string name="vote_quorum_met">Enough votes were cast: %1$d, and the service asked for at least %2$d.</string>
     <string name="vote_quorum_not_met">Not enough votes were cast: %1$d, and the service asked for at least %2$d.</string>
+    <!-- ANDROID-PLAN 0.1.116 table: owner decision a, 2026-11-02 (threads 01M6EXXXE5RBG51H5MD1G0AV30, 01M6F2GFXDMDY1GC0QWEC1ZJNJ). -->
+    <string name="vote_choice_abstain">Abstain</string>
+    <string name="vote_results_dont_add_up">The rest of the published results don\'t add up. The service may have published them wrongly.</string>
     <string name="vote_save_proof">Save the proof</string>
     <string name="vote_save_proof_warning">The file shows how you voted. Keep it private, and share it only with the organization.</string>
     <string name="vote_rejected_title">VettID set this vote aside</string>

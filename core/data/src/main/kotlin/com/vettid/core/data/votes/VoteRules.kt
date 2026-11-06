@@ -18,6 +18,12 @@ enum class VoteNote(val severity: Severity) {
     IN_RESULTS_CONFLICT(Severity.NOTE),
     UNCONFIRMED(Severity.WARNING),
     DIDNT_VOTE(Severity.INFO),
+
+    /**
+     * `vote_results_dont_add_up`, once, under the state line of a `verified` or `unconfirmed` check whose results failed the
+     * app's own observer check (ANDROID-PLAN 0.1.116/0.1.117): a plain note, no error colour, and no number is shown.
+     */
+    RESULTS_DONT_ADD_UP(Severity.NOTE),
     CHECK_PENDING(Severity.INFO),
 
     /** A check the vault leaves `pending` with reason `input`, or the app's own check of the results failed: never "failed". */
@@ -172,6 +178,7 @@ object VoteRules {
      * when it knows (a `gave_up` check says which of two things, ANDROID-PLAN 0.1.102 screen 4): null when it does not.
      * [resultsProblem] is a problem the app found itself in the site's results, kept until the next attempt.
      * [notListedLate]: the app has seen the vote missing from the site for 10 minutes or more (the summary carries no age).
+     * [observerFailed]: the app's observer check of the results it submitted failed ([VoteHint.observerFailed]).
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount")
     fun notes(
@@ -180,12 +187,14 @@ object VoteRules {
         resultsProblem: Boolean = false,
         notListedLate: Boolean = false,
         resultsTooLarge: Boolean = false,
+        observerFailed: Boolean = false,
     ): List<VoteNote> {
         val out = ArrayList<VoteNote>()
         if (s.state == VoteState.CLOSED) out += VoteNote.CLOSED
         if (s.state == VoteState.REJECTED) out += VoteNote.REJECTED
         ballotNotes(s, out)
         checkNotes(s, gaveUp, resultsProblem, out)
+        if (observerFailed && judged(s)) out += VoteNote.RESULTS_DONT_ADD_UP
         siteNotes(s, notListedLate, out)
         if (s.ballot == null && s.state != VoteState.CLOSED && s.state != VoteState.REJECTED) cannotCastNote(s)?.let { out += it }
         if (s.ballot == null && s.state == VoteState.CHECKING && out.none { it in CHECKING_NOTES }) out += checkingNote(s.reason)
@@ -277,6 +286,16 @@ object VoteRules {
         }
         if (note != null) out += note
     }
+
+    /** The vault's check is `verified` or `unconfirmed`: the only states under which numbers may be shown. */
+    private fun judged(s: VoteSummary): Boolean = s.check?.state == CheckState.VERIFIED || s.check?.state == CheckState.UNCONFIRMED
+
+    /**
+     * Whether the results' numbers (the choice counts, the turnout, the quorum line and the unhandled line) are shown
+     * (ANDROID-PLAN 0.1.117): only under a `verified` or `unconfirmed` check, and never while the app's observer check of
+     * the results failed ([observerFailed]).
+     */
+    fun showNumbers(s: VoteSummary, observerFailed: Boolean): Boolean = judged(s) && !observerFailed
 
     /** The reason a cast is not offered (screen 2: the reason is written where the button would be). */
     @Suppress("ReturnCount")

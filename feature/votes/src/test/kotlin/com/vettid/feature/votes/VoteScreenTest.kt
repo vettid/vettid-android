@@ -117,10 +117,12 @@ class VoteScreenTest {
     }
 
     @Test
-    fun theChoicesAreInTheOrderSentWithTheirLabelsAndAbstainAsSent() {
+    fun theChoicesAreInTheOrderSentWithTheirLabelsAndAbstainInTheAppsOwnWord() {
         show(state(summary()))
-        val labels = listOf("No", "Yes, really", "Yes")
+        // The reserved `abstain` is "Abstain" whatever its label says (ANDROID-PLAN 0.1.117).
+        val labels = listOf("No", "Abstain", "Yes")
         labels.forEach { shown(it).assertIsDisplayed() }
+        assertEquals(0, shownAll("Yes, really").fetchSemanticsNodes().size)
         val order = listOf("vote_choice_no", "vote_choice_abstain", "vote_choice_yes").map {
             rule.onNodeWithTag(it).fetchSemanticsNode().boundsInRoot.top
         }
@@ -206,9 +208,37 @@ class VoteScreenTest {
         shown("The published results include your vote.").assertIsDisplayed()
         shown("Results").assertIsDisplayed()
         shown("Yes: 52").assertIsDisplayed()
+        shown("Abstain: 2").assertIsDisplayed()
         shown("84 of 120 eligible members voted.").assertIsDisplayed()
         shown("Enough votes were cast: 84, and the service asked for at least 40.").assertIsDisplayed()
         shown("3 messages sent to $SERVICE during the vote were not handled; any vote among them was not counted.").assertIsDisplayed()
+    }
+
+    @Test
+    fun resultsThatDontAddUpUnderAVerifiedCheckShowTheLineButNoNumber() = dontAddUp(CheckState.VERIFIED)
+
+    @Test
+    fun resultsThatDontAddUpUnderAnUnconfirmedCheckShowTheLineButNoNumber() = dontAddUp(CheckState.UNCONFIRMED)
+
+    private fun dontAddUp(check: CheckState) {
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        run {
+            val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(check), canCast = false)
+            show(state(s, detail(s, choiceId = "abstain", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(observerFailed = true)))
+            val line = "The rest of the published results don't add up. The service may have published them wrongly."
+            assertEquals("$check", 1, shownAll(line).fetchSemanticsNodes().size)
+            rule.onNodeWithTag("vote_note_RESULTS_DONT_ADD_UP").assertIsDisplayed()
+            // No number: no Results section, no counts, turnout, quorum or unhandled line.
+            assertEquals(0, shownAll("Results").fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("Yes: 52").fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("84 of 120", substring = true).fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("Enough votes", substring = true).fetchSemanticsNodes().size)
+            assertEquals(0, shownAll("were not handled", substring = true).fetchSemanticsNodes().size)
+            // Not the text for a problem with the published results.
+            assertEquals(0, shownAll("could not check the published results", substring = true).fetchSemanticsNodes().size)
+            // The member's own choice, abstain, in the app's own word.
+            shown("Your choice: Abstain").assertIsDisplayed()
+        }
     }
 
     @Test

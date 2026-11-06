@@ -95,6 +95,9 @@ internal object VotesCatalog {
         "vote.sending" to { Vote(summary("p5", "Adopt the budget", ballot = VoteBallot(BallotState.SENDING)), detail(open, "no")) },
         "vote.waiting" to { Vote(summary("p5", "Adopt the budget", ballot = VoteBallot(BallotState.WAITING, reason = "not_open")), detail(open, "no")) },
         "vote.results" to { Vote(closed, detail(closed, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2))) },
+        "vote.results_dont_add_up" to {
+            Vote(closed, detail(closed, "abstain", mapOf("yes" to 52, "no" to 30, "abstain" to 2)), hint = com.vettid.core.data.votes.VoteHint(observerFailed = true))
+        },
         "vote.conflict_after_verified" to {
             val s = closed.copy(conflictEvidence = true)
             Vote(s, detail(s, "yes", mapOf("yes" to 52, "no" to 30, "abstain" to 2)))

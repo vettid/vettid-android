@@ -278,6 +278,37 @@ class VoteRulesTest {
     }
 
     @Test
+    fun resultsThatDontAddUpAreANoteOnceUnderAVerifiedOrUnconfirmedCheckAndHideTheNumbers() {
+        val recorded = ballot(BallotState.RECORDED)
+        val verified = vote(VoteState.CLOSED, recorded, check(CheckState.VERIFIED))
+        val notes = VoteRules.notes(verified, observerFailed = true)
+        // Once, right under the state line, a plain note.
+        assertEquals(1, notes.count { it == VoteNote.RESULTS_DONT_ADD_UP })
+        assertEquals(notes.indexOf(VoteNote.IN_RESULTS) + 1, notes.indexOf(VoteNote.RESULTS_DONT_ADD_UP))
+        assertEquals(VoteNote.Severity.NOTE, VoteNote.RESULTS_DONT_ADD_UP.severity)
+        assertFalse(VoteNote.CHECK_RESULTS_PROBLEM in notes)
+        val unconfirmed = vote(VoteState.CLOSED, ballot(BallotState.WAITING), check(CheckState.UNCONFIRMED))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(unconfirmed, observerFailed = true))
+        val didntVote = vote(VoteState.CLOSED, null, check(CheckState.VERIFIED))
+        assertTrue(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(didntVote, observerFailed = true))
+        // Not without the flag, and not under any other check (failed shows only its own text; pending its own).
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified))
+        for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
+            assertFalse("$c", VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded, check(c)), observerFailed = true))
+        }
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded), observerFailed = true))
+        // Numbers: only under verified or unconfirmed, and never with the flag.
+        assertTrue(VoteRules.showNumbers(verified, observerFailed = false))
+        assertTrue(VoteRules.showNumbers(unconfirmed, observerFailed = false))
+        assertFalse(VoteRules.showNumbers(verified, observerFailed = true))
+        assertFalse(VoteRules.showNumbers(unconfirmed, observerFailed = true))
+        for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
+            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), observerFailed = false))
+        }
+        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), observerFailed = false))
+    }
+
+    @Test
     fun aRealChoiceLabelledAbstainIsShownByItsId() {
         // ANDROID-PLAN 0.1.117 "Abstain" matching: Default_Ignorable and U+2800 removed anywhere, White_Space trimmed, any case.
         val labels = listOf("Abstain", "abstain", "  ABSTAIN\u00a0", "Ab\u200bstain", "Abs\u2800tain", "\u2800Abstain", "Abst\u00adain")
