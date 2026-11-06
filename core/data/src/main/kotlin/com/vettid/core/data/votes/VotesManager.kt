@@ -1355,10 +1355,19 @@ class VotesManager(
         }
     }
 
-    /** The recheck's rows.json waits: downloaded for [key] less than a week ago, on a network not known unmetered (#319 2). */
+    /**
+     * The recheck's rows.json waits (#319 item 2, the lead's (a)): on a network not known unmetered, downloaded for [key] less
+     * than a day ago while within 7 days of the vote's close (as extended), or less than a week ago after (or with no close
+     * known).
+     */
     private fun recheckRowsWait(key: String, at: Long): Boolean {
         val lastRows = recheckRowsAt[key] ?: return false
-        return at - lastRows in 0 until METERED_ROWS_EVERY.toMillis() && unmetered() != true
+        // The lead's call on #319 item 2 (a): for 7 days after the vote's close (as extended) at most daily, then weekly; a vote
+        // without a known close, weekly. Wi-Fi is never capped.
+        val closesAt = votesFlow.value.firstOrNull { it.key == key }?.closesAt?.toEpochMilli()
+        val early = closesAt != null && at < closesAt + RECHECK_DAILY_FOR.toMillis()
+        val every = if (early) RECHECK_EARLY_EVERY else METERED_ROWS_EVERY
+        return at - lastRows in 0 until every.toMillis() && unmetered() != true
     }
 
     private fun rechecked(key: String, passed: Boolean, gen: Int): ResultsOutcome {
@@ -1495,6 +1504,12 @@ class VotesManager(
 
         /** From the first re-check of a `gave_up` record, rows.json on any network for this long (#314 item 1). */
         val WIFI_ONLY_AFTER: Duration = Duration.ofDays(7)
+
+        /** The recheck on open on a metered network: daily for this long after the vote's close (#319 item 2, the lead's (a)). */
+        val RECHECK_DAILY_FOR: Duration = Duration.ofDays(7)
+
+        /** ...at most this often then; weekly ([METERED_ROWS_EVERY]) after. */
+        val RECHECK_EARLY_EVERY: Duration = Duration.ofDays(1)
 
         /** After that, on a metered network, rows.json at most this often (#314 item 1: a weekly cap, not a block). */
         val METERED_ROWS_EVERY: Duration = Duration.ofDays(7)

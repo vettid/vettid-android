@@ -485,14 +485,18 @@ The A2 exit test:
   rows.json is downloaded on any network); it still follows the unchanged-results skip, its time rule is unchanged
   (an `Unchanged` one keeps the last attempt's time, #314 item 3), and its download moves `lastRowsMs` (data was spent, so the weekly mobile cap counts from it). Both times are wiped with the attempts. Erratum due (the lead writes it):
   ANDROID-PLAN §4 "Votes" ("A `gave_up` check run again") and VAULT-MESSAGING §10.19.6 ("at most once a day per record")
-  gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
+  gain the 7-day / unmetered / weekly-on-metered rule for the rows.json download, and ANDROID-PLAN's "Recheck on open"
+  gains its own rule (#319 item 2, the lead's call (a)): on metered or unknown networks rows.json at most daily per vote
+  for 7 days after `closes_at`, then weekly; Wi-Fi never capped; behind the cap `vote_results_not_rechecked`. **Recheck on open** (ANDROID-PLAN 0.1.121): `VoteViewModel.setVisible` (ON_START/ON_STOP) runs
   `VotesRepository.recheck` for a `verified` or `unconfirmed` vote with no verdict in memory (`VoteRules.recheckOnOpen`):
   the observer's check alone (a check in flight like `checkResults`: `asCheck`, cancelled by `clear()` and then void, the cap
   read in the compute block, the observer under the same `observeLimitFor` time box), nothing submitted or stored; its
   verdict sets `VoteHint.verdict` (a recheck queued behind a check that set one returns it and downloads nothing, L4); on a
-  metered or unknown network it downloads rows.json at most weekly per vote (`recheckRowsAt`, memory only, kept across a
-  lock, cleared by a wipe; #319 item 2: the verdict is forgotten at every lock, so each open would download again), else
-  the not-rechecked line and no number, and a
+  metered or unknown network it downloads rows.json at most once a day per vote for 7 days after the vote's `closes_at`
+  (as extended), then at most weekly, and weekly when the close is not known (`recheckRowsWait`, `recheckRowsAt`: memory
+  only, kept across a lock, cleared by a wipe, a stamp only under the store epoch it began in; #319 item 2, the lead's
+  call (a): the verdict is forgotten at every lock, so each open would download again); on Wi-Fi every open downloads;
+  behind the cap the not-rechecked line and no number, and a
   site that cannot be
   reached sets `VoteHint.notRechecked` (`vote_results_not_rechecked`, owner-approved 2026-11-03), as does a recheck that could
   check nothing (no `record_tag`, results.json over its limit, a `counts.eligible` cap that does not read; #314 item 2):

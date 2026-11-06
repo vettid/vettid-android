@@ -1774,6 +1774,12 @@ class VotesManagerTest {
 
     private fun verifiedVote() = summary(state = "closed", extra = ""","ballot":{"state":"recorded"},"check":{"state":"verified"}""")
 
+    /** A verified vote that closed at [closes] (RFC 3339), or with no `closes_at` when null. */
+    private fun verifiedVoteClosing(closes: Instant?): String {
+        val v = verifiedVote()
+        return if (closes == null) v.replace(""","closes_at":"2026-11-06T17:00:00.000Z"""", "") else v.replace("2026-11-06T17:00:00.000Z", closes.toString())
+    }
+
     @Test
     fun theRecheckOnOpenSetsAVerdictAndNeverSubmits() = runTest {
         val (ops, site) = observedScenario(observed())
@@ -2323,7 +2329,7 @@ class VotesManagerTest {
     fun theRecheckOnOpenDownloadsRowsAtMostWeeklyOnMobileData() = runTest {
         // Item 2: the verdict is memory only, so every open after a lock rechecks; on mobile data rows.json at most weekly.
         val (ops, site) = observedScenario(observed())
-        ops.list = listing(verifiedVote())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z"))) // closed weeks ago: the weekly rule
         var net: Boolean? = false
         val m = manager(ops, site, unmetered = { net })
         m.refresh()
@@ -2471,7 +2477,7 @@ class VotesManagerTest {
     fun theRechecksWeeklyCapAtItsBoundary() = runTest {
         // The recheck's own cap (recheckRowsWait) on mobile data: 1 ms before 7 days held, at 7 days it downloads.
         val (ops, site) = observedScenario(observed())
-        ops.list = listing(verifiedVote())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z"))) // closed weeks ago: the weekly rule
         val m = manager(ops, site, unmetered = { false })
         m.refresh()
         val day0 = clock
@@ -2485,6 +2491,83 @@ class VotesManagerTest {
         m.refresh()
         clock = day0.plus(Duration.ofDays(7))
         assertEquals(ResultsOutcome.Rechecked(passed = true), m.recheck(CONN, PID))
+        assertEquals(2, site.rowsReads())
+    }
+
+    // ---- #319 item 2, the lead's call (a): the recheck on open, daily for 7 days after the close, weekly after ----
+
+    private suspend fun TestScope.recheckManager(closes: Instant?, net: () -> Boolean?): Pair<VotesManager, Site> {
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(closes))
+        val m = manager(ops, site, unmetered = net)
+        m.refresh()
+        return m to site
+    }
+
+    /** An open after a lock: the verdict forgotten, the recheck runs again. */
+    private suspend fun VotesManager.reopen(): ResultsOutcome {
+        clear()
+        refresh()
+        return recheck(CONN, PID)
+    }
+
+    private val checked = ResultsOutcome.Rechecked(passed = true)
+    private val held = ResultsOutcome.SiteUnreachable
+
+    @Test
+    fun theRecheckOnMeteredDataIsDailyForSevenDaysAfterTheCloseThenWeekly() = runTest {
+        val closes = clock
+        val ms = Duration.ofMillis(1)
+        fun at(d: Duration) = closes.plus(d)
+        val (m, site) = recheckManager(closes) { false }
+        assertEquals(checked, m.recheck(CONN, PID)) // day 0
+        clock = at(Duration.ofHours(1))
+        assertEquals(held, m.reopen()) // the same day
+        clock = at(Duration.ofDays(1).minus(ms))
+        assertEquals(held, m.reopen())
+        clock = at(Duration.ofDays(1))
+        assertEquals(checked, m.reopen()) // 24 h later
+        assertEquals(2, site.rowsReads())
+        // At the close + 7 days: last download day 5; 1 ms before, the daily rule (downloads); exactly at, the weekly (held).
+        for ((boundary, expected) in listOf(at(Duration.ofDays(7)).minus(ms) to checked, at(Duration.ofDays(7)) to held)) {
+            clock = at(Duration.ofDays(5))
+            val (m2, _) = recheckManager(closes) { false }
+            assertEquals(checked, m2.recheck(CONN, PID))
+            clock = boundary
+            assertEquals("$boundary", expected, m2.reopen())
+        }
+        // Then weekly: last download at the close + 8 days; 1 ms before 7 days since held, exactly at downloads.
+        clock = at(Duration.ofDays(8))
+        val (m3, site3) = recheckManager(closes) { false }
+        assertEquals(checked, m3.recheck(CONN, PID))
+        clock = at(Duration.ofDays(15)).minus(ms)
+        assertEquals(held, m3.reopen())
+        clock = at(Duration.ofDays(15))
+        assertEquals(checked, m3.reopen())
+        assertEquals(2, site3.rowsReads())
+    }
+
+    @Test
+    fun theRecheckOnWifiIsNeverCappedInEitherPeriod() = runTest {
+        val closes = clock
+        val (m, site) = recheckManager(closes) { true }
+        assertEquals(checked, m.recheck(CONN, PID))
+        assertEquals(checked, m.reopen())
+        clock = closes.plus(Duration.ofDays(9))
+        assertEquals(checked, m.reopen())
+        assertEquals(checked, m.reopen())
+        assertEquals(4, site.rowsReads())
+    }
+
+    @Test
+    fun aVoteWithNoCloseKnownUsesTheWeeklyRule() = runTest {
+        val day0 = clock
+        val (m, site) = recheckManager(null) { false }
+        assertEquals(checked, m.recheck(CONN, PID))
+        clock = day0.plus(Duration.ofDays(1))
+        assertEquals(held, m.reopen())
+        clock = day0.plus(Duration.ofDays(7))
+        assertEquals(checked, m.reopen())
         assertEquals(2, site.rowsReads())
     }
 }
