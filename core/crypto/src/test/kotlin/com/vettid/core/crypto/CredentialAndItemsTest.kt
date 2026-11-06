@@ -167,9 +167,13 @@ class CredentialAndItemsTest {
         // Nothing in it is verified (nothing changes): a forged statement ending at the pin is ignored too.
         val forged = CredentialKeyRotation(k2.publicKey, k3.publicKey, ByteArray(64), ByteArray(64))
         assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, listOf(forged)))
-        // The cap and an empty chain are still refused first, wherever the chain ends.
+        // Ends at the pin is checked before the cap, as the vault orders them: a 33-statement chain ending at the pin is
+        // ignored, not refused. One over the cap that does not end at the pin is still refused.
         val long = List(32) { r1 } + listOf(r2)
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, long) }
+        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, long))
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
+        // An empty chain is still refused (before `chain.last()`).
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, emptyList()) }
         // One that ends before the pin is still refused (the caller audits `rotation_rejected`).
         assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, listOf(r1)) }
     }
