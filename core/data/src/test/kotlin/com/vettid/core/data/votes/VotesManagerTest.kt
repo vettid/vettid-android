@@ -1137,7 +1137,8 @@ class VotesManagerTest {
             m.refresh()
             assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
             val stages = steps.map { it.first.substringAfterLast(':') }.toSet()
-            assertEquals(setOf("read", "row", "observe"), stages)
+            // "cap": results.json read for rows.json's download cap (lead review L1).
+            assertEquals(setOf("cap", "read", "row", "observe"), stages)
             assertTrue("$steps", steps.all { it.second == "vote-compute" })
         } finally {
             pool.shutdown()

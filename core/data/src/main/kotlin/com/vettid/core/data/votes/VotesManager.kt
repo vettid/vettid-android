@@ -756,7 +756,11 @@ class VotesManager(
         val sig = fetch("results.json.sig", SIG_MAX)
         val bundleBytes = fetch("results.json.sigstore.json", BUNDLE_MAX)
         // The download cap of rows.json follows counts.eligible (§10.19.6 step 1); results whose counts do not read are a problem.
-        val rowsCap = VoteRows.rowsCap(doc) ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
+        // Reading it parses results.json (up to 192 KiB), so it runs where the rest of the reading does (lead review L1).
+        val rowsCap = withContext(compute) {
+            computeStep("$key:cap")
+            VoteRows.rowsCap(doc)
+        } ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
         val rows = fetch("rows.json", rowsCap)
         if (tooLarge) return@run fail(key, ResultsOutcome.Problem, tooLarge = true, gen = gen)
         if (sig == null || bundleBytes == null || rows == null) {

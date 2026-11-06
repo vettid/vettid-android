@@ -427,7 +427,8 @@ The A2 exit test:
   row, the first under its tag; a valid own `choice_id`). `PublishedResults.observe` is the rest of the observer's check
   (BALLOT-PROTOCOL §8.4) and also reports the `rows_hash`, the tag order and duplicates, the field lengths, members other than
   §8.5's (`pad` is not allowed in rows.json), the documents naming another proposal and rows.json not exactly `{v: 1,
-  proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default),
+  proposal_id, rows}`. `checkResults` runs the reading, the proof and `observe` in one `withContext(compute)` (Dispatchers.Default; the
+  parse of results.json for `rowsCap`, needed before rows.json is fetched, runs on `compute` too),
   with `ensureActive()` every 256 rows and tree nodes (a cancellation stops it there: leaving the screen ends its
   `viewModelScope`, a lock cancels the sync job and so the due checks; a lock does **not** cancel a Check again still running,
   which runs to its end, but a `generation` taken at its start voids it: no hint is written and nothing is submitted after a
