@@ -123,12 +123,14 @@ class SpendingLimitsScreenTest {
     }
 
     @Test
-    fun nextOnThePinMovesToThePassword() {
+    fun nextOnThePinMovesToThePasswordAndDoneOnThePasswordRaises() {
         var raised = 0
         show(state(step = LimitsStep.CONFIRM_RAISE, raise = true, form = CapsEditForm(perTx = "600000")), SpendingLimitsActions(onConfirmRaise = { raised++ }))
         rule.onNodeWithTag("wallet_limits_pin").performImeAction()
         rule.onNodeWithTag("wallet_limits_password").assertIsFocused()
         assertEquals(0, raised)
+        rule.onNodeWithTag("wallet_limits_password").performImeAction()
+        assertEquals(1, raised)
     }
 
     @Test

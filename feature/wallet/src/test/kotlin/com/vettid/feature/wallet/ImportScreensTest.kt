@@ -159,12 +159,14 @@ class ImportScreensTest {
     }
 
     @Test
-    fun nextOnACappedWalletsPinMovesToThePassword() {
+    fun nextOnACappedWalletsPinMovesToThePasswordAndDoneOnThePasswordReveals() {
         var shown = 0
-        rule.setContent { BackupScreen(BackupUiState(BackupStep.PASSWORD, capped = true, pin = "123456"), BackupActions(onReveal = { shown++ })) }
+        rule.setContent { BackupScreen(BackupUiState(BackupStep.PASSWORD, capped = true, pin = "123456", password = "pw"), BackupActions(onReveal = { shown++ })) }
         rule.onNodeWithTag("wallet_pin").performImeAction()
         rule.onNodeWithTag("wallet_password").assertIsFocused()
         assertEquals(0, shown)
+        rule.onNodeWithTag("wallet_password").performImeAction()
+        assertEquals(1, shown)
     }
 
     @Test

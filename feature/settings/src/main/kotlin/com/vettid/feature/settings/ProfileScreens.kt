@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Badge
@@ -33,8 +34,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -388,7 +391,7 @@ private fun NameField(
     onIme: (() -> Unit)?,
     tag: String,
 ) {
-    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val focus = LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
@@ -398,11 +401,11 @@ private fun NameField(
         singleLine = true,
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ime),
         // Without a handler, Next goes to the field below (an empty one would do nothing).
-        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+        keyboardActions = KeyboardActions(
             onAny = {
                 when {
                     onIme != null -> onIme()
-                    ime == ImeAction.Next -> focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                    ime == ImeAction.Next -> focus.moveFocus(FocusDirection.Down)
                 }
             },
         ),
