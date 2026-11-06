@@ -1226,6 +1226,26 @@ class OwnerCheckManagerTest {
         assertFalse(m.relayRefused.value)
     }
 
+    /**
+     * Review of #301, F4: a successful rotate ([RelayReads.keysReplaced], called by `VaultManager.rotate`) reads the status
+     * again, so the notice goes; a read that fails there is not thrown.
+     */
+    @Test
+    fun replacedKeysReadTheStatusAgain() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        ops.relayRefused = true
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertTrue(m.relayRefused.value)
+        ops.relayRefused = false
+        val reads = ops.reads
+        RelayReads.keysReplaced(m)
+        assertEquals(reads + 1, ops.reads)
+        assertFalse(m.relayRefused.value)
+        ops.failStatus = true
+        RelayReads.keysReplaced(m) // no exception
+    }
+
     /** The re-read is cancelled by a lock. */
     @Test
     fun theRelayRereadIsCancelledAtLock() = runTest {

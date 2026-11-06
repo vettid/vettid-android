@@ -1,12 +1,22 @@
 package com.vettid.app.ui
 
 import android.app.Application
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.vettid.feature.credential.CredentialAlarmRoute
+import com.vettid.feature.credential.CredentialNewRoute
+import com.vettid.feature.credential.CredentialPasswordRoute
+import com.vettid.feature.credential.CredentialRotateRoute
+import com.vettid.feature.credential.CredentialRoute
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,5 +54,31 @@ class RelayRefusedNoticeTest {
     fun theNoticeCannotBeDismissed() {
         rule.setContent { RelayRefusedNotice(first = true, onReplaceKeys = {}) }
         rule.onNodeWithTag("banner_dismiss").assertDoesNotExist()
+    }
+
+    /**
+     * Review of #301, F4: announced politely (it comes back after every unlock), never assertively as the other urgent
+     * banners are.
+     */
+    @Test
+    fun theNoticeIsAnnouncedPolitely() {
+        rule.setContent { RelayRefusedNotice(first = true, onReplaceKeys = {}) }
+        rule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite), useUnmergedTree = true)
+            .assertExists()
+        rule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Assertive), useUnmergedTree = true)
+            .assertDoesNotExist()
+    }
+
+    /** Review of #301, F4: hidden on the key and credential screens only (Rotate, New credential, Password, Alarm). */
+    @Test
+    fun theNoticeIsHiddenOnTheKeyAndCredentialScreensOnly() {
+        val hidden = listOf(
+            CredentialRotateRoute::class, CredentialNewRoute::class, CredentialPasswordRoute::class, CredentialAlarmRoute::class,
+        )
+        assertEquals(hidden.toSet(), relayNoticeHiddenOn)
+        for (route in hidden) assertFalse("$route", relayNoticeShown(refused = true) { it == route })
+        assertTrue("another screen", relayNoticeShown(refused = true) { it == CredentialRoute::class })
+        assertTrue("the shell's start", relayNoticeShown(refused = true) { false })
+        assertFalse("not refused", relayNoticeShown(refused = false) { false })
     }
 }

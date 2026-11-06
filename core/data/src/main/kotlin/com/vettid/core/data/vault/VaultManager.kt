@@ -3319,8 +3319,7 @@ class VaultManager(
         windowFlow.value = null
         refreshAlarm(s)
         // (VAULT-MESSAGING 0.84.0) The new keys end a refused relay key: read `vault.status` again so that the notice goes.
-        runCatching { ownerCheck.refreshOwnerCheck() }
-        Unit
+        RelayReads.keysReplaced(ownerCheck)
     }
 
     /**

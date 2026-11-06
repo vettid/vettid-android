@@ -25,4 +25,12 @@ internal object RelayReads {
         if (open()) ownerCheck.noteRelay(stamp, status.relayRefused)
         return status
     }
+
+    /**
+     * New keys end a refused relay key (§3.4 "The way out of the refused state"): after a successful `credential.rotate`
+     * the status is read again so that the notice goes. A read that fails is not the rotation's failure.
+     */
+    suspend fun keysReplaced(ownerCheck: OwnerCheckRepository) {
+        runCatching { ownerCheck.refreshOwnerCheck() }
+    }
 }
