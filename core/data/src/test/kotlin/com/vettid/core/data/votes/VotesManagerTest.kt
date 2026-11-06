@@ -1222,4 +1222,36 @@ class VotesManagerTest {
         assertTrue(job.isCancelled)
         assertTrue(ops.submitted.isEmpty())
     }
+
+    @Test
+    fun theVerdictIsSetOnlyByAnAnsweredSubmitAndANonSubmitKeepsIt() = runTest {
+        val (ops, site) = observedScenario(observed(tally = """{"abstain":0,"no":1,"yes":0}"""))
+        val m = manager(ops, site)
+        m.refresh()
+        val key = "$CONN/$PID"
+        // A refused submission: the line is set, but the vault answered nothing, so there is no verdict.
+        ops.refuse["submit"] = "internal"
+        try {
+            m.checkResults(CONN, PID)
+            fail("refused")
+        } catch (_: VaultFailure) {
+        }
+        assertTrue(m.hints.value.getValue(key).observerFailed)
+        assertNull(m.hints.value.getValue(key).verdict)
+        // Answered: the verdict is the observer's.
+        ops.refuse.clear()
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue(key).verdict)
+        // Check again with the site down: nothing submitted, the line goes, the verdict stays (no numbers come back).
+        site.answers["p/$PID/results.json"] = SiteAnswer.Unreachable
+        assertEquals(ResultsOutcome.SiteUnreachable, m.checkResults(CONN, PID))
+        assertFalse(m.hints.value.getValue(key).observerFailed)
+        assertEquals(ObserverVerdict.FAILED, m.hints.value.getValue(key).verdict)
+        // Results that add up, answered: the verdict passes.
+        val (ops2, site2) = observedScenario(observed())
+        val m2 = manager(ops2, site2)
+        m2.refresh()
+        assertTrue(m2.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(ObserverVerdict.PASSED, m2.hints.value.getValue(key).verdict)
+    }
 }

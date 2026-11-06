@@ -297,15 +297,26 @@ class VoteRulesTest {
             assertFalse("$c", VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded, check(c)), observerFailed = true))
         }
         assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(vote(VoteState.CLOSED, recorded), observerFailed = true))
-        // Numbers: only under verified or unconfirmed, and never with the flag.
-        assertTrue(VoteRules.showNumbers(verified, observerFailed = false))
-        assertTrue(VoteRules.showNumbers(unconfirmed, observerFailed = false))
-        assertFalse(VoteRules.showNumbers(verified, observerFailed = true))
-        assertFalse(VoteRules.showNumbers(unconfirmed, observerFailed = true))
+        // Numbers: only under verified or unconfirmed, and never with a failed verdict.
+        val failed = ObserverVerdict.FAILED
+        val passed = ObserverVerdict.PASSED
+        assertTrue(VoteRules.showNumbers(verified, passed))
+        assertTrue(VoteRules.showNumbers(unconfirmed, passed))
+        assertFalse(VoteRules.showNumbers(verified, failed))
+        assertFalse(VoteRules.showNumbers(unconfirmed, failed))
         for (c in listOf(CheckState.FAILED, CheckState.PENDING, CheckState.GAVE_UP, CheckState.UNKNOWN)) {
-            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), observerFailed = false))
+            assertFalse("$c", VoteRules.showNumbers(vote(VoteState.CLOSED, recorded, check(c)), passed))
         }
-        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), observerFailed = false))
+        assertFalse(VoteRules.showNumbers(vote(VoteState.CLOSED, recorded), passed))
+    }
+
+    @Test
+    fun anAttemptThatSubmitsNothingClearsTheLineButTheLastVerdictKeepsTheNumbersHidden() {
+        // The reviewer's case: a verified check whose results did not add up, then a Check again that submitted nothing.
+        val verified = vote(VoteState.CLOSED, ballot(BallotState.RECORDED), check(CheckState.VERIFIED))
+        val after = VoteHint(observerFailed = false, verdict = ObserverVerdict.FAILED)
+        assertFalse(VoteNote.RESULTS_DONT_ADD_UP in VoteRules.notes(verified, observerFailed = after.observerFailed))
+        assertFalse(VoteRules.showNumbers(verified, after.verdict))
     }
 
     @Test

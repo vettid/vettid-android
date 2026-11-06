@@ -70,6 +70,12 @@ data class VoteHint(
      * that submits nothing clears it.
      */
     val observerFailed: Boolean = false,
+    /**
+     * The verdict of the app's observer check on the last results the vault answered for (review 1, finding 3; ANDROID-PLAN
+     * 0.1.117: "the last verdict still decides whether numbers show"). Set only by a submit the vault answered; an attempt
+     * that submits nothing leaves it. Null: no verdict in memory yet.
+     */
+    val verdict: ObserverVerdict? = null,
     /** When the app first saw the vote missing from the public site. */
     val notListedSince: Instant? = null,
 ) {
@@ -80,6 +86,9 @@ data class VoteHint(
         val LATE_AFTER: Duration = Duration.ofMinutes(10)
     }
 }
+
+/** The app's observer check on results the vault answered for. */
+enum class ObserverVerdict { PASSED, FAILED }
 
 /** What an attempt at a vote's results came to. */
 sealed interface ResultsOutcome {
@@ -817,7 +826,8 @@ class VotesManager(
         val state = CheckState.of(check?.let { VaultJson.str(it, "state") })
         // The vault alone judges; a submission it leaves pending (reason input) is the problem the screens say.
         val input = state == CheckState.PENDING && check?.let { c -> VaultJson.str(c, "reason") } == "input"
-        hint(key) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false) }
+        val verdict = if (examined.observerFailed) ObserverVerdict.FAILED else ObserverVerdict.PASSED
+        hint(key) { it.copy(gaveUp = null, resultsProblem = input, resultsTooLarge = false, verdict = verdict) }
         refreshQuietly()
         ResultsOutcome.Submitted(state)
     }

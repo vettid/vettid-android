@@ -319,8 +319,8 @@ private fun VoteContent(state: VoteUiState, actions: VoteActions, now: Instant) 
                     modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("vote_your_choice"),
                 )
             }
-            // No number unless the vault's check is verified or unconfirmed and the app's observer check passed (0.1.117).
-            if (VoteRules.showNumbers(s, state.hint.observerFailed)) Results(d, service, resources)
+            // No number unless the vault's check is verified or unconfirmed and the last observer verdict allows it (0.1.117).
+            if (VoteRules.showNumbers(s, state.hint.verdict)) Results(d, service, resources)
         }
         if (d != null && VoteRules.choosing(s)) {
             Choices(d, state, actions)

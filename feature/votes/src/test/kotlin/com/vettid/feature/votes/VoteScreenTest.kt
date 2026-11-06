@@ -20,6 +20,7 @@ import com.vettid.core.data.votes.VoteChoice
 import com.vettid.core.data.votes.VoteCheck
 import com.vettid.core.data.votes.VoteCounts
 import com.vettid.core.data.votes.VoteDetail
+import com.vettid.core.data.votes.ObserverVerdict
 import com.vettid.core.data.votes.VoteHint
 import com.vettid.core.data.votes.VoteState
 import com.vettid.core.data.votes.VoteSummary
@@ -224,7 +225,7 @@ class VoteScreenTest {
         val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
         run {
             val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(check), canCast = false)
-            show(state(s, detail(s, choiceId = "abstain", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(observerFailed = true)))
+            show(state(s, detail(s, choiceId = "abstain", tally = tally, counts = VoteCounts(120, 84, 0, 3)), hint = VoteHint(observerFailed = true, verdict = ObserverVerdict.FAILED)))
             val line = "The rest of the published results don't add up. The service may have published them wrongly."
             assertEquals("$check", 1, shownAll(line).fetchSemanticsNodes().size)
             rule.onNodeWithTag("vote_note_RESULTS_DONT_ADD_UP").assertIsDisplayed()
