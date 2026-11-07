@@ -307,10 +307,16 @@ object ApprovalParser {
     }
 
     /**
-     * A `connection.authenticate.result` event over the state [previous]. `key_changed` is this verdict's: true when the
-     * key was not the pinned one and the pin did not lead to it (§10.4); false or absent otherwise, including a response
-     * whose `rotations` the vault followed. `key` (when sent and well formed) is the key the vault now has pinned; an
-     * absent or malformed one leaves the previous key as it was (a `denied` result carries none).
+     * A `connection.authenticate.result` event over the state [previous].
+     *
+     * Only a successful verdict (`authenticated: true`) speaks about the key. Its `key_changed` decides the warning: true
+     * when the key was not the pinned one and the pin did not lead to it (§10.4); false or absent otherwise, including a
+     * response whose `rotations` the vault followed. Its `key` (when sent and well formed) is the key the vault now has
+     * pinned; an absent or malformed one leaves the previous key.
+     *
+     * A failed verdict (`denied`, `bad_signature`) carries no evidence about the key: it keeps the previous `keyChanged`
+     * and `key` as they were. Otherwise the party a key-change warning is about could erase it by declining the member's
+     * next request, and a `key` sent with a failure (which the spec does not define) could pass for a pinned one.
      */
     fun authResult(o: JsonObject, now: Instant, previous: AuthenticationState?): AuthenticationState? {
         val conn = o.s("connection_id") ?: return null
@@ -320,9 +326,9 @@ object ApprovalParser {
             verifiedAt = if (ok) now else base.verifiedAt,
             lastResult = if (ok) "authenticated" else o.s("reason") ?: "denied",
             lastAt = now,
-            keyChanged = o.b("key_changed") ?: false,
+            keyChanged = if (ok) o.b("key_changed") ?: false else base.keyChanged,
             waitingUntil = null,
-            key = credentialKey(o) ?: base.key,
+            key = if (ok) credentialKey(o) ?: base.key else base.key,
         )
     }
 

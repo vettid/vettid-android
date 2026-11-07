@@ -308,7 +308,36 @@ class ApprovalParserTest {
         val denied = ApprovalParser.authResult(o("""{"connection_id":"C1","request_id":"R","authenticated":false,"reason":"denied"}"""), at, ok)!!
         assertEquals(at, denied.verifiedAt)
         assertEquals("denied", denied.lastResult)
-        assertFalse(denied.keyChanged)
+        assertTrue("a failed verdict says nothing about the key: the warning stays", denied.keyChanged)
+        // The next success decides it again.
+        val again = ApprovalParser.authResult(o("""{"connection_id":"C1","request_id":"R","authenticated":true}"""), at, denied)!!
+        assertFalse(again.keyChanged)
+    }
+
+    /** A `denied` or `bad_signature` verdict keeps the warning and the key, whatever it carries. */
+    @Test
+    fun aFailedResultKeepsTheWarningAndTheKey() {
+        val changed = ApprovalParser.authResult(
+            o("""{"connection_id":"C1","request_id":"R","authenticated":true,"key":"$k1","key_changed":true}"""), at, null,
+        )!!
+        for (reason in listOf("denied", "bad_signature")) {
+            val failed = ApprovalParser.authResult(
+                o("""{"connection_id":"C1","request_id":"R","authenticated":false,"reason":"$reason","key":"$k2","key_changed":false}"""),
+                at,
+                changed,
+            )!!
+            assertEquals(reason, failed.lastResult)
+            assertTrue(reason, failed.keyChanged)
+            assertEquals(reason, k1, failed.key)
+        }
+        // Without a warning standing, a failure does not make one, and takes no key either.
+        val plain = ApprovalParser.authResult(
+            o("""{"connection_id":"C1","request_id":"R","authenticated":false,"reason":"bad_signature","key":"$k2","key_changed":true}"""),
+            at,
+            null,
+        )!!
+        assertFalse(plain.keyChanged)
+        assertNull(plain.key)
     }
 
     private val k1 = Base64s.encodeStd(ByteArray(32) { 1 })
