@@ -305,6 +305,29 @@ class ReleaseOfferCompactTest {
         } finally {
             notesSheetProcess = process
         }
+        // The stale key was dropped, not kept: back under the first process's mark, nothing reopens.
+        restoration.emulateSavedInstanceStateRestore()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+    }
+
+    @Test
+    fun aSavedKeyForAnotherReleaseIsDropped() {
+        // The lead's review of #327: the sheet open for release 5, then the check offers release 7, then 5 again.
+        val restoration = StateRestorationTester(rule)
+        restoration.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertExists()
+        unlock = unlock.copy(preflight = PreflightInfo(release(4), 4, false, false, release(7)))
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+        unlock = unlock.copy(preflight = preflight)
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+        restoration.emulateSavedInstanceStateRestore()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
     }
 
     @Test

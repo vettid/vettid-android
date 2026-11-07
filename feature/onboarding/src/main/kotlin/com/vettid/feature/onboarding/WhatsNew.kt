@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -78,6 +79,8 @@ internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onAppro
     // process died does not open again by itself when the check comes back, nor for another release (review F4).
     var notesOpenFor by rememberSaveable { mutableStateOf<String?>(null) }
     val openKey = "$notesSheetProcess:${offer.number}"
+    // A saved key of another process or release is dropped, not kept for later (the lead's review of #327).
+    SideEffect { if (notesOpenFor != null && notesOpenFor != openKey) notesOpenFor = null }
     val title = stringResource(R.string.release_notes_title, offer.number.toInt())
     val offerText = stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint)
     DetailCard(Modifier.testTag("release_offer")) {
