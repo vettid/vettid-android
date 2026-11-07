@@ -176,6 +176,12 @@ class VotesManagerTest {
         /** Runs before the read's bytes are reported (a wipe while the download is still arriving). */
         var beforeReceived: (() -> Unit)? = null
 
+        /** Runs after the read's bytes are reported (a lock once some bytes were spent). */
+        var afterReceived: (() -> Unit)? = null
+
+        /** The read is cancelled right after its bytes are reported: it never returns (a cut mid-read). */
+        var cancelAfterReceived = false
+
         /** The chunks a read reports its bytes in (a download arriving in pieces). */
         var chunks = 1
 
@@ -184,6 +190,8 @@ class VotesManagerTest {
             beforeReceived?.invoke()
             repeat(chunks - 1) { received(1) }
             partial[path]?.let(received) ?: (answer as? SiteAnswer.Found)?.let { received(it.bytes.size.toLong()) }
+            afterReceived?.invoke()
+            if (cancelAfterReceived) throw kotlinx.coroutines.CancellationException("cut off mid-read")
             return answer
         }
     }
@@ -2660,5 +2668,207 @@ class VotesManagerTest {
         m.refresh()
         assertEquals(ResultsOutcome.SiteUnreachable, m.recheck(CONN, PID))
         assertEquals(1, site.rowsReads())
+    }
+
+    // ---- #322: a Keystore not usable now neither caches the kept stores as empty nor writes over them ----
+
+    @get:org.junit.Rule
+    val dir = org.junit.rules.TemporaryFolder()
+
+    /**
+     * A real sealed file store whose key cannot be used for reads while [readsUnavailable] (a `ProviderException`, as a
+     * Keystore not ready throws), and works for writes: a Keystore that comes back between a read and a write.
+     */
+    private class SealedFile(f: java.io.File, purpose: String) {
+        var readsUnavailable = false
+        private var keyBroken = false
+        private val real = com.vettid.core.data.KeystoreFileStore(f, purpose) {
+            if (keyBroken) throw java.security.ProviderException("Keystore not ready")
+            javax.crypto.spec.SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
+        }
+        val store = object : com.vettid.core.vault.DeviceStateStore by real {
+            override fun load(): ByteArray? {
+                keyBroken = readsUnavailable
+                try {
+                    return real.load()
+                } finally {
+                    keyBroken = false
+                }
+            }
+        }
+    }
+
+    /** Bytes no key opens: malformed, then the right format sealed under another key (the tag fails). */
+    private fun corruptBlobs(): List<ByteArray> {
+        val other = com.vettid.core.data.KeystoreFileStore(dir.newFile(), "vote-attempts") {
+            javax.crypto.spec.SecretKeySpec(ByteArray(32) { 7 }, "AES")
+        }
+        return listOf("not a sealed file".toByteArray(), other.seal("[]".toByteArray()))
+    }
+
+    @Test
+    fun aCorruptAttemptsFileCountsAsEmptyAndTheNextAttemptReplacesIt() = runTest {
+        for (blob in corruptBlobs()) {
+            val f = java.io.File(dir.newFolder(), "vote-attempts.bin").apply { writeBytes(blob) }
+            val sealed = SealedFile(f, "vote-attempts")
+            val store = KeystoreResultsAttemptStore(sealed.store)
+            assertTrue(store.load().isEmpty())
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(gaveUp())
+            ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+            manager(ops, site, attempts = store).syncOnce()
+            assertEquals(1, ops.submitted.size)
+            assertEquals(listOf("$CONN/$PID"), store.load().map { it.key })
+        }
+    }
+
+    @Test
+    fun anUnavailableAttemptsStoreHoldsTheDailyReCheckAndIsNeitherCachedNorOverwritten() = runTest {
+        val f = java.io.File(dir.root, "vote-attempts.bin")
+        val sealed = SealedFile(f, "vote-attempts")
+        val store = KeystoreResultsAttemptStore(sealed.store)
+        val original = ResultsAttempt(key = "$CONN/$PID", atMs = clock.minus(Duration.ofHours(1)).toEpochMilli())
+        store.save(listOf(original))
+        val onDisk = f.readBytes()
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(gaveUp())
+        ops.submitAnswer = obj("""{"proposal_id":"$PID","check":{"state":"gave_up"}}""")
+        fun resultsReads() = site.reads.count { it == "p/$PID/results.json" }
+        sealed.readsUnavailable = true
+        org.robolectric.shadows.ShadowLog.clear()
+        assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
+        // Logged once, by class names only (#324: how the phone reports it).
+        assertEquals(
+            listOf("vote-attempts not read: java.security.ProviderException; unavailable"),
+            org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg },
+        )
+        // A KeyStoreException at the key (wrapped by the file store with the decrypt failures) is "unavailable" too.
+        val keyStoreDown = com.vettid.core.data.KeystoreFileStore(f, "vote-attempts") { throw java.security.KeyStoreException("busy") }
+        assertTrue(runCatching { KeystoreResultsAttemptStore(keyStoreDown).load() }.exceptionOrNull() is StoreUnavailable)
+        val m = manager(ops, site, attempts = store)
+        m.syncOnce()
+        assertEquals("not readable: the daily re-check waits (iOS #222)", 0, resultsReads())
+        assertTrue(ops.submitted.isEmpty())
+        // The member's Check again is not held; its attempt is dropped, not written over the file.
+        assertTrue(m.checkResults(CONN, PID) is ResultsOutcome.Submitted)
+        assertEquals(1, resultsReads())
+        assertTrue("the attempt is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
+        // The Keystore is back: the same manager reads the file again (nothing was cached) and the daily limit holds.
+        sealed.readsUnavailable = false
+        m.syncOnce()
+        assertEquals("the original attempt, read again, holds the re-check", 1, resultsReads())
+        assertEquals(listOf(original), store.load())
+    }
+
+    @Test
+    fun aCorruptRecheckFileCountsAsEmptyAndTheNextStampReplacesIt() = runTest {
+        val causes = listOf("com.vettid.core.data.KeystoreFileStore\$Malformed", "javax.crypto.AEADBadTagException")
+        for ((blob, cause) in corruptBlobs().zip(causes)) {
+            val f = java.io.File(dir.newFolder(), "vote-rechecks.bin").apply { writeBytes(blob) }
+            val store = KeystoreRecheckStampStore(SealedFile(f, "vote-rechecks").store)
+            org.robolectric.shadows.ShadowLog.clear()
+            assertTrue(store.load().isEmpty())
+            // Logged once, by class names down to the root cause (#324: whether KeyMint reports a tag failure this way).
+            assertEquals(
+                listOf("vote-rechecks not read: com.vettid.core.keystore.KeystoreException <- $cause; corrupt"),
+                org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg },
+            )
+            val (ops, site) = observedScenario(observed())
+            ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+            val m = manager(ops, site, unmetered = { false }, stamps = store)
+            m.refresh()
+            assertEquals(checked, m.recheck(CONN, PID))
+            assertEquals(listOf(RecheckStamp("$CONN/$PID", clock.toEpochMilli())), store.load())
+        }
+    }
+
+    @Test
+    fun anUnavailableRecheckStoreHoldsTheMeteredDownloadAndIsNeitherCachedNorOverwritten() = runTest {
+        val f = java.io.File(dir.root, "vote-rechecks.bin")
+        val sealed = SealedFile(f, "vote-rechecks")
+        val store = KeystoreRecheckStampStore(sealed.store)
+        // A download a day ago, after the 7 days from the close: the weekly rule holds the next one on mobile data.
+        val original = RecheckStamp("$CONN/$PID", clock.minus(Duration.ofDays(1)).toEpochMilli())
+        store.save(listOf(original))
+        val onDisk = f.readBytes()
+        val (ops, site) = observedScenario(observed())
+        ops.list = listing(verifiedVoteClosing(Instant.parse("2026-10-01T12:00:00Z")))
+        sealed.readsUnavailable = true
+        assertTrue(runCatching { store.load() }.exceptionOrNull() is StoreUnavailable)
+        var wifi = false
+        val m = manager(ops, site, unmetered = { wifi }, stamps = store)
+        m.refresh()
+        assertEquals("not readable, on mobile data: the download waits (iOS #222)", held, m.recheck(CONN, PID))
+        assertEquals(0, site.rowsReads())
+        // On Wi-Fi (never capped) it downloads; its stamp is dropped, not written over the file.
+        wifi = true
+        assertEquals(checked, m.reopen())
+        assertEquals(1, site.rowsReads())
+        assertTrue("the stamp is dropped, not written over the file", f.readBytes().contentEquals(onDisk))
+        // The Keystore is back, on mobile data: the same manager reads the file again (nothing was cached) and the
+        // original stamp holds.
+        wifi = false
+        sealed.readsUnavailable = false
+        assertEquals("the original stamp, read again, holds the recheck", held, m.reopen())
+        assertEquals(1, site.rowsReads())
+        assertEquals(listOf(original), store.load())
+    }
+
+    @Test
+    fun aFailedDeleteAtTheWipeIsLoggedByNameAndTheWipeGoesOn() = runTest {
+        val attempts = MemoryResultsAttemptStore().apply { save(listOf(ResultsAttempt(key = "$CONN/$PID", atMs = 1))) }
+        val stamps = object : RecheckStampStore {
+            override fun load() = listOf(RecheckStamp("$CONN/$PID", 1))
+
+            override fun save(stamps: List<RecheckStamp>) = throw java.io.IOException("could not delete vote-rechecks.bin")
+        }
+        val m = manager(Ops(), attempts = attempts, stamps = stamps)
+        org.robolectric.shadows.ShadowLog.clear()
+        m.forgetStored() // does not throw: LocalWipe erases the directory after
+        val logged = org.robolectric.shadows.ShadowLog.getLogsForTag("VotesManager").map { it.msg }
+        assertEquals(listOf("could not erase vote-rechecks at the wipe (IOException)"), logged)
+        assertTrue("the other store is still erased", attempts.load().isEmpty())
+    }
+
+    @Test
+    fun aDailyReCheckCutOffAfterRowsBytesStillCountsTowardTheWeeklyCap() = runTest {
+        // #322 (shared with iOS #224): day 8 on mobile, the last download day 0; the daily re-check is cancelled mid-read after
+        // part of rows.json arrived (the read never returns). The attempt is recorded (rows spent, nothing answered), so day 9 is deferred.
+        val (ops, site) = wifiScenario()
+        val store = MemoryResultsAttemptStore()
+        val m = manager(ops, site, attempts = store, unmetered = { false })
+        m.refresh()
+        val day0 = clock
+        assertTrue(m.checkDue(CONN, PID) is ResultsOutcome.Submitted)
+        val rows = site.answers.getValue("p/$PID/rows.json")
+        site.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site.partial["p/$PID/rows.json"] = 1_000_000
+        site.cancelAfterReceived = true
+        clock = day0.plus(Duration.ofDays(8))
+        assertTrue(runCatching { m.checkDue(CONN, PID) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        val kept = store.load().single()
+        assertEquals(clock.toEpochMilli(), kept.lastRowsMs)
+        assertEquals(clock.toEpochMilli(), kept.atMs)
+        assertFalse("nothing answered: the next run skips nothing", kept.answered || kept.sentRow || kept.rowsFetched)
+        site.answers["p/$PID/rows.json"] = rows
+        site.partial.clear()
+        site.cancelAfterReceived = false
+        m.refresh()
+        clock = day0.plus(Duration.ofDays(9))
+        assertEquals("the partial download counted", ResultsOutcome.Deferred, m.checkDue(CONN, PID))
+        assertEquals(2, site.rowsReads())
+        // A cut before any rows byte records nothing new.
+        val (ops2, site2) = wifiScenario()
+        val store2 = MemoryResultsAttemptStore()
+        val m2 = manager(ops2, site2, attempts = store2, unmetered = { false })
+        m2.refresh()
+        clock = day0
+        m2.checkDue(CONN, PID)
+        val before = store2.load()
+        site2.answers["p/$PID/rows.json"] = SiteAnswer.Unreachable
+        site2.cancelAfterReceived = true
+        clock = day0.plus(Duration.ofDays(8))
+        assertTrue(runCatching { m2.checkDue(CONN, PID) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+        assertEquals(before, store2.load())
     }
 }
