@@ -4,19 +4,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performClick
 import com.vettid.core.data.vault.EarlierRelease
 import com.vettid.core.data.vault.PreflightInfo
@@ -246,6 +251,29 @@ class ReleaseOfferCompactTest {
         rule.waitForIdle()
         rule.onNodeWithTag("whats_new_loading").assertExists()
         rule.onNodeWithTag("whats_new_fingerprint").assertTextContains(fingerprint, substring = true)
+    }
+
+    @Test
+    fun theSheetStaysOpenAcrossARecreationButNotAcrossANewProcess() {
+        // Review F4.
+        val restoration = StateRestorationTester(rule)
+        restoration.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertExists()
+        restoration.emulateSavedInstanceStateRestore()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertExists()
+        val process = notesSheetProcess
+        try {
+            notesSheetProcess = "another process"
+            restoration.emulateSavedInstanceStateRestore()
+            rule.waitForIdle()
+            rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+            rule.onNodeWithTag("release_offer").assertExists()
+        } finally {
+            notesSheetProcess = process
+        }
     }
 
     // --- the recovery's PIN step (MoveScreens), the other place the offer is shown ---

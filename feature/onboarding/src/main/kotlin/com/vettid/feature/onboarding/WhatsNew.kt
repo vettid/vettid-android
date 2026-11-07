@@ -45,6 +45,7 @@ import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseSecurity
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.theme.Spacing
+import java.util.UUID
 
 /**
  * **What's new in release N** (ANDROID-PLAN 0.1.31, RELEASE-UPDATES 0.3.0 §2): the release log entry of the offered
@@ -55,6 +56,9 @@ import com.vettid.core.ui.theme.Spacing
 fun WhatsNew(release: Long, notes: ReleaseNotes?, notesUrl: String, modifier: Modifier = Modifier) {
     DetailCard(modifier.testTag("whats_new")) { WhatsNewBody(release, notes, notesUrl) }
 }
+
+/** This process's mark on a notes sheet saved open (a test may change it to stand for a new process). */
+internal var notesSheetProcess: String = UUID.randomUUID().toString()
 
 /**
  * The release offer at unlock, compact (owner decision 2026-11-07, as iOS; ANDROID-PLAN 0.1.122): shown below the PIN, it
@@ -68,7 +72,10 @@ fun WhatsNew(release: Long, notes: ReleaseNotes?, notesUrl: String, modifier: Mo
 internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onApproveOffer: (Boolean) -> Unit, notes: ReleaseNotes?) {
     val offer = p.offer ?: return
     if (p.rollback) return
-    var notesOpen by rememberSaveable(offer.number) { mutableStateOf(false) }
+    // Saved, so a rotation keeps the sheet open; tied to this process and this offer, so a sheet saved open before the
+    // process died does not open again by itself when the check comes back, nor for another release (review F4).
+    var notesOpenFor by rememberSaveable { mutableStateOf<String?>(null) }
+    val openKey = "$notesSheetProcess:${offer.number}"
     val title = stringResource(R.string.release_notes_title, offer.number.toInt())
     val offerText = stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint)
     DetailCard(Modifier.testTag("release_offer")) {
@@ -99,12 +106,12 @@ internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onAppro
                 Text(stringResource(R.string.unlock_offer_approve), style = MaterialTheme.typography.bodyMedium)
             }
             TextButton(
-                onClick = { notesOpen = true },
+                onClick = { notesOpenFor = openKey },
                 modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("whats_new_open"),
             ) { Text(title) }
         }
     }
-    if (notesOpen) ReleaseNotesSheet(p, notes) { notesOpen = false }
+    if (notesOpenFor == openKey) ReleaseNotesSheet(p, notes) { notesOpenFor = null }
 }
 
 /**
