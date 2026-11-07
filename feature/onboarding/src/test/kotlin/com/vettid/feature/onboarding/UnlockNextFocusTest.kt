@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performImeAction
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
@@ -13,7 +14,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.lang.reflect.Proxy
 
-/** A6 audit A5: with the check due, Next on the PIN moves to the password and sends nothing. */
+/**
+ * A6 audit A5: with the check due, Next on the PIN moves to the password and sends nothing; with it not due, the PIN is
+ * the only field and Done on it unlocks (#323).
+ */
 @RunWith(RobolectricTestRunner::class)
 class UnlockNextFocusTest {
     @get:Rule
@@ -35,5 +39,16 @@ class UnlockNextFocusTest {
         rule.onNodeWithTag("unlock_pin").performImeAction()
         rule.onNodeWithTag("unlock_password").assertIsFocused()
         assertFalse(asked.toString(), "submit" in asked)
+    }
+
+    @Test
+    fun doneOnThePinUnlocksWhenTheCheckIsNotDue() {
+        val notDue = UnlockUiState(
+            loading = false, preflight = PreflightInfo(release, 3, false, false, null), checkDue = false, pin = "123456",
+        )
+        rule.setContent { UnlockContent(notDue, actions) }
+        rule.onNodeWithTag("unlock_password").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_pin").performImeAction()
+        assertEquals(asked.toString(), 1, asked.count { it == "submit" })
     }
 }
