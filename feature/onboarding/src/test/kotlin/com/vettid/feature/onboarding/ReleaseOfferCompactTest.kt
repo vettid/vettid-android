@@ -164,7 +164,8 @@ class ReleaseOfferCompactTest {
     fun whileTheNotesLoadTheNoticeShowsTheProgressLineAndTheApprovalWorks() {
         unlock = unlock.copy(notes = null)
         rule.setContent { UnlockContent(unlock, unlockActions) }
-        rule.onNodeWithTag("release_offer_loading").assertTextContains("Loading the release notes…")
+        rule.onNodeWithTag("release_offer_loading", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("release_offer_notes").assertTextEquals("Loading the release notes…")
         rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
         rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
@@ -203,27 +204,32 @@ class ReleaseOfferCompactTest {
     }
 
     @Test
-    fun theVisibleNotesLineAloneIsAPoliteLiveRegion() {
-        // The lead's review of #327: TalkBack hears the security line arrive; the invisible height copies say nothing.
+    fun theNotesLineIsOneStablePoliteLiveRegionWhoseTextChanges() {
+        // The lead's review of #327 (R2-1): one node that persists across the states, so its change is announced; the
+        // invisible height copies are never live and never in the tree.
         unlock = unlock.copy(notes = null)
         rule.setContent { UnlockContent(unlock, unlockActions) }
         fun liveNodes() = rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.LiveRegion), useUnmergedTree = true)
             .fetchSemanticsNodes()
             .filter { n -> generateSequence(n) { it.parent }.any { it.config.getOrNull(SemanticsProperties.TestTag) == "release_offer" } }
-        fun check(tag: String) {
-            val live = liveNodes()
-            assertEquals(live.map { it.config.getOrNull(SemanticsProperties.TestTag) }.toString(), 1, live.size)
-            assertEquals(tag, live.single().config.getOrNull(SemanticsProperties.TestTag))
-            assertEquals(LiveRegionMode.Polite, live.single().config[SemanticsProperties.LiveRegion])
+        fun live(): SemanticsNode {
+            val nodes = liveNodes()
+            assertEquals(nodes.map { it.config.getOrNull(SemanticsProperties.TestTag) }.toString(), 1, nodes.size)
+            val n = nodes.single()
+            assertEquals("release_offer_notes", n.config.getOrNull(SemanticsProperties.TestTag))
+            assertEquals(LiveRegionMode.Polite, n.config[SemanticsProperties.LiveRegion])
+            return n
         }
-        check("release_offer_loading")
+        val id = live().id
+        rule.onNodeWithTag("release_offer_notes").assertTextEquals("Loading the release notes…")
         unlock = unlock.copy(notes = notes)
         rule.waitForIdle()
-        check("release_offer_security")
-        rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertTextEquals("Security fix: update urgently")
+        assertEquals("the same node", id, live().id)
+        rule.onNodeWithTag("release_offer_notes").assertTextEquals("Security fix: update urgently")
         unlock = unlock.copy(notes = ReleaseNotes.Unavailable)
         rule.waitForIdle()
-        check("release_offer_unavailable")
+        assertEquals("the same node", id, live().id)
+        rule.onNodeWithTag("release_offer_notes").assertTextEquals("Release notes unavailable")
         // The copies are out of the tree: one text of each kind in the notice.
         unlock = unlock.copy(notes = notes)
         rule.waitForIdle()

@@ -196,20 +196,22 @@ private fun NotesLine(notes: ReleaseNotes?) {
         }
         UnavailableLine(hidden)
         ReleaseSecurity.entries.forEach { SecurityLine(it, hidden) }
-        // The visible line alone is a polite live region: "Security fix: update urgently" is read out when it arrives.
-        val live = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
-        when (notes) {
-            null -> LoadingLine(live.testTag("release_offer_loading"))
-            ReleaseNotes.Unavailable -> UnavailableLine(live.testTag("release_offer_unavailable"))
-            is ReleaseNotes.Available -> SecurityLine(notes.entry.security, live.testTag("release_offer_security"))
+        // The visible line alone is a polite live region, on one node that stays across the states and reads as one text,
+        // so "Security fix: update urgently" is read out when it replaces the progress line (a new node may not be).
+        Box(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("release_offer_notes")) {
+            when (notes) {
+                null -> LoadingLine(Modifier.testTag("release_offer_loading"), merge = false)
+                ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("release_offer_unavailable"))
+                is ReleaseNotes.Available -> SecurityLine(notes.entry.security, Modifier.testTag("release_offer_security"))
+            }
         }
     }
 }
 
-/** "Loading the release notes…" with a small progress indicator, read as one line. */
+/** "Loading the release notes…" with a small progress indicator, read as one line ([merge]: unless its parent merges it). */
 @Composable
-private fun LoadingLine(modifier: Modifier = Modifier) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.semantics(mergeDescendants = true) {}) {
+private fun LoadingLine(modifier: Modifier = Modifier, merge: Boolean = true) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.semantics(mergeDescendants = merge) {}) {
         CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
         Spacer(Modifier.width(Spacing.s))
         Text(stringResource(R.string.release_notes_loading), style = MaterialTheme.typography.bodyMedium)
