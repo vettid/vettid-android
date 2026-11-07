@@ -9,6 +9,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -304,17 +305,45 @@ class TransferInViewModel @Inject constructor(
     }
 
     /**
-     * Leaves a transfer in progress. Before the code was shown nothing can have been approved: dropped at once. (A6 audit
-     * N1) Once it was shown, the old phone may have approved it, so the member confirms first ([confirmCancel]).
+     * Leaves a transfer in progress. (A6 audit N1) Once the code is shown, the old phone may have approved it, so the member
+     * confirms first ([confirmCancel]). While CONNECTING ([cancelConnecting]) the code may not be on the screen yet and
+     * still exist: an `hs.resp` being answered at that moment has sent its `hs.fin`, and the old phone shows the code.
      */
     override fun cancel() {
         if (settlingNow()) return
-        val step = state.value.step
-        if (step == TransferInStep.COMPARE) {
-            state.update { it.copy(confirmCancel = true) }
-            return
+        when (state.value.step) {
+            TransferInStep.COMPARE -> state.update { it.copy(confirmCancel = true) }
+            TransferInStep.CONNECTING -> cancelConnecting()
+            else -> drop()
         }
-        drop()
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.88.0 §6.7.1 step 2: a new phone that stopped waiting MUST NOT answer a late `hs.resp`) Cancel or
+     * Back while CONNECTING. The wait for the code is cancelled and joined first (whatever it was doing with the device is
+     * over), then the repository drops the transfer only if no `hs.resp` was answered, deciding under the device's lock
+     * ([MoveRepository.abandonTransferInIfUnanswered]); that is the same race as the 60 s timeout's. Dropped: back to
+     * the start. Answered meanwhile (its `hs.fin` went out, so the old phone shows the code and may approve it): the code
+     * is shown with the cancel's confirmation open, as a cancel in COMPARE asks, and the wait goes on unless the member
+     * confirms ([confirmCancel], the member's informed cancel). Never [MoveRepository.abandonTransferIn] here.
+     */
+    private fun cancelConnecting() {
+        val before = waiter
+        waiter = viewModelScope.launch {
+            before?.cancelAndJoin()
+            val kept = abandonUnanswered()
+            if (kept == null) {
+                state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null, confirmCancel = false) }
+                return@launch
+            }
+            val shown = try {
+                move.transferInWaiting()?.startedAt?.plus(WINDOW)
+            } catch (_: VaultFailure) {
+                null
+            } ?: Instant.now(clock).plus(WINDOW)
+            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = kept, deadline = shown, confirmCancel = true) }
+            waitForApproval(shown) { move.awaitTransferIn() }
+        }
     }
 
     override fun confirmCancel() {
@@ -332,7 +361,8 @@ class TransferInViewModel @Inject constructor(
     }
 
     /**
-     * (0.88.0, §6.7.1 step 2: a new phone that stopped waiting MUST NOT answer a late `hs.resp`) The 60 s ran out: the
+     * (0.88.0, §6.7.1 step 2: a new phone that stopped waiting MUST NOT answer a late `hs.resp`) The 60 s ran out, or the
+     * member cancelled while CONNECTING ([cancelConnecting]): the
      * repository drops the transfer only while no `hs.resp` was answered, under the device's lock. If one was answered
      * meanwhile (its `hs.fin` went out), the transfer is kept and its SAS returned: the screen shows the code and waits,
      * as for an answer within the 60 s. Null: dropped (or nothing to drop).

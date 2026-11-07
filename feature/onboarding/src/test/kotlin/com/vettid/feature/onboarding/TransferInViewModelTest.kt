@@ -372,6 +372,82 @@ class TransferInViewModelTest {
         assertFalse(vm.back())
     }
 
+    /**
+     * (0.88.0, §6.7.1 step 2) Cancel or Back while CONNECTING with no hs.resp answered: dropped through the unanswered-only
+     * path, back to the start; never the member's informed cancel (`abandonTransferIn`), which drops whatever was answered.
+     */
+    @Test
+    fun aCancelWhileConnectingDropsOnlyAnUnansweredTransfer() = runTest {
+        vault.transferHsResp = CompletableDeferred()
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.CONNECTING, vm.uiState.value.step)
+        assertTrue(vm.back())
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.INTRO, vm.uiState.value.step)
+        assertTrue("abandonTransferInIfUnanswered" in vault.calls)
+        assertFalse("abandonTransferIn" in vault.calls)
+        // A late hs.resp changes nothing: the wait was cancelled.
+        vault.transferHsResp!!.complete("042817")
+        advanceUntilIdle()
+        assertEquals(TransferInStep.INTRO, vm.uiState.value.step)
+        assertFalse("awaitTransferIn" in vault.calls)
+    }
+
+    /**
+     * (0.88.0, §6.7.1 step 2; review F1) The cancel meets an hs.resp being answered: its hs.fin went out, so the old phone
+     * shows the code. The transfer is kept; the screen shows the code with the cancel's confirmation open, as a cancel in
+     * COMPARE does. Keeping the code waits for the approval; confirming is the member's informed cancel.
+     */
+    @Test
+    fun aCancelWhileConnectingThatMeetsAnAnswerShowsTheCodeAndAsks() = runTest {
+        vault.transferHsResp = CompletableDeferred()
+        vault.answeredMeanwhile = "042817"
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(1_000)
+        vm.cancel()
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertTrue("asked, as in COMPARE", vm.uiState.value.confirmCancel)
+        assertFalse("abandonTransferIn" in vault.calls)
+        assertTrue("the wait goes on", "awaitTransferIn" in vault.calls)
+        vm.dismissCancel()
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+        // The other answer: confirmed, the member's informed cancel.
+        val v2 = FakeVault(AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)).apply { transferHsResp = CompletableDeferred(); answeredMeanwhile = "042817" }
+        val vm2 = TransferInViewModel(v2, v2)
+        vm2.scan()
+        vm2.scanned(qr())
+        advanceTimeBy(1_000)
+        vm2.cancel()
+        advanceTimeBy(100)
+        vm2.confirmCancel()
+        advanceTimeBy(100)
+        assertTrue("abandonTransferIn" in v2.calls)
+        assertEquals(TransferInStep.INTRO, vm2.uiState.value.step)
+    }
+
+    /** (review F1) Source guard: CONNECTING's cancel goes through the unanswered-only drop, never `abandon()`. */
+    @Test
+    fun theConnectingCancelUsesTheUnansweredOnlyDrop() {
+        val src = java.io.File("src/main/kotlin/com/vettid/feature/onboarding/TransferInViewModel.kt").readLines().map { it.trim() }
+        assertTrue(src.any { it == "TransferInStep.CONNECTING -> cancelConnecting()" })
+        val i = src.indexOfFirst { it == "private fun cancelConnecting() {" }
+        assertTrue(i >= 0)
+        val end = (i + 1 until src.size).first { src[it].startsWith("private ") || src[it].startsWith("override ") || src[it].startsWith("/**") }
+        val body = src.subList(i, end)
+        assertTrue(body.any { it.contains("before?.cancelAndJoin()") })
+        assertTrue(body.any { it.contains("abandonUnanswered()") })
+        assertFalse(body.any { it.contains("abandon()") || it.contains("abandonTransferIn()") || it.contains("drop()") })
+    }
+
     /** §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; the new phone stops after 60 s. */
     @Test
     fun noHsRespWithin60SecondsSaysWhyAndOffersANewCode() = runTest {
