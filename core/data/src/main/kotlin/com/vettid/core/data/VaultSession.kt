@@ -70,7 +70,8 @@ class VaultSession(
             val keys = DeviceKeys(SeedWrapKey.wrapper(), SharedPreferencesWrappedKeyStore(context))
             val store = KeystoreFileStore(File(context.noBackupFilesDir, "vault-device.bin"), "vault-device")
             val cfg = DeviceConfig(name = deviceName, relayUrl = endpoints.relayUrl, http = http, store = store, trust = trust,
-                elapsedMs = { android.os.SystemClock.elapsedRealtime() })
+                elapsedMs = { android.os.SystemClock.elapsedRealtime() },
+                bootId = context.applicationContext.let { c -> { com.vettid.core.data.vault.BootCount.read(c) } })
             val s = secrets(keys)
             val device = VaultDevice.load(cfg, s) ?: VaultDevice.create(cfg, s)
             val member = MemberApiClient(endpoints.apiBase, endpoints.manifestUrl, http, auth)

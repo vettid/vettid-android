@@ -78,6 +78,11 @@ internal data class DeviceState(
  * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
  * and, once `device.paired{transfer: true}` was applied, the member's `user_guid` from it (null from a vault release
  * before 0.17.0).
+ *
+ * (VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome") Every member added for the outcome has a default, so a record
+ * written by an earlier app version reads as a transfer without the gate ([outcome] false: 0.85.2's settlement window,
+ * unchanged) and with no `hs.resp` stamp. An earlier app version reading a record of this one ignores the new members
+ * ([stateJson] `ignoreUnknownKeys`).
  */
 @Serializable
 internal data class TransferInRecord(
@@ -85,6 +90,28 @@ internal data class TransferInRecord(
     val sas: String? = null,
     val paired: Boolean = false,
     val userGuid: String? = null,
+    /**
+     * The gate: the scanned transfer bundle's `capabilities` listed `transfer_outcome` (§6.7.1 "Capability", §11.10.9).
+     * Fixed at the scan, per transfer: never read from the account's last descriptor, which a later one overwrites. Only
+     * with it does this phone act on `device.transfer.ended`.
+     */
+    val outcome: Boolean = false,
+    /** When this phone took the vault's `hs.resp` (wall clock, epoch ms), stored in the same write as [sas]. */
+    val respMs: Long? = null,
+    /** The same moment on the monotonic clock ([DeviceConfig.elapsedMs], `elapsedRealtime` in the app). */
+    val respElapsedMs: Long? = null,
+    /**
+     * Which boot [respElapsedMs] counts from ([DeviceConfig.bootId], `Settings.Global.BOOT_COUNT` in the app); null when
+     * the platform gave none. [respElapsedMs] is comparable with a later reading only on the same boot.
+     */
+    val respBoot: Long? = null,
+    /**
+     * (0.88.0) The reason of the `device.transfer.ended` that ended this transfer (one of [TransferOutcome.REASONS]). A
+     * record with it is a tombstone: no SAS, no session, no vault; it only says how the transfer ended, across a restart,
+     * until the next transfer replaces it or the app clears it ([VaultDevice.clearTransferInEnded]). It is never a
+     * pending transfer ([VaultDevice.transferInPending] is null).
+     */
+    val ended: String? = null,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

@@ -250,6 +250,10 @@ class VaultDeviceTest {
     @Volatile
     private var elapsed = 0L
 
+    /** The boot the monotonic clock counts from, as [DeviceConfig.bootId] reads it (null: the platform gives none). */
+    @Volatile
+    private var bootId: Long? = null
+
     /** How far the phone's wall clock is ahead of real time (milliseconds), for a vault answer stamped minutes later. */
     @Volatile
     private var clockAheadMs = 0L
@@ -269,6 +273,7 @@ class VaultDeviceTest {
             name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
             clock = phoneClock,
             elapsedMs = { elapsed },
+            bootId = { bootId },
             settleWait = java.time.Duration.ofMillis(800),
             trust = trust,
         )
@@ -1151,10 +1156,13 @@ class VaultDeviceTest {
         kind: InviteKind = InviteKind.APP,
         exp: Instant = Instant.now().plusSeconds(600),
         timeScale: Long? = null,
+        capabilities: List<String>? = null,
     ): String {
         val e = exp.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
         val tok = DepositTokens.mintOpen(v.relayKey, v.relayUrl, Instant.now(), java.time.Duration.ofMinutes(10))
-        val (blob, kb, h) = InviteBundle.seal(InviteBundle(kind, inviteId, false, v.principal(), tok, e, timeScale = timeScale).marshal())
+        val (blob, kb, h) = InviteBundle.seal(
+            InviteBundle(kind, inviteId, false, v.principal(), tok, e, capabilities = capabilities, timeScale = timeScale).marshal(),
+        )
         val claimId = "abcdefghijklmnopqrstuvwxy" + "234567"[claims.size % 6]
         claims[claimId] = blob
         return InviteQr(kind, v.relayUrl, claimId, h, kb, e.epochSecond).link()
@@ -1458,6 +1466,327 @@ class VaultDeviceTest {
             assertTrue(
                 runCatching { d.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is PairingRejectedException,
             )
+        }
+    }
+
+    // --- VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome": the gate, the hs.resp stamp, device.transfer.ended ---
+
+    private val outcomeCaps = listOf("recovery_r", "transfer_outcome")
+
+    /** `device.transfer.ended` sealed under the transfer's epoch; [body] verbatim. */
+    private fun FakeVault.ended(body: String): RelayMessage = msg(keyring.current()!!.seal(Inner(id = Ulid.new(), type = "device.transfer.ended", ts = Instant.now(), body = body.toByteArray())))
+
+    private fun FakeVault.endedFor(reason: String): RelayMessage = ended("""{"transfer_id":"${Ulid.new()}","reason":"$reason"}""")
+
+    /** A transfer to a new device that has shown its code: started from a bundle with [capabilities], hs.resp answered. */
+    private suspend fun answeredTransfer(
+        v: FakeVault,
+        capabilities: List<String>? = outcomeCaps,
+        store: DeviceStateStore = InMemoryDeviceStateStore(),
+        secrets: DeviceSecrets = DeviceSecrets.generate(),
+    ): VaultDevice {
+        val d = VaultDevice.create(config(store), secrets)
+        d.startTransfer(transferLink(v, Ulid.new(), capabilities = capabilities), RecordingAttester())
+        v.answerTransfer(d)
+        return d
+    }
+
+    /**
+     * The gate is read from the scanned bundle's own `capabilities` at the scan: exactly `transfer_outcome` turns it on;
+     * none, or only other capabilities, or a name that merely contains it, leave it off (0.85.2's window, unchanged).
+     */
+    @Test
+    fun theOutcomeGateIsReadFromTheTransferBundle() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val cases = listOf(
+                outcomeCaps to true,
+                listOf("transfer_outcome") to true,
+                null to false,
+                emptyList<String>() to false,
+                listOf("recovery_r", "vote_rows") to false,
+                listOf("transfer_outcome_v2", "transfer_outcomes") to false,
+            )
+            for ((caps, gate) in cases) {
+                val v = FakeVault()
+                val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+                d.startTransfer(transferLink(v, Ulid.new(), capabilities = caps), RecordingAttester())
+                nextDeposit()
+                assertEquals("capabilities $caps", gate, d.transferInPending!!.outcome)
+            }
+            assertTrue(TransferOutcome.offered(com.vettid.core.crypto.altchan.ReleaseTraits(listOf("transfer_outcome"))))
+            assertFalse(TransferOutcome.offered(com.vettid.core.crypto.altchan.ReleaseTraits()))
+        }
+    }
+
+    /**
+     * The hs.resp stamp (wall clock, monotonic clock, boot) is written with the SAS, before hs.fin goes out, and survives a
+     * restart with the gate; nothing of it exists before hs.resp. A boot id the platform cannot give is null, and one
+     * that throws does not stop the answer.
+     */
+    @Test
+    fun theHsRespStampIsStoredWithTheCodeAndSurvivesARestart() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(v, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            val before = d.transferInPending!!
+            assertNull(before.respAt)
+            assertNull(before.respElapsedMs)
+            assertNull(before.respBoot)
+            elapsed = 123_456
+            bootId = 42
+            val from = Instant.now()
+            val sas = v.answerTransfer(d)
+            val to = Instant.now()
+            elapsed = 999_999 // later readings change nothing stored
+            bootId = 43
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!.transferInPending!!
+            assertEquals(sas, again.sas)
+            assertTrue(again.outcome)
+            assertTrue(!again.respAt!!.isBefore(from.truncatedTo(java.time.temporal.ChronoUnit.MILLIS)) && !again.respAt!!.isAfter(to))
+            assertEquals(123_456L, again.respElapsedMs)
+            assertEquals(42L, again.respBoot)
+            // No boot id from the platform: null, and the transfer is answered all the same.
+            bootId = null
+            val d2 = answeredTransfer(FakeVault())
+            assertNotNull(d2.transferInPending!!.sas)
+            assertNull(d2.transferInPending!!.respBoot)
+            assertEquals(999_999L, d2.transferInPending!!.respElapsedMs)
+            val throwing = VaultDevice.create(
+                DeviceConfig(
+                    name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = InMemoryDeviceStateStore(),
+                    requestTimeout = java.time.Duration.ofSeconds(5), clock = phoneClock, elapsedMs = { elapsed }, bootId = { error("no setting") },
+                ),
+                DeviceSecrets.generate(),
+            )
+            val v3 = FakeVault()
+            throwing.startTransfer(transferLink(v3, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            v3.answerTransfer(throwing) // hs.fin went out (answerTransfer takes it)
+            assertNotNull(throwing.transferInPending!!.sas)
+            assertNull(throwing.transferInPending!!.respBoot)
+        }
+    }
+
+    /**
+     * A record written by an earlier app version has none of the 0.88.0 members: it reads as a transfer without the gate
+     * (the settlement window) and without a stamp or an end, and is still resumed with its code.
+     */
+    @Test
+    fun anOlderTransferRecordReadsWithoutTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val old = stateJson.decodeFromString(TransferInRecord.serializer(), """{"startedMs":1700000000000,"sas":"042817"}""")
+            assertEquals(TransferInRecord(1_700_000_000_000L, sas = "042817"), old)
+            assertFalse(old.outcome)
+            assertNull(old.respMs)
+            assertNull(old.respElapsedMs)
+            assertNull(old.respBoot)
+            assertNull(old.ended)
+            // A whole device state of an earlier version (the members taken out of a saved one) loads the same way.
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = answeredTransfer(v, store = store, secrets = secrets)
+            d.stop()
+            val saved = kotlinx.serialization.json.Json.parseToJsonElement(String(store.load()!!)) as kotlinx.serialization.json.JsonObject
+            val tr = saved["transferIn"] as kotlinx.serialization.json.JsonObject
+            val oldTr = kotlinx.serialization.json.JsonObject(tr.filterKeys { it in setOf("startedMs", "sas", "paired", "userGuid") })
+            store.save(kotlinx.serialization.json.JsonObject(saved + ("transferIn" to oldTr)).toString().toByteArray())
+            val again = VaultDevice.load(config(store), secrets)!!
+            val t = again.transferInPending!!
+            assertFalse(t.outcome)
+            assertNull(t.respAt)
+            assertNotNull(t.sas)
+            assertNull(again.transferInEnded)
+            // Without the gate an end changes nothing.
+            again.handle(v.endedFor("locked"))
+            assertNotNull(again.transferInPending)
+            assertTrue(again.hasVault)
+        }
+    }
+
+    /**
+     * Each reason of `device.transfer.ended` ends a transfer with the gate: the handshake, the token and the session go,
+     * the reason is kept (across a restart), the wait ends with [TransferEndedException], and nothing can pair it later.
+     * An unknown, missing or malformed reason is `expired`.
+     */
+    @Test
+    fun eachEndReasonEndsAnOutcomeTransfer() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val bodies = listOf(
+                """{"transfer_id":"t1","reason":"expired"}""" to "expired",
+                """{"transfer_id":"t1","reason":"locked"}""" to "locked",
+                """{"transfer_id":"t1","reason":"alarm"}""" to "alarm",
+                """{"transfer_id":"t1","reason":"replaced"}""" to "replaced",
+                """{"transfer_id":"t1","reason":"failed"}""" to "failed",
+                """{"transfer_id":"t1","reason":"stolen"}""" to "expired",
+                """{"transfer_id":"t1","reason":"LOCKED"}""" to "expired",
+                """{"transfer_id":"t1"}""" to "expired",
+                """{"transfer_id":"t1","reason":7}""" to "expired",
+                """{"reason":null}""" to "expired",
+            )
+            for ((body, reason) in bodies) {
+                val store = InMemoryDeviceStateStore()
+                val secrets = DeviceSecrets.generate()
+                val v = FakeVault()
+                val d = answeredTransfer(v, store = store, secrets = secrets)
+                val started = d.transferInPending!!.startedAt
+                d.handle(v.ended(body))
+                assertNull("$body: no longer pending", d.transferInPending)
+                assertEquals(body, TransferEnded(started, reason), d.transferInEnded)
+                assertFalse("$body: the session is gone", d.hasVault)
+                assertNull(d.pairingSas.value)
+                val e = runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(1)) }.exceptionOrNull()
+                assertTrue("$body: $e", e is TransferEndedException && e.reason == reason)
+                // A device.paired after it (none should come: one outcome per transfer) has no session to open under.
+                d.handle(v.transferPaired(d))
+                assertNull(d.deviceId)
+                d.stop()
+                val again = VaultDevice.load(config(store), secrets)!!
+                assertEquals("kept across a restart", TransferEnded(started, reason), again.transferInEnded)
+                assertNull(again.transferInPending)
+                assertFalse(again.hasVault)
+            }
+            assertEquals("expired", TransferOutcome.reason("""{"reason":"Alarm"}""".toByteArray()))
+            // A body that is not an object cannot be sealed by the vault (the inner body is an object, §8), but if one
+            // were opened it would still be the vault's end: expired, never an exception out of the handler.
+            assertEquals("expired", TransferOutcome.reason("not json".toByteArray()))
+            assertEquals("expired", TransferOutcome.reason("[]".toByteArray()))
+            assertEquals("expired", TransferOutcome.reason(ByteArray(0)))
+            assertEquals(setOf("expired", "locked", "alarm", "replaced", "failed"), TransferOutcome.REASONS)
+        }
+    }
+
+    /** A screen waiting for the transfer when the end arrives: the wait ends at once with the reason. */
+    @Test
+    fun anEndDuringTheWaitEndsIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = answeredTransfer(v)
+            val waiting = async(Dispatchers.IO) { runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(20)) }.exceptionOrNull() }
+            kotlinx.coroutines.delay(200)
+            assertFalse(waiting.isCompleted)
+            d.handle(v.endedFor("replaced"))
+            val e = waiting.await()
+            assertTrue("$e", e is TransferEndedException && e.reason == "replaced")
+        }
+    }
+
+    /**
+     * Matched by the epoch: an end sealed under an earlier transfer's epoch (the same vault, its relay key) does not open
+     * under this transfer's session and changes nothing; this transfer still completes. An end from anyone other than the
+     * vault's relay key is dropped too.
+     */
+    @Test
+    fun anEndUnderAnotherEpochIsIgnored() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            v.answerTransfer(d)
+            // The earlier transfer's end, sealed under its epoch (the vault held it back, the relay delivers it late).
+            val earlier = v.endedFor("locked")
+            d.abandonTransfer()
+            d.startTransfer(transferLink(v, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            v.answerTransfer(d)
+            d.handle(earlier)
+            assertNotNull("the earlier epoch's end does not open", d.transferInPending)
+            assertNull(d.transferInEnded)
+            assertTrue(d.hasVault)
+            // Under the current epoch but deposited by another sender: dropped (§6.3).
+            val m = v.endedFor("alarm")
+            d.handle(RelayMessage(m.msgId, "", RelayAuth.encodeKey(Ed25519PrivateKey.generate().publicKey), null, m.payload()))
+            assertNotNull(d.transferInPending)
+            d.handle(v.transferPaired(d))
+            assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
+            assertEquals("dev-2", d.deviceId)
+        }
+    }
+
+    /**
+     * Without the gate (a bundle without `transfer_outcome`), an end is ignored: the transfer stays pending with its code
+     * and session, the wait does not end on it, and a later approval still completes it (0.85.2's behaviour, unchanged).
+     */
+    @Test
+    fun withoutTheGateAnEndIsIgnored() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            for (caps in listOf(null, listOf("recovery_r"))) {
+                val v = FakeVault()
+                val d = answeredTransfer(v, capabilities = caps)
+                d.handle(v.endedFor("locked"))
+                assertNotNull(d.transferInPending)
+                assertFalse(d.transferInPending!!.outcome)
+                assertNull(d.transferInEnded)
+                assertTrue(d.hasVault)
+                assertNotNull(d.pairingSas.value)
+                val e = runCatching { d.awaitTransfer(java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+                assertTrue("$e", e is kotlinx.coroutines.TimeoutCancellationException)
+                d.handle(v.transferPaired(d))
+                assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
+            }
+        }
+    }
+
+    /**
+     * After the end, after a drop and after the pairing, an end changes nothing: the first end stands (a redelivery or a
+     * second end with another reason is a no-op); a dropped transfer has no session to open it; a paired one stays paired.
+     * A new transfer replaces the tombstone, and [VaultDevice.clearTransferInEnded] forgets it once said.
+     */
+    @Test
+    fun anEndAfterTheTransferEndedOrWasDroppedOrPairedChangesNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            // Ended: the first reason stands.
+            val v = FakeVault()
+            val d = answeredTransfer(v)
+            val started = d.transferInPending!!.startedAt
+            val end = v.endedFor("locked")
+            d.handle(end)
+            d.handle(v.endedFor("alarm"))
+            d.handle(RelayMessage(Ulid.new(), "", end.sender, null, end.payload())) // the same message redelivered
+            assertEquals(TransferEnded(started, "locked"), d.transferInEnded)
+            // Cleared only for its own start.
+            d.clearTransferInEnded(started.plusMillis(1))
+            assertNotNull(d.transferInEnded)
+            d.clearTransferInEnded(started)
+            assertNull(d.transferInEnded)
+            // A new transfer on the same device replaces a tombstone, and its own end is matched by its own epoch.
+            d.handle(v.endedFor("alarm"))
+            assertNull(d.transferInEnded)
+            val again = answeredTransfer(v)
+            again.handle(v.endedFor("failed"))
+            assertNotNull(again.transferInEnded)
+            again.startTransfer(transferLink(v, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            assertNull("replaced by the new transfer", again.transferInEnded)
+            assertNotNull(again.transferInPending)
+            assertNull("the new transfer has no code yet", again.transferInPending!!.sas)
+            nextDeposit()
+            // Dropped first (a cancel): nothing to open the end with.
+            val v2 = FakeVault()
+            val d2 = answeredTransfer(v2)
+            val late = v2.endedFor("expired")
+            d2.abandonTransfer()
+            d2.handle(late)
+            assertNull(d2.transferInEnded)
+            assertNull(d2.transferInPending)
+            // Rejected first: the same.
+            val v3 = FakeVault()
+            val d3 = answeredTransfer(v3)
+            val late3 = v3.endedFor("expired")
+            d3.handle(v3.seal("device.pair.rejected", "{}"))
+            d3.handle(late3)
+            assertNull(d3.transferInEnded)
+            // Paired first: kept.
+            val v4 = FakeVault()
+            val d4 = answeredTransfer(v4)
+            d4.handle(v4.transferPaired(d4))
+            d4.handle(v4.endedFor("replaced"))
+            assertEquals("dev-2", d4.deviceId)
+            assertTrue(d4.hasVault)
+            assertTrue(d4.transferInPending!!.paired)
+            assertNull(d4.transferInEnded)
+            assertEquals("member-0017", d4.awaitTransfer(java.time.Duration.ofMillis(100)))
         }
     }
 

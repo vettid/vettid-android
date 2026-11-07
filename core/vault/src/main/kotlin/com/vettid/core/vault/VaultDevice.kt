@@ -140,6 +140,13 @@ class DeviceConfig(
      * seen is carried forward on ([VaultDevice.vaultNow]): `SystemClock.elapsedRealtime` in the app.
      */
     val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
+    /**
+     * (VAULT-MESSAGING 0.88.0 §11.14.10 rule 5 "Giving up the wait") Which boot [elapsedMs] counts from:
+     * `Settings.Global.BOOT_COUNT` in the app; null when the platform gives none (the default, and in-process tests that
+     * do not set it). Stored with a transfer's `hs.resp` stamp ([TransferInState.respBoot]), so that a monotonic reading
+     * is compared only with one of the same boot. A seam, so that tests control it with [elapsedMs].
+     */
+    val bootId: () -> Long? = { null },
     /** (VAULT-MESSAGING 0.45.0 §11.14.9 step 1) How long a change waits for earlier credential operations to settle. */
     val settleWait: Duration = Duration.ofSeconds(DEFAULT_SETTLE_WAIT_S),
 ) {
@@ -211,8 +218,86 @@ class PairingRejectedException : IOException("vault client: pairing rejected on 
 class NotATransferCodeException(val expired: Boolean = false) :
     IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
 
-/** (A6 audit N1) A transfer to this phone that is not finished ([VaultDevice.transferInPending]). */
-data class TransferInState(val startedAt: Instant, val sas: String?, val paired: Boolean, val userGuid: String?)
+/**
+ * (A6 audit N1) A transfer to this phone that is not finished ([VaultDevice.transferInPending]).
+ *
+ * (VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome") [outcome]: the scanned bundle listed `transfer_outcome`, so the
+ * vault tells this phone how the transfer ended (`device.transfer.ended` besides `device.paired` and
+ * `device.pair.rejected`); false for a record of an earlier app version and toward a vault without it (0.85.2's settlement
+ * window, unchanged). [respAt], [respElapsedMs] and [respBoot]: when this phone took the vault's `hs.resp`, on the wall
+ * clock, on the monotonic clock ([DeviceConfig.elapsedMs]) and the boot that clock counts from ([DeviceConfig.bootId]);
+ * null before `hs.resp`, for a record of an earlier app version, and [respBoot] also when the platform gives none.
+ */
+data class TransferInState(
+    val startedAt: Instant,
+    val sas: String?,
+    val paired: Boolean,
+    val userGuid: String?,
+    val outcome: Boolean = false,
+    val respAt: Instant? = null,
+    val respElapsedMs: Long? = null,
+    val respBoot: Long? = null,
+)
+
+/**
+ * (VAULT-MESSAGING 0.88.0 §6.7.1) The transfer to this phone that started at [startedAt] was ended by the vault with
+ * `device.transfer.ended{reason}` ([VaultDevice.transferInEnded]); [reason] is one of [TransferOutcome.REASONS].
+ */
+data class TransferEnded(val startedAt: Instant, val reason: String)
+
+/**
+ * (VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome") The vault ended this phone's transfer without an approval or a
+ * rejection (`device.transfer.ended`): [reason] is one of [TransferOutcome.REASONS] (an unknown or missing one is
+ * [TransferOutcome.EXPIRED]). The device has dropped the handshake's epoch, the vault's token and the session; a new
+ * transfer needs a new code. Thrown only for a transfer whose bundle listed `transfer_outcome`.
+ */
+class TransferEndedException(val reason: String) : IOException("vault client: the transfer ended ($reason)")
+
+/** VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome", §9.1 (`device.transfer.ended`), §11.10.9 (`transfer_outcome`). */
+object TransferOutcome {
+    const val TYPE_ENDED = "device.transfer.ended"
+
+    /** The vault's 10 minutes ran out (at once or at the next unlock); also every end before it verified `hs.fin`. */
+    const val EXPIRED = "expired"
+
+    /** Release R: a lock or a crash before the approval's step 1 was stored lost the new phone's secret. */
+    const val LOCKED = "locked"
+
+    /** A security alarm (§3.5.9). */
+    const val ALARM = "alarm"
+
+    /** A recovery completed (§11.11.5). */
+    const val REPLACED = "replaced"
+
+    /** A commitment mismatch at `hs.fin` (§6.3). */
+    const val FAILED = "failed"
+
+    val REASONS: Set<String> = setOf(EXPIRED, LOCKED, ALARM, REPLACED, FAILED)
+
+    /**
+     * The gate (§6.7.1 "Capability"): the transfer bundle's own `capabilities` list `transfer_outcome`, exactly. The bundle
+     * is the only source: the new phone is not unlocked and has no descriptor at the scan.
+     */
+    fun offered(traits: com.vettid.core.crypto.altchan.ReleaseTraits): Boolean =
+        com.vettid.core.crypto.altchan.Capabilities.TRANSFER_OUTCOME in traits.capabilities
+
+    /**
+     * The `reason` of a `device.transfer.ended` body ([body], the inner body's bytes): one of [REASONS] when it is that
+     * string exactly; anything else (absent, not a string, an unknown name, a body that does not read as a JSON object)
+     * is [EXPIRED], as the spec says of an unknown reason. The message itself was authenticated under the transfer's
+     * epoch, so a body we cannot read is still the vault's end of this transfer; never a reason to keep waiting.
+     * `transfer_id` is informational (the QR does not carry it) and is not read.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // any parse failure is the unknown reason
+    fun reason(body: ByteArray): String {
+        val o = try {
+            VaultJson.parseObject(body)
+        } catch (e: Exception) {
+            return EXPIRED
+        }
+        return VaultJson.str(o, "reason")?.takeIf { it in REASONS } ?: EXPIRED
+    }
+}
 
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
@@ -976,8 +1061,12 @@ class VaultDevice private constructor(
      * transfer after this device's `hs.fin`; [process] has already dropped its state).
      * Returns a transfer's `user_guid` (0.17.0, §6.7.1), or null (not a transfer, or a vault release before 0.17.0).
      */
-    private suspend fun awaitPaired(timeout: Duration): String? {
-        val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout)
+    private suspend fun awaitPaired(timeout: Duration, endedOf: Long? = null): String? {
+        // (0.88.0) [endedOf]: the start of the transfer this wait is for. Its end (`device.transfer.ended`, acted on by the
+        // handler only for a transfer with the gate, [endTransfer]) is read from the transfer's record, not from the inbox:
+        // an end the handler ignored (no gate, another transfer) is in the inbox too and must not end the wait.
+        val stop: (suspend () -> Throwable?)? = endedOf?.let { s -> { endedReason(s)?.let { TransferEndedException(it) } } }
+        val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout, stop = stop)
         if (ev.type == TYPE_PAIR_REJECTED) throw PairingRejectedException()
         val guid = lock.withLock {
             val o = ev.body
@@ -1077,7 +1166,10 @@ class VaultDevice private constructor(
             } finally {
                 unlockSecret?.fill(0)
             }
-            st.transferIn = TransferInRecord(at.toEpochMilli())
+            // (0.88.0) The gate is read here, from the bundle the QR's `h` binds, and kept with this transfer: never from
+            // the account's capabilities, which a later descriptor overwrites. This record replaces any earlier one,
+            // an ended transfer's tombstone included.
+            st.transferIn = TransferInRecord(at.toEpochMilli(), outcome = TransferOutcome.offered(traits))
             save()
         }
     }
@@ -1170,9 +1262,33 @@ class VaultDevice private constructor(
      */
     suspend fun awaitTransfer(timeout: Duration): String? {
         // (A6 audit N1) Applied by the handler already (a restart, or after the screen stopped waiting): nothing to wait for.
-        lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }?.let { return it.userGuid }
-        return awaitPaired(timeout)
+        val (tr, pairedNow) = lock.withLock { st.transferIn to (st.transferIn?.paired == true && st.deviceId != null) }
+        if (pairedNow) return tr?.userGuid
+        // (0.88.0) This wait also ends on the vault's end of the same transfer ([TransferEndedException]), also one the
+        // handler took before the wait began, as a rejection does. Matched by the start: an end of another transfer (one
+        // started again since) never ends this wait.
+        return awaitPaired(timeout, endedOf = tr?.startedMs)
     }
+
+    /**
+     * (VAULT-MESSAGING 0.88.0 §6.7.1) How the last transfer to this phone was ended by the vault
+     * (`device.transfer.ended`), or null: none ended so, or a new transfer, a drop or [clearTransferInEnded] replaced it.
+     * Kept across a restart, so that a screen opened later can say why the transfer stopped.
+     */
+    val transferInEnded: TransferEnded?
+        get() = st.transferIn?.let { r -> r.ended?.let { TransferEnded(Instant.ofEpochMilli(r.startedMs), it) } }
+
+    /** Forgets [transferInEnded] once it was said, if it is still the end of the transfer that started at [startedAt]. */
+    suspend fun clearTransferInEnded(startedAt: Instant) = lock.withLock {
+        val r = st.transferIn ?: return@withLock
+        if (r.ended == null || r.startedMs != startedAt.toEpochMilli()) return@withLock
+        st.transferIn = null
+        save()
+    }
+
+    /** The reason the transfer that started at [startedMs] was ended with, while that is still the record held. */
+    private suspend fun endedReason(startedMs: Long): String? =
+        lock.withLock { st.transferIn?.takeIf { it.startedMs == startedMs }?.ended }
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
@@ -1197,7 +1313,19 @@ class VaultDevice private constructor(
      * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
      */
     val transferInPending: TransferInState?
-        get() = st.transferIn?.let { TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid) }
+        get() = liveTransferIn()?.let {
+            TransferInState(
+                Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid,
+                outcome = it.outcome, respAt = it.respMs?.let(Instant::ofEpochMilli), respElapsedMs = it.respElapsedMs,
+                respBoot = it.respBoot,
+            )
+        }
+
+    /**
+     * The transfer to this phone that is still live: started and not finished, dropped or ended. An ended transfer's
+     * tombstone ([TransferInRecord.ended]) is never live: it holds no session, and nothing may pair, answer or resume it.
+     */
+    private fun liveTransferIn(): TransferInRecord? = st.transferIn?.takeIf { it.ended == null }
 
     /** Collect rounds of the running collection that ended, their messages handled (A6 audit N1). */
     private val roundsEnded = java.util.concurrent.atomic.AtomicLong()
@@ -1266,7 +1394,7 @@ class VaultDevice private constructor(
      * for a transfer this device started and is still waiting for.
      */
     private fun applyTransferPaired(body: ByteArray) {
-        val tr = st.transferIn ?: return
+        val tr = liveTransferIn() ?: return
         if (st.deviceId != null || tr.paired) return
         val o = VaultJson.parseObject(body)
         if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return
@@ -1276,6 +1404,8 @@ class VaultDevice private constructor(
     }
 
     private fun applyPaired(o: JsonObject) {
+        // (0.88.0) A device paired since (a recovery on this phone) leaves no earlier transfer's end to report.
+        if (st.transferIn?.ended != null) st.transferIn = null
         VaultJson.str(o, "device_id")?.let { st.deviceId = it }
         VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
         val rel = VaultJson.str(o, "release")
@@ -1520,11 +1650,14 @@ class VaultDevice private constructor(
         types: Set<String>,
         timeout: Duration,
         match: (JsonObject) -> Boolean = { true },
+        /** Looked at before the inbox at each wake: a non-null answer is thrown and ends the wait. */
+        stop: (suspend () -> Throwable?)? = null,
     ): VaultMessage =
         withTimeout(timeout.toMillis()) {
             var found: VaultMessage? = null
             while (found == null) {
                 val v = inboxVersion.value
+                stop?.invoke()?.let { throw it }
                 found = synchronized(inbox) {
                     val i = inbox.indexOfFirst { it.type in types && match(it.body) }
                     if (i >= 0) inbox.removeAt(i) else null
@@ -1725,6 +1858,8 @@ class VaultDevice private constructor(
             }
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
+            // (0.88.0 §6.7.1) The vault's end of a transfer to this phone, for a transfer with the gate only.
+            TransferOutcome.TYPE_ENDED -> endTransfer(inner.body)
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
                 val tok = mintForVault()
@@ -1745,6 +1880,42 @@ class VaultDevice private constructor(
             publish(VaultMessage(inner))
         }
         maintain(t)
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.88.0 §6.7.1 "The transfer's outcome") `device.transfer.ended{transfer_id, reason}`, opened under
+     * this device's session. Acted on only when all of these hold; otherwise it changes nothing (it is still recorded as
+     * seen and published as an event, as before 0.88.0):
+     * - **Matched by the epoch.** It reached here only because it opened under the keyring and came from the vault's relay
+     *   key ([process]). An unpaired phone's keyring holds exactly the epoch of its transfer's handshake: [setVault] empties
+     *   it at the scan, [handleResp] activates the one epoch, and every drop ([dropPairing]) destroys it. So an end sealed
+     *   under any other epoch (an earlier transfer's, another vault's) never opens and is dropped before this point, as
+     *   `device.paired` and `device.pair.rejected` are. `transfer_id` is informational and not compared.
+     * - **A live transfer** ([liveTransferIn]): none after a drop, a finish or an earlier end (a redelivery or a second
+     *   copy is a no-op; the first end stands).
+     * - **The gate** ([TransferInRecord.outcome]): a transfer whose bundle did not list `transfer_outcome` keeps 0.85.2's
+     *   settlement window, exactly as before; such a vault never sends this message anyway.
+     * - **Not paired**: exactly one outcome per transfer; a `device.paired` applied first stands, and a paired device
+     *   keeps everything (as [abandonTransfer]).
+     *
+     * Then it drops what [abandonTransfer] drops (the handshake and epoch, the vault's token, the session, the SAS) and
+     * keeps a tombstone with the reason ([transferInEnded]), which also ends any wait for this transfer
+     * ([awaitTransfer] throws [TransferEndedException]). An unknown or missing reason is `expired`
+     * ([TransferOutcome.reason]). The message's freshness is checked as any durable message's ([Inner.checkTime], 16
+     * days, in [process]): the vault seals the outcome again at each deposit attempt (spec Q4), so no exemption is needed.
+     * The epoch-1 secret (the phone key) and the attested key are not held by this module: `:core:data` drops them
+     * (not yet: see the PR's Q3 note).
+     */
+    private fun endTransfer(body: ByteArray) {
+        val tr = liveTransferIn() ?: return
+        if (!tr.outcome) return
+        if (tr.paired || st.deviceId != null || pairedState.value) return
+        val reason = TransferOutcome.reason(body)
+        dropPairing()
+        st.vault = null
+        st.transferIn = TransferInRecord(startedMs = tr.startedMs, outcome = true, ended = reason)
+        // Wakes a wait for this transfer ([awaitEventOf] looks at the tombstone first), also while events are held.
+        inboxVersion.value++
     }
 
     /** An event left on the relay during a hold ([leaveForLater]). */
@@ -1839,7 +2010,17 @@ class VaultDevice private constructor(
         keyring.activate(res.epoch, t)
         // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
         // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
-        st.transferIn?.let { tr -> if (res.sas != null) st.transferIn = tr.copy(sas = res.sas) }
+        // (0.88.0) With it, in the same write, when this phone took the hs.resp: the wall clock, the monotonic clock and its
+        // boot (the give-up's 11 minutes count from here, §11.14.10 rule 5). A boot id the platform cannot give is null,
+        // never a reason not to answer.
+        liveTransferIn()?.let { tr ->
+            if (res.sas != null) {
+                st.transferIn = tr.copy(
+                    sas = res.sas, respMs = t.toEpochMilli(), respElapsedMs = cfg.elapsedMs(),
+                    respBoot = runCatching { cfg.bootId() }.getOrNull(),
+                )
+            }
+        }
         save()
         depositToVault(v, res.fin)
         res.sas?.let { sasState.value = it }
@@ -2261,7 +2442,10 @@ class VaultDevice private constructor(
 
         /** The session's own messages, handled as they come whatever is held. */
         private val SESSION_TYPES =
-            setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
+            setOf(
+                "device.paired", TYPE_PAIR_REJECTED, TransferOutcome.TYPE_ENDED, "relay.token.issued", "relay.token.refresh",
+                "identity.rotate",
+            )
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
         private const val ROUND_POLL_MS = 50L
