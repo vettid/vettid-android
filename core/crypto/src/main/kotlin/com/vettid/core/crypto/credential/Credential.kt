@@ -142,8 +142,6 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
         .build()
 
     companion object {
-        const val MAX_CHAIN = 32
-
         fun create(old: Ed25519PrivateKey, new: Ed25519PrivateKey): CredentialKeyRotation {
             if (Ed25519.equalPublic(old.publicKey, new.publicKey)) throw CryptoException.Signature("credential rotation")
             val m = Bytes.concat(old.publicKey, new.publicKey)
@@ -160,72 +158,5 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
                 o.base64("sig_new", Suite.ED25519_SIGNATURE_SIZE),
             )
         }
-
-        /**
-         * Follows a chain (≤ 32 statements in all, unless it already ends at the pinned key) from the pinned key
-         * (VAULT-MESSAGING 0.83.9 and 0.83.11 §10.4 "Following a credential-key rotation").
-         * - A chain whose last `new_key` is the pinned key (a delivery repeated, or one overtaken by a response that already
-         *   moved the pin there) gives [CredentialChainResult.AlreadyCurrent]: the caller ignores it, with no audit and no key
-         *   event (VAULT-MESSAGING 0.83.11 §10.4 "Failure"). Nothing in it is verified, since nothing changes. This is checked
-         *   before the 32-statement cap, as the vault does (vettid-vault `features/connauth` `rotated`: the ends-at-the-pin
-         *   check, then `credwire.FollowChain` with its cap), so a long chain already at the pin is ignored, not refused.
-         * - Otherwise it starts at the first statement whose `old_key` is the pinned key, skipping the statements before it
-         *   (links this receiver followed earlier: the sender starts a chain at the key it last signed with); from there each
-         *   `old_key` must be the previous `new_key` and both signatures must verify, and it gives
-         *   [CredentialChainResult.Moved] with the key the chain leads to. Nothing before the pin is verified or trusted.
-         *
-         * Throws [CryptoException.Signature] (the caller drops the chain and audits
-         * `connection.authenticate.rotation_rejected`) for an empty chain (checked first), one over 32 statements that does
-         * not end at the pinned key, a chain with no statement from the pinned key (one that ends before the pin, or another
-         * key's), or one that breaks or fails a signature (`sig_old` or `sig_new`) after it.
-         *
-         * What the caller does with the result depends on where the chain came from (§10.4):
-         * - **A delivered `connection.authenticate.rotated`:** [CredentialChainResult.Moved] means pin its key and tell
-         *   every owner device with `connection.authenticate.key`. [CredentialChainResult.AlreadyCurrent] means ignore it.
-         * - **The `rotations` of a signed `connection.authenticate.response`:** [CredentialChainResult.Moved] counts only when
-         *   its key equals the response's `key` (the key `sig` verified under). Then the caller pins it and reports
-         *   `key_changed: false`. Otherwise the response is a key change: `key_changed: true`, re-pinned to the response's
-         *   `key`. [CredentialChainResult.AlreadyCurrent] ignores the chain, not the response: its `key` is still compared
-         *   with the pin as usual.
-         * - **A receiver with no pinned key** ignores `rotated` and does not call this (it would throw, and so be audited).
-         * - **A parser of `rotations`** (none exists yet) caps the array at 32 statements while parsing and refuses a longer one
-         *   as `bad_request`, as the vault's `peerwire.ParseRotations` does: this function's cap does not bound the parse, and a
-         *   long chain that ends at the pin returns [CredentialChainResult.AlreadyCurrent] before it.
-         */
-        fun followChain(pinned: ByteArray, chain: List<CredentialKeyRotation>): CredentialChainResult {
-            if (pinned.size != Suite.ED25519_PUBLIC_SIZE || chain.isEmpty()) throw CryptoException.Signature("credential chain")
-            // Ends at the pin before the cap, as the vault orders them (0.83.11 §10.4).
-            if (Ed25519.equalPublic(chain.last().newKey, pinned)) return CredentialChainResult.AlreadyCurrent
-            if (chain.size > MAX_CHAIN) throw CryptoException.Signature("credential chain")
-            val from = chain.indexOfFirst { Ed25519.equalPublic(it.oldKey, pinned) }
-            if (from < 0) throw CryptoException.Signature("credential chain")
-            var cur = pinned
-            for (r in chain.subList(from, chain.size)) {
-                if (!Ed25519.equalPublic(r.oldKey, cur)) throw CryptoException.Signature("credential chain")
-                r.verify()
-                cur = r.newKey
-            }
-            return CredentialChainResult.Moved(cur)
-        }
     }
-}
-
-/** What [CredentialKeyRotation.followChain] gives for a chain it does not refuse (VAULT-MESSAGING 0.83.11 §10.4). */
-sealed class CredentialChainResult {
-    /**
-     * The chain verified from the pinned key and leads to [key] (§10.4). For a delivered `rotated` chain: pin it and tell every
-     * owner device with `connection.authenticate.key`. For a response's `rotations`: this counts only when [key] equals the
-     * response's `key` (then pin it, `key_changed: false`); otherwise the response is a key change (`key_changed: true`).
-     */
-    class Moved(key: ByteArray) : CredentialChainResult() {
-        private val key = key.copyOf()
-
-        fun key(): ByteArray = key.copyOf()
-    }
-
-    /**
-     * The chain ends at the pinned key: ignore the chain, with no audit and no key event (0.83.11 §10.4). For a response, only
-     * the chain is ignored: the response's `key` is still compared with the pin.
-     */
-    data object AlreadyCurrent : CredentialChainResult()
 }

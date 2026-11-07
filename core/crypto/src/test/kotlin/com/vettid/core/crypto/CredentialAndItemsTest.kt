@@ -4,7 +4,6 @@ import com.vettid.core.crypto.altchan.AltChannel
 import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.altchan.Descriptor
 import com.vettid.core.crypto.credential.CredentialBlobHeader
-import com.vettid.core.crypto.credential.CredentialChainResult
 import com.vettid.core.crypto.credential.CredentialKeyRotation
 import com.vettid.core.crypto.credential.CredentialSeal
 import com.vettid.core.crypto.credential.Utk
@@ -23,7 +22,6 @@ import com.vettid.core.crypto.session.Principal
 import com.vettid.core.crypto.session.RelayAddr
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -89,120 +87,39 @@ class CredentialAndItemsTest {
         assertThrows(CryptoException.Format::class.java) { CredentialBlobHeader.parse(blob.copyOf(17 + 1120)) }
     }
 
+    /** A credential-key rotation statement (§3.5.5) round-trips and checks both signatures. */
     @Test
-    fun credentialKeyRotationChain() {
+    fun credentialKeyRotationStatement() {
         val k1 = Ed25519PrivateKey.generate()
         val k2 = Ed25519PrivateKey.generate()
-        val k3 = Ed25519PrivateKey.generate()
-        val r1 = CredentialKeyRotation.create(k1, k2)
-        val r2 = CredentialKeyRotation.parse(StrictJson.parseObject(CredentialKeyRotation.create(k2, k3).marshal()))
-        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k1.publicKey, listOf(r1, r2))))
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, listOf(r2)) }
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, emptyList()) }
+        val r = CredentialKeyRotation.parse(StrictJson.parseObject(CredentialKeyRotation.create(k1, k2).marshal()))
+        r.verify()
+        assertTrue(Bytes.constantTimeEquals(k1.publicKey, r.oldKey()))
+        assertTrue(Bytes.constantTimeEquals(k2.publicKey, r.newKey()))
+        val unsigned = CredentialKeyRotation(k1.publicKey, k2.publicKey, ByteArray(64), ByteArray(64))
+        assertThrows(CryptoException.Signature::class.java) { unsigned.verify() }
         assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.create(k1, k1) }
     }
 
-    /** VAULT-MESSAGING 0.83.9 §10.4: the chain is followed from the first statement whose `old_key` is the pinned key. */
+    /** Both signatures of a statement must verify: one valid signature is not enough (§3.5.5). */
     @Test
-    fun aCredentialChainIsFollowedFromThePinnedKey() {
-        val k1 = Ed25519PrivateKey.generate()
-        val k2 = Ed25519PrivateKey.generate()
-        val k3 = Ed25519PrivateKey.generate()
-        val k4 = Ed25519PrivateKey.generate()
-        val r1 = CredentialKeyRotation.create(k1, k2)
-        val r2 = CredentialKeyRotation.create(k2, k3)
-        val r3 = CredentialKeyRotation.create(k3, k4)
-        // Pinned at k2 (r1 followed earlier): the chain from k1 is followed from r2.
-        assertTrue(Bytes.constantTimeEquals(k4.publicKey, moved(k2.publicKey, listOf(r1, r2, r3))))
-        // The statements before the pin are not checked: a bad one there does not matter.
-        val bad = CredentialKeyRotation(k1.publicKey, k2.publicKey, ByteArray(64), ByteArray(64))
-        assertTrue(Bytes.constantTimeEquals(k4.publicKey, moved(k2.publicKey, listOf(bad, r2, r3))))
-        // No statement from the pin: refused (a chain that ends before the pin, or another key's).
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k4.publicKey, listOf(r1, r2)) }
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, listOf(r1)) }
-        val k5 = Ed25519PrivateKey.generate()
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k5.publicKey, listOf(r1, r2, r3)) }
-        // A break after the pin: refused.
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, listOf(r1, r3)) }
-        // A bad signature after the pin: refused.
-        val forged = CredentialKeyRotation(k2.publicKey, k3.publicKey, ByteArray(64), ByteArray(64))
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, forged, r3)) }
-        // More than 32 statements in all: refused, even if the part from the pin is short.
-        val long = List(32) { r1 } + listOf(r2)
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
-        // Exactly 32 in all is allowed.
-        val atCap = List(31) { r1 } + listOf(r2)
-        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k2.publicKey, atCap)))
-    }
-
-    /** A chain that comes back to the pinned key is followed from its first statement from the pin, to the same end. */
-    @Test
-    fun aCredentialChainThatReturnsToThePinIsFollowedFromItsFirstStatement() {
-        val k1 = Ed25519PrivateKey.generate()
-        val k2 = Ed25519PrivateKey.generate()
-        val k3 = Ed25519PrivateKey.generate()
-        val chain = listOf(CredentialKeyRotation.create(k1, k2), CredentialKeyRotation.create(k2, k1), CredentialKeyRotation.create(k1, k3))
-        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k1.publicKey, chain)))
-        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k2.publicKey, chain)))
-        // Followed from the FIRST statement from the pin: a forged statement between two statements from the pin fails.
-        val forged = CredentialKeyRotation(k2.publicKey, k1.publicKey, ByteArray(64), ByteArray(64))
-        val withForged = listOf(CredentialKeyRotation.create(k1, k2), forged, CredentialKeyRotation.create(k1, k3))
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k1.publicKey, withForged) }
-    }
-
-    /** VAULT-MESSAGING 0.83.11 §10.4: a chain whose last `new_key` is the pinned key is ignored, not refused. */
-    @Test
-    fun aCredentialChainEndingAtThePinIsAlreadyCurrent() {
-        val k1 = Ed25519PrivateKey.generate()
-        val k2 = Ed25519PrivateKey.generate()
-        val k3 = Ed25519PrivateKey.generate()
-        val r1 = CredentialKeyRotation.create(k1, k2)
-        val r2 = CredentialKeyRotation.create(k2, k3)
-        // A delivery repeated, or overtaken by a response that already moved the pin to k3.
-        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, listOf(r1, r2)))
-        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k2.publicKey, listOf(r1)))
-        // A chain that leaves the pin and comes back to it changes nothing either.
-        val back = CredentialKeyRotation.create(k2, k1)
-        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k1.publicKey, listOf(r1, back)))
-        // Nothing in it is verified (nothing changes): a forged statement ending at the pin is ignored too.
-        val forged = CredentialKeyRotation(k2.publicKey, k3.publicKey, ByteArray(64), ByteArray(64))
-        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, listOf(forged)))
-        // Ends at the pin is checked before the cap, as the vault orders them: a 33-statement chain ending at the pin is
-        // ignored, not refused. One over the cap that does not end at the pin is still refused.
-        val long = List(32) { r1 } + listOf(r2)
-        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, long))
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
-        // An empty chain is still refused (before `chain.last()`).
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, emptyList()) }
-        // One that ends before the pin is still refused (the caller audits `rotation_rejected`).
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, listOf(r1)) }
-    }
-
-    /** Both signatures of a statement after the pin must verify: one valid signature is not enough (§3.5.5, §10.4). */
-    @Test
-    fun aCredentialStatementAfterThePinNeedsBothSignatures() {
-        val k1 = Ed25519PrivateKey.generate()
+    fun aCredentialStatementNeedsBothSignatures() {
         val k2 = Ed25519PrivateKey.generate()
         val k3 = Ed25519PrivateKey.generate()
         val other = Ed25519PrivateKey.generate()
-        val r1 = CredentialKeyRotation.create(k1, k2)
         val m = Bytes.concat(k2.publicKey, k3.publicKey)
         val sigOld = k2.sign(Labels.CREDENTIAL_ROTATE, m)
         val sigNew = k3.sign(Labels.CREDENTIAL_ROTATE, m)
         val wrong = other.sign(Labels.CREDENTIAL_ROTATE, m)
-        // The genuine statement is followed, so the refusals below come from the one bad signature.
-        val genuine = CredentialKeyRotation(k2.publicKey, k3.publicKey, sigOld, sigNew)
-        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k2.publicKey, listOf(r1, genuine))))
+        // The genuine statement verifies, so the refusals below come from the one bad signature.
+        CredentialKeyRotation(k2.publicKey, k3.publicKey, sigOld, sigNew).verify()
         // A valid sig_old and a bad sig_new: refused.
         val badNew = CredentialKeyRotation(k2.publicKey, k3.publicKey, sigOld, wrong)
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, badNew)) }
+        assertThrows(CryptoException.Signature::class.java) { badNew.verify() }
         // A bad sig_old and a valid sig_new: refused.
         val badOld = CredentialKeyRotation(k2.publicKey, k3.publicKey, wrong, sigNew)
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, badOld)) }
+        assertThrows(CryptoException.Signature::class.java) { badOld.verify() }
     }
-
-    private fun moved(pinned: ByteArray, chain: List<CredentialKeyRotation>): ByteArray =
-        (CredentialKeyRotation.followChain(pinned, chain) as CredentialChainResult.Moved).key()
 
     @Test
     fun inviteRules() {
