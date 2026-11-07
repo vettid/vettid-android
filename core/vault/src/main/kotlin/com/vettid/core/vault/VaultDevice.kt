@@ -240,8 +240,9 @@ data class TransferInState(
 )
 
 /**
- * (VAULT-MESSAGING 0.88.0 §6.7.1) The transfer to this phone that started at [startedAt] was ended by the vault with
- * `device.transfer.ended{reason}` ([VaultDevice.transferInEnded]); [reason] is one of [TransferOutcome.REASONS].
+ * (VAULT-MESSAGING 0.88.0 §6.7.1) The transfer to this phone that started at [startedAt] was ended by the vault
+ * ([VaultDevice.transferInEnded]): [reason] is one of [TransferOutcome.REASONS] (`device.transfer.ended{reason}`), or
+ * [TransferOutcome.REJECTED] (the holder's `device.pair.rejected`).
  */
 data class TransferEnded(val startedAt: Instant, val reason: String)
 
@@ -273,6 +274,12 @@ object TransferOutcome {
     const val FAILED = "failed"
 
     val REASONS: Set<String> = setOf(EXPIRED, LOCKED, ALARM, REPLACED, FAILED)
+
+    /**
+     * Not a reason of `device.transfer.ended` (never read from one): the tombstone of a transfer the holder rejected
+     * (`device.pair.rejected`), kept so that the next start can say so once ([VaultDevice.transferInEnded]).
+     */
+    const val REJECTED = "rejected"
 
     /**
      * The gate (§6.7.1 "Capability"): the transfer bundle's own `capabilities` list `transfer_outcome`, exactly. The bundle
@@ -1065,7 +1072,11 @@ class VaultDevice private constructor(
         // (0.88.0) [endedOf]: the start of the transfer this wait is for. Its end (`device.transfer.ended`, acted on by the
         // handler only for a transfer with the gate, [endTransfer]) is read from the transfer's record, not from the inbox:
         // an end the handler ignored (no gate, another transfer) is in the inbox too and must not end the wait.
-        val stop: (suspend () -> Throwable?)? = endedOf?.let { s -> { endedReason(s)?.let { TransferEndedException(it) } } }
+        val stop: (suspend () -> Throwable?)? = endedOf?.let { s ->
+            {
+                endedReason(s)?.let { if (it == TransferOutcome.REJECTED) PairingRejectedException() else TransferEndedException(it) }
+            }
+        }
         val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout, stop = stop)
         if (ev.type == TYPE_PAIR_REJECTED) throw PairingRejectedException()
         val guid = lock.withLock {
@@ -1271,8 +1282,9 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (VAULT-MESSAGING 0.88.0 §6.7.1) How the last transfer to this phone was ended by the vault
-     * (`device.transfer.ended`), or null: none ended so, or a new transfer, a drop or [clearTransferInEnded] replaced it.
+     * (VAULT-MESSAGING 0.88.0 §6.7.1) How the last transfer to this phone was ended by the vault (`device.transfer.ended`,
+     * or a rejection: [TransferOutcome.REJECTED]), or null: none ended so, or a new transfer, a pairing or
+     * [clearTransferInEnded] replaced it. No drop removes it.
      * Kept across a restart, so that a screen opened later can say why the transfer stopped.
      */
     val transferInEnded: TransferEnded?
@@ -1327,17 +1339,22 @@ class VaultDevice private constructor(
         val tr = st.transferIn
         if (st.deviceId != null) return@withLock tr?.sas
         if (onlyStartedAt != null && tr?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock null
-        if (tr?.ended != null) return@withLock null // ended by the vault already: nothing left to drop, the reason stays
-        tr?.sas?.let { return@withLock it }
+        if (tr?.ended == null) tr?.sas?.let { return@withLock it }
         dropTransferLocked()
         null
     }
 
-    /** The drop of [abandonTransfer] and [abandonTransferIfUnanswered], under [lock]. */
+    /**
+     * The drop of [abandonTransfer] and [abandonTransferIfUnanswered], under [lock]. (Review F5) An ended or rejected
+     * transfer's tombstone is kept through it, so its reason can still be said: the drop takes whatever session is left
+     * (a rejection leaves the vault's record, as before) and puts the tombstone back. Only a new transfer, a pairing or
+     * [clearTransferInEnded] removes a tombstone.
+     */
     private fun dropTransferLocked() {
+        val tombstone = st.transferIn?.takeIf { it.ended != null }
         dropPairing()
         st.vault = null
-        st.transferIn = null
+        st.transferIn = tombstone
         sasState.value = null
         save()
     }
@@ -1891,9 +1908,9 @@ class VaultDevice private constructor(
                 applyTransferPaired(inner.body)
             }
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
-            TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
+            TYPE_PAIR_REJECTED -> if (pairedState.value) return else rejectTransfer()
             // (0.88.0 §6.7.1) The vault's end of a transfer to this phone, for a transfer with the gate only.
-            TransferOutcome.TYPE_ENDED -> endTransfer(inner.body)
+            TransferOutcome.TYPE_ENDED -> endTransfer(inner.body, ep)
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
                 val tok = mintForVault()
@@ -1940,15 +1957,30 @@ class VaultDevice private constructor(
      * The epoch-1 secret (the phone key) and the attested key are not held by this module: `:core:data` drops them
      * (not yet: see the PR's Q3 note).
      */
-    private fun endTransfer(body: ByteArray) {
+    private fun endTransfer(body: ByteArray, ep: Epoch) {
         val tr = liveTransferIn() ?: return
         if (!tr.outcome) return
+        // (Review F6) The epoch it opened under must be the one this transfer's hs.resp established, compared, not only
+        // implied by the keyring holding nothing else. A record with no epoch id (none can have the gate) never matches.
+        if (tr.epochId == null || tr.epochId != Base64s.encodeStd(ep.id)) return
         if (tr.paired || st.deviceId != null || pairedState.value) return
         val reason = TransferOutcome.reason(body)
         dropPairing()
         st.vault = null
         st.transferIn = TransferInRecord(startedMs = tr.startedMs, outcome = true, ended = reason)
         // Wakes a wait for this transfer ([awaitEventOf] looks at the tombstone first), also while events are held.
+        inboxVersion.value++
+    }
+
+    /**
+     * `device.pair.rejected` for a device still waiting for `device.paired` ([dropPairing]). (Review F5) For a transfer to
+     * this phone, a tombstone with [TransferOutcome.REJECTED] is kept in its place, so that the next start can say once
+     * that the move was rejected (PR 3); a wait for the transfer ends with [PairingRejectedException], as before.
+     */
+    private fun rejectTransfer() {
+        val tr = liveTransferIn()
+        dropPairing()
+        if (tr != null) st.transferIn = TransferInRecord(startedMs = tr.startedMs, outcome = tr.outcome, ended = TransferOutcome.REJECTED)
         inboxVersion.value++
     }
 
@@ -2052,6 +2084,7 @@ class VaultDevice private constructor(
                 st.transferIn = tr.copy(
                     sas = res.sas, respMs = t.toEpochMilli(), respElapsedMs = cfg.elapsedMs(),
                     respBoot = runCatching { cfg.bootId() }.getOrNull(),
+                    epochId = Base64s.encodeStd(res.epoch.id),
                 )
             }
         }

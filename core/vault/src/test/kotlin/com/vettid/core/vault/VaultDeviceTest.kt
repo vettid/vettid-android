@@ -1776,7 +1776,7 @@ class VaultDeviceTest {
             val late3 = v3.endedFor("expired")
             d3.handle(v3.seal("device.pair.rejected", "{}"))
             d3.handle(late3)
-            assertNull(d3.transferInEnded)
+            assertEquals("the rejection stands", TransferOutcome.REJECTED, d3.transferInEnded!!.reason)
             // Paired first: kept.
             val v4 = FakeVault()
             val d4 = answeredTransfer(v4)
@@ -1928,6 +1928,112 @@ class VaultDeviceTest {
                     assertEquals(caps != null, d.transferInPending!!.outcome)
                 }
             }
+        }
+    }
+
+    /**
+     * (Review F5) No drop removes an ended transfer's tombstone: the member's cancel, the 60 s drop and a settlement-style
+     * drop of the same start all keep its reason. Only a new transfer, a pairing or clearTransferInEnded removes it.
+     */
+    @Test
+    fun noDropRemovesAnEndedTransfersReason() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = answeredTransfer(v)
+            val started = d.transferInPending!!.startedAt
+            d.handle(v.endedFor("locked"))
+            d.abandonTransfer()
+            d.abandonTransfer(onlyStartedAt = started)
+            assertNull(d.abandonTransferIfUnanswered(started))
+            assertEquals(TransferEnded(started, "locked"), d.transferInEnded)
+            assertNull(d.transferInPending)
+        }
+    }
+
+    /**
+     * (Review F5) A rejection keeps a tombstone with [TransferOutcome.REJECTED] (with or without the gate), across a restart,
+     * so that the next start can say it once; the wait still ends with [PairingRejectedException], before or during it. A
+     * new transfer or clearTransferInEnded removes it, and a drop does not.
+     */
+    @Test
+    fun aRejectionKeepsItsReason() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            for (caps in listOf(outcomeCaps, null)) {
+                val store = InMemoryDeviceStateStore()
+                val secrets = DeviceSecrets.generate()
+                val v = FakeVault()
+                val d = answeredTransfer(v, capabilities = caps, store = store, secrets = secrets)
+                val started = d.transferInPending!!.startedAt
+                val waiting = async(Dispatchers.IO) { runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(20)) }.exceptionOrNull() }
+                kotlinx.coroutines.delay(200)
+                d.handle(v.seal("device.pair.rejected", "{}"))
+                assertTrue("${waiting.await()}", waiting.await() is PairingRejectedException)
+                assertNull(d.transferInPending)
+                assertTrue("the vault's record stays until a drop, as before", d.hasVault)
+                assertEquals(TransferEnded(started, TransferOutcome.REJECTED), d.transferInEnded)
+                assertTrue(runCatching { d.awaitTransfer(java.time.Duration.ofMillis(100)) }.exceptionOrNull() is PairingRejectedException)
+                d.abandonTransfer()
+                assertFalse("the drop takes the rest of the session", d.hasVault)
+                assertEquals("and keeps the reason", TransferEnded(started, TransferOutcome.REJECTED), d.transferInEnded)
+                d.stop()
+                val again = VaultDevice.load(config(store), secrets)!!
+                assertEquals(TransferEnded(started, TransferOutcome.REJECTED), again.transferInEnded)
+                assertNull(again.transferInPending)
+                again.clearTransferInEnded(started)
+                assertNull(again.transferInEnded)
+            }
+            assertFalse(TransferOutcome.REJECTED in TransferOutcome.REASONS)
+            assertEquals("never a reason read from an end", "expired", TransferOutcome.reason("""{"reason":"rejected"}""".toByteArray()))
+        }
+    }
+
+    /**
+     * (Review F6) The transfer's epoch is stored with its code and compared: an end that opens under the session but not
+     * under the stored epoch is ignored. (The keyring holds only the transfer's epoch, so the mismatch is made by changing
+     * the stored id; this pins the comparison itself.)
+     */
+    @Test
+    fun anEndIsMatchedToTheStoredEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = answeredTransfer(v, store = store, secrets = secrets)
+            assertEquals(Base64s.encodeStd(v.keyring.current()!!.id), savedState(store).transferIn!!.epochId)
+            d.stop()
+            for (other in listOf<String?>(Base64s.encodeStd(ByteArray(16) { 7 }), null)) {
+                val st = savedState(store)
+                st.transferIn = st.transferIn!!.copy(epochId = other)
+                store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+                val again = VaultDevice.load(config(store), secrets)!!
+                again.handle(v.endedFor("alarm"))
+                assertNotNull("epoch $other: not this transfer's end", again.transferInPending)
+                assertNull(again.transferInEnded)
+                again.stop()
+            }
+        }
+    }
+
+    /**
+     * (Review F8) During a hold (an opening of the vault still locked here), `device.transfer.ended` is a session message
+     * ([SESSION_TYPES]): handled at once, not left on the relay; and its own wake-up reaches a waiter, since a held event
+     * does not bump the inbox. A type outside the session's is left on the relay, for contrast.
+     */
+    @Test
+    fun anEndDuringAHoldIsHandledAndWakesTheWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = answeredTransfer(v)
+            d.holdEvents()
+            val other = v.seal("sync.event", """{"kind":"x"}""")
+            assertTrue("not a session type: left", runCatching { d.handle(other) }.exceptionOrNull() is LeaveUnacked)
+            val waiting = async(Dispatchers.IO) { runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(20)) }.exceptionOrNull() }
+            kotlinx.coroutines.delay(200)
+            d.handle(v.endedFor("locked")) // no LeaveUnacked: handled during the hold
+            val e = withTimeout(3_000) { waiting.await() }
+            assertTrue("$e", e is TransferEndedException && e.reason == "locked")
+            assertEquals("locked", d.transferInEnded!!.reason)
+            d.endHold(deliver = false)
         }
     }
 

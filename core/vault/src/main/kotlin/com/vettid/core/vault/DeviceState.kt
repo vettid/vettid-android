@@ -106,9 +106,17 @@ internal data class TransferInRecord(
      */
     val respBoot: Long? = null,
     /**
-     * (0.88.0) The reason of the `device.transfer.ended` that ended this transfer (one of [TransferOutcome.REASONS]). A
+     * (Review F6) The id of the handshake epoch this transfer's `hs.resp` established (standard base64 of [Epoch.id]),
+     * stored with [sas]. `device.transfer.ended` is acted on only when it opened under exactly this epoch: the "an
+     * unpaired keyring holds only the transfer's epoch" invariant, checked rather than assumed.
+     */
+    val epochId: String? = null,
+    /**
+     * (0.88.0) How the vault ended this transfer: the reason of its `device.transfer.ended` (one of
+     * [TransferOutcome.REASONS]), or [TransferOutcome.REJECTED] for the holder's `device.pair.rejected` (review F5). A
      * record with it is a tombstone: no SAS, no session, no vault; it only says how the transfer ended, across a restart,
-     * until the next transfer replaces it or the app clears it ([VaultDevice.clearTransferInEnded]). It is never a
+     * until the next transfer replaces it, a pairing clears it, or the app clears it once said
+     * ([VaultDevice.clearTransferInEnded]). No drop removes it ([VaultDevice.abandonTransfer] keeps it). It is never a
      * pending transfer ([VaultDevice.transferInPending] is null).
      */
     val ended: String? = null,
