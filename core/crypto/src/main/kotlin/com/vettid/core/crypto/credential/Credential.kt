@@ -162,8 +162,8 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
         }
 
         /**
-         * Follows a chain (≤ 32 statements in all) from the pinned key (VAULT-MESSAGING 0.83.9 and 0.83.11 §10.4 "Following a
-         * credential-key rotation").
+         * Follows a chain (≤ 32 statements in all, unless it already ends at the pinned key) from the pinned key
+         * (VAULT-MESSAGING 0.83.9 and 0.83.11 §10.4 "Following a credential-key rotation").
          * - A chain whose last `new_key` is the pinned key (a delivery repeated, or one overtaken by a response that already
          *   moved the pin there) gives [CredentialChainResult.AlreadyCurrent]: the caller ignores it, with no audit and no key
          *   event (VAULT-MESSAGING 0.83.11 §10.4 "Failure"). Nothing in it is verified, since nothing changes. This is checked
@@ -188,6 +188,9 @@ class CredentialKeyRotation(oldKey: ByteArray, newKey: ByteArray, sigOld: ByteAr
          *   `key`. [CredentialChainResult.AlreadyCurrent] ignores the chain, not the response: its `key` is still compared
          *   with the pin as usual.
          * - **A receiver with no pinned key** ignores `rotated` and does not call this (it would throw, and so be audited).
+         * - **A parser of `rotations`** (none exists yet) caps the array at 32 statements while parsing and refuses a longer one
+         *   as `bad_request`, as the vault's `peerwire.ParseRotations` does: this function's cap does not bound the parse, and a
+         *   long chain that ends at the pin returns [CredentialChainResult.AlreadyCurrent] before it.
          */
         fun followChain(pinned: ByteArray, chain: List<CredentialKeyRotation>): CredentialChainResult {
             if (pinned.size != Suite.ED25519_PUBLIC_SIZE || chain.isEmpty()) throw CryptoException.Signature("credential chain")
