@@ -1,5 +1,8 @@
 package com.vettid.feature.credential
 
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -7,6 +10,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.requestFocus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,10 +33,16 @@ class NewCredentialDoneKeyTest {
         val state = NewCredentialUiState(
             pin = "123456", current = "old", password = "new password", confirm = "new password", acknowledged = true,
         )
-        rule.setContent { NewCredentialContent(state, actions) }
+        lateinit var view: View
+        rule.setContent {
+            view = LocalView.current
+            NewCredentialContent(state, actions)
+        }
         rule.onNodeWithTag("new_credential_confirm").requestFocus().assertIsFocused()
         rule.onNodeWithTag("new_credential_confirm").performImeAction()
         rule.onNodeWithTag("new_credential_confirm").assertIsNotFocused()
+        // Focus did not just move to another field: nothing is left to type into, so the keyboard is hidden.
+        rule.runOnUiThread { assertNull(view.onCreateInputConnection(EditorInfo())) }
         assertEquals(emptyList<String>(), sent)
     }
 }
