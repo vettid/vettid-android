@@ -817,4 +817,51 @@ class RecoverViewModelTest {
         advanceUntilIdle()
         assertFalse("another release", vm.uiState.value.approveOffer)
     }
+
+    /** The lead's recheck of #327: entering the PIN step again (toPin) clears the tick at once, before any new check. */
+    @Test
+    fun thePinStepAgainClearsTheTick() = runTest {
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6))
+        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE))
+        val vm = atThePin()
+        vm.setApproveOffer(true)
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        vm.tryPinAgain()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertFalse("cleared on entering the step", vm.uiState.value.approveOffer)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.approveOffer)
+    }
+
+    /** The lead's recheck of #327: a failed check, a rollback of the same offer and no offer each clear the tick. */
+    @Test
+    fun aFailedCheckARollbackOrNoOfferClearsTheTick() = runTest {
+        val offer = FakeVault.release(6)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        val vm = atThePin()
+        vm.setApproveOffer(true)
+        vault.fail["recoveryPreflight"] = FakeVault.failure(FailureKind.NETWORK)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("a failed check", vm.uiState.value.approveOffer)
+        vault.fail.remove("recoveryPreflight")
+        vm.retryPreflight()
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, true, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("the same offer, as a rollback", vm.uiState.value.approveOffer)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, null)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("no offer", vm.uiState.value.approveOffer)
+    }
 }

@@ -50,4 +50,26 @@ class UnlockApprovalTickTest {
         advanceUntilIdle()
         assertFalse("not brought back by the next check", vm.uiState.value.approveOffer)
     }
+
+    /** The lead's recheck of #327: a rollback of the same offer, or no offer, clears the tick. */
+    @Test
+    fun aRollbackOrNoOfferClearsTheTick() = runTest {
+        val offer = FakeVault.release(6)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, true, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("the same offer, as a rollback", vm.uiState.value.approveOffer)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, null)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("no offer", vm.uiState.value.approveOffer)
+    }
 }
