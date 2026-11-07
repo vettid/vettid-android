@@ -126,6 +126,15 @@ class FeedNotifier(
     private val voteWaiting = HashMap<String, Long>()
     private var voteSeq = 0L
 
+    /** Every `vote.result` arrival still waiting, in the order they arrived: they are posted in that order (under [lock]). */
+    private val voteQueue = ArrayDeque<VoteWait>()
+
+    /** A `vote.result` arrival waiting for the votes list; [n] is set (or left null: nothing to post) once it is [ready]. */
+    private class VoteWait(val item: FeedItem, val seq: Long) {
+        var ready = false
+        var n: LocalNotification? = null
+    }
+
     /** The votes list read asked for and not yet started, and whether a read is running (under [lock]). */
     private var voteReadNext: CompletableDeferred<Boolean>? = null
     private var voteReading = false
@@ -153,10 +162,15 @@ class FeedNotifier(
         val covered = source.coveredNow()
         if (item.kind == VOTE_RESULT && !covered) {
             // Titled in its own job (#313): the items behind it are not held up by the list read. A later arrival of the
-            // same item replaces one still waiting.
-            val seq = synchronized(lock) { (++voteSeq).also { voteWaiting[item.itemId] = it } }
-            val read = requestVoteRead()
-            scope.launch { postVoteResult(item, channel, read, seq) }
+            // same item replaces one still waiting. Checked and queued in one go: a lock cannot come in between.
+            val (wait, read) = synchronized(lock) {
+                if (!notifiable(item)) return
+                val w = VoteWait(item, ++voteSeq)
+                voteWaiting[item.itemId] = w.seq
+                voteQueue.addLast(w)
+                w to requestVoteRead()
+            }
+            scope.launch { postVoteResult(wait, channel, read) }
             return
         }
         // Posted now (under the cover): one still waiting for the list must not replace it.
@@ -180,25 +194,53 @@ class FeedNotifier(
      * older than the item (a re-check's verdict, or the vault giving up on its own clock): it is titled from the list as
      * read again after it arrived ([read], shared by every `vote.result` that arrived before that read started), waiting
      * at most [VOTE_LIST_WAIT_MS]; if the read does not go through in time, the generic "Vote results are out" (review 1,
-     * M3). Dropped if the same item arrived again meanwhile ([seq]) or the vault locked; the cover is looked at again.
+     * M3). The items that arrive while a read runs wait for the next one, which has only what is left of their 3 s, so
+     * after a slow read they mostly get the generic title. Posted in the order they arrived ([drainVoteResults]).
      */
-    private suspend fun postVoteResult(item: FeedItem, channel: String, read: Deferred<Boolean>, seq: Long) {
-        val fresh = withTimeoutOrNull(VOTE_LIST_WAIT_MS) { read.await() } == true
-        val covered = source.coveredNow()
-        val previews = if (covered) NotificationPreviews.NOTHING else settings.value.previews
-        val names = when {
-            covered -> FeedNames()
-            fresh -> source.names()
-            else -> source.names().copy(votesGaveUp = emptySet())
+    private suspend fun postVoteResult(wait: VoteWait, channel: String, read: Deferred<Boolean>) {
+        var n: LocalNotification? = null
+        try {
+            val fresh = withTimeoutOrNull(VOTE_LIST_WAIT_MS) { read.await() } == true
+            val covered = source.coveredNow()
+            val previews = if (covered) NotificationPreviews.NOTHING else settings.value.previews
+            val names = when {
+                covered -> FeedNames()
+                fresh -> source.names()
+                else -> source.names().copy(votesGaveUp = emptySet())
+            }
+            n = NotificationContent.of(wait.item, channel, previews, names, res(), null)
+        } finally {
+            // Always marked ready, so that one that failed never holds up those behind it.
+            synchronized(lock) {
+                wait.n = n
+                wait.ready = true
+                drainVoteResults()
+            }
         }
-        val n = NotificationContent.of(item, channel, previews, names, res(), null)
-        synchronized(lock) {
-            if (voteWaiting[item.itemId] != seq) return
-            voteWaiting.remove(item.itemId)
-            // Dismissed while it waited.
-            if (item.quietRepost && !stillShowing(item)) return
-            postLocked(item, n)
+    }
+
+    /**
+     * Under [lock]: posts the waiting `vote.result` items that are ready, in the order they arrived, up to the first one
+     * still waiting (they share reads and are ready in that order, give or take a dispatch). One is dropped if the same
+     * item arrived again since ([voteWaiting]), the vault locked meanwhile (it was forgotten, then [postLocked]), or the
+     * feed now lists it as read or archived. The dismissal check is a defence only: a `vote.result` is never a quiet
+     * re-post.
+     */
+    private fun drainVoteResults() {
+        while (voteQueue.firstOrNull()?.ready == true) {
+            val w = voteQueue.removeFirst()
+            val n = w.n
+            if (stillWaiting(w) && n != null) postLocked(w.item, n)
         }
+    }
+
+    /** Under [lock]: [w] is the item's latest arrival (it is forgotten now), still active and not dismissed. */
+    private fun stillWaiting(w: VoteWait): Boolean {
+        val id = w.item.itemId
+        if (voteWaiting[id] != w.seq) return false
+        voteWaiting.remove(id)
+        val inactive = source.items.value.any { it.itemId == id && it.status != FeedManager.STATUS_ACTIVE }
+        return !inactive && !(w.item.quietRepost && !stillShowing(w.item))
     }
 
     /**
@@ -218,22 +260,24 @@ class FeedNotifier(
 
     /** Runs the reads asked for, one at a time, each bounded by [VOTE_LIST_WAIT_MS]. */
     private suspend fun runVoteReads() {
-        try {
-            while (true) {
-                val next = synchronized(lock) {
-                    voteReadNext.also { voteReadNext = null } ?: run {
-                        voteReading = false
-                        null
-                    }
-                } ?: return
-                try {
-                    next.complete(readVotes())
-                } finally {
-                    next.complete(false)
+        while (true) {
+            // [voteReading] is reset only here, in the block that finds nothing to read: once it is false another runner
+            // may start, and this one never touches it again (the lead's review of #313, finding 1).
+            val next = synchronized(lock) {
+                voteReadNext.also { voteReadNext = null } ?: run {
+                    voteReading = false
+                    null
                 }
+            } ?: return
+            try {
+                next.complete(readVotes())
+            } catch (e: CancellationException) {
+                // The notifier's scope is going: no read runs any more.
+                synchronized(lock) { voteReading = false }
+                throw e
+            } finally {
+                next.complete(false)
             }
-        } finally {
-            synchronized(lock) { voteReading = false }
         }
     }
 
