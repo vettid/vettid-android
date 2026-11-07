@@ -401,8 +401,6 @@ fun UnlockContent(
                     else -> Unit
                 }
             }
-            // The release offer after the PIN and its results, compact, the full notes one tap away (owner decision 2026-11-07).
-            if (p != null) ReleaseOfferNotice(p, state.approveOffer, actions::setApproveOffer, state.notes)
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
             // An ended release or a rollback wins: no erase there, whatever else the last answers said.
             when {
@@ -412,6 +410,9 @@ fun UnlockContent(
                 state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
                 state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }
+            // The release offer last: after the PIN and every result of the unlock (their explanations and the erase come
+            // first), compact, the full notes one tap away (owner decision 2026-11-07, ANDROID-PLAN 0.1.122).
+            if (p != null) ReleaseOfferNotice(p, state.approveOffer, actions::setApproveOffer, state.notes)
         }
     }
     state.move?.takeIf { state.returnConfirm }?.let { m ->

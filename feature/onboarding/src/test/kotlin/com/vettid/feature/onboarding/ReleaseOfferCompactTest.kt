@@ -120,6 +120,21 @@ class ReleaseOfferCompactTest {
     }
 
     @Test
+    fun theUnlockResultsComeBeforeTheOffer() {
+        // Review F1: a failed unlock's explanation and its erase come first; the optional offer is last.
+        unlock = unlock.copy(signerRefused = true, notRecognised = true, message = UnlockMessage.BadPin)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        val tags = tagsInOrder()
+        assertBefore(tags, "unlock_pin", "unlock_signer_refused")
+        assertBefore(tags, "unlock_signer_refused", "release_offer")
+        assertBefore(tags, "unlock_not_recognised", "release_offer")
+        assertBefore(tags, "erase_phone", "release_offer")
+        unlock = unlock.copy(notRecognised = false, keysGone = true)
+        rule.waitForIdle()
+        assertBefore(tagsInOrder(), "unlock_stuck", "release_offer")
+    }
+
+    @Test
     fun theCompactNoticeShowsTheSecurityLineAndTheFingerprint() {
         rule.setContent { UnlockContent(unlock, unlockActions) }
         rule.onNodeWithText("Update available: release 5").assertExists()
