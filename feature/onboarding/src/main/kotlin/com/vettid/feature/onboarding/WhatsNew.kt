@@ -1,6 +1,7 @@
 package com.vettid.feature.onboarding
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,7 +13,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.paneTitle
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.ui.components.ModalBottomSheet
@@ -164,13 +167,27 @@ private fun WhatsNewBody(
     }
 }
 
-/** The compact notice's line from the release log: the progress line, "Release notes unavailable", or the security line. */
+/**
+ * The compact notice's line from the release log: the progress line, "Release notes unavailable", or the security line.
+ * Its height is reserved for the tallest of them (invisible copies, out of the semantics tree), so the approval and the
+ * link below never move when the notes arrive (review F2): a tap meant for the link can't land on the checkbox.
+ */
 @Composable
 private fun NotesLine(notes: ReleaseNotes?) {
-    when (notes) {
-        null -> LoadingLine(Modifier.testTag("release_offer_loading"))
-        ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("release_offer_unavailable"))
-        is ReleaseNotes.Available -> SecurityLine(notes.entry.security, Modifier.testTag("release_offer_security"))
+    Box {
+        val hidden = Modifier.alpha(0f).clearAndSetSemantics {}
+        // The progress line's size without its animation: the indicator (16dp) is no taller than the text.
+        Row(hidden) {
+            Spacer(Modifier.width(16.dp + Spacing.s))
+            Text(stringResource(R.string.release_notes_loading), style = MaterialTheme.typography.bodyMedium)
+        }
+        UnavailableLine(hidden)
+        ReleaseSecurity.entries.forEach { SecurityLine(it, hidden) }
+        when (notes) {
+            null -> LoadingLine(Modifier.testTag("release_offer_loading"))
+            ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("release_offer_unavailable"))
+            is ReleaseNotes.Available -> SecurityLine(notes.entry.security, Modifier.testTag("release_offer_security"))
+        }
     }
 }
 

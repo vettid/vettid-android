@@ -30,7 +30,9 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.lang.reflect.Proxy
 
 /**
@@ -171,6 +173,26 @@ class ReleaseOfferCompactTest {
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
         rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
         rule.onNodeWithTag("approve_offer").assertIsOn()
+    }
+
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE) // real text measurement, so that the lines wrap as on a phone
+    fun theApprovalAndTheLinkDoNotMoveWhenTheNotesArrive() {
+        // Review F2: the notes' line keeps its height whatever its state, also where its texts wrap differently.
+        RuntimeEnvironment.setFontScale(2f)
+        unlock = unlock.copy(notes = null)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        fun tops() = listOf("approve_offer", "whats_new_open").map { rule.onNodeWithTag(it).fetchSemanticsNode().positionInRoot.y }
+        val loading = tops()
+        unlock = unlock.copy(notes = notes)
+        rule.waitForIdle()
+        assertEquals(loading, tops())
+        unlock = unlock.copy(notes = ReleaseNotes.Unavailable)
+        rule.waitForIdle()
+        assertEquals(loading, tops())
+        unlock = unlock.copy(notes = notes.copy(entry = notes.entry.copy(security = ReleaseSecurity.NONE)))
+        rule.waitForIdle()
+        assertEquals(loading, tops())
     }
 
     @Test
