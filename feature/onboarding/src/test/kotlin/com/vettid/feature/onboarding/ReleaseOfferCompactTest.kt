@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
@@ -143,11 +144,47 @@ class ReleaseOfferCompactTest {
     }
 
     @Test
-    fun noSecurityLineForAReleaseWithoutASecurityFix() {
+    fun aReleaseWithoutASecurityFixSaysSo() {
         unlock = unlock.copy(notes = notes.copy(entry = notes.entry.copy(security = ReleaseSecurity.NONE, securityText = null)))
         rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertTextEquals("No security fix")
+        rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
+    }
+
+    @Test
+    fun whileTheNotesLoadTheNoticeShowsTheProgressLineAndTheApprovalWorks() {
+        unlock = unlock.copy(notes = null)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("release_offer_loading").assertTextContains("Loading the release notes…")
         rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
+        rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
+        rule.onNodeWithTag("approve_offer").assertIsOn()
+    }
+
+    @Test
+    fun unavailableNotesAreSaidAndTheApprovalWorks() {
+        unlock = unlock.copy(notes = ReleaseNotes.Unavailable)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("release_offer_unavailable", useUnmergedTree = true).assertTextEquals("Release notes unavailable")
+        rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
+        rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
+        rule.onNodeWithTag("approve_offer").assertIsOn()
+    }
+
+    @Test
+    fun theCompactNoticeHoldsExactlyThePlansContents() {
+        // ANDROID-PLAN 0.1.122: "Update available: release N", the security line, the fingerprint,
+        // "Approve the update with this unlock" and the link; security_text stays in the sheet.
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithText("Update available: release 5").assertExists()
+        rule.onNodeWithText("Approve the update with this unlock", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("whats_new_open").assertTextEquals("What's new in release 5")
+        rule.onNodeWithText("Fixes the backoff.").assertDoesNotExist()
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("Fixes the backoff.").assertExists()
     }
 
     @Test

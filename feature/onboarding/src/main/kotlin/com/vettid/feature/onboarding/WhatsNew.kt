@@ -54,9 +54,11 @@ fun WhatsNew(release: Long, notes: ReleaseNotes?, notesUrl: String, modifier: Mo
 }
 
 /**
- * The release offer at unlock, compact (owner decision 2026-11-07, as iOS): shown below the PIN, it says "Update
- * available: release N", the security line when the release fixes one, the offer with its fingerprint, the approval and
- * "What's new in release N", which opens [ReleaseNotesSheet]. The approval never waits for the notes to be opened.
+ * The release offer at unlock, compact (owner decision 2026-11-07, as iOS; ANDROID-PLAN 0.1.122): shown below the PIN, it
+ * says "Update available: release N", the security line (from the release log: the progress line while it loads,
+ * "Release notes unavailable" when it can't be had), the offer with its fingerprint, "Approve the update with this unlock"
+ * and "What's new in release N", which opens [ReleaseNotesSheet]. The approval is enabled whatever the notes' state and
+ * never waits for the sheet; `security_text` is only in the sheet.
  * Nothing for a rollback (the PIN is not sent) or without an offer. Shared by the unlock and the recovery's PIN step.
  */
 @Composable
@@ -74,10 +76,7 @@ internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onAppro
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.semantics { heading() },
             )
-            val security = (notes as? ReleaseNotes.Available)?.entry?.security
-            if (security != null && security != ReleaseSecurity.NONE) {
-                SecurityLine(security, Modifier.testTag("release_offer_security"))
-            }
+            NotesLine(notes)
             Text(
                 offerText,
                 style = MaterialTheme.typography.bodyMedium,
@@ -151,20 +150,8 @@ private fun WhatsNewBody(
             modifier = Modifier.semantics { heading() },
         )
         when (notes) {
-            null -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.semantics(mergeDescendants = true) {}.testTag("whats_new_loading"),
-            ) {
-                CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(Spacing.s))
-                Text(stringResource(R.string.release_notes_loading), style = MaterialTheme.typography.bodyMedium)
-            }
-            ReleaseNotes.Unavailable -> Text(
-                stringResource(R.string.release_notes_unavailable),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.testTag("whats_new_unavailable"),
-            )
+            null -> LoadingLine(Modifier.testTag("whats_new_loading"))
+            ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("whats_new_unavailable"))
             is ReleaseNotes.Available -> Entry(notes)
         }
         beforeLink()
@@ -175,6 +162,37 @@ private fun WhatsNewBody(
             ) { Text(stringResource(R.string.release_notes_full)) }
         }
     }
+}
+
+/** The compact notice's line from the release log: the progress line, "Release notes unavailable", or the security line. */
+@Composable
+private fun NotesLine(notes: ReleaseNotes?) {
+    when (notes) {
+        null -> LoadingLine(Modifier.testTag("release_offer_loading"))
+        ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("release_offer_unavailable"))
+        is ReleaseNotes.Available -> SecurityLine(notes.entry.security, Modifier.testTag("release_offer_security"))
+    }
+}
+
+/** "Loading the release notes…" with a small progress indicator, read as one line. */
+@Composable
+private fun LoadingLine(modifier: Modifier = Modifier) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.semantics(mergeDescendants = true) {}) {
+        CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(Spacing.s))
+        Text(stringResource(R.string.release_notes_loading), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** "Release notes unavailable", muted. */
+@Composable
+private fun UnavailableLine(modifier: Modifier = Modifier) {
+    Text(
+        stringResource(R.string.release_notes_unavailable),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    )
 }
 
 /** "No security fix" / "Security fix: update recommended" / "…urgently", emphasised (urgent in the error colour). */
