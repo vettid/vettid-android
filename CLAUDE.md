@@ -469,10 +469,27 @@ The A2 exit test:
   `service_list`, `clock`); **never a choice, row or proof**. With the same three hashes, rows had, an answered
   submission of a real row and no vault-side answer, a `gave_up` re-check downloads no rows.json and sends
   nothing (`ResultsOutcome.Unchanged`); an attempt that failed (no answer) counts as rows not had, and one cancelled or
-  voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). The entry goes
+  voided by a lock after it downloaded rows.json still counts toward the daily limit, as rows not had (L1). So does an
+  attempt cut off (a lock, `clear()`, backgrounding, the time box) after **any** rows.json bytes arrived, whole or partway
+  (#322, shared with iOS #224): it is recorded with `lastRowsMs` (the weekly metered cap counts it) and as what it
+  achieved (nothing answered or sent), under the store epoch and only over a readable store; one cut off before any rows
+  byte records nothing. The entry goes
   when the check is final or the vote leaves a whole list. **A wipe, sign-out or deletion** calls `votes.forgetStored()`
   after `clear()`: the attempts go from memory and disk, and a store epoch drops any write still on its way (M1); a lock
-  does not touch them. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
+  does not touch them. A file it could not delete is logged (`VotesManager` tag, the file's name and the exception type
+  only) and the wipe goes on; `LocalWipe` erases the no-backup directory after (#322). **Unreadable vs unavailable**
+  (#322, iOS #222's rule; both this store and `vote-rechecks.bin`, through `readKept`): a corrupt or undecryptable file
+  (`KeystoreFileStore.isCorrupt`: malformed, or an AES-GCM tag failure; or JSON that does not parse) loads as empty and the
+  next write replaces it; any other failure (a `KeyStoreException`, a `ProviderException`, a key not usable now, the file
+  not read) throws `StoreUnavailable`: `VotesManager` then neither caches it nor writes over it, and the next access
+  reads the file again. Each failed read is logged once (`Log.w`, tag `VotesManager`: the file's name, the class names of
+  the exception and its causes down to the root, and corrupt or unavailable; no message text, bytes or key; #324). The
+  device check of how KeyMint reports a damaged file is `VotesKeystoreProbeTest` (`core/data/src/androidTest`, real
+  AndroidKeyStore, test alias `vettid.test.votes.v1`, logs under `VotesKeystoreProbe`): `ANDROID_SERIAL=<serial>
+  ./gradlew :core:data:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.vettid.core.data.votes.VotesKeystoreProbeTest`. Meanwhile it **waits**, as iOS #222 does: the automatic daily re-check of a `gave_up` record is not
+  due (`dailyDue`: no fetch, no submit), and the recheck on open downloads no rows.json on a metered or unknown network
+  (`recheckRowsWait`: the not-rechecked line), only on Wi-Fi; a Check again runs as always, reading the store as empty,
+  and its attempt and stamp are dropped. With `vote_rows`, extra rows too large for the request are dropped largest first, down to one,
   before the fallback to `rows_unavailable` (L3). **Wi-Fi only after a week** (#314 item 1, owner decision a, thread
   01M6RS33MQVX7KZMSJE0VBFYBR): for 7 days from a `gave_up` record's first re-check (`ResultsAttempt.firstRecheckMs`; a check back in `pending` starts
   them again, #319 item 3; the `vote.list` summary carries no give-up time, only `check.due_at`, which a `gave_up` check

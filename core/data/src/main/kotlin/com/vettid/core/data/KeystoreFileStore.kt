@@ -31,9 +31,12 @@ class KeystoreFileStore(
         return open(blob)
     }
 
-    /** The plain bytes of [blob] (this store's format and purpose); [KeystoreException] if it is not that or cannot be decrypted. */
+    /**
+     * The plain bytes of [blob] (this store's format and purpose); [KeystoreException] if it is not that or cannot be decrypted.
+     * [isCorrupt] tells the data at fault from the Keystore or its key not usable now.
+     */
     fun open(blob: ByteArray): ByteArray {
-        if (blob.size < 1 + IV + TAG || blob[0] != FORMAT) throw KeystoreException("malformed ${file.name}")
+        if (blob.size < 1 + IV + TAG || blob[0] != FORMAT) throw KeystoreException("malformed ${file.name}", Malformed())
         return try {
             val c = Cipher.getInstance(TRANSFORMATION)
             c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, blob, 1, IV))
@@ -72,7 +75,20 @@ class KeystoreFileStore(
 
     private fun aad() = Bytes.concat(LABEL.toByteArray(), byteArrayOf(0), purpose.toByteArray())
 
+    /** The cause of a [KeystoreException] for a blob not in this store's format. */
+    private class Malformed : Exception("malformed")
+
     companion object {
+        /**
+         * Whether [e], thrown by [load] or [open], says the file's data is at fault (#322): not in this format, or failing
+         * its authentication tag under a key that worked (corrupt, or sealed under another key or purpose). Such a file
+         * cannot be read later either, so it counts as empty and the next save replaces it. Anything else is the Keystore
+         * or its key not usable now (a `KeyStoreException`, a `ProviderException`, a key not authenticated or not made, the
+         * file not read): the data may be fine, so the caller neither takes it as empty nor writes over it, and reads again later.
+         */
+        fun isCorrupt(e: Throwable): Boolean =
+            e is KeystoreException && (e.cause is Malformed || e.cause is javax.crypto.AEADBadTagException)
+
         /** The Keystore key of the app's encrypted files. */
         const val ALIAS = "vettid.local_files.v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
