@@ -25,7 +25,9 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
   available), and `./gradlew --stop` when done. No emulator.
 - `./gradlew :app:assembleDebug :app:assembleDevStack testDebugUnitTest :core:crypto:test :core:relay:test detekt :app:lintDebug :app:assembleRelease :app:assembleStaging :app:checkReleaseApk :app:checkStagingApk :app:checkFossReleaseApk`
-  is what CI runs (`:app:assembleRelease` builds both distributions' release APKs) (`.github/workflows/ci.yml`, plus gitleaks over full history, with
+  is what CI runs (`:app:assembleRelease` builds both distributions' release APKs), plus the instrumented test sources, compiled only (#326):
+  `./gradlew compileDebugAndroidTestKotlin :app:compileFullDevStackAndroidTestKotlin -PvettidTestBuildType=devStack` (the app's
+  tests build only against `devStack`) (`.github/workflows/ci.yml`, plus gitleaks over full history, with
   `.gitleaks.toml` allowlisting the public §16 test-vector values).
 - `:core:crypto` is a pure Kotlin/JVM module (`vettid.jvm.library`); its tests include the
   vettid-vault §16 vectors (`src/test/resources/vectors`, see `SOURCE.md` there), which must
