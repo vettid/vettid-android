@@ -167,11 +167,38 @@ class CredentialAndItemsTest {
         // Nothing in it is verified (nothing changes): a forged statement ending at the pin is ignored too.
         val forged = CredentialKeyRotation(k2.publicKey, k3.publicKey, ByteArray(64), ByteArray(64))
         assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, listOf(forged)))
-        // The cap and an empty chain are still refused first, wherever the chain ends.
+        // Ends at the pin is checked before the cap, as the vault orders them: a 33-statement chain ending at the pin is
+        // ignored, not refused. One over the cap that does not end at the pin is still refused.
         val long = List(32) { r1 } + listOf(r2)
-        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, long) }
+        assertSame(CredentialChainResult.AlreadyCurrent, CredentialKeyRotation.followChain(k3.publicKey, long))
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, long) }
+        // An empty chain is still refused (before `chain.last()`).
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, emptyList()) }
         // One that ends before the pin is still refused (the caller audits `rotation_rejected`).
         assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k3.publicKey, listOf(r1)) }
+    }
+
+    /** Both signatures of a statement after the pin must verify: one valid signature is not enough (§3.5.5, §10.4). */
+    @Test
+    fun aCredentialStatementAfterThePinNeedsBothSignatures() {
+        val k1 = Ed25519PrivateKey.generate()
+        val k2 = Ed25519PrivateKey.generate()
+        val k3 = Ed25519PrivateKey.generate()
+        val other = Ed25519PrivateKey.generate()
+        val r1 = CredentialKeyRotation.create(k1, k2)
+        val m = Bytes.concat(k2.publicKey, k3.publicKey)
+        val sigOld = k2.sign(Labels.CREDENTIAL_ROTATE, m)
+        val sigNew = k3.sign(Labels.CREDENTIAL_ROTATE, m)
+        val wrong = other.sign(Labels.CREDENTIAL_ROTATE, m)
+        // The genuine statement is followed, so the refusals below come from the one bad signature.
+        val genuine = CredentialKeyRotation(k2.publicKey, k3.publicKey, sigOld, sigNew)
+        assertTrue(Bytes.constantTimeEquals(k3.publicKey, moved(k2.publicKey, listOf(r1, genuine))))
+        // A valid sig_old and a bad sig_new: refused.
+        val badNew = CredentialKeyRotation(k2.publicKey, k3.publicKey, sigOld, wrong)
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, badNew)) }
+        // A bad sig_old and a valid sig_new: refused.
+        val badOld = CredentialKeyRotation(k2.publicKey, k3.publicKey, wrong, sigNew)
+        assertThrows(CryptoException.Signature::class.java) { CredentialKeyRotation.followChain(k2.publicKey, listOf(r1, badOld)) }
     }
 
     private fun moved(pinned: ByteArray, chain: List<CredentialKeyRotation>): ByteArray =
