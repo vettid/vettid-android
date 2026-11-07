@@ -3,6 +3,7 @@ package com.vettid.feature.onboarding
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
@@ -198,6 +200,35 @@ class ReleaseOfferCompactTest {
         unlock = unlock.copy(notes = notes.copy(entry = notes.entry.copy(security = ReleaseSecurity.NONE)))
         rule.waitForIdle()
         assertEquals(loading, tops())
+    }
+
+    @Test
+    fun theVisibleNotesLineAloneIsAPoliteLiveRegion() {
+        // The lead's review of #327: TalkBack hears the security line arrive; the invisible height copies say nothing.
+        unlock = unlock.copy(notes = null)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        fun liveNodes() = rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.LiveRegion), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .filter { n -> generateSequence(n) { it.parent }.any { it.config.getOrNull(SemanticsProperties.TestTag) == "release_offer" } }
+        fun check(tag: String) {
+            val live = liveNodes()
+            assertEquals(live.map { it.config.getOrNull(SemanticsProperties.TestTag) }.toString(), 1, live.size)
+            assertEquals(tag, live.single().config.getOrNull(SemanticsProperties.TestTag))
+            assertEquals(LiveRegionMode.Polite, live.single().config[SemanticsProperties.LiveRegion])
+        }
+        check("release_offer_loading")
+        unlock = unlock.copy(notes = notes)
+        rule.waitForIdle()
+        check("release_offer_security")
+        rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertTextEquals("Security fix: update urgently")
+        unlock = unlock.copy(notes = ReleaseNotes.Unavailable)
+        rule.waitForIdle()
+        check("release_offer_unavailable")
+        // The copies are out of the tree: one text of each kind in the notice.
+        unlock = unlock.copy(notes = notes)
+        rule.waitForIdle()
+        assertEquals(1, rule.onAllNodesWithText("Security fix: update urgently", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithText("No security fix", useUnmergedTree = true).fetchSemanticsNodes().size)
     }
 
     @Test

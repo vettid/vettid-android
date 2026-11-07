@@ -31,9 +31,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -191,10 +193,12 @@ private fun NotesLine(notes: ReleaseNotes?) {
         }
         UnavailableLine(hidden)
         ReleaseSecurity.entries.forEach { SecurityLine(it, hidden) }
+        // The visible line alone is a polite live region: "Security fix: update urgently" is read out when it arrives.
+        val live = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
         when (notes) {
-            null -> LoadingLine(Modifier.testTag("release_offer_loading"))
-            ReleaseNotes.Unavailable -> UnavailableLine(Modifier.testTag("release_offer_unavailable"))
-            is ReleaseNotes.Available -> SecurityLine(notes.entry.security, Modifier.testTag("release_offer_security"))
+            null -> LoadingLine(live.testTag("release_offer_loading"))
+            ReleaseNotes.Unavailable -> UnavailableLine(live.testTag("release_offer_unavailable"))
+            is ReleaseNotes.Available -> SecurityLine(notes.entry.security, live.testTag("release_offer_security"))
         }
     }
 }
