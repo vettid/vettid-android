@@ -2056,7 +2056,28 @@ class VaultDevice private constructor(
             }
         }
         save()
-        depositToVault(v, res.fin)
+        // (Review F4) The code of a transfer is shown whatever becomes of the hs.fin deposit (in the finally): it is stored
+        // already, and a transfer that kept it is waited for, so the screen must not stay on "connecting" for the 60 s.
+        val transfer = liveTransferIn()
+        var dropped = false
+        try {
+            depositToVault(v, res.fin)
+        } catch (x: RelayException) {
+            // The relay definitively refused the hs.fin (RELAY-PROTOCOL §5.3): the vault never gets it and can never
+            // approve this transfer. Toward a vault WITHOUT the outcome gate, the transfer is dropped here, as before the
+            // race fix (the 60 s then end as "No answer", not a code pinned until the 11-minute window). Toward a vault
+            // WITH it, nothing is dropped: §6.7.1 "a new phone whose hs.fin deposit is definitively refused … waits for
+            // its outcome" (the vault sends `expired`; a vault that is gone sends none, and only the give-up ends it). A
+            // transient failure (a 5xx, the network) may still have delivered it: kept, either way. Thrown on, as before:
+            // [handle] absorbs it.
+            if (transfer != null && !transfer.outcome && x.code in FIN_REFUSED) {
+                dropTransferLocked()
+                dropped = true
+            }
+            throw x
+        } finally {
+            if (!dropped && transfer != null) res.sas?.let { sasState.value = it }
+        }
         res.sas?.let { sasState.value = it }
     }
 
@@ -2455,6 +2476,9 @@ class VaultDevice private constructor(
     companion object {
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
+
+        /** The relay's definitive refusals of a deposit (RELAY-PROTOCOL §5.3; VAULT-MESSAGING 0.88.0 §6.7.1). */
+        private val FIN_REFUSED = setOf(RelayException.TOKEN_REVOKED, RelayException.TOKEN_EXPIRED, RelayException.MAILBOX_UNKNOWN)
         private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
         private const val EVENT_BUFFER = 256
         /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */

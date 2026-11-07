@@ -1891,6 +1891,47 @@ class VaultDeviceTest {
     }
 
     /**
+     * (Review F4) The relay refuses the hs.fin deposit. The code is shown at once in every case (the screen does not stay on
+     * "connecting"). A definitive refusal (`token_revoked`, `token_expired`, `mailbox_unknown`) means the vault can never
+     * approve: toward a vault without the outcome gate the transfer is dropped then, as before (the 60 s end as "No
+     * answer"); toward a vault with it, it is kept and waited for (§6.7.1: "definitively refused … waits for its
+     * outcome"). Any other refusal may not be final: kept either way.
+     */
+    @Test
+    fun aRefusedHsFinIsKeptWithTheGateAndDroppedWithout() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            for (code in listOf(RelayException.TOKEN_REVOKED, RelayException.TOKEN_EXPIRED, RelayException.MAILBOX_UNKNOWN, "bad_request")) {
+                for (caps in listOf(outcomeCaps, null)) {
+                    val v = FakeVault()
+                    val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+                    d.startTransfer(transferLink(v, Ulid.new(), capabilities = caps), RecordingAttester())
+                    val (_, resp) = v.respEnvelope(d)
+                    refuseStatus = if (code == RelayException.MAILBOX_UNKNOWN) 404 else 403
+                    refuseDeposits = code
+                    d.handle(resp)
+                    refuseDeposits = null
+                    refuseStatus = 403
+                    val definitive = code != "bad_request"
+                    if (definitive && caps == null) {
+                        assertNull("$code, no gate: dropped", d.transferInPending)
+                        assertFalse(d.hasVault)
+                        assertNull("no code to show", d.pairingSas.value)
+                        assertNull(d.abandonTransferIfUnanswered())
+                        continue
+                    }
+                    val sas = d.transferInPending!!.sas
+                    assertNotNull("$code $caps: kept with its code", sas)
+                    assertEquals("$code $caps: shown at once", sas, d.pairingSas.value)
+                    assertTrue(d.hasVault)
+                    assertEquals(sas, d.abandonTransferIfUnanswered())
+                    assertNotNull(d.transferInPending)
+                    assertEquals(caps != null, d.transferInPending!!.outcome)
+                }
+            }
+        }
+    }
+
+    /**
      * (recheck) A collect returns [m1, device.paired] and m1's ack is refused: the batch is still handled, so the
      * device.paired is applied (the unacked m1 comes again after its lease and is dropped as seen).
      */
