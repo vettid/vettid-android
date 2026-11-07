@@ -1475,7 +1475,7 @@ class VaultManager(
                 val store = KeystoreFileStore(slots.file(slot), "vault-device")
                 val cfg = DeviceConfig(
                     name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust,
-                    elapsedMs = { android.os.SystemClock.elapsedRealtime() }, bootId = { BootCount.read(app) },
+                    elapsedMs = { android.os.SystemClock.elapsedRealtime() }, bootId = BootCount.of(app).let { boot -> { boot } },
                 )
                 val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
                 liveDevices += device
@@ -3853,7 +3853,7 @@ class VaultManager(
             val cfg = DeviceConfig(
                 name = deviceName, relayUrl = env.endpoints.relayUrl, http = http,
                 store = KeystoreFileStore(slots.file(slot), "vault-device"), trust = env.trust(http),
-                elapsedMs = { android.os.SystemClock.elapsedRealtime() }, bootId = { BootCount.read(app) },
+                elapsedMs = { android.os.SystemClock.elapsedRealtime() }, bootId = BootCount.of(app).let { boot -> { boot } },
             )
             com.vettid.core.vault.VaultDevice.load(cfg, secrets)
         } ?: return null
