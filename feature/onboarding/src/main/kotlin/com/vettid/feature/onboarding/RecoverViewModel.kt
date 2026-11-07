@@ -455,7 +455,7 @@ class RecoverViewModel @Inject constructor(
     private fun toPin() {
         state.update {
             it.copy(
-                step = RecoverStep.PIN, preflight = null, preflightError = null, phoneSecret = vault.usesPhoneSecret,
+                step = RecoverStep.PIN, preflight = null, preflightError = null, approveOffer = false, phoneSecret = vault.usesPhoneSecret,
                 undecided = move.recoveryUndecided,
             )
         }
@@ -463,18 +463,25 @@ class RecoverViewModel @Inject constructor(
     }
 
     override fun retryPreflight() {
+        val before = state.value.preflight?.offer
         state.update { it.copy(busy = true, preflightError = null, error = null) }
         viewModelScope.launch {
             try {
                 val p = move.recoveryPreflight()
-                state.update { it.copy(busy = false, preflight = p, notes = null) }
+                state.update {
+                    it.copy(busy = false, preflight = p, notes = null, approveOffer = keptApproval(it.approveOffer, before, p))
+                }
                 p.offer?.takeIf { !p.rollback }?.let { offer ->
                     val n = releaseNotes.whatsNew(offer, p.between)
                     state.update { if (it.preflight?.offer == offer) it.copy(notes = n) else it }
                 }
             } catch (e: VaultFailure) {
                 // §11.11.7: the member API takes a recovering key only until its recovery ends.
-                if (e.kind == FailureKind.UNAUTHORIZED) ended() else state.update { it.copy(busy = false, preflightError = e.kind) }
+                if (e.kind == FailureKind.UNAUTHORIZED) {
+                    ended()
+                } else {
+                    state.update { it.copy(busy = false, preflightError = e.kind, approveOffer = false) }
+                }
             }
         }
     }

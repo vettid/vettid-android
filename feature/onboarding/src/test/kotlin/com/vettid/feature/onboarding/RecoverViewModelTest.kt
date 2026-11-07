@@ -792,4 +792,29 @@ class RecoverViewModelTest {
         vm.useNewCode()
         assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
     }
+
+    /** The lead's review of #327 (L2): at the recovery's PIN step too, another offer clears the tick. */
+    @Test
+    fun aTickNeverCarriesOverToAnotherRelease() = runTest {
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6))
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.scan()
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.setApproveOffer(true)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertTrue("the same offer keeps the tick", vm.uiState.value.approveOffer)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6).copy(pcr0 = "ff".repeat(48)))
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("another PCR0", vm.uiState.value.approveOffer)
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(7))
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("another release", vm.uiState.value.approveOffer)
+    }
 }
