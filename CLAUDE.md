@@ -530,7 +530,15 @@ The A2 exit test:
   have (or under the app lock's cover, no names) reads as a result, "Vote results are out". The lookup is the current
   state: once the check is final an older give-up item reads as a result. The notification of a `vote.result` is titled
   only after the votes list is read again (`FeedNotifier`, `NotifySource.refreshVotes`, at most 3 s,
-  `VOTE_LIST_WAIT_MS`); if that read does not go through, the generic "Vote results are out" (review 1 M3). Catalog:
+  `VOTE_LIST_WAIT_MS`); if that read does not go through, the generic "Vote results are out" (review 1 M3). It waits in
+  its own job (#313): the items behind it are posted at once, in order, and the `vote.result` items themselves in the
+  order they arrived; every `vote.result` that arrived before a read started shares that one read (a read already running
+  when one arrives is not used: the next one serves it, with only what is left of the item's 3 s, so after a slow read it
+  mostly gets the generic title); a lock, Off, a later arrival of the same item, or the feed listing it as read or archived
+  meanwhile drops it (a dismissal check is kept as a defence only: a `vote.result` is never a quiet re-post), and
+  the cover is looked at again when it is posted. Under the
+  cover nothing is read and it is posted at once in public form. A read cut off (the 3 s limit, a cancel) puts
+  `VotesManager.load` back as it was, never left "loading". Catalog:
   `notifications.sheet_vote_gave_up`.
   Every vote signature the app checks goes through
   `Ed25519.verifyStrict` (the four rules of BALLOT-PROTOCOL §2: the `y < p` and small-order rules for `A` and `R` are a
