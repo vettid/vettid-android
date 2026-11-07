@@ -330,10 +330,17 @@ class AuthKeyEventTest {
         // The read waits; the collector goes on.
         m.onEvent(event("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"hi","sent_at":"2026-11-06T12:00:00Z"}"""))
         assertEquals(listOf("m9"), m.messages("c1").first().map { it.messageId })
-        m.onEvent(result("c1", k1, changed = false))
-        assertFalse(m.authentication.value.getValue("c1").keyChanged)
+        // A new verdict while the read waits: a key change to k2.
+        m.onEvent(result("c1", k2, changed = true))
+        assertTrue(m.authentication.value.getValue("c1").keyChanged)
+        assertEquals(k2, m.authentication.value.getValue("c1").key)
+        // The read was answered before that verdict (the list still pins k1) and lands after it.
         g.complete(Unit)
         runCurrent()
+        val s = m.authentication.value.getValue("c1")
+        assertTrue("keyChanged is carried over the late list read", s.keyChanged)
+        assertEquals("the other fields are one read old: the list's key, not the verdict's", k1, s.key)
+        assertEquals("authenticated", s.lastResult)
     }
 
     /**

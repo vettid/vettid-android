@@ -200,6 +200,11 @@ data class AuthenticationState(
      * immutable and comparable. Not a secret, but nothing shows it (no fingerprint is displayed) and [toString] leaves
      * it out. The vault follows rotation chains itself (§10.4 "Following a credential-key rotation"); the app only
      * records what the vault reports.
+     *
+     * It can be one read stale: a list read answered before a `.result` may land after it (the re-read on
+     * `connection.authenticate.key` and [SocialManager.refresh] both run beside the event collector) and puts the list's
+     * older key back over the verdict's. Do not treat it as the vault's current pin; anything that shows it later (a
+     * fingerprint, say) must read `connection.authenticate.list` again first, or order list reads against verdicts.
      */
     val key: String? = null,
 ) {
