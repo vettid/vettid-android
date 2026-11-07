@@ -62,6 +62,15 @@ suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T =
     throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, cause = e)
 } catch (e: PairingRejectedException) {
     throw VaultFailure(FailureKind.REJECTED, "rejected", cause = e)
+} catch (e: com.vettid.core.vault.TransferEndedException) {
+    // (VAULT-MESSAGING 0.88.0 §6.7.1, review F3) The vault ended the transfer without an approval or a rejection. Until
+    // PR 2 gives each reason its own result, it is the dropped transfer's failure (the transfer screen's TIMED_OUT: "It
+    // was not approved in time. Nothing changed. Show a new code"), the closest existing text: every end before the vault
+    // verified hs.fin is `expired`, an unknown reason reads as `expired`, and in every reason the move did not happen and
+    // a new code is the way on. Never a kind that reads as approved (NETWORK became FINISHING_FAILED), nor REJECTED (the
+    // old phone did not reject) or SESSION_ENDED (which tells the member to recover if they approved). The reason stays
+    // in the cause.
+    throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED, cause = e)
 } catch (e: NotATransferCodeException) {
     throw VaultFailure(if (e.expired) FailureKind.INVITE_EXPIRED else FailureKind.INVITE_INVALID, "not_transfer", cause = e)
 } catch (e: RelayException) {

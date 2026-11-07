@@ -109,4 +109,24 @@ class GuardTest {
         assertEquals(0L, failureOf(VaultOpException("vault.owner-check", "backoff", body = body(JsonPrimitive("30")))).retryAfterSeconds)
         assertEquals(0L, failureOf(VaultOpException("vault.owner-check", "backoff", body = body(JsonPrimitive(-1)))).retryAfterSeconds)
     }
+
+    /**
+     * (VAULT-MESSAGING 0.88.0, review F3) The vault's end of a transfer is the dropped transfer's failure (the screen's
+     * TIMED_OUT), with the reason kept in the cause; never NETWORK, which the transfer screen shows as "the steps after the
+     * approval failed".
+     */
+    @Test
+    fun aTransferEndedByTheVaultIsTheDroppedTransfersFailure() = runTest {
+        for (reason in listOf("expired", "locked", "alarm", "replaced", "failed")) {
+            val f = try {
+                vaultGuard { throw com.vettid.core.vault.TransferEndedException(reason) }
+                error("no failure")
+            } catch (v: VaultFailure) {
+                v
+            }
+            assertEquals(FailureKind.NO_RESPONSE, f.kind)
+            assertEquals(MoveRepository.CODE_TRANSFER_DROPPED, f.code)
+            assertEquals(reason, (f.cause as com.vettid.core.vault.TransferEndedException).reason)
+        }
+    }
 }

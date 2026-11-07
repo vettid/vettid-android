@@ -80,12 +80,20 @@ private suspend fun readVisibility(d: SettleDevice): Long? = try {
 /**
  * Ended by a rejection (or an abandon): a rejection is still in the device's inbox and ends the wait as REJECTED, as it
  * would have before the deadline; otherwise a short timeout.
+ *
+ * (VAULT-MESSAGING 0.88.0, review F3) An end the vault sent (`device.transfer.ended`, [TransferEndedException]) is taken
+ * as an end, the same as an abandon: the settlement then answers [Settled.Dropped] and the screen the dropped transfer's
+ * text, never an exception out of the settlement. It cannot happen today (the device acts on an end only for a transfer
+ * with the `transfer_outcome` gate, and those will not be settled by this window, PR 2), so this only keeps a future
+ * mistake from surfacing as "the steps after the approval failed".
  */
 private suspend fun lookForRejection(d: SettleDevice) {
     try {
         d.awaitTransfer(Duration.ofMillis(REJECTION_LOOK_MS))
     } catch (_: TimeoutCancellationException) {
         // none: abandoned
+    } catch (_: com.vettid.core.vault.TransferEndedException) {
+        // ended by the vault: dropped
     }
 }
 

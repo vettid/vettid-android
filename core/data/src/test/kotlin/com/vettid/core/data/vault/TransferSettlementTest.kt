@@ -81,8 +81,12 @@ class TransferSettlementTest {
             if (pending?.startedAt == onlyStartedAt && deviceId == null) pending = null
         }
 
+        /** (0.88.0) The reason the vault ended the transfer with; the wait then throws [TransferEndedException]. */
+        var endedReason: String? = null
+
         override suspend fun awaitTransfer(timeout: Duration) {
             if (rejected) throw PairingRejectedException()
+            endedReason?.let { throw com.vettid.core.vault.TransferEndedException(it) }
             withTimeout(1) { CompletableDeferred<Unit>().await() }
         }
     }
@@ -135,6 +139,23 @@ class TransferSettlementTest {
         val idle = FakeDevice(shown, this)
         run(idle).await()
         assertTrue("long polls: ${idle.waits}", idle.waits.any { it >= Duration.ofSeconds(10) })
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.88.0, review F3) An end the vault sent that ended the window is taken as an end (Dropped, the
+     * dropped transfer's text), never an exception out of the settlement.
+     */
+    @Test
+    fun anEndDuringTheWindowEndsAsDropped() = runTest {
+        val d = FakeDevice(shown, this)
+        val job = async { runCatching { settle(d) } }
+        testScheduler.advanceTimeBy(5_000)
+        d.pending = null // the handler dropped the handshake
+        d.endedReason = "expired"
+        val r = job.await()
+        assertTrue("${r.exceptionOrNull()}", r.isSuccess)
+        assertEquals(Settled.Dropped, r.getOrNull())
+        assertTrue("nothing was dropped by the settlement", d.abandoned.isEmpty())
     }
 
     /** A rejection that ended the window ends as the rejection (REJECTED on the screen), not as a drop. */
