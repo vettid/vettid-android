@@ -44,6 +44,7 @@ private object NoUnlockActions : UnlockActions {
     override fun setPassword(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
+    override fun showSignerHelp(show: Boolean) = Unit
     override fun askErase() = Unit
     override fun dismissErase() = Unit
     override fun confirmErase() = Unit
