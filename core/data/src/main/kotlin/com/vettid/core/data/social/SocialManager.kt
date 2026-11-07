@@ -435,6 +435,7 @@ class SocialManager internal constructor(
     private suspend fun handle(m: VaultMessage) {
         val b = m.body
         val epoch = currentEpoch()
+        val hold = holdEpoch.get()
         when (m.type) {
             "message.new" -> runCatching { VaultJson.decode(com.vettid.core.vault.Message.serializer(), b) }
                 .getOrNull()?.let {
@@ -455,10 +456,15 @@ class SocialManager internal constructor(
             "connection.event" -> onConnectionEvent(b)
             "connection.authenticate.result" -> {
                 val conn = VaultJson.str(b, "connection_id") ?: return
-                ApprovalParser.authResult(b, now(), authFlow.value[conn])?.let { s ->
-                    synchronized(localLock) { if (epoch == lockEpoch.get()) authFlow.update { it + (conn to s) } }
+                val t = now()
+                // Built from the state held at the write, under the lock, so a list read taken in meanwhile is not undone.
+                synchronized(localLock) {
+                    if (epoch == lockEpoch.get()) {
+                        authFlow.update { m -> ApprovalParser.authResult(b, t, m[conn])?.let { m + (conn to it) } ?: m }
+                    }
                 }
             }
+            "connection.authenticate.key" -> onAuthenticateKey(b, epoch, hold)
             "sync.event" -> onSync(VaultJson.str(b, "kind") ?: "", b, m.ts)
         }
         nowFlow.value = now()
@@ -950,20 +956,77 @@ class SocialManager internal constructor(
             refreshHook?.invoke()
             // Epoch check and writes under [localLock], where a lock bumps the epoch and clears (see [dropReads]).
             synchronized(localLock) {
-                if (epoch == lockEpoch.get()) {
-                    connectionsFlow.value = read.connections
-                    read.states?.let { states ->
-                        authFlow.update { old ->
-                            states.associateBy { it.connectionId }.mapValues { (id, st) ->
-                                val prev = old[id]
-                                val waiting = prev?.waitingUntil?.takeIf { it.isAfter(now()) }
-                                st.copy(waitingUntil = waiting, keyChanged = prev?.keyChanged ?: false)
-                            } + old.filterKeys { k -> states.none { it.connectionId == k } }
-                        }
-                    }
-                }
+                if (epoch == lockEpoch.get()) takeConnectionRead(read)
             }
             read.authFailure?.let { throw it }
+        }
+    }
+
+    /**
+     * Takes a whole `connection.list` / `authenticate.list` read in; the caller holds [localLock] and has checked its
+     * epochs. The list is authoritative for what it carries (times, last result, the pinned `key`). Two things it does
+     * not carry are kept from the state held: [AuthenticationState.waitingUntil] (this app's own request) and
+     * [AuthenticationState.keyChanged]. `key_changed` exists only on a `.result` event (§10.4), so a list read cannot
+     * say whether the last verdict was a key change; without the carry-over every re-read (including the one a
+     * `connection.authenticate.key` event triggers) would silently drop the warning the member MUST be shown. States
+     * the list does not name are kept as they were.
+     */
+    private fun takeConnectionRead(read: ConnectionRead) {
+        connectionsFlow.value = read.connections
+        read.states?.let { states ->
+            authFlow.update { old ->
+                states.associateBy { it.connectionId }.mapValues { (id, st) ->
+                    val prev = old[id]
+                    val waiting = prev?.waitingUntil?.takeIf { it.isAfter(now()) }
+                    st.copy(waitingUntil = waiting, keyChanged = prev?.keyChanged ?: false)
+                } + old.filterKeys { k -> states.none { it.connectionId == k } }
+            }
+        }
+    }
+
+    /** Test hook: runs between a `connection.authenticate.key` event's re-read and its guarded write (a test locks here). */
+    @Volatile
+    internal var keyEventHook: (() -> Unit)? = null
+
+    /**
+     * `connection.authenticate.key {connection_id, key}` (VAULT-MESSAGING 0.88.1 §10.4): this vault followed a delivered
+     * `connection.authenticate.rotated` chain from the key it had pinned and pinned the chain's last key. The vault did
+     * every check; the app follows no chain (it never sees `rotated` or `rotations`).
+     *
+     * What it does: re-reads `connection.list` and `authenticate.list` and takes them in as [refresh] does. The list is
+     * authoritative: the event's `key` is only checked for form (an event without a well-formed connection id and key is
+     * ignored, no read) and is never written. If the re-read shows another key than the event's, the list wins: it was
+     * read after the event, so it reflects any later rotation or key change the vault made (whose own event or
+     * `.result` follows).
+     *
+     * What it does NOT do: change [AuthenticationState.keyChanged]. A standing `keyChanged` came from a `.result` with
+     * `key_changed: true`: the vault saw a key its pin did not lead to and re-pinned to it without verifying the step.
+     * A `.key` event always starts from the vault's pin at that moment (§10.4: "follows the chain from its pinned
+     * key"), so after such a result it starts from the unverified key and verifies nothing about the change the
+     * warning is about. Clearing it here would hide a key change that was never checked. Only the next `.result` decides
+     * it again (`key_changed: false` when the key is the pin or the pin leads to it). Orders, both handled by this:
+     * - `.key` then `.result{key_changed: true}`: the result is the later verdict and sets the warning.
+     * - `.result{key_changed: true}` then `.key`: the warning stays (above).
+     *
+     * Epochs: the read is written only if neither a lock ([lockEpoch], the event's own epoch, see [onEvent]) nor a hold
+     * ([holdEpoch], taken when the event's handling began) came between the event and the write; the check and the
+     * write are under [localLock], where a lock and a hold bump them. A lock bumps both, so for a lock after the handling
+     * began the hold check alone would do; the lock check covers a lock that fell between [onEvent] taking the event's
+     * epoch and [handle] taking the hold epoch. A read that fails writes nothing (the next
+     * [refresh] reads again). No credential prompt is raised from this background read (`resend = false`).
+     */
+    private suspend fun onAuthenticateKey(b: JsonObject, epoch: Int, hold: Int) {
+        if (VaultJson.str(b, "connection_id") == null || ApprovalParser.credentialKey(b) == null) return
+        val read = try {
+            vaultGuard { readConnections() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+            return
+        }
+        keyEventHook?.invoke()
+        synchronized(localLock) {
+            if (epoch == lockEpoch.get() && hold == holdEpoch.get()) takeConnectionRead(read)
         }
     }
 

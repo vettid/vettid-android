@@ -311,6 +311,52 @@ class ApprovalParserTest {
         assertFalse(denied.keyChanged)
     }
 
+    private val k1 = Base64s.encodeStd(ByteArray(32) { 1 })
+    private val k2 = Base64s.encodeStd(ByteArray(32) { 2 })
+
+    /** Not the base64 of 32 bytes: 31 and 33 bytes, not base64, not canonical (padding missing), a number, an object. */
+    private val badKeys = listOf(
+        "\"${Base64s.encodeStd(ByteArray(31))}\"", "\"${Base64s.encodeStd(ByteArray(33))}\"", "\"not base64!\"",
+        "\"${k1.trimEnd('=')}\"", "\"\"", "7", "{}",
+    )
+
+    /** VAULT-MESSAGING 0.88.1 §10.4: a list state's `key` is kept; absent or malformed is null and the rest stays. */
+    @Test
+    fun aListStateCarriesItsPinnedKey() {
+        val base = """"connection_id":"C1","verified_at":"2026-10-04T11:00:00Z","last_result":"authenticated""""
+        assertEquals(k1, ApprovalParser.authState(o("""{$base,"key":"$k1"}"""))!!.key)
+        assertNull(ApprovalParser.authState(o("""{$base}"""))!!.key)
+        for (bad in badKeys) {
+            val s = ApprovalParser.authState(o("""{$base,"key":$bad}"""))
+            assertEquals(bad, AuthenticationState("C1", Instant.parse("2026-10-04T11:00:00Z"), "authenticated"), s)
+        }
+    }
+
+    /** A `.result`'s `key` replaces the one held; an absent or malformed one keeps it; the rest of the verdict stands. */
+    @Test
+    fun aResultCarriesThePinnedKey() {
+        val r = """"connection_id":"C1","request_id":"R","authenticated":true"""
+        val first = ApprovalParser.authResult(o("""{$r,"key":"$k1"}"""), at, null)!!
+        assertEquals(k1, first.key)
+        assertEquals(k2, ApprovalParser.authResult(o("""{$r,"key":"$k2","key_changed":true}"""), at, first)!!.key)
+        assertEquals(k1, ApprovalParser.authResult(o("""{$r}"""), at, first)!!.key)
+        assertNull(ApprovalParser.authResult(o("""{$r}"""), at, null)!!.key)
+        for (bad in badKeys) {
+            val s = ApprovalParser.authResult(o("""{$r,"key":$bad,"key_changed":true}"""), at, first)!!
+            assertEquals(bad, k1, s.key)
+            assertTrue(bad, s.keyChanged)
+            assertEquals(bad, "authenticated", s.lastResult)
+        }
+    }
+
+    @Test
+    fun anAuthenticationStatePrintsNoIdAndNoKey() {
+        val s = AuthenticationState("C-secret-id", key = k1).toString()
+        assertFalse(s, s.contains("C-secret-id"))
+        assertFalse(s, s.contains(k1))
+        assertTrue(s, s.contains("hasKey=true"))
+    }
+
     /** VAULT-MESSAGING 0.23.0 §10.4.1: `<connection>.asks`; null from an older vault. */
     @Test
     fun aConnectionCarriesItsAsks() {
