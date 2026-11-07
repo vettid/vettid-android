@@ -262,7 +262,7 @@ class FeedNotifier(
     private suspend fun runVoteReads() {
         while (true) {
             // [voteReading] is reset only here, in the block that finds nothing to read: once it is false another runner
-            // may start, and this one never touches it again (the lead's review of #313, finding 1).
+            // may start, and this one never touches it again (the author's Opus review of #313, finding 1).
             val next = synchronized(lock) {
                 voteReadNext.also { voteReadNext = null } ?: run {
                     voteReading = false

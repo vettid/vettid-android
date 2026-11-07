@@ -876,7 +876,7 @@ class FeedNotifierTest {
         assertFalse(poster.shown.containsKey("v2"))
     }
 
-    // --- the lead's review of #313 ---
+    // --- the author's Opus review of #313 ---
 
     /** Finding 2: one that arrives while a read runs is bounded by 3 s from its own arrival, not by the next read's cut-off. */
     @Test
