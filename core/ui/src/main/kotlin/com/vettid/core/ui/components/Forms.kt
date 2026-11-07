@@ -57,7 +57,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -93,13 +96,17 @@ fun SecretField(
     error: String? = null,
     supporting: String? = null,
     imeAction: ImeAction = ImeAction.Done,
-    /** What the keyboard's action does. Null: Done does nothing and Next moves focus to the next field. */
+    /**
+     * What the keyboard's action does. Null: Next moves focus to the next field, and Done hides the keyboard (clears focus)
+     * and submits nothing (#323: the last field of a form that still needs a checkbox and its button).
+     */
     onImeAction: (() -> Unit)? = null,
     enabled: Boolean = true,
     holdsInput: Boolean = true,
 ) {
     var visible by rememberSaveable { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     // A PIN or password prompt on screen is a credential operation in progress, typed or not: the daily owner check waits
     // for it (VAULT-MESSAGING §3.6.5). [holdsInput] false: a field that is not such a prompt (a secret item's value).
     HoldsInput(holdsInput)
@@ -137,17 +144,9 @@ fun SecretField(
             imeAction = imeAction,
             autoCorrectEnabled = false,
         ),
-        // Next moves on to the next field (A6 audit A5) unless the caller handles the action itself.
-        keyboardActions = KeyboardActions(
-            onAny = {
-                // A caller that handles the action (the item editor moves focus itself) is not followed by a second move.
-                if (onImeAction != null) {
-                    onImeAction()
-                } else if (imeAction == ImeAction.Next) {
-                    focusManager.moveFocus(FocusDirection.Down)
-                }
-            },
-        ),
+        // Next moves on to the next field (A6 audit A5) and Done hides the keyboard (#323), unless the caller handles the
+        // action itself.
+        keyboardActions = KeyboardActions(onAny = { focusManager.secretImeAction(imeAction, onImeAction, keyboard) }),
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
                 Icon(
@@ -161,6 +160,20 @@ fun SecretField(
         },
         modifier = modifier.excludeFromAutofill().fillMaxWidth(),
     )
+}
+
+/**
+ * [SecretField]'s keyboard action. A caller that handles the action (the item editor moves focus itself) is not followed by
+ * a second move. Otherwise Next moves to the next field, and Done hides the soft keyboard: never a submit, so the keyboard
+ * no longer covers the checkbox and the button below (#323). Focus stays on the field: clearing it would send focus to the
+ * form's Back button with a hardware keyboard or D-pad, where a second Enter would leave the form and drop what was typed.
+ */
+private fun FocusManager.secretImeAction(imeAction: ImeAction, onImeAction: (() -> Unit)?, keyboard: SoftwareKeyboardController?) {
+    when {
+        onImeAction != null -> onImeAction()
+        imeAction == ImeAction.Next -> moveFocus(FocusDirection.Down)
+        imeAction == ImeAction.Done -> keyboard?.hide()
+    }
 }
 
 /**
