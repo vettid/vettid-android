@@ -272,8 +272,14 @@ class FeedNotifier(
             try {
                 next.complete(readVotes())
             } catch (e: CancellationException) {
-                // The notifier's scope is going: no read runs any more.
-                synchronized(lock) { voteReading = false }
+                // The notifier's scope is going, or a stray cancellation came out of the read: this runner stops. The read
+                // asked for next goes too (its items get the generic title), so that a later arrival asks for a new one and
+                // starts a new runner, never waits on a read no runner will serve.
+                synchronized(lock) {
+                    voteReading = false
+                    voteReadNext?.complete(false)
+                    voteReadNext = null
+                }
                 throw e
             } finally {
                 next.complete(false)

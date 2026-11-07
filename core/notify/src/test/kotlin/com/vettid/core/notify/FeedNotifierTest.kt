@@ -957,4 +957,30 @@ class FeedNotifierTest {
         assertFalse(poster.shown.containsKey("v1"))
         assertTrue(poster.log.isEmpty())
     }
+
+    /** The lead's review of #330: a stray cancellation out of a read does not leave the next read waiting with no runner. */
+    @Test
+    fun aStrayCancellationOutOfAReadDoesNotStrandTheReadsAfterIt() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            throw kotlinx.coroutines.CancellationException("stray")
+        }
+        voteResult("v1")
+        // v2 arrives during the read: it waits for the next one.
+        voteResult("v2")
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("Vote results are out", poster.shown.getValue("v1").title)
+        assertEquals("Vote results are out", poster.shown.getValue("v2").title)
+        // A later one gets a read of its own, and is titled from the list.
+        source.refresh = {
+            source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+            true
+        }
+        voteResult("v3")
+        assertEquals(2, source.refreshCalls)
+        assertEquals("Vote results not checked yet", poster.shown.getValue("v3").title)
+    }
 }
