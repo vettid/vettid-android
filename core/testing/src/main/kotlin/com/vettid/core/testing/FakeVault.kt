@@ -52,7 +52,7 @@ import java.time.Instant
  * every call is recorded in [calls]; [fail] makes the next calls of a name
  * throw; the unlock outcomes are scripted in [unlockResults].
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass") // one fake for every repository a ViewModel test needs
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
@@ -681,6 +681,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override suspend fun abandonTransferIn() {
         call("abandonTransferIn")
         waitingTransfer = null
+    }
+
+    /** What [abandonTransferInIfUnanswered] finds: the SAS of an `hs.resp` answered meanwhile (kept), or null (dropped). */
+    var answeredMeanwhile: String? = null
+
+    override suspend fun abandonTransferInIfUnanswered(): String? {
+        call("abandonTransferInIfUnanswered")
+        answeredMeanwhile?.let { return it }
+        waitingTransfer = null
+        return null
     }
 
     /** (A6 audit N1) A transfer to this phone that waits for the old phone, as a restart finds it ([transferInWaiting]). */

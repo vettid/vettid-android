@@ -381,12 +381,14 @@ class TransferInViewModelTest {
         vm.scanned(qr())
         advanceTimeBy(59_000)
         assertEquals(TransferInStep.CONNECTING, vm.uiState.value.step)
-        assertFalse("abandonTransferIn" in vault.calls)
+        assertFalse("abandonTransferInIfUnanswered" in vault.calls)
         advanceTimeBy(1_100)
         assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
         assertFalse(vm.uiState.value.busy)
         advanceUntilIdle()
-        assertTrue("abandonTransferIn" in vault.calls)
+        // (0.88.0) Dropped only if unanswered, never by the member's cancel path.
+        assertTrue("abandonTransferInIfUnanswered" in vault.calls)
+        assertFalse("abandonTransferIn" in vault.calls)
         assertFalse("awaitTransferIn" in vault.calls)
         // A late hs.resp changes nothing: the wait was cancelled.
         vault.transferHsResp!!.complete("042817")
@@ -394,6 +396,29 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
         vm.again()
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    /**
+     * (0.88.0, §6.7.1 step 2) The screen's 60 s run out while an hs.resp is being answered: the repository finds its hs.fin
+     * sent (a SAS) and keeps the transfer, so the screen shows that code and waits for the old phone, never "No answer".
+     */
+    @Test
+    fun anHsRespAnsweredAsThe60SecondsRunOutIsKeptAndShown() = runTest {
+        vault.transferHsResp = CompletableDeferred()
+        vault.answeredMeanwhile = "042817"
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(60_100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertTrue("abandonTransferInIfUnanswered" in vault.calls)
+        assertFalse("abandonTransferIn" in vault.calls)
+        advanceTimeBy(1_000)
+        assertTrue("awaitTransferIn" in vault.calls)
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1_000)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
     }
 
     @Test

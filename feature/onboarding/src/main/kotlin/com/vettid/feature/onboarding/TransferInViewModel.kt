@@ -221,11 +221,9 @@ class TransferInViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 connectFailed(from, e)
                 return@launch
-            }
-            if (sas == null) {
-                // §6.7.1 step 2: stop waiting for hs.resp after 60 s; the handshake state is dropped.
+            } ?: abandonUnanswered() ?: run {
+                // §6.7.1 step 2: stop waiting for hs.resp after 60 s; the handshake state was dropped.
                 state.update { it.copy(step = TransferInStep.NOT_ANSWERED, busy = false) }
-                abandon()
                 return@launch
             }
             // The countdown from the stored start (what the repository judges by), not from before the claim.
@@ -331,6 +329,18 @@ class TransferInViewModel @Inject constructor(
         ticker?.cancel()
         state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null, confirmCancel = false) }
         viewModelScope.launch { abandon() }
+    }
+
+    /**
+     * (0.88.0, §6.7.1 step 2: a new phone that stopped waiting MUST NOT answer a late `hs.resp`) The 60 s ran out: the
+     * repository drops the transfer only while no `hs.resp` was answered, under the device's lock. If one was answered
+     * meanwhile (its `hs.fin` went out), the transfer is kept and its SAS returned: the screen shows the code and waits,
+     * as for an answer within the 60 s. Null: dropped (or nothing to drop).
+     */
+    private suspend fun abandonUnanswered(): String? = try {
+        move.abandonTransferInIfUnanswered()
+    } catch (_: VaultFailure) {
+        null // nothing to drop
     }
 
     private suspend fun abandon() {

@@ -504,11 +504,16 @@ class VaultManager(
                     val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
                     if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
                 }
+                // Only this transfer: a timeout never drops one started again since.
+                val started = d.transferInPending?.startedAt
                 try {
                     // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
                     withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
                 } catch (e: TimeoutCancellationException) {
-                    d.abandonTransfer()
+                    // (0.88.0, MUST NOT answer a late hs.resp) Dropped only while no SAS exists, decided under the device's
+                    // lock: an hs.resp being handled when the 60 s ran out has sent its hs.fin by the time the lock is
+                    // ours, and that transfer is kept and its code shown ([VaultDevice.abandonTransferIfUnanswered]).
+                    d.abandonTransferIfUnanswered(started)?.let { return@guard it }
                     throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
                 }
             }
@@ -4417,6 +4422,10 @@ class VaultManager(
         // FINISHING is the caller's to publish, with the mark it took before its own vault calls (an unlock's end, a
         // refresh, the wait for the transfer): one taken here would be after them, and miss a lock during them.
         guid != null
+    }
+
+    override suspend fun abandonTransferInIfUnanswered(): String? = guard {
+        session().device.abandonTransferIfUnanswered()
     }
 
     override suspend fun abandonTransferIn() = guard {

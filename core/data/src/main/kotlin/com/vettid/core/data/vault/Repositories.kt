@@ -565,6 +565,14 @@ interface MoveRepository {
      */
     suspend fun abandonTransferIn()
 
+    /**
+     * §6.7.1 step 2 (0.88.0: a new phone that stopped waiting MUST NOT answer a late `hs.resp`) The screen's own 60-second
+     * wait for [transferIn] ran out: drops the transfer only if no `hs.resp` was answered yet (decided under the device's
+     * lock) and returns null; a transfer whose `hs.fin` went out meanwhile is kept and its SAS returned, to be shown and
+     * waited for as usual. Never the member's cancel ([abandonTransferIn]).
+     */
+    suspend fun abandonTransferInIfUnanswered(): String?
+
     // --- direct transfer, the old phone (§6.7.1) ---
 
     /** `device.transfer.create`. */

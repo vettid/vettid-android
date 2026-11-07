@@ -1301,6 +1301,40 @@ class VaultDevice private constructor(
         if (st.deviceId != null) return@withLock
         // The settlement drops only the transfer it settles: not one the member started again meanwhile.
         if (onlyStartedAt != null && st.transferIn?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock
+        dropTransferLocked()
+    }
+
+    /**
+     * §6.7.1 step 2 (0.10.6; 0.88.0: "a transfer's new phone that has stopped waiting MUST NOT answer a late `hs.resp`
+     * with `hs.fin`") The 60-second wait for `hs.resp` ran out: drops the transfer only if this phone has not answered an
+     * `hs.resp` yet, and returns null; otherwise drops nothing and returns the transfer's SAS (its `hs.fin` went out, or
+     * may have: the vault may approve it, and the caller shows the code and waits as for any answered transfer).
+     *
+     * Why under the device's lock, and why the SAS decides: [handle] runs [handleResp] whole under the same lock, and
+     * [handleResp] stores the SAS (and the `hs.resp` stamp) and saves BEFORE it deposits `hs.fin`. A transfer's handshake
+     * has purpose `app`, which always has a SAS ([Purpose.hasSas]). So under the lock either
+     * - [handleResp] has not run: no SAS. The drop runs now and clears [ini] ([dropPairing]); a `hs.resp` handled after it
+     *   is never taken ([process] takes one only while [ini] is set), so no `hs.fin` can follow the drop; or
+     * - it has run: the SAS is stored, `hs.fin` was deposited (or its deposit was tried), and nothing is dropped.
+     *
+     * The timeout cannot fall between "hs.fin sent" and "dropped" any more. Before this, the waiter's timeout called
+     * [abandonTransfer], which queued behind a [handleResp] in progress and dropped the transfer right after its `hs.fin`
+     * went out: the vault could then approve a transfer to a phone that had thrown its keys away. Toward any vault, with
+     * or without the outcome capability. With [onlyStartedAt], only the transfer that started then (as [abandonTransfer]).
+     * A paired device keeps everything and gives its SAS.
+     */
+    suspend fun abandonTransferIfUnanswered(onlyStartedAt: Instant? = null): String? = lock.withLock {
+        val tr = st.transferIn
+        if (st.deviceId != null) return@withLock tr?.sas
+        if (onlyStartedAt != null && tr?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock null
+        if (tr?.ended != null) return@withLock null // ended by the vault already: nothing left to drop, the reason stays
+        tr?.sas?.let { return@withLock it }
+        dropTransferLocked()
+        null
+    }
+
+    /** The drop of [abandonTransfer] and [abandonTransferIfUnanswered], under [lock]. */
+    private fun dropTransferLocked() {
         dropPairing()
         st.vault = null
         st.transferIn = null

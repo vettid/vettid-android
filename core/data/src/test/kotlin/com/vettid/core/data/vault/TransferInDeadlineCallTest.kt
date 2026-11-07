@@ -43,6 +43,25 @@ class TransferInDeadlineCallTest {
         assertFalse("never blocks the start for the window", b.any { it.contains("atTransferDeadline(") })
     }
 
+    /**
+     * (VAULT-MESSAGING 0.88.0 §6.7.1 step 2: a new phone that stopped waiting MUST NOT answer a late hs.resp) The 60 s
+     * timeout of [MoveRepository.transferIn] drops only through `abandonTransferIfUnanswered`, which decides under the
+     * device's lock and keeps a transfer whose hs.fin went out (VaultDeviceTest.theHsRespTimeoutNeverDropsATransferWhoseHsFinWentOut);
+     * never through `abandonTransfer`, which dropped it right after its hs.fin when the timeout met a handleResp in progress.
+     * The member's own cancel keeps `abandonTransfer`; the screen's 60 s goes through `abandonTransferInIfUnanswered`.
+     */
+    @Test
+    fun theHsRespTimeoutDropsOnlyAnUnansweredTransfer() {
+        val i = code.indexOfFirst { it.contains("withTimeout(MoveRepository.HS_RESP_WAIT_MS)") }
+        assertTrue(i >= 0)
+        val handler = code.subList(i, i + 6)
+        assertTrue(handler.any { it == "d.abandonTransferIfUnanswered(started)?.let { return@guard it }" })
+        assertFalse(handler.any { it.contains("abandonTransfer()") })
+        assertTrue(code.subList(i - 3, i).any { it == "val started = d.transferInPending?.startedAt" })
+        val screen = body("override suspend fun abandonTransferInIfUnanswered()")
+        assertTrue(screen.any { it == "session().device.abandonTransferIfUnanswered()" })
+    }
+
     /** (VAULT-MESSAGING 0.85.2) No abandon and no new code while the settlement window runs. */
     @Test
     fun noAbandonAndNoNewCodeDuringTheWindow() {

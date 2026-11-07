@@ -1790,6 +1790,106 @@ class VaultDeviceTest {
         }
     }
 
+    // --- the 60-second wait for hs.resp and a handleResp in progress (§6.7.1 step 2; 0.88.0 "MUST NOT answer a late hs.resp") ---
+
+    /** The vault's answer to the device's hs.init (taken from the relay), and the responder that checks its hs.fin. */
+    private fun FakeVault.respEnvelope(d: VaultDevice): Pair<Responder, RelayMessage> {
+        val p = PendingInit.open(nextDeposit().second, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
+        val (r, env) = p.respond(ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()))
+        return r to msg(env)
+    }
+
+    /**
+     * The race: the 60 s run out while the handler is inside handleResp, its hs.fin deposit under way (the relay holds it).
+     * The drop asked then waits for the device's lock, and finds the SAS stored: it drops nothing and gives the SAS, the
+     * hs.fin reaches the vault, and the transfer completes on the approval. For both kinds of transfer (with and without
+     * the outcome gate). The old call ([VaultDevice.abandonTransfer], used by the 60 s timeouts before this fix) is run in
+     * the same race to show what it did: it dropped the transfer right after its hs.fin went out, so the vault could
+     * approve a transfer whose phone had thrown its session away. (The callers are held to the new call by
+     * `TransferInDeadlineCallTest.theHsRespTimeoutDropsOnlyAnUnansweredTransfer` and the transfer screen's tests.)
+     */
+    @Test
+    fun theHsRespTimeoutNeverDropsATransferWhoseHsFinWentOut() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            for (caps in listOf(outcomeCaps, null)) {
+                for (fixed in listOf(true, false)) {
+                    val v = FakeVault()
+                    val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+                    d.startTransfer(transferLink(v, Ulid.new(), capabilities = caps), RecordingAttester())
+                    val (r, resp) = v.respEnvelope(d)
+                    val gate = java.util.concurrent.CountDownLatch(1)
+                    depositGate = gate
+                    val before = depositsStarted.get()
+                    val handling = async(Dispatchers.IO) { d.handle(resp) }
+                    while (depositsStarted.get() == before) kotlinx.coroutines.delay(10) // hs.fin is on its way
+                    val drop = async(Dispatchers.IO) {
+                        if (fixed) d.abandonTransferIfUnanswered() else d.abandonTransfer().let { null }
+                    }
+                    kotlinx.coroutines.delay(300)
+                    assertFalse("the drop waits for the handler's lock", drop.isCompleted)
+                    gate.countDown()
+                    depositGate = null
+                    handling.await()
+                    val kept = drop.await()
+                    val fin = nextDeposit().second // the hs.fin went out in both cases
+                    val fr = r.handleFin(fin, d.relayAddr.pk(), Instant.now())
+                    v.keyring.activate(fr.epoch, Instant.now())
+                    if (!fixed) {
+                        assertNull("the old call dropped it after hs.fin", d.transferInPending)
+                        assertFalse(d.hasVault)
+                        continue
+                    }
+                    assertEquals("$caps: the SAS is given back", fr.sas, kept)
+                    val t = d.transferInPending!!
+                    assertEquals(fr.sas, t.sas)
+                    assertTrue(d.hasVault)
+                    assertEquals(fr.sas, d.pairingSas.value)
+                    d.handle(v.transferPaired(d))
+                    assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
+                    assertEquals("dev-2", d.deviceId)
+                }
+            }
+        }
+    }
+
+    /**
+     * The other order: the 60 s run out before the hs.resp is handled. The drop runs at once, and the late hs.resp is
+     * never answered (no hs.fin, no code). A paired device keeps everything; a drop for another start drops nothing; an
+     * ended transfer keeps its reason.
+     */
+    @Test
+    fun anUnansweredTransferIsDroppedAndALateHsRespGetsNoHsFin() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new(), capabilities = outcomeCaps), RecordingAttester())
+            val started = d.transferInPending!!.startedAt
+            val (_, resp) = v.respEnvelope(d)
+            assertNull(d.abandonTransferIfUnanswered(started.minusMillis(1)))
+            assertNotNull("another start: kept", d.transferInPending)
+            assertNull(d.abandonTransferIfUnanswered(started))
+            assertNull(d.transferInPending)
+            assertFalse(d.hasVault)
+            d.handle(resp)
+            assertNull("no hs.fin for a late hs.resp", deposits.poll(1, TimeUnit.SECONDS))
+            assertNull(d.pairingSas.value)
+            assertNull(d.transferInPending)
+            // Paired: nothing dropped.
+            val v2 = FakeVault()
+            val d2 = answeredTransfer(v2)
+            d2.handle(v2.transferPaired(d2))
+            assertNotNull(d2.abandonTransferIfUnanswered())
+            assertEquals("dev-2", d2.deviceId)
+            assertTrue(d2.hasVault)
+            // Ended: the reason stays.
+            val v3 = FakeVault()
+            val d3 = answeredTransfer(v3)
+            d3.handle(v3.endedFor("alarm"))
+            assertNull(d3.abandonTransferIfUnanswered())
+            assertEquals("alarm", d3.transferInEnded!!.reason)
+        }
+    }
+
     /**
      * (recheck) A collect returns [m1, device.paired] and m1's ack is refused: the batch is still handled, so the
      * device.paired is applied (the unacked m1 comes again after its lease and is dropped as seen).
