@@ -67,11 +67,16 @@ class OnboardingScreensTest {
             }
         }
         rule.onNodeWithTag("primary_button").assertIsEnabled()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_title)).assertDoesNotExist()
         rule.onNodeWithTag("backup_off").performClick()
-        rule.onNodeWithText("Losing this phone loses your credential").assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_title)).assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_body)).assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_ack)).assertExists()
         rule.onNodeWithTag("primary_button").assertIsNotEnabled()
         rule.onNodeWithTag("backup_off_ack").performClick()
         rule.onNodeWithTag("primary_button").assertIsEnabled()
+        rule.onNodeWithTag("backup_off_ack").performClick()
+        rule.onNodeWithTag("primary_button").assertIsNotEnabled()
     }
 
     @Test
@@ -183,7 +188,7 @@ private fun FormScreenForBackup(backup: Boolean, ack: Boolean, onBackup: (Boolea
         title = "Backup",
         primaryLabel = "Continue",
         onPrimary = {},
-        primaryEnabled = backup || ack,
+        primaryEnabled = OnboardingUiState(backup = backup, backupOffAcknowledged = ack).canContinueBackup,
     ) {
         BackupChoice(backup, ack, onBackup, onAck)
     }
