@@ -611,6 +611,7 @@ internal fun PreflightNotices(p: PreflightInfo, updateAcknowledged: Boolean, onA
             NoticeKind.URGENT,
             stringResource(R.string.unlock_rollback_title),
             stringResource(R.string.unlock_rollback_body, p.routed.number.toInt(), p.lastNumber.toInt()),
+            modifier = Modifier.testTag("unlock_rollback"),
         )
     } else if (p.softwareUpdated) {
         NoticeCard(
@@ -632,6 +633,7 @@ internal fun PreflightNotices(p: PreflightInfo, updateAcknowledged: Boolean, onA
             if (p.routed.status == "retired") NoticeKind.URGENT else NoticeKind.WARNING,
             stringResource(R.string.unlock_status_title, p.routed.number.toInt(), p.routed.status),
             ends?.let { stringResource(R.string.unlock_status_body_ends, it) } ?: stringResource(R.string.unlock_status_body),
+            modifier = Modifier.testTag("unlock_release_status"),
         )
     }
 }

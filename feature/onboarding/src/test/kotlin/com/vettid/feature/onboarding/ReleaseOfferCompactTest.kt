@@ -276,6 +276,42 @@ class ReleaseOfferCompactTest {
         }
     }
 
+    @Test
+    fun aTickedBoxSurvivesTheSheetOpeningAndClosing() {
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("approve_offer").performClick()
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertExists()
+        // The sheet's own dismiss (its drag handle's or the scrim's action, as Back and a swipe do).
+        rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).onFirst().performSemanticsAction(SemanticsActions.Dismiss)
+        rule.waitForIdle()
+        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+        rule.onNodeWithTag("approve_offer").assertIsOn()
+        assertEquals(listOf("setApproveOffer"), unlockCalls.filter { it == "setApproveOffer" })
+    }
+
+    @Test
+    fun aRollbackHidesTheOffer() {
+        unlock = unlock.copy(preflight = PreflightInfo(release(2), 3, false, true, release(5)))
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        rule.onNodeWithTag("unlock_rollback").assertExists()
+        rule.onNodeWithTag("release_offer").assertDoesNotExist()
+        rule.onNodeWithTag("approve_offer").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
+    }
+
+    @Test
+    fun theUpdatedAndStatusNoticesStayBeforeThePin() {
+        val deprecated = ReleaseView(4, "04".repeat(48), "deprecated", null, "https://vettid.org/security/releases/4/")
+        unlock = unlock.copy(preflight = PreflightInfo(deprecated, 3, true, false, release(5)), updateAcknowledged = true)
+        rule.setContent { UnlockContent(unlock, unlockActions) }
+        val tags = tagsInOrder()
+        assertBefore(tags, "software_updated", "unlock_pin")
+        assertBefore(tags, "unlock_release_status", "unlock_pin")
+        assertBefore(tags, "unlock_pin", "release_offer")
+    }
+
     // --- the recovery's PIN step (MoveScreens), the other place the offer is shown ---
 
     @Test
