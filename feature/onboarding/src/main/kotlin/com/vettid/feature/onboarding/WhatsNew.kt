@@ -2,48 +2,48 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.paneTitle
-import com.vettid.core.data.vault.PreflightInfo
-import com.vettid.core.ui.components.ModalBottomSheet
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseLog
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseSecurity
 import com.vettid.core.ui.components.DetailCard
+import com.vettid.core.ui.components.ModalBottomSheet
 import com.vettid.core.ui.theme.Spacing
 import java.util.UUID
 
@@ -118,6 +118,7 @@ internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onAppro
  * The full notes of [p]'s offered release in a sheet (the shell's [ModalBottomSheet]), titled "What's new in release N":
  * the entry, the earlier releases, "From <host>", the offer with its fingerprint and "Full release notes".
  */
+// The wrapper's default sheet state is Material's experimental API: without the opt-in the call does not compile.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReleaseNotesSheet(p: PreflightInfo, notes: ReleaseNotes?, onDismiss: () -> Unit) {
