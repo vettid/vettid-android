@@ -1813,13 +1813,13 @@ class VaultDeviceTest {
             val d = VaultDevice.create(config(store), secrets)
             d.startTransfer(link, RecordingAttester())
             nextDeposit()
-            assertTrue("its own code", d.transferInPending!!.isCode(link))
-            assertFalse("another code of the same vault", d.transferInPending!!.isCode(sameVault))
-            assertFalse("another vault's code", d.transferInPending!!.isCode(otherVault))
-            assertFalse("not a code", d.transferInPending!!.isCode("not a link"))
+            assertTrue("its own code", d.isOpenTransferCode(link))
+            assertFalse("another code of the same vault", d.isOpenTransferCode(sameVault))
+            assertFalse("another vault's code", d.isOpenTransferCode(otherVault))
+            assertFalse("not a code", d.isOpenTransferCode("not a link"))
             d.stop()
             val reloaded = VaultDevice.load(config(store), secrets)!!
-            assertTrue("its own code after a restart", reloaded.transferInPending!!.isCode(link))
+            assertTrue("its own code after a restart", reloaded.isOpenTransferCode(link))
             reloaded.stop()
         }
     }

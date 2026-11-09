@@ -239,13 +239,7 @@ data class TransferInState(
     /** The scanned code's relay `r` and claim id `c` (GC #6474), null in a record written before them. */
     val codeRelay: String? = null,
     val codeClaim: String? = null,
-) {
-    /** Whether [link] is this transfer's own code: the same relay `r` and claim id `c` (GC #6474, vettid.org#558). */
-    fun isCode(link: String): Boolean {
-        val q = runCatching { InviteQr.parseLink(link) }.getOrNull() ?: return false
-        return codeClaim != null && q.claimId == codeClaim && q.relay.trimEnd('/') == codeRelay?.trimEnd('/')
-    }
-}
+)
 
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
@@ -1135,7 +1129,9 @@ class VaultDevice private constructor(
     }
 
     /** Whether [link] is the code of the transfer to this phone that is open (recorded, or its scan under way). */
-    fun isOpenTransferCode(link: String): Boolean {
+    suspend fun isOpenTransferCode(link: String): Boolean = lock.withLock { isOpenTransferCodeLocked(link) }
+
+    private fun isOpenTransferCodeLocked(link: String): Boolean {
         val q = runCatching { InviteQr.parseLink(link) }.getOrNull() ?: return false
         val scanned = TransferCodeRecord(q.relay.trimEnd('/'), q.claimId)
         val open = listOfNotNull(
@@ -1326,12 +1322,20 @@ class VaultDevice private constructor(
      */
     @Suppress("TooGenericExceptionCaught") // any failure of the drop's save
     private fun dropTransferOrStop() {
+        dropPairing()
+        st.vault = null
+        st.transferIn = null
+        sasState.value = null
         try {
-            dropTransferLocked()
+            save()
         } catch (e: Exception) {
+            // Memory no longer matches the file, which still holds the open transfer: nothing more is saved, sent or
+            // collected from this device (a message collected now would be handled against the wrong state and acked).
             forgotten = true
+            stop()
             throw VaultStateException("the open transfer could not be dropped: the scan was stopped").also { it.initCause(e) }
         }
+        settleDroppedTransfer() // the drop is on disk: a failure here is the delete's, retried as any other
     }
 
     /**

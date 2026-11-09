@@ -4316,32 +4316,37 @@ class VaultManager(
         return enrolments.transferIn(code)
     }
 
-    /** The open transfer's SAS when [code] is its own code (see [transferIn]), else null; nothing sent either way. */
+    /**
+     * The open transfer's SAS when [code] is its own code (see [transferIn]), else null. The move as it stands, from its
+     * stored state: nothing is fetched, sent or dropped, whatever happens (0.88.3 §11.14.10 rule 5; the review of 1cfdc080,
+     * H1: never an abandon here). Its `hs.resp` not yet in: the wait for it, until 60 s after the transfer's stored start,
+     * ending with "not answered" and nothing dropped; a scan of it still in flight that ends without a transfer: null, so this
+     * scan is handled as a scan of its own (M1).
+     */
     private suspend fun sameTransferCode(code: String): String? = guard {
         val link = (InviteLinks.parseTransfer(code) as? InviteLinks.TransferParsed.Ok)?.link ?: return@guard null
-        val d = session?.device ?: return@guard null
+        val d = session().device // opened if it is not yet (L1)
         if (d.deviceId != null || !d.isOpenTransferCode(link)) return@guard null
-        awaitTransferSas(d)
+        val deadline = (d.transferInPending?.startedAt ?: Instant.now()).plusMillis(MoveRepository.HS_RESP_WAIT_MS)
+        while (true) {
+            d.transferInPending?.sas?.let { return@guard it } // the record's, also after a restart
+            d.pairingSas.value?.let { return@guard it }
+            if (!d.isOpenTransferCode(link)) return@guard null
+            if (!Instant.now().isBefore(deadline)) {
+                throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED)
+            }
+            kotlinx.coroutines.delay(SAME_CODE_POLL_MS)
+        }
+        @Suppress("UNREACHABLE_CODE")
+        null
     }
 
-    /**
-     * The transfer's SAS once its `hs.resp` arrived (the compare screen), as after its scan; §6.7.1 step 2 (0.10.6): a dropped
-     * hs.init is never answered, so the wait ends 60 s after the transfer's stored start (not after a later re-scan) and says why.
-     */
-    private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String {
-        d.pairingSas.value?.let { return it }
-        val started = d.transferInPending?.startedAt
-        val left = if (started == null) {
-            MoveRepository.HS_RESP_WAIT_MS
-        } else {
-            (MoveRepository.HS_RESP_WAIT_MS - java.time.Duration.between(started, Instant.now()).toMillis()).coerceAtLeast(1)
-        }
-        return try {
-            withTimeout(left) { d.pairingSas.filterNotNull().first() }
-        } catch (e: TimeoutCancellationException) {
-            d.abandonTransfer()
-            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
-        }
+    /** The transfer's SAS once its `hs.resp` arrived (the compare screen); §6.7.1 step 2 (0.10.6): 60 s, then "not answered". */
+    private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {
+        withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
+    } catch (e: TimeoutCancellationException) {
+        d.abandonTransfer()
+        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
     }
 
     override suspend fun awaitTransferIn(): Boolean = guard {
@@ -4982,6 +4987,8 @@ class VaultManager(
     }
 
     companion object {
+        /** How often a same-code re-scan looks at the open transfer while its `hs.resp` is not in. */
+        private const val SAME_CODE_POLL_MS = 250L
         /** The lock record's seal: the app's Keystore file key, purpose `lock-record`. */
         private fun lockSealer(file: File): LockRecordFile.Sealer {
             val store = KeystoreFileStore(file, "lock-record")
