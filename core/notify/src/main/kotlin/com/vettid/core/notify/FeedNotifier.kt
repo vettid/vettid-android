@@ -13,7 +13,9 @@ import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.WaitingCounts
 import com.vettid.core.vault.FeedItem
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -120,6 +122,23 @@ class FeedNotifier(
     /** A cover-up ran for the cover that is up now; reset when the cover is seen gone or a named notification is posted. */
     private var coverDone = false
 
+    /** The `vote.result` items waiting for the votes list, by tag: the arrival each waits as (under [lock]). */
+    private val voteWaiting = HashMap<String, Long>()
+    private var voteSeq = 0L
+
+    /** Every `vote.result` arrival still waiting, in the order they arrived: they are posted in that order (under [lock]). */
+    private val voteQueue = ArrayDeque<VoteWait>()
+
+    /** A `vote.result` arrival waiting for the votes list; [n] is set (or left null: nothing to post) once it is [ready]. */
+    private class VoteWait(val item: FeedItem, val seq: Long) {
+        var ready = false
+        var n: LocalNotification? = null
+    }
+
+    /** The votes list read asked for and not yet started, and whether a read is running (under [lock]). */
+    private var voteReadNext: CompletableDeferred<Boolean>? = null
+    private var voteReading = false
+
     private val on: Boolean get() = settings.value.mode != NotificationMode.OFF
 
     fun start() {
@@ -138,11 +157,27 @@ class FeedNotifier(
         // The cover's timer runs on monotonic time, which stops in deep sleep: the clock is looked at here too.
         recheckCover()
         // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
-        if (item.quietRepost && !synchronized(lock) { item.itemId in posted.keys && poster.isPosted(item.itemId) }) return
+        if (item.quietRepost && !synchronized(lock) { stillShowing(item) }) return
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
+        val covered = source.coveredNow()
+        if (item.kind == VOTE_RESULT && !covered) {
+            // Titled in its own job (#313): the items behind it are not held up by the list read. A later arrival of the
+            // same item replaces one still waiting. Checked and queued in one go: a lock cannot come in between.
+            val (wait, read) = synchronized(lock) {
+                if (!notifiable(item)) return
+                val w = VoteWait(item, ++voteSeq)
+                voteWaiting[item.itemId] = w.seq
+                voteQueue.addLast(w)
+                w to requestVoteRead()
+            }
+            scope.launch { postVoteResult(wait, channel, read) }
+            return
+        }
+        // Posted now (under the cover): one still waiting for the list must not replace it.
+        if (item.kind == VOTE_RESULT) synchronized(lock) { voteWaiting.remove(item.itemId) }
         // The app lock's cover is up: the public form only, whatever the member's choice of previews (nothing is read).
-        val previews = if (source.coveredNow()) NotificationPreviews.NOTHING else settings.value.previews
-        val names = if (source.coveredNow()) FeedNames() else namesFor(item)
+        val previews = if (covered) NotificationPreviews.NOTHING else settings.value.previews
+        val names = if (covered) FeedNames() else source.names()
         val text = if (previews == NotificationPreviews.NAMES_AND_TEXT && item.kind == "message.received") {
             val c = item.connectionId
             val m = item.ref
@@ -150,37 +185,136 @@ class FeedNotifier(
         } else {
             null
         }
-        var n = NotificationContent.of(item, channel, previews, names, res(), text)
-        // Posted under the lock the cancels hold, and only if it still may be: an item that was being prepared while
-        // the vault locked or the phone was wiped is not posted after its cancel.
-        synchronized(lock) {
-            if (!notifiable(item)) return
-            // The cover came up while it was being prepared.
-            if (source.coveredNow()) n = n.publicForm(quiet = false) else coverDone = false
-            posted[item.itemId] = n.publicForm(quiet = true)
-            poster.post(n)
+        val n = NotificationContent.of(item, channel, previews, names, res(), text)
+        synchronized(lock) { postLocked(item, n) }
+    }
+
+    /**
+     * A `vote.result` is the give-up item only by its vote's state in the list (it carries none), and that list may be
+     * older than the item (a re-check's verdict, or the vault giving up on its own clock): it is titled from the list as
+     * read again after it arrived ([read], shared by every `vote.result` that arrived before that read started), waiting
+     * at most [VOTE_LIST_WAIT_MS]; if the read does not go through in time, the generic "Vote results are out" (review 1,
+     * M3). The items that arrive while a read runs wait for the next one, which has only what is left of their 3 s, so
+     * after a slow read they mostly get the generic title. Posted in the order they arrived ([drainVoteResults]).
+     */
+    private suspend fun postVoteResult(wait: VoteWait, channel: String, read: Deferred<Boolean>) {
+        var n: LocalNotification? = null
+        try {
+            val fresh = withTimeoutOrNull(VOTE_LIST_WAIT_MS) { read.await() } == true
+            val covered = source.coveredNow()
+            val previews = if (covered) NotificationPreviews.NOTHING else settings.value.previews
+            val names = when {
+                covered -> FeedNames()
+                fresh -> source.names()
+                else -> source.names().copy(votesGaveUp = emptySet())
+            }
+            n = NotificationContent.of(wait.item, channel, previews, names, res(), null)
+        } finally {
+            // Always marked ready, so that one that failed never holds up those behind it.
+            synchronized(lock) {
+                wait.n = n
+                wait.ready = true
+                drainVoteResults()
+            }
         }
     }
 
     /**
-     * The names for [item]. A `vote.result` is the give-up item only by its vote's state in the list (it carries none), and
-     * that list may be older than the item (a re-check's verdict, or the vault giving up on its own clock): the list is
-     * read again first, at most [VOTE_LIST_WAIT_MS]; if that does not go through, the generic "Vote results are out"
-     * (review 1, M3).
+     * Under [lock]: posts the waiting `vote.result` items that are ready, in the order they arrived, up to the first one
+     * still waiting (they share reads and are ready in that order, give or take a dispatch). One is dropped if the same
+     * item arrived again since ([voteWaiting]), the vault locked meanwhile (it was forgotten, then [postLocked]), or the
+     * feed now lists it as read or archived. The dismissal check is a defence only: a `vote.result` is never a quiet
+     * re-post.
      */
-    private suspend fun namesFor(item: FeedItem): FeedNames {
-        if (item.kind != VOTE_RESULT) return source.names()
-        val fresh = withTimeoutOrNull(VOTE_LIST_WAIT_MS) {
-            try {
-                source.refreshVotes()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                false
+    private fun drainVoteResults() {
+        while (voteQueue.firstOrNull()?.ready == true) {
+            val w = voteQueue.removeFirst()
+            val n = w.n
+            if (stillWaiting(w) && n != null) postLocked(w.item, n)
+        }
+    }
+
+    /** Under [lock]: [w] is the item's latest arrival (it is forgotten now), still active and not dismissed. */
+    private fun stillWaiting(w: VoteWait): Boolean {
+        val id = w.item.itemId
+        if (voteWaiting[id] != w.seq) return false
+        voteWaiting.remove(id)
+        val inactive = source.items.value.any { it.itemId == id && it.status != FeedManager.STATUS_ACTIVE }
+        return !inactive && !(w.item.quietRepost && !stillShowing(w.item))
+    }
+
+    /**
+     * A votes list read that starts after this call: the one asked for and not yet started if there is one (a burst of
+     * `vote.result` items shares it), else a new one. A read already running started before the item arrived, so it is
+     * not used: the next one starts when it ends.
+     */
+    private fun requestVoteRead(): Deferred<Boolean> = synchronized(lock) {
+        voteReadNext ?: CompletableDeferred<Boolean>().also {
+            voteReadNext = it
+            if (!voteReading) {
+                voteReading = true
+                scope.launch { runVoteReads() }
             }
-        } == true
-        val names = source.names()
-        return if (fresh) names else names.copy(votesGaveUp = emptySet())
+        }
+    }
+
+    /** Runs the reads asked for, one at a time, each bounded by [VOTE_LIST_WAIT_MS]. */
+    private suspend fun runVoteReads() {
+        while (true) {
+            // [voteReading] is reset only here, in the block that finds nothing to read: once it is false another runner
+            // may start, and this one never touches it again (the author's Opus review of #313, finding 1).
+            val next = synchronized(lock) {
+                voteReadNext.also { voteReadNext = null } ?: run {
+                    voteReading = false
+                    null
+                }
+            } ?: return
+            try {
+                next.complete(readVotes())
+            } catch (e: CancellationException) {
+                // The notifier's scope is going, or a stray cancellation came out of the read: this runner stops. The read
+                // asked for next goes too (its items get the generic title), so that a later arrival asks for a new one and
+                // starts a new runner, never waits on a read no runner will serve.
+                synchronized(lock) {
+                    voteReading = false
+                    voteReadNext?.complete(false)
+                    voteReadNext = null
+                }
+                throw e
+            } finally {
+                next.complete(false)
+            }
+        }
+    }
+
+    private suspend fun readVotes(): Boolean = withTimeoutOrNull(VOTE_LIST_WAIT_MS) {
+        try {
+            source.refreshVotes()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+            false
+        }
+    } == true
+
+    /** Under [lock]: the notification [item] had is still showing (not dismissed). */
+    private fun stillShowing(item: FeedItem): Boolean = item.itemId in posted.keys && poster.isPosted(item.itemId)
+
+    /**
+     * Under [lock], the lock the cancels hold: posts [n] only if it still may be. An item that was being prepared while
+     * the vault locked or the phone was wiped is not posted after its cancel; the cover that came up meanwhile gives
+     * the public form.
+     */
+    private fun postLocked(item: FeedItem, n: LocalNotification) {
+        if (!notifiable(item)) return
+        val shown = if (source.coveredNow()) {
+            n.publicForm(quiet = false)
+        } else {
+            coverDone = false
+            n
+        }
+        posted[item.itemId] = shown.publicForm(quiet = true)
+        poster.post(shown)
     }
 
     private fun notifiable(item: FeedItem): Boolean =
@@ -206,6 +340,8 @@ class FeedNotifier(
     private fun cancelItems() {
         synchronized(lock) {
             val all = posted.keys.toList().also { posted.clear() }
+            // Those still waiting for the votes list are not posted, even if the vault opens again before they would be.
+            voteWaiting.clear()
             all.forEach { poster.cancel(it) }
             // Those a process before this one posted (the set above is memory only): at start the vault is not open
             // yet, so every item notification still showing is one that outlived the open vault (ANDROID-PLAN §4,
@@ -308,7 +444,7 @@ class FeedNotifier(
     }
 
     companion object {
-        /** How long a `vote.result` waits for the votes list read before it is titled generically (M3). */
+        /** How long a `vote.result` waits for the votes list read, and a read may take, before it is titled generically (M3). */
         const val VOTE_LIST_WAIT_MS = 3_000L
         private const val VOTE_RESULT = "vote.result"
         const val TAG_LOCKED = "vault.locked"

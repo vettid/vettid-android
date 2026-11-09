@@ -746,7 +746,11 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
         Spacer(Modifier.height(Spacing.l))
         SecretField(state.pin, actions.setPin, stringResource(R.string.settings_delete_pin), isPin = true, imeAction = ImeAction.Next)
         Spacer(Modifier.height(Spacing.l))
-        SecretField(state.password, actions.setPassword, stringResource(R.string.settings_delete_password))
+        // Done hides the keyboard and sends nothing (#323): the acknowledgement and the button below still have to be used.
+        SecretField(
+            state.password, actions.setPassword, stringResource(R.string.settings_delete_password),
+            modifier = Modifier.testTag("delete_password"),
+        )
         Spacer(Modifier.height(Spacing.m))
         Row(
             verticalAlignment = Alignment.CenterVertically,
