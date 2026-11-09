@@ -59,6 +59,7 @@ import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
 import okhttp3.OkHttpClient
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -264,6 +265,7 @@ class VaultDeviceTest {
         store: DeviceStateStore,
         timeout: java.time.Duration = java.time.Duration.ofSeconds(5),
         trust: com.vettid.core.altchan.AltTrust? = null,
+        transferDropped: (DroppedTransfer) -> Boolean = { true },
     ) =
         DeviceConfig(
             name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = timeout,
@@ -271,6 +273,7 @@ class VaultDeviceTest {
             elapsedMs = { elapsed },
             settleWait = java.time.Duration.ofMillis(800),
             trust = trust,
+            transferDropped = transferDropped,
         )
 
     /** Enrollment, the first handshake and device.paired: a device with a live session. */
@@ -1439,6 +1442,356 @@ class VaultDeviceTest {
             assertNotNull("another transfer's start: kept", d.transferInPending)
             d.abandonTransfer(onlyStartedAt = started)
             assertNull("the matching one: dropped", d.transferInPending)
+        }
+    }
+
+    // --- a dropped transfer's epoch-1 secret and attested key go (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5) ---
+
+    /**
+     * A stand-in for the app's phone key on the other side of [DeviceConfig.transferDropped] (`TransferKeyDrop` in
+     * `:core:data`, tested there with the real `PhoneSecrets`): one key, reused for every scan until the hook deletes it,
+     * as the app's code before the fix did (`PhoneSecrets.reuseOrCreate` while the record said ("", 1)). The app now makes
+     * a new key at every scan as well; these tests keep the reuse so that they show the DEVICE's half alone (every drop
+     * reaches the delete, in order, under the lock) already stops the secret coming back. The secret is an HMAC
+     * of that key, as `UnlockSecret.compute`'s form 1 is. [events] records the order: the hook must run after the drop was
+     * saved ("drop:saved", the store already holds no transfer) and before the next scan's secret.
+     */
+    private class PhoneKeyStandIn(private val store: InMemoryDeviceStateStore) {
+        @Volatile
+        var key: ByteArray? = null
+        val drops = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+        /** "throw" (a crash right after the drop's save), "false" (the app's delete did not hold), or null: it works. */
+        @Volatile
+        var failWith: String? = null
+
+        @Volatile
+        var gate: java.util.concurrent.CountDownLatch? = null
+        val entered = java.util.concurrent.Semaphore(0)
+
+        fun secret(): ByteArray {
+            val k = key ?: ByteArray(32).also { java.security.SecureRandom().nextBytes(it); key = it }
+            events += "secret"
+            return javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(k, "HmacSHA256")) }
+                .doFinal("unlock-secret epoch 1".toByteArray())
+        }
+
+        fun onDrop(d: DroppedTransfer): Boolean {
+            entered.release()
+            gate?.await(10, TimeUnit.SECONDS)
+            val saved = String(store.load()!!)
+            events += when {
+                "\"transferIn\":null" !in saved -> "drop:NOT-saved"
+                "\"droppedTransfer\":{" in saved -> "drop:saved"
+                else -> "sweep" // the start-up sweep: no transfer, nothing recorded
+            }
+            when (failWith) {
+                "throw" -> error("killed")
+                "false" -> return false
+            }
+            drops += d.attestKeys
+            key = null
+            return true
+        }
+    }
+
+    /** A device with an app key (a release-R `hs.init` carries the secret only with `api_key`). */
+    private fun appSecrets() = DeviceSecrets(
+        Ed25519PrivateKey.generate(), KemPrivateKey.generate(), Ed25519PrivateKey.generate(),
+        java.security.KeyPairGenerator.getInstance("EC").apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }
+            .generateKeyPair().public.encoded,
+    )
+
+    /** The epoch-1 secret a vault reads from the new phone's `hs.init` (what a first, hostile QR's vault would learn). */
+    private fun FakeVault.secretIn(init: ByteArray): ByteArray =
+        PendingInit.open(init, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now()).body.unlockSecret()!!
+
+    /** [answerTransfer] for an `hs.init` already taken from the relay. */
+    private fun FakeVault.answer(init: ByteArray, d: VaultDevice): String {
+        val p = PendingInit.open(init, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
+        val (r, env) = p.respond(ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()))
+        runBlocking { d.handle(msg(env)) }
+        val fr = r.handleFin(nextDeposit().second, d.relayAddr.pk(), Instant.now())
+        keyring.activate(fr.epoch, Instant.now())
+        return fr.sas!!
+    }
+
+    private suspend fun VaultDevice.scan(v: FakeVault, phone: PhoneKeyStandIn, alias: String) =
+        startTransfer(transferLink(v, Ulid.new()), RecordingAttester(), attestedKey = { alias }) { phone.secret() }
+
+    /** Every device-level drop of a transfer to this phone, as the app reaches it in `:core:data`. */
+    private enum class Drop {
+        /** The member's confirmed cancel (`abandonTransferIn`): `abandonTransfer()`, the code shown. */
+        CANCEL,
+
+        /** The 60 s wait for `hs.resp` ran out (`transferIn`'s timeout): `abandonTransfer()`, nothing answered. */
+        NO_ANSWER_60S,
+
+        /** `evaluate()`'s DROP at start: a restarted process, `abandonTransfer()`. */
+        DROP_AT_START,
+
+        /** The settlement's drop at the deadline: `abandonTransfer(onlyStartedAt)`. */
+        SETTLEMENT,
+
+        /** The settlement's dead-mailbox drop: `abandonTransfer(onlyStartedAt)`, nothing answered. */
+        MAILBOX_GONE,
+
+        /** `device.pair.rejected` (the message handler's [VaultDevice.dropPairing]). */
+        REJECTED,
+    }
+
+    /**
+     * The bug: after any dropped transfer the next scan of ANY transfer QR (another vault's included) sent the same epoch-1
+     * secret, so a first QR that was an attacker's taught that vault the secret this phone later presents to the member's
+     * real vault. For every kind of drop: the app's hook runs once, after the drop was saved, naming the transfer's
+     * attested key; and the next scan, to another vault, sends a DIFFERENT secret.
+     */
+    @Test
+    fun everyDropOfATransferHasTheNextScanSendANewSecret() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            for (kind in Drop.entries) {
+                val store = InMemoryDeviceStateStore()
+                val secrets = appSecrets()
+                val phone = PhoneKeyStandIn(store)
+                var d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+                val hostile = FakeVault()
+                d.scan(hostile, phone, "att-1")
+                val init = nextDeposit().second
+                val sent = hostile.secretIn(init)
+                when (kind) {
+                    Drop.CANCEL -> {
+                        hostile.answer(init, d)
+                        d.abandonTransfer()
+                    }
+                    Drop.NO_ANSWER_60S -> d.abandonTransfer()
+                    Drop.DROP_AT_START -> {
+                        d.stop()
+                        d = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)!!
+                        d.abandonTransfer()
+                    }
+                    Drop.SETTLEMENT -> {
+                        hostile.answer(init, d)
+                        d.abandonTransfer(onlyStartedAt = d.transferInPending!!.startedAt)
+                    }
+                    Drop.MAILBOX_GONE -> d.abandonTransfer(onlyStartedAt = d.transferInPending!!.startedAt)
+                    Drop.REJECTED -> {
+                        hostile.answer(init, d)
+                        d.handle(hostile.seal("device.pair.rejected", "{}"))
+                    }
+                }
+                assertNull("$kind: dropped", d.transferInPending)
+                assertEquals("$kind: the attested key named once", listOf(listOf("att-1")), phone.drops.toList())
+                assertEquals("$kind: after the drop's save", listOf("secret", "drop:saved"), phone.events.toList())
+                assertFalse("$kind: nothing left to delete", d.droppedTransferPending)
+                assertFalse("$kind: and so saved", VaultDevice.load(config(store), secrets)!!.droppedTransferPending)
+                val real = FakeVault()
+                d.scan(real, phone, "att-2")
+                val again = real.secretIn(nextDeposit().second)
+                assertFalse("$kind: the real vault gets a secret the first QR's never saw", sent.contentEquals(again))
+                d.stop()
+            }
+        }
+    }
+
+    /**
+     * A scan whose `hs.init` deposit failed is not a drop (no transfer was recorded): the device asks for no delete. The
+     * app makes a new key at the next scan anyway (`newTransferPhoneKey`); with the old reuse the key would stay the same.
+     */
+    @Test
+    fun aFailedDepositIsNotADrop() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val v = FakeVault()
+            val link = transferLink(v, Ulid.new())
+            val key = run {
+                refuseDeposits = "denied"
+                assertTrue(runCatching { d.startTransfer(link, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() } }.isFailure)
+                refuseDeposits = null
+                phone.key!!.copyOf()
+            }
+            // The retry: the old phone's code again (the claim was taken by the first try).
+            d.scan(v, phone, "att-2")
+            v.secretIn(nextDeposit().second)
+            assertArrayEquals("the same key: the same secret", key, phone.key)
+            assertTrue("no drop", phone.drops.isEmpty())
+        }
+    }
+
+    /** A paired transfer keeps everything: no drop, a cancel or a rejection afterwards, never calls the app's delete. */
+    @Test
+    fun aPairedTransfersKeysAreNeverDeleted() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val v = FakeVault()
+            d.scan(v, phone, "att-1")
+            v.answer(nextDeposit().second, d)
+            d.handle(v.transferPaired(d))
+            assertEquals("dev-2", d.deviceId)
+            d.abandonTransfer()
+            d.abandonTransfer(onlyStartedAt = d.transferInPending!!.startedAt)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            d.finishTransferIn()
+            assertTrue(phone.drops.isEmpty())
+            assertEquals(listOf("secret"), phone.events.toList())
+            assertNotNull(phone.key)
+            assertFalse(d.droppedTransferPending)
+        }
+    }
+
+    /**
+     * The process dies right after the drop's save, before the app's delete (simulated by a hook that throws). The drop's
+     * record was saved with it: the restarted device runs the delete before the next scan computes any secret, and the
+     * secret is new.
+     */
+    @Test
+    fun aCrashBetweenTheDropAndTheDeleteIsStillSafe() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            val hostile = FakeVault()
+            d.scan(hostile, phone, "att-1")
+            val sent = hostile.secretIn(nextDeposit().second)
+            phone.failWith = "throw"
+            d.abandonTransfer() // the drop goes through; the throw does not escape it
+            assertNull(d.transferInPending)
+            assertNotNull("the key is still there", phone.key)
+            d.stop() // killed
+            phone.failWith = null
+            val again = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)!!
+            assertTrue("the drop's record survived the kill", again.droppedTransferPending)
+            again.settleTransferKeysAtStart() // as VaultManager does once the device is loaded
+            assertFalse(again.droppedTransferPending)
+            val real = FakeVault()
+            again.scan(real, phone, "att-2")
+            assertFalse(sent.contentEquals(real.secretIn(nextDeposit().second)))
+            // At start: the drop's record runs again, then the sweep (no transfer, no device id) finds nothing more.
+            assertEquals(listOf("secret", "drop:saved", "drop:saved", "sweep", "secret"), phone.events.toList())
+            assertEquals(listOf(listOf("att-1"), emptyList()), phone.drops.toList())
+            assertFalse(again.droppedTransferPending)
+        }
+    }
+
+    /**
+     * The app's delete keeps failing: it is tried again at the next scan BEFORE that scan's key is made, and then let go,
+     * so that no later settle (a message, a start) can delete the key whose secret the new `hs.init` carries. (The app's
+     * new key per scan is what keeps the dropped secret from coming back here.)
+     */
+    @Test
+    fun aDeleteThatDoesNotHoldNeverReachesTheNextScansKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            d.scan(FakeVault(), phone, "att-1")
+            nextDeposit()
+            phone.failWith = "false"
+            d.abandonTransfer()
+            assertTrue(d.droppedTransferPending)
+            val v = FakeVault()
+            d.scan(v, phone, "att-2")
+            val init = nextDeposit().second
+            assertEquals("tried before the new key, then let go", listOf("secret", "drop:saved", "drop:saved", "secret"), phone.events.toList())
+            assertFalse(d.droppedTransferPending)
+            phone.failWith = null
+            v.answer(init, d) // a message handled, and a start: neither asks for a delete any more
+            d.settleTransferKeysAtStart()
+            assertEquals(listOf("secret", "drop:saved", "drop:saved", "secret"), phone.events.toList())
+            assertTrue(phone.drops.isEmpty())
+            assertNotNull("the new transfer's key is kept", phone.key)
+        }
+    }
+
+    /**
+     * The start-up sweep ([VaultDevice.settleTransferKeysAtStart]): with no device id and no transfer record, the app is
+     * asked to delete an orphaned epoch-1 transfer key (no attested key named); never while a transfer is live or once
+     * paired.
+     */
+    @Test
+    fun theStartUpSweepRunsOnlyWithNoTransferAndNoDeviceId() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            phone.secret() // a key from a build before this fix, or a deposit that failed
+            d.settleTransferKeysAtStart()
+            assertEquals(listOf(emptyList<String>()), phone.drops.toList())
+            assertNull(phone.key)
+            val v = FakeVault()
+            d.scan(v, phone, "att-1")
+            val init = nextDeposit().second
+            d.settleTransferKeysAtStart()
+            assertEquals("a live transfer keeps its key", 1, phone.drops.size)
+            v.answer(init, d)
+            d.handle(v.transferPaired(d))
+            d.finishTransferIn()
+            d.settleTransferKeysAtStart()
+            assertEquals("a paired device keeps its key", 1, phone.drops.size)
+            assertNotNull(phone.key)
+        }
+    }
+
+    /**
+     * The race with a new scan: the app's delete runs under the device's lock, as the new scan's secret does. While a
+     * drop's delete is in progress, a new scan waits, and its secret is computed from a new key.
+     */
+    @Test
+    fun aNewScanWaitsForADropsDelete() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            raceADropWithANewScan(byMessage = false)
+            raceADropWithANewScan(byMessage = true)
+        }
+    }
+
+    private suspend fun raceADropWithANewScan(byMessage: Boolean) = kotlinx.coroutines.coroutineScope {
+        val store = InMemoryDeviceStateStore()
+        val phone = PhoneKeyStandIn(store)
+        val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+        val hostile = FakeVault()
+        d.scan(hostile, phone, "att-1")
+        val init = nextDeposit().second
+        val sent = hostile.secretIn(init)
+        // The rejection is the collector's drop (as the vault's end of a transfer will be): it too holds the lock.
+        val rejected = if (byMessage) { hostile.answer(init, d); hostile.seal("device.pair.rejected", "{}") } else null
+        val gate = java.util.concurrent.CountDownLatch(1)
+        phone.gate = gate
+        val drop = async(Dispatchers.IO) { if (rejected != null) d.handle(rejected) else d.abandonTransfer() }
+        assertTrue(phone.entered.tryAcquire(10, TimeUnit.SECONDS))
+        val real = FakeVault()
+        val scan = async(Dispatchers.IO) { d.scan(real, phone, "att-2") }
+        kotlinx.coroutines.delay(500)
+        assertEquals("the scan's secret waits for the delete", 1, phone.events.count { it == "secret" })
+        assertFalse(scan.isCompleted)
+        gate.countDown()
+        drop.await()
+        scan.await()
+        assertEquals(listOf("secret", "drop:saved", "secret"), phone.events.toList())
+        assertFalse(sent.contentEquals(real.secretIn(nextDeposit().second)))
+        assertNotNull("the new scan's key is never deleted", phone.key)
+        d.stop()
+    }
+
+    /** A scan over a pending transfer drops it as any other drop: its attested key and secret go before the new secret. */
+    @Test
+    fun aScanThatReplacesAPendingTransferDropsItFirst() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val hostile = FakeVault()
+            d.scan(hostile, phone, "att-1")
+            val sent = hostile.secretIn(nextDeposit().second)
+            val real = FakeVault()
+            d.scan(real, phone, "att-2")
+            assertFalse(sent.contentEquals(real.secretIn(nextDeposit().second)))
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            assertEquals(listOf("secret", "drop:saved", "secret"), phone.events.toList())
         }
     }
 

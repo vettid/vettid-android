@@ -33,6 +33,10 @@ class PhoneSecrets(private val keys: (String) -> PhoneKeyHandle) {
      * The key for [keyVault] at epoch 1: [current] when it is exactly that and its key still exists (a retry of an
      * enrollment or a transfer whose request may have reached the vault already, which then holds its secret), a new
      * key otherwise ([create]).
+     *
+     * The reuse is for a retry of the SAME request only (§11.14.10 rule 2): an enrollment's post, which is stored and
+     * resumed. A transfer has no such retry on Android and never comes here: every scan makes a new key
+     * (`VaultManager.newTransferPhoneKey`), and a drop deletes it ([TransferKeyDrop]).
      */
     fun reuseOrCreate(current: PhoneSecretState, keyVault: String): PhoneSecretState =
         if (current.epoch == 1L && current.keyVault == keyVault && keys(keyVault).exists()) current else create(keyVault)
@@ -54,6 +58,19 @@ class PhoneSecrets(private val keys: (String) -> PhoneKeyHandle) {
     /** Removes the key (a wipe, the end of a transfer's keep period). */
     fun delete(s: PhoneSecretState) {
         runCatching { keys(s.keyVault).delete() }
+    }
+
+    /**
+     * Removes [keyVault]'s key and throws what the Keystore threw when it could not ([TransferKeyDrop] logs it and goes
+     * on). A key that is not there is no failure.
+     */
+    fun deleteKey(keyVault: String) {
+        keys(keyVault).delete()
+    }
+
+    companion object {
+        /** The Keystore alias of [keyVault]'s phone key, for a log line (never its material). */
+        fun alias(keyVault: String): String = com.vettid.core.keystore.PhoneKey.ALIAS_PREFIX + keyVault
     }
 }
 

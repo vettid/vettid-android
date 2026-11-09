@@ -142,6 +142,19 @@ class DeviceConfig(
     val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
     /** (VAULT-MESSAGING 0.45.0 §11.14.9 step 1) How long a change waits for earlier credential operations to settle. */
     val settleWait: Duration = Duration.ofSeconds(DEFAULT_SETTLE_WAIT_S),
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5: a dropped transfer "drops its handshake, its attested key and its epoch-1
+     * secret and cannot use them") Deletes what the app holds for a transfer to this phone that was dropped while unpaired:
+     * the phone key the epoch-1 secret is computed from, its record, and the attested keys [DroppedTransfer] names. Called
+     * by the device under its lock, after the drop is saved, never for a device with a device id; see
+     * [VaultDevice.dropPairing] for when; also at start ([VaultDevice.settleTransferKeysAtStart]: a record left over, and
+     * the sweep of an epoch-1 transfer key with no transfer). Returns true once done; false, or a throw, keeps the drop
+     * recorded and it is called again: at the next handled message, at the next start, and once more at the next scan
+     * before its key is made (after which the record is let go: the app makes a new key at every scan, so the dropped
+     * secret is never sent again whatever this answered). It must not suspend or take the device's lock. The default
+     * deletes nothing (a device with no phone key: the dev stack, the tests of this module).
+     */
+    val transferDropped: (DroppedTransfer) -> Boolean = { true },
 ) {
     companion object {
         const val ROLE_APP = "app"
@@ -150,6 +163,12 @@ class DeviceConfig(
         private const val NANOS_PER_MS = 1_000_000L
     }
 }
+
+/**
+ * A transfer to this phone that was dropped while unpaired ([DeviceConfig.transferDropped]): [attestKeys], the Keystore
+ * aliases of the device attestation keys its `hs.init` carried, as the app named them at the scan.
+ */
+class DroppedTransfer(val attestKeys: List<String>)
 
 /** A message from the vault: an event (no `re`) or a response. */
 class VaultMessage(val inner: Inner) {
@@ -1034,10 +1053,19 @@ class VaultDevice private constructor(
         link: String,
         attester: Attester,
         /**
+         * The Keystore alias of the device attestation key [attester] made for this `hs.init`, asked once it attested
+         * (null: none to name). Kept with the transfer, so that a drop deletes that key too ([DeviceConfig.transferDropped]).
+         */
+        attestedKey: () -> String? = { null },
+        /**
          * (0.34.0, release R §11.14.10, §11.10.9) Given the bundle's capabilities (empty when it has none) and time scale
          * (1 when it has none), the new phone key's secret of epoch 1 for release R's `hs.init`, null for the earlier one;
          * it may throw, and then nothing is sent. The secret is zeroed once the `hs.init` is sealed. A bundle whose time
          * scale this build does not accept (STAGING-TIME-SCALE §4 item 4) is refused before it is asked.
+         *
+         * Asked under the device's lock, after any earlier dropped transfer's keys were deleted ([settleDroppedTransfer]):
+         * the app's phone key for this secret is reused only for a retry of this same attempt (a key made and stored, and
+         * an `hs.init` that may or may not have gone out), never across a drop.
          */
         unlockSecretFor: suspend (traits: com.vettid.core.crypto.altchan.ReleaseTraits) -> ByteArray? = { null },
     ) {
@@ -1062,6 +1090,17 @@ class VaultDevice private constructor(
             if (b.kind != InviteKind.APP) throw NotATransferCodeException()
             val traits = b.traits
             (cfg.trust ?: AltTrust(emptyList(), emptyList())).checkTimeScale(traits.timeScale)
+            // A pending transfer this scan replaces is dropped as any other (the app forgets the whole device before a new
+            // scan anyway: this keeps the device's own rule). Then what any dropped transfer left is deleted, BEFORE this
+            // scan's key is made: a record still there afterwards (its delete failed) is let go here, never kept past this
+            // point, so that no later settle can delete the key this scan is about to make. The app makes a new key at
+            // every scan, so the dropped secret cannot be sent again either way; only an attested key may stay listed.
+            if (st.transferIn != null) dropTransferLocked()
+            settleDroppedTransfer()
+            if (st.droppedTransfer != null) {
+                st.droppedTransfer = null
+                save() // let go durably: a later start must not delete the key this scan makes
+            }
             val unlockSecret = unlockSecretFor(traits)
             setVault(b.vault)
             st.vaultId = null
@@ -1077,7 +1116,7 @@ class VaultDevice private constructor(
             } finally {
                 unlockSecret?.fill(0)
             }
-            st.transferIn = TransferInRecord(at.toEpochMilli())
+            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey())
             save()
         }
     }
@@ -1185,10 +1224,57 @@ class VaultDevice private constructor(
         if (st.deviceId != null) return@withLock
         // The settlement drops only the transfer it settles: not one the member started again meanwhile.
         if (onlyStartedAt != null && st.transferIn?.startedMs != onlyStartedAt.toEpochMilli()) return@withLock
+        dropTransferLocked()
+    }
+
+    /**
+     * The drop of an unpaired transfer to this phone, under [lock]: the handshake, the session and the SAS ([dropPairing],
+     * which also records what the app must delete), saved; then the app deletes the transfer's phone key and attested
+     * key ([settleDroppedTransfer]). Any new caller that drops a transfer uses this, or calls [dropPairing] and then
+     * [save] and [settleDroppedTransfer] itself (as [handle] does after a message), in that order.
+     */
+    private fun dropTransferLocked() {
         dropPairing()
         st.vault = null
         st.transferIn = null
         sasState.value = null
+        save()
+        settleDroppedTransfer()
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5; the failure table: a dropped transfer's phone "drops its handshake,
+     * attested key and epoch-1 secret and cannot use them") Has the app delete what a dropped transfer left
+     * ([DeviceState.droppedTransfer], recorded by [dropPairing]), under [lock], after the drop was saved.
+     *
+     * Why here and in this order:
+     * - **Under the lock.** The app makes a new scan's key and secret inside [startTransfer]'s lock (its
+     *   `unlockSecretFor`), so a delete can never land after a new scan made its key and delete the key whose secret the
+     *   new `hs.init` carries (the vault would then pair a phone that cannot unlock). A delete run later outside the lock
+     *   (by the app after it saw a drop, an end or a rejection) could.
+     * - **The drop's save first, the key after.** The drop and the record of what to delete are one write: a process
+     *   killed after it still has the record, and the delete runs again at the next start
+     *   ([settleTransferKeysAtStart]), at the next handled message, or before the next scan's key is made. Deleting first
+     *   would instead leave, on a kill, a transfer still pending whose secret is gone: the same unlock-less pairing.
+     *   Correctness does not rest on the delete alone: the app makes a NEW key at every transfer scan, so even a key left
+     *   behind is never used for a secret again.
+     * - **Never with a device id.** A paired device keeps everything (rule 4 of the fix: a paired transfer's key is the
+     *   phone's key for life); the record is just dropped.
+     *
+     * The app's answer decides: true, the secret can no longer be sent again, and the record goes; false or a throw,
+     * the record stays for the next try. Nothing of the failure is kept or logged here: the app logs what it could not
+     * delete.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // any failure of the app's delete: kept, tried again
+    private fun settleDroppedTransfer() {
+        val drop = st.droppedTransfer ?: return
+        val done = st.deviceId != null || try {
+            cfg.transferDropped(DroppedTransfer(drop.attestKeys))
+        } catch (e: Exception) {
+            false
+        }
+        if (!done) return
+        st.droppedTransfer = null
         save()
     }
 
@@ -1665,6 +1751,8 @@ class VaultDevice private constructor(
             // device.unlinked queued behind it would never be read.
         }
         save()
+        // A drop by the message (a rejection, [dropPairing]) is saved above: what it left goes now, under the same lock.
+        settleDroppedTransfer()
     }
 
     @Suppress("CyclomaticComplexMethod", "ReturnCount")
@@ -1754,8 +1842,17 @@ class VaultDevice private constructor(
      * `device.pair.rejected` (§6.7, 0.10.5): stop waiting, drop the handshake's epoch
      * and the request token of its `hs.resp`. Nothing is sent back (the vault has
      * denylisted that token); a redelivery finds no epoch to open it and is dropped.
+     *
+     * **Every device-level drop of a transfer to this phone passes here** (a rejection, [abandonTransfer]: the confirmed
+     * cancel, the 60-second wait for `hs.resp`, the DROP at start, the settlement's drop and the dead mailbox's; a scan
+     * that replaces a pending transfer; and any later drop, such as the vault's end of a transfer). So this is where the
+     * transfer's keys are marked to go: an unpaired transfer leaves [DeviceState.droppedTransfer], naming its attested key,
+     * for the app to delete with the epoch-1 secret's phone key. A caller MUST then [save] and call
+     * [settleDroppedTransfer] under the same lock ([dropTransferLocked] does both; [handle] does both after a message); a
+     * caller that forgets still leaves the record, which the next handled message or the next scan settles.
      */
     private fun dropPairing() {
+        noteDroppedTransfer()
         sasState.value = null
         st.transferIn = null
         ini?.abort()
@@ -1768,6 +1865,37 @@ class VaultDevice private constructor(
             it.token = ""
             it.tokenExpMs = 0
         }
+    }
+
+    /**
+     * At start, before anything can scan (the app calls it once its device is loaded): a dropped transfer's record that
+     * is still there runs again ([settleDroppedTransfer]: its delete failed, or the process died between the drop's save
+     * and the delete). Then the sweep: a device with no device id and no transfer record holds no transfer that a phone
+     * key of epoch 1 for "" could belong to, so the app is asked to delete such a key ([DeviceConfig.transferDropped] with
+     * no attested key; the app touches only a ("", 1) record, or ("", 0)). Under [lock], as every drop.
+     *
+     * Note for a rebase on the transfer outcome (`device.transfer.ended`'s tombstone): "no transfer record" there is "no
+     * LIVE transfer" (`liveTransferIn() == null`).
+     */
+    suspend fun settleTransferKeysAtStart() = lock.withLock {
+        if (forgotten) return@withLock
+        settleDroppedTransfer()
+        if (st.deviceId == null && st.transferIn == null && st.droppedTransfer == null) {
+            st.droppedTransfer = DroppedTransferRecord()
+            settleDroppedTransfer()
+            st.droppedTransfer = null // a sweep that did not hold is not kept: it runs again at the next start
+        }
+    }
+
+    /** Tests: a dropped transfer's keys are still to be deleted ([DeviceState.droppedTransfer]), as saved. */
+    internal val droppedTransferPending: Boolean get() = st.droppedTransfer != null
+
+    /** [dropPairing]'s record of an unpaired transfer's keys to delete, added to any not deleted yet. */
+    private fun noteDroppedTransfer() {
+        val tr = st.transferIn ?: return
+        if (st.deviceId != null || tr.paired) return
+        val keys = (st.droppedTransfer?.attestKeys.orEmpty() + listOfNotNull(tr.attestKey)).distinct()
+        st.droppedTransfer = DroppedTransferRecord(keys)
     }
 
     private fun prune(m: MutableMap<String, Long>, t: Instant) {
