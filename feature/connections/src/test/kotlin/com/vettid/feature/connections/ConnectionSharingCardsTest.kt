@@ -365,4 +365,35 @@ class ConnectionSharingCardsTest {
         }
         rule.onNodeWithTag("auth_status").assertTextEquals("Not accepted.")
     }
+
+    /** §10.4 "apps MUST show a key change": this member's own pending request does not hide the warning. */
+    @Test
+    fun aKeyChangeShowsWhileOurRequestWaits() {
+        val auth = com.vettid.core.data.social.AuthenticationState(
+            "c1",
+            keyChanged = true,
+            waitingUntil = java.time.Instant.now().plusSeconds(600),
+        )
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", ada, auth, loading = false, sharing = DetailSharing(loaded = true)),
+                DetailActions(),
+            )
+        }
+        rule.onNodeWithTag("auth_status").assertTextContains("Waiting for", substring = true)
+        rule.onNodeWithTag("auth_key_changed").assertTextContains("changed since their last authentication", substring = true)
+    }
+
+    /** Without a pending request the warning is the status line itself, shown once. */
+    @Test
+    fun aKeyChangeAloneIsTheStatusLine() {
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", ada, com.vettid.core.data.social.AuthenticationState("c1", keyChanged = true), loading = false, sharing = DetailSharing(loaded = true)),
+                DetailActions(),
+            )
+        }
+        rule.onNodeWithTag("auth_status").assertTextContains("changed since their last authentication", substring = true)
+        rule.onNodeWithTag("auth_key_changed").assertDoesNotExist()
+    }
 }

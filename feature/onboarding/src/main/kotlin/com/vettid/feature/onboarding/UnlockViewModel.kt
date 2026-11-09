@@ -12,6 +12,7 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseNotesRepository
+import com.vettid.core.data.vault.ReleaseView
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -240,6 +241,14 @@ data class UnlockUiState(
     }
 }
 
+/**
+ * The release-offer tick after a new release check ([p]): it is consent to one release, so it is kept only when [p] offers
+ * the very same release as the check it was given under ([before]: the same number, PCR0 and the rest) and is not a
+ * rollback; any other offer, or none, clears it. Shared by the unlock and the recovery's PIN step.
+ */
+internal fun keptApproval(approve: Boolean, before: ReleaseView?, p: PreflightInfo): Boolean =
+    approve && before != null && !p.rollback && p.offer == before
+
 /** What the unlock screen can ask for. */
 @Suppress("TooManyFunctions")
 interface UnlockActions {
@@ -365,14 +374,17 @@ class UnlockViewModel @Inject constructor(
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
         // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
+        val before = state.value.preflight?.offer
         state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
-                state.update { it.copy(loading = false, preflight = p, notes = null) }
+                state.update {
+                    it.copy(loading = false, preflight = p, notes = null, approveOffer = keptApproval(it.approveOffer, before, p))
+                }
                 loadNotes(p)
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, preflightError = e.kind) }
+                state.update { it.copy(loading = false, preflightError = e.kind, approveOffer = false) }
                 if (e.kind == FailureKind.SERVICE_PAUSED) startServiceWait(e.retryAfterSeconds)
             }
         }

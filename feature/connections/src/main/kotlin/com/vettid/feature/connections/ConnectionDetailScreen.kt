@@ -414,15 +414,26 @@ private fun AuthCard(auth: AuthenticationState?, name: String, busy: Boolean, ac
     DetailCard(Modifier.testTag("auth_card")) {
         CardTitle(stringResource(R.string.connections_auth_title))
         val verified = auth?.verifiedAt
+        val waiting = auth?.waitingUntil != null
+        val keyChanged = auth?.keyChanged == true
         val line = when {
-            auth?.waitingUntil != null -> stringResource(R.string.connections_auth_waiting, name)
-            auth?.keyChanged == true -> stringResource(R.string.connections_auth_key_changed, name)
+            waiting -> stringResource(R.string.connections_auth_waiting, name)
+            keyChanged -> stringResource(R.string.connections_auth_key_changed, name)
             auth?.lastResult == "denied" -> stringResource(R.string.connections_auth_denied, name)
             auth?.lastResult == "bad_signature" -> stringResource(R.string.connections_auth_bad, name)
             verified != null -> stringResource(R.string.connections_auth_ok, name, Times.full(verified))
             else -> stringResource(R.string.connections_auth_never, name)
         }
         Text(line, modifier = Modifier.testTag("auth_status"))
+        // A key change must be shown (VAULT-MESSAGING §10.4): the waiting line of this member's own request does not
+        // hide it, so with both the warning follows as a second line.
+        if (waiting && keyChanged) {
+            Spacer(Modifier.height(Spacing.xs))
+            Text(
+                stringResource(R.string.connections_auth_key_changed, name),
+                modifier = Modifier.testTag("auth_key_changed"),
+            )
+        }
         Spacer(Modifier.height(Spacing.xs))
         Text(
             stringResource(R.string.connections_auth_explain),

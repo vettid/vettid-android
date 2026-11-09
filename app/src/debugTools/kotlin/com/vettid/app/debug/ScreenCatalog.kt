@@ -40,6 +40,7 @@ import com.vettid.core.data.vault.ReleaseSecurity
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.UpdateStep
+import com.vettid.feature.onboarding.ReleaseNotesSheet
 import com.vettid.feature.onboarding.ReleaseUpdateActions
 import com.vettid.feature.onboarding.ReleaseUpdateContent
 import com.vettid.feature.onboarding.ReleaseUpdateFlowActions
@@ -652,7 +653,15 @@ object ScreenCatalog {
         "recover.type_rate_limited" to { Rec(typeState.copy(typed = TYPED_SAMPLE, error = FailureKind.RATE_LIMITED, retrySeconds = 754)) },
         "recover.registering" to { Rec(recState.copy(step = RecoverStep.REGISTERING)) },
         "recover.pin" to { Rec(pinState) },
-        "recover.pin_offer" to { Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true)) },
+        // The offer below the PIN, compact; the full notes in their sheet (owner decision 2026-11-07).
+        "recover.pin_offer" to {
+            Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true, notes = whatsNew))
+        },
+        "recover.pin_offer_notes" to {
+            val p = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4))
+            Rec(pinState.copy(preflight = p, notes = whatsNew))
+            ReleaseNotesSheet(p, whatsNew) {}
+        },
         "recover.pin_backoff" to { Rec(pinState.copy(pin = "", pinWrong = true, waitSeconds = 75)) },
         "recover.pin_ended" to { Rec(pinState.copy(preflight = null, preflightError = FailureKind.RELEASE_ENDED)) },
         // A6 audit E1: a registered recovery can be left ("Start over", confirmed), and one the vault no longer takes ends by itself.
@@ -683,6 +692,25 @@ object ScreenCatalog {
                 ),
                 NoUnlock,
             )
+        },
+        // The release offer below the PIN, compact (owner decision 2026-11-07): with a security fix, and its notes' sheet.
+        "unlock.offer_security" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(4), 4, false, false, release(7)), notes = whatsNewSecurity,
+                ),
+                NoUnlock,
+            )
+        },
+        "unlock.offer_notes" to {
+            val p = PreflightInfo(release(4), 4, false, false, release(7))
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = p, notes = whatsNewSecurity), NoUnlock)
+            ReleaseNotesSheet(p, whatsNewSecurity) {}
+        },
+        "unlock.offer_notes_loading" to {
+            val p = PreflightInfo(release(4), 4, false, false, release(5))
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = p), NoUnlock)
+            ReleaseNotesSheet(p, null) {}
         },
         "unlock.offer_unavailable" to {
             UnlockContent(

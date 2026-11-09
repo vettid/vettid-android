@@ -108,6 +108,8 @@ class SocialManager internal constructor(
     /** `message.send` (a seam for tests; the vault client in the app). */
     private val sendMessage: suspend (connectionId: String, text: String) -> com.vettid.core.vault.SentMessage =
         { id, text -> api().messageSend(id, text) },
+    /** Where a background read runs (the IO dispatcher; a test passes its own so the read stays on its scheduler). */
+    private val readContext: kotlin.coroutines.CoroutineContext = kotlinx.coroutines.Dispatchers.IO,
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     /** Guards [local]; held only for memory work (nothing is written to disk), so a lock's clear cannot be raced. */
     private val localLock = Any()
@@ -414,18 +416,27 @@ class SocialManager internal constructor(
     /** Every event of the vault (§9.1). */
     @Suppress("CyclomaticComplexMethod")
     suspend fun onEvent(m: VaultMessage) {
-        // The epoch of the session the event is taken in: every write of it checks the epoch under [localLock], so an
-        // event handled across a lock writes nothing (the lock's steps run beside the collector, not after it).
-        withContext(EventEpoch(lockEpoch.get())) { handle(m) }
+        // The epochs of the session the event is taken in: every write of it checks the epoch under [localLock], so an
+        // event handled across a lock writes nothing (the lock's steps run beside the collector, not after it). Both are
+        // read together under [localLock], where a lock and a hold bump them, so they are one consistent pair.
+        val (epoch, hold) = synchronized(localLock) { lockEpoch.get() to holdEpoch.get() }
+        withContext(EventEpoch(epoch, hold)) { handle(m) }
     }
 
-    /** The lock epoch an event was taken in, carried in the coroutine context of its handling. */
-    private class EventEpoch(val epoch: Int) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    /** The lock and hold epochs an event was taken in, carried in the coroutine context of its handling. */
+    private class EventEpoch(val epoch: Int, val hold: Int) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
         companion object Key : kotlin.coroutines.CoroutineContext.Key<EventEpoch>
     }
 
     /** The epoch the current event was taken in, or the present one outside an event. */
     private suspend fun currentEpoch(): Int = kotlin.coroutines.coroutineContext[EventEpoch]?.epoch ?: lockEpoch.get()
+
+    /** The hold epoch the current event was taken in, or the present one outside an event. */
+    private suspend fun currentHold(): Int = kotlin.coroutines.coroutineContext[EventEpoch]?.hold ?: holdEpoch.get()
+
+    /** Test hook: runs in a `connection.authenticate.result` event's handling, before its guarded build and write. */
+    @Volatile
+    internal var resultHook: (() -> Unit)? = null
 
     /** Test hook: runs inside an event's handling before its write (a test locks here). */
     @Volatile
@@ -455,10 +466,16 @@ class SocialManager internal constructor(
             "connection.event" -> onConnectionEvent(b)
             "connection.authenticate.result" -> {
                 val conn = VaultJson.str(b, "connection_id") ?: return
-                ApprovalParser.authResult(b, now(), authFlow.value[conn])?.let { s ->
-                    synchronized(localLock) { if (epoch == lockEpoch.get()) authFlow.update { it + (conn to s) } }
+                val t = now()
+                resultHook?.invoke()
+                // Built from the state held at the write, under the lock, so a list read taken in meanwhile is not undone.
+                synchronized(localLock) {
+                    if (epoch == lockEpoch.get()) {
+                        authFlow.update { m -> ApprovalParser.authResult(b, t, m[conn])?.let { m + (conn to it) } ?: m }
+                    }
                 }
             }
+            "connection.authenticate.key" -> onAuthenticateKey(b, Epochs(epoch, currentHold()))
             "sync.event" -> onSync(VaultJson.str(b, "kind") ?: "", b, m.ts)
         }
         nowFlow.value = now()
@@ -950,20 +967,138 @@ class SocialManager internal constructor(
             refreshHook?.invoke()
             // Epoch check and writes under [localLock], where a lock bumps the epoch and clears (see [dropReads]).
             synchronized(localLock) {
-                if (epoch == lockEpoch.get()) {
-                    connectionsFlow.value = read.connections
-                    read.states?.let { states ->
-                        authFlow.update { old ->
-                            states.associateBy { it.connectionId }.mapValues { (id, st) ->
-                                val prev = old[id]
-                                val waiting = prev?.waitingUntil?.takeIf { it.isAfter(now()) }
-                                st.copy(waitingUntil = waiting, keyChanged = prev?.keyChanged ?: false)
-                            } + old.filterKeys { k -> states.none { it.connectionId == k } }
-                        }
-                    }
-                }
+                if (epoch == lockEpoch.get()) takeConnectionRead(read)
             }
             read.authFailure?.let { throw it }
+        }
+    }
+
+    /**
+     * Takes a whole `connection.list` / `authenticate.list` read in; the caller holds [localLock] and has checked its
+     * epochs. The list is authoritative for what it carries (times, last result, the pinned `key`). Two things it does
+     * not carry are kept from the state held: [AuthenticationState.waitingUntil] (this app's own request) and
+     * [AuthenticationState.keyChanged]. `key_changed` exists only on a `.result` event (§10.4), so a list read cannot
+     * say whether the last verdict was a key change; without the carry-over every re-read (including the one a
+     * `connection.authenticate.key` event triggers) would silently drop the warning the member MUST be shown. States
+     * the list does not name are kept as they were.
+     */
+    private fun takeConnectionRead(read: ConnectionRead) {
+        connectionsFlow.value = read.connections
+        read.states?.let { states ->
+            authFlow.update { old ->
+                states.associateBy { it.connectionId }.mapValues { (id, st) ->
+                    val prev = old[id]
+                    val waiting = prev?.waitingUntil?.takeIf { it.isAfter(now()) }
+                    st.copy(waitingUntil = waiting, keyChanged = prev?.keyChanged ?: false)
+                } + old.filterKeys { k -> states.none { it.connectionId == k } }
+            }
+        }
+    }
+
+    /** Test hook: runs between a `connection.authenticate.key` event's re-read and its guarded write (a test locks here). */
+    @Volatile
+    internal var keyEventHook: (() -> Unit)? = null
+
+    /** The lock and hold epochs of the event a background re-read answers: its write is checked against both. */
+    private class Epochs(val lock: Int, val hold: Int)
+
+    /** Guards [keyRereadRunning] and [keyRereadQueued]; held only to read and set them. */
+    private val keyRereadLock = Any()
+
+    /** Whether a `.key` re-read job is running (it reads again while [keyRereadQueued] is set). */
+    private var keyRereadRunning = false
+
+    /** A `.key` event that came while a re-read was running: the epochs of the latest one, or null. */
+    private var keyRereadQueued: Epochs? = null
+
+    /**
+     * `connection.authenticate.key {connection_id, key}` (VAULT-MESSAGING 0.88.1 §10.4): this vault followed a delivered
+     * `connection.authenticate.rotated` chain from the key it had pinned and pinned the chain's last key. The vault did
+     * every check; the app follows no chain (it never sees `rotated` or `rotations`).
+     *
+     * What it does: re-reads `connection.list` and `authenticate.list` and takes them in as [refresh] does. The list is
+     * authoritative: the event's `key` is only checked for form (an event without a well-formed connection id and key is
+     * ignored, no read) and is never written. If the re-read shows another key than the event's, the list wins: it was
+     * read after the event, so it reflects any later rotation or key change the vault made (whose own event or
+     * `.result` follows).
+     *
+     * What it does NOT do: change [AuthenticationState.keyChanged]. A standing `keyChanged` came from a `.result` with
+     * `key_changed: true`: the vault saw a key its pin did not lead to and re-pinned to it without verifying the step.
+     * A `.key` event always starts from the vault's pin at that moment (§10.4: "follows the chain from its pinned
+     * key"), so after such a result it starts from the unverified key and verifies nothing about the change the
+     * warning is about. Clearing it here would hide a key change that was never checked. Only the next successful
+     * `.result` decides it again (`key_changed: false` when the key is the pin or the pin leads to it). Orders, both
+     * handled by this:
+     * - `.key` then `.result{key_changed: true}`: the result is the later verdict and sets the warning.
+     * - `.result{key_changed: true}` then `.key`: the warning stays (above).
+     *
+     * Off the event collector, conflated: a peer controls how often it rotates (each verified rotation is one `.key` on
+     * every owner device), so the read is not done inline, where it would hold up every later event (a `vault.locking`
+     * among them) for two vault round trips. One re-read job runs at a time; an event that comes while it runs only
+     * marks one more read due (the latest event's epochs), so a burst of events costs at most two reads, and the last
+     * read starts after the last event. The job carries the event's epochs explicitly (it runs outside the event's
+     * coroutine context). Running beside the collector, a re-read may land after a `.result` handled later; that is
+     * [refresh]'s race too, and the carry-over keeps `keyChanged` right (only the times and `key` may be one read old).
+     */
+    private fun onAuthenticateKey(b: JsonObject, epochs: Epochs) {
+        if (VaultJson.str(b, "connection_id") == null || ApprovalParser.credentialKey(b) == null) return
+        synchronized(keyRereadLock) {
+            if (keyRereadRunning) {
+                keyRereadQueued = epochs
+                return
+            }
+            keyRereadRunning = true
+        }
+        // A job that ends abnormally (cancelled with its scope, or before it started) frees the slot; one that ends
+        // normally freed it itself when it found nothing queued.
+        scope.launch { rereadAuthStates(epochs) }.invokeOnCompletion { cause ->
+            if (cause != null) {
+                synchronized(keyRereadLock) {
+                    keyRereadRunning = false
+                    keyRereadQueued = null
+                }
+            }
+        }
+    }
+
+    /** The `.key` re-read job: reads for [first], then once more for each mark left while it read, until none is left. */
+    private suspend fun rereadAuthStates(first: Epochs) {
+        var next: Epochs? = first
+        while (next != null) {
+            rereadAuthOnce(next)
+            next = synchronized(keyRereadLock) {
+                keyRereadQueued.also {
+                    keyRereadQueued = null
+                    if (it == null) keyRereadRunning = false
+                }
+            }
+        }
+    }
+
+    /**
+     * One re-read for a `.key` event taken at [epochs]. Written only if neither a lock ([lockEpoch]) nor a hold
+     * ([holdEpoch]) came since the event was taken ([onEvent] reads both together under [localLock]); the check and the
+     * write are under [localLock], where a lock and a hold bump them. A lock bumps both, so the lock check is implied by
+     * the hold check; it is kept as the plain statement of the rule.
+     *
+     * A read that fails writes nothing, whichever half failed: a failed `connection.list` throws, and a failed
+     * `authenticate.list` comes back as no states, in which case the connections it did read are not taken in either
+     * (the next [refresh] reads both). Nothing is raised to the member: this is a background read the member did not
+     * ask for, so it goes around [vaultGuard], whose `credential_required` handling would put up "This phone can't use
+     * your vault" ([com.vettid.core.data.vault.CredentialRequired]); the next unlock or refresh reads again.
+     */
+    private suspend fun rereadAuthOnce(epochs: Epochs) {
+        val read = try {
+            withContext(readContext) { readConnections() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+            return
+        }
+        keyEventHook?.invoke()
+        if (read.states == null || read.authFailure != null) return
+        synchronized(localLock) {
+            if (epochs.lock == lockEpoch.get() && epochs.hold == holdEpoch.get()) takeConnectionRead(read)
         }
     }
 
