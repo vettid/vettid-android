@@ -792,4 +792,76 @@ class RecoverViewModelTest {
         vm.useNewCode()
         assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
     }
+
+    /** The lead's review of #327 (L2): at the recovery's PIN step too, another offer clears the tick. */
+    @Test
+    fun aTickNeverCarriesOverToAnotherRelease() = runTest {
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6))
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.scan()
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.setApproveOffer(true)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertTrue("the same offer keeps the tick", vm.uiState.value.approveOffer)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6).copy(pcr0 = "ff".repeat(48)))
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("another PCR0", vm.uiState.value.approveOffer)
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(7))
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("another release", vm.uiState.value.approveOffer)
+    }
+
+    /** The lead's recheck of #327: entering the PIN step again (toPin) clears the tick at once, before any new check. */
+    @Test
+    fun thePinStepAgainClearsTheTick() = runTest {
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, FakeVault.release(6))
+        vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE))
+        val vm = atThePin()
+        vm.setApproveOffer(true)
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.ENDED, vm.uiState.value.step)
+        vm.tryPinAgain()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        assertFalse("cleared on entering the step", vm.uiState.value.approveOffer)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.approveOffer)
+    }
+
+    /** The lead's recheck of #327: a failed check, a rollback of the same offer and no offer each clear the tick. */
+    @Test
+    fun aFailedCheckARollbackOrNoOfferClearsTheTick() = runTest {
+        val offer = FakeVault.release(6)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        val vm = atThePin()
+        vm.setApproveOffer(true)
+        vault.fail["recoveryPreflight"] = FakeVault.failure(FailureKind.NETWORK)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("a failed check", vm.uiState.value.approveOffer)
+        vault.fail.remove("recoveryPreflight")
+        vm.retryPreflight()
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, true, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("the same offer, as a rollback", vm.uiState.value.approveOffer)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, offer)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        vm.setApproveOffer(true)
+        vault.preflightInfo = PreflightInfo(FakeVault.release(4), 4, false, false, null)
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertFalse("no offer", vm.uiState.value.approveOffer)
+    }
 }

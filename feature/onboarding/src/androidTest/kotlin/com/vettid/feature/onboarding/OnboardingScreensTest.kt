@@ -131,12 +131,14 @@ class OnboardingScreensTest {
     }
 
     @Test
-    fun theUnlockOfferShowsWhatsNewAndTheApproval() {
+    fun theUnlockOfferIsCompactWithWhatsNewOneTapAway() {
         val preflight = PreflightInfo(release(4), 4, false, false, release(5))
         rule.setContent { VettIdTheme { UnlockContent(UnlockUiState(loading = false, preflight = preflight), NoUnlockActions) } }
-        rule.onNodeWithTag("whats_new_loading").assertExists()
-        rule.onNodeWithTag("whats_new").assertExists()
+        rule.onNodeWithTag("release_offer").assertExists()
         rule.onNodeWithTag("approve_offer").assertExists()
+        rule.onNodeWithTag("whats_new").assertDoesNotExist()
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.onNodeWithTag("whats_new_loading").assertExists()
     }
 
     @Test
