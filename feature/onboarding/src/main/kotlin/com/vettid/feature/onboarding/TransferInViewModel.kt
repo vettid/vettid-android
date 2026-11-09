@@ -210,13 +210,24 @@ class TransferInViewModel @Inject constructor(
         when (problem) {
             // (VAULT-MESSAGING 0.88.4 §11.14.10 rule 5) The open transfer's own code outlives its 10 minutes: asked first,
             // so a re-scan of it goes back to that move, never "expired" (and then a new code that would drop it).
-            FailureKind.INVITE_EXPIRED -> viewModelScope.launch {
-                val own = try {
-                    move.isOpenTransferCode(text)
-                } catch (_: VaultFailure) {
-                    false
+            FailureKind.INVITE_EXPIRED -> {
+                // Busy while asked: a repeated camera frame or a quick second scan does not start another (review of #334).
+                if (state.value.busy) return
+                state.update { it.copy(busy = true) }
+                viewModelScope.launch {
+                    val own = try {
+                        move.isOpenTransferCode(text)
+                    } catch (_: VaultFailure) {
+                        false
+                    }
+                    state.update { it.copy(busy = false) }
+                    val step = state.value.step
+                    when {
+                        !own -> state.update { it.copy(inputProblem = problem) }
+                        step == TransferInStep.SCAN || step == TransferInStep.PASTE -> begin(text)
+                        else -> Unit // left meanwhile: nothing to go back to
+                    }
                 }
-                if (own) begin(text) else state.update { it.copy(inputProblem = problem) }
             }
             null -> begin(text)
             else -> state.update { it.copy(inputProblem = problem) }

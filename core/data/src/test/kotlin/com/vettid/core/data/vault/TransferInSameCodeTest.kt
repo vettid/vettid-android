@@ -68,4 +68,17 @@ class TransferInSameCodeTest {
         assertTrue(i >= 0)
         assertTrue(code[i + 1].contains("sweep = !local.setupComplete") && code[i + 1].contains("it.deviceId != null"))
     }
+
+    /** (The re-checks of #334, item 1) Both same-code paths read the code whatever its exp, never through parseTransfer. */
+    @Test
+    fun theSameCodePathsIgnoreTheCodesExp() {
+        for (sig in listOf(
+            "private suspend fun sameTransferCode(code: String): String? = guard {",
+            "override suspend fun isOpenTransferCode(code: String): Boolean = guard {",
+        )) {
+            val b = body(sig)
+            assertTrue("$sig: whatever its exp", b.any { it.contains("InviteLinks.transferLinkAnyExp(code)") })
+            assertFalse("$sig: no expiry refusal", b.any { it.contains("parseTransfer") })
+        }
+    }
 }

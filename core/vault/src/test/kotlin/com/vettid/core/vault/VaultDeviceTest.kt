@@ -1824,6 +1824,32 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (The re-checks of #334, item 1) A forget whose store cannot be cleared throws (so the manager stops the scan before any
+     * key goes), and the file still holds the open transfer, which knows its own code after a reload.
+     */
+    @Test
+    fun aForgetThatCannotClearTheStoreThrowsAndKeepsTheTransfer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) = inner.save(state)
+                override fun clear() = throw java.io.IOException("could not delete")
+            }
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val link = transferLink(FakeVault(), Ulid.new())
+            d.startTransfer(link, RecordingAttester())
+            nextDeposit()
+            assertTrue("the forget throws", runCatching { d.forget() }.isFailure)
+            val reloaded = VaultDevice.load(config(inner), secrets)!!
+            assertNotNull("the file still holds the open transfer", reloaded.transferInPending)
+            assertTrue("and knows its own code", reloaded.isOpenTransferCode(link))
+            reloaded.stop()
+        }
+    }
+
     /** The start-up sweep skipped (the phone holds a vault, review of #334 item 3): no orphan delete is asked for. */
     @Test
     fun theStartUpSweepCanBeSkipped() = runBlocking<Unit> {

@@ -3430,7 +3430,8 @@ class VaultManager(
             d.forget()
         } catch (e: Exception) {
             runCatching { dropSession(forget = false) }
-            throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING, cause = e)
+            // The phone's storage, not the move: the existing local-state text (no new text), its own code (review N4).
+            throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED, cause = e)
         }
     }
 

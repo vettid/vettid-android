@@ -683,5 +683,8 @@ interface MoveRepository {
          * new code and the member's abandon are refused until it ends ([FailureKind.BUSY]); the screen does not offer them.
          */
         const val CODE_TRANSFER_SETTLING = "transfer_settling"
+
+        /** The open transfer could not be dropped for a new code (its device file could not be cleared): nothing changed. */
+        const val CODE_TRANSFER_NOT_DROPPED = "transfer_not_dropped"
     }
 }

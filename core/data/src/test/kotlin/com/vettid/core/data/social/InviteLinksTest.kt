@@ -93,4 +93,14 @@ class InviteLinksTest {
             ),
         )
     }
+
+    /** (VAULT-MESSAGING 0.88.4) The same-code compare reads a transfer code whatever its exp; another kind is not one. */
+    @Test
+    fun aTransferLinkIsReadWhateverItsExp() {
+        val past = qr(InviteKind.APP, now.minusSeconds(3600).epochSecond)
+        assertEquals(past.link(), InviteLinks.transferLinkAnyExp(past.link()))
+        assertEquals(past.link(), InviteLinks.transferLinkAnyExp(String(past.marshal())))
+        assertEquals(null, InviteLinks.transferLinkAnyExp(qr(InviteKind.CONNECTION).link()))
+        assertEquals(null, InviteLinks.transferLinkAnyExp("not a code"))
+    }
 }
