@@ -665,6 +665,14 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return recoverOutcome
     }
 
+    /** The code [isOpenTransferCode] recognises as the open transfer's own (whatever its exp); null: none. */
+    var openTransferCode: String? = null
+
+    override suspend fun isOpenTransferCode(code: String): Boolean {
+        call("isOpenTransferCode")
+        return code == openTransferCode
+    }
+
     override suspend fun transferIn(code: String): String {
         call("transferIn")
         lastTransferCode = code

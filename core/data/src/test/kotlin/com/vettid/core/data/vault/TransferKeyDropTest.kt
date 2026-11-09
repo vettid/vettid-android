@@ -255,6 +255,6 @@ class TransferKeyDropTest {
         )
         val load = code.indexOfFirst { it == "val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)" }
         val next = code.drop(load + 1).first { it.isNotEmpty() }
-        assertEquals("the start-up sweep, before the device is used", "device.settleTransferKeysAtStart()", next)
+        assertEquals("the start-up settle, before the device is used", "device.settleTransferKeysAtStart(", next)
     }
 }

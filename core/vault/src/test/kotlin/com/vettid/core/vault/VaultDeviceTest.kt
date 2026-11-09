@@ -1824,6 +1824,21 @@ class VaultDeviceTest {
         }
     }
 
+    /** The start-up sweep skipped (the phone holds a vault, review of #334 item 3): no orphan delete is asked for. */
+    @Test
+    fun theStartUpSweepCanBeSkipped() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            d.settleTransferKeysAtStart(sweep = false)
+            assertTrue("nothing asked", phone.drops.isEmpty())
+            d.settleTransferKeysAtStart()
+            assertEquals("the sweep when allowed", 1, phone.drops.size)
+            d.stop()
+        }
+    }
+
     /**
      * (0.88.3 §11.14.10 rule 5) A scan is open from its claim fetch: its code is stored before the fetch, so the same code
      * is refused while the fetch runs; a fetch that fails ends the scan at once and leaves no code behind (the same code

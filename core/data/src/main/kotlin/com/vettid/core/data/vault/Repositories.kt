@@ -542,6 +542,12 @@ interface MoveRepository {
     suspend fun transferIn(code: String): String
 
     /**
+     * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5) Whether [code] is the open transfer's own code (the same relay and claim id,
+     * whatever its `exp`): asked before a code is refused as expired, since [transferIn] then returns that move as it stands.
+     */
+    suspend fun isOpenTransferCode(code: String): Boolean = false
+
+    /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
      * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for the settlement

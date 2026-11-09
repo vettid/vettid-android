@@ -337,6 +337,32 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
     }
 
+    /**
+     * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5; the blind reviews of #334, item 1) The open transfer's own code, scanned
+     * again after its 10 minutes, is that move (its compare screen), not "expired"; another expired code still is.
+     */
+    @Test
+    fun theOpenTransfersOwnCodeAfterItsExpiryGoesBackToTheMove() = runTest {
+        val expired = qr(exp = Instant.now().minusSeconds(60))
+        vault.openTransferCode = expired
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(expired)
+        advanceTimeBy(100)
+        assertEquals(null, vm.uiState.value.inputProblem)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertTrue("isOpenTransferCode" in vault.calls && "transferIn" in vault.calls)
+        vault.openTransferCode = null
+        val vm2 = TransferInViewModel(vault, vault)
+        vm2.scan()
+        vault.calls.clear()
+        vm2.scanned(expired)
+        advanceTimeBy(100)
+        assertEquals(FailureKind.INVITE_EXPIRED, vm2.uiState.value.inputProblem)
+        assertFalse("nothing sent for another expired code", "transferIn" in vault.calls)
+    }
+
     @Test
     fun otherCodesAreRefusedBeforeAnythingIsSent() = runTest {
         val vm = TransferInViewModel(vault, vault)
@@ -346,6 +372,7 @@ class TransferInViewModelTest {
         vm.scanned("hello")
         assertEquals(FailureKind.INVITE_INVALID, vm.uiState.value.inputProblem)
         vm.scanned(qr(exp = Instant.now().minusSeconds(1)))
+        advanceTimeBy(100) // the open-transfer question first (none here)
         assertEquals(FailureKind.INVITE_EXPIRED, vm.uiState.value.inputProblem)
         assertFalse("transferIn" in vault.calls)
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)

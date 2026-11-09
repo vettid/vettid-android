@@ -1495,7 +1495,11 @@ class VaultManager(
                 val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
                 // What a dropped transfer left (a drop whose delete did not hold, a process killed between the drop and the
                 // delete, a build before this one), before anything can scan: [VaultDevice.settleTransferKeysAtStart].
-                device.settleTransferKeysAtStart()
+                // The orphan sweep only while the phone holds no vault: the ("", 1) record and key are the phone's, not the
+                // device's, so a fresh device in another slot must not delete a transferred vault's unlock key.
+                device.settleTransferKeysAtStart(
+                    sweep = !local.setupComplete && synchronized(liveDevices) { liveDevices.none { it.deviceId != null } },
+                )
                 liveDevices += device
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
@@ -3414,6 +3418,22 @@ class VaultManager(
     private fun transferPinned(d: VaultDevice) =
         settlements.active || TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now())
 
+    /**
+     * (The blind reviews of #334, Fable M1: iOS #233's Medium on the app's real path) A new code over an open transfer
+     * forgets the device first, alone, before any key goes: if that fails, the device file still holds the transfer, which
+     * the old phone may still approve. Then nothing else is deleted: the session is dropped without forgetting (the next
+     * one reloads the file, the open transfer included) and the scan stops, with nothing changed and nothing sent.
+     */
+    @Suppress("TooGenericExceptionCaught") // whatever the forget threw: the scan stops
+    private suspend fun forgetOpenTransferOrStop(d: VaultDevice) {
+        try {
+            d.forget()
+        } catch (e: Exception) {
+            runCatching { dropSession(forget = false) }
+            throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING, cause = e)
+        }
+    }
+
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         // (0.1.78) K is never forgotten while an open's answer is unknown.
@@ -3424,7 +3444,12 @@ class VaultManager(
         if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
         val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
-        if (d.deviceId == null && stale) dropSession(forget = true) else retireOtherDevices()
+        if (d.deviceId == null && stale) {
+            if (d.transferInPending != null) forgetOpenTransferOrStop(d)
+            dropSession(forget = true)
+        } else {
+            retireOtherDevices()
+        }
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {
@@ -4323,8 +4348,15 @@ class VaultManager(
      * ending with "not answered" and nothing dropped; a scan of it still in flight that ends without a transfer: null, so this
      * scan is handled as a scan of its own (M1).
      */
+    override suspend fun isOpenTransferCode(code: String): Boolean = guard {
+        val link = InviteLinks.transferLinkAnyExp(code) ?: return@guard false
+        val d = session().device
+        d.deviceId == null && d.isOpenTransferCode(link)
+    }
+
     private suspend fun sameTransferCode(code: String): String? = guard {
-        val link = (InviteLinks.parseTransfer(code) as? InviteLinks.TransferParsed.Ok)?.link ?: return@guard null
+        // The payload's r and c alone, whatever its exp (review of #334, item 1).
+        val link = InviteLinks.transferLinkAnyExp(code) ?: return@guard null
         val d = session().device // opened if it is not yet (L1)
         if (d.deviceId != null || !d.isOpenTransferCode(link)) return@guard null
         val deadline = (d.transferInPending?.startedAt ?: Instant.now()).plusMillis(MoveRepository.HS_RESP_WAIT_MS)

@@ -44,4 +44,28 @@ class TransferInSameCodeTest {
         assertTrue("the record's SAS first, then memory's", stored in 0 until memory)
         assertTrue("the session is opened, not only read", b.any { it.contains("session().device") })
     }
+
+    /**
+     * (The blind reviews of #334, item 2) A new code over an open transfer forgets the device alone first; a failed forget
+     * drops the session without forgetting and stops, before any key is deleted.
+     */
+    @Test
+    fun aNewCodeOverAnOpenTransferForgetsTheDeviceAloneFirst() {
+        val fresh = body("private suspend fun freshDeviceIfUnpaired() {")
+        val first = fresh.indexOfFirst { it.contains("forgetOpenTransferOrStop(d)") }
+        val forget = fresh.indexOfFirst { it.contains("dropSession(forget = true)") }
+        assertTrue("the open transfer's forget first", first in 0 until forget)
+        val stop = body("private suspend fun forgetOpenTransferOrStop(d: VaultDevice) {")
+        assertTrue(stop.any { it == "d.forget()" })
+        assertTrue("a failed forget keeps the file", stop.any { it.contains("dropSession(forget = false)") })
+        assertFalse("never the full forget there", stop.any { it.contains("dropSession(forget = true)") })
+    }
+
+    /** (The blind reviews of #334, item 3) The start-up sweep of an orphaned ("", 1) key only while the phone holds no vault. */
+    @Test
+    fun theStartUpSweepIsSkippedWhileThePhoneHoldsAVault() {
+        val i = code.indexOfFirst { it.startsWith("device.settleTransferKeysAtStart(") }
+        assertTrue(i >= 0)
+        assertTrue(code[i + 1].contains("sweep = !local.setupComplete") && code[i + 1].contains("it.deviceId != null"))
+    }
 }

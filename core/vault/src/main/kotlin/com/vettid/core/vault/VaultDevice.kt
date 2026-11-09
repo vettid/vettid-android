@@ -1975,10 +1975,12 @@ class VaultDevice private constructor(
      * Note for a rebase on the transfer outcome (`device.transfer.ended`'s tombstone): "no transfer record" there is "no
      * LIVE transfer" (`liveTransferIn() == null`).
      */
-    suspend fun settleTransferKeysAtStart() = lock.withLock {
+    suspend fun settleTransferKeysAtStart(sweep: Boolean = true) = lock.withLock {
         if (forgotten) return@withLock
         settleDroppedTransfer()
-        if (st.deviceId == null && st.transferIn == null && st.droppedTransfer == null) {
+        // [sweep] false: the phone holds a vault (the review of #334, Fable M2): the ("", 1) key may be its only unlock key,
+        // and this device-local look cannot tell; only a recorded drop is settled then.
+        if (sweep && st.deviceId == null && st.transferIn == null && st.droppedTransfer == null) {
             st.droppedTransfer = DroppedTransferRecord()
             settleDroppedTransfer()
             st.droppedTransfer = null // a sweep that did not hold is not kept: it runs again at the next start
