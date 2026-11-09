@@ -2,6 +2,7 @@ package com.vettid.core.data.social
 
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.CredentialKeyFingerprint
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.IkFingerprint
 import com.vettid.core.data.account.AccountNames
@@ -281,12 +282,42 @@ object ApprovalParser {
         name = AccountNames.cleanedCapped(a.name, com.vettid.core.media.PhotoLimits.NAME_MAX_CHARS),
     )
 
-    /** `connection.authenticate.list` states and `.result` events. */
-    fun authState(o: JsonObject): AuthenticationState? {
-        val conn = o.s("connection_id") ?: return null
-        return AuthenticationState(conn, instant(o.s("verified_at")), o.s("last_result"), instant(o.s("last_at")))
+    /**
+     * The `key` member of a `connection.authenticate.list` state, `.result` or `.key` body (VAULT-MESSAGING 0.88.1 §10.4):
+     * returned as sent when it is canonical standard base64 of exactly 32 bytes (an Ed25519 public key, §5.3), else
+     * null. Only the encoding and the length are checked: the app does no cryptography with it (the vault verified the
+     * signatures and follows the rotation chains), it only records which key the vault has pinned.
+     */
+    fun credentialKey(o: JsonObject): String? {
+        val k = o.s("key") ?: return null
+        return try {
+            Base64s.decodeStd(k, CredentialKeyFingerprint.KEY_SIZE)
+            k
+        } catch (_: CryptoException) {
+            null
+        }
     }
 
+    /** One `connection.authenticate.list` state; a malformed `key` is dropped and the rest kept. */
+    fun authState(o: JsonObject): AuthenticationState? {
+        val conn = o.s("connection_id") ?: return null
+        return AuthenticationState(
+            conn, instant(o.s("verified_at")), o.s("last_result"), instant(o.s("last_at")), key = credentialKey(o),
+        )
+    }
+
+    /**
+     * A `connection.authenticate.result` event over the state [previous].
+     *
+     * Only a successful verdict (`authenticated: true`) speaks about the key. Its `key_changed` decides the warning: true
+     * when the key was not the pinned one and the pin did not lead to it (§10.4); false or absent otherwise, including a
+     * response whose `rotations` the vault followed. Its `key` (when sent and well formed) is the key the vault now has
+     * pinned; an absent or malformed one leaves the previous key.
+     *
+     * A failed verdict (`denied`, `bad_signature`) carries no evidence about the key: it keeps the previous `keyChanged`
+     * and `key` as they were. Otherwise the party a key-change warning is about could erase it by declining the member's
+     * next request, and a `key` sent with a failure (which the spec does not define) could pass for a pinned one.
+     */
     fun authResult(o: JsonObject, now: Instant, previous: AuthenticationState?): AuthenticationState? {
         val conn = o.s("connection_id") ?: return null
         val ok = o.b("authenticated") ?: false
@@ -295,8 +326,9 @@ object ApprovalParser {
             verifiedAt = if (ok) now else base.verifiedAt,
             lastResult = if (ok) "authenticated" else o.s("reason") ?: "denied",
             lastAt = now,
-            keyChanged = o.b("key_changed") ?: false,
+            keyChanged = if (ok) o.b("key_changed") ?: false else base.keyChanged,
             waitingUntil = null,
+            key = if (ok) credentialKey(o) ?: base.key else base.key,
         )
     }
 

@@ -193,7 +193,26 @@ data class AuthenticationState(
     val keyChanged: Boolean = false,
     /** A request this app sent and is waiting for (until it expires). */
     val waitingUntil: Instant? = null,
-)
+    /**
+     * The credential key this vault has pinned for the connection (VAULT-MESSAGING 0.88.1 §10.4): canonical standard
+     * base64 of 32 bytes (an Ed25519 public key), checked by [ApprovalParser.credentialKey]; null when the vault sent
+     * none (nothing pinned yet, or an older vault) or sent one that is not well formed. A String, so the state stays
+     * immutable and comparable. Not a secret, but nothing shows it (no fingerprint is displayed) and [toString] leaves
+     * it out. The vault follows rotation chains itself (§10.4 "Following a credential-key rotation"); the app only
+     * records what the vault reports.
+     *
+     * It can be one read stale: a list read answered before a `.result` may land after it (the re-read on
+     * `connection.authenticate.key` and [SocialManager.refresh] both run beside the event collector) and puts the list's
+     * older key back over the verdict's. Do not treat it as the vault's current pin; anything that shows it later (a
+     * fingerprint, say) must read `connection.authenticate.list` again first, or order list reads against verdicts.
+     */
+    val key: String? = null,
+) {
+    /** Prints no connection id and no key. */
+    override fun toString(): String =
+        "AuthenticationState(verifiedAt=$verifiedAt, lastResult=$lastResult, lastAt=$lastAt, keyChanged=$keyChanged, " +
+            "waitingUntil=$waitingUntil, hasKey=${key != null})"
+}
 
 /** One message (§10.5). */
 data class MessageInfo(
