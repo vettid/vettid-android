@@ -492,12 +492,6 @@ class VaultManager(
                     InviteLinks.TransferParsed.NotATransfer, InviteLinks.TransferParsed.Invalid ->
                         throw VaultFailure(FailureKind.INVITE_INVALID, CODE_NOT_TRANSFER)
                 }
-                // (owner decision a, GC #6474; vettid.org#558) A scan of the open transfer's own code (the same relay and
-                // claim id) changes nothing and sends nothing: before the claim fetch and before any drop, the member goes
-                // back to that move's own screen. A different code is handled as before.
-                session().device.let { open ->
-                    if (open.deviceId == null && open.transferInPending?.isCode(link) == true) return@guard awaitTransferSas(open)
-                }
                 freshDeviceIfUnpaired()
                 val d = session().device
                 if (d.deviceId != null) throw VaultFailure(FailureKind.VAULT_EXISTS)
@@ -516,14 +510,7 @@ class VaultManager(
                 awaitTransferSas(d)
             }
 
-            /** The transfer's SAS once its `hs.resp` arrived (the compare screen), as after its scan. */
-            private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {
-                // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
-                withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
-            } catch (e: TimeoutCancellationException) {
-                d.abandonTransfer()
-                throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
-            }
+            private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = this@VaultManager.awaitTransferSas(d)
 
             override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
                 // (0.1.78) Undecided: a new code only reuses K (the claim, the earlier open's slot, a new identity), or is refused.
@@ -4319,9 +4306,42 @@ class VaultManager(
     private var openTransferId: String? = null
 
     override suspend fun transferIn(code: String): String {
+        // (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5, owner decision a, GC #6474) A scan of the open transfer's own code (the
+        // same relay `r` and claim id `c`) is refused before anything else, the window's and the deadline's refusals
+        // included: nothing is fetched, dropped or sent, and the member is back on that move's screen as it stands. A
+        // different code is handled as before.
+        sameTransferCode(code)?.let { return it }
         // One transfer and one window at a time: a new code only after the settlement window ended.
         if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         return enrolments.transferIn(code)
+    }
+
+    /** The open transfer's SAS when [code] is its own code (see [transferIn]), else null; nothing sent either way. */
+    private suspend fun sameTransferCode(code: String): String? = guard {
+        val link = (InviteLinks.parseTransfer(code) as? InviteLinks.TransferParsed.Ok)?.link ?: return@guard null
+        val d = session?.device ?: return@guard null
+        if (d.deviceId != null || !d.isOpenTransferCode(link)) return@guard null
+        awaitTransferSas(d)
+    }
+
+    /**
+     * The transfer's SAS once its `hs.resp` arrived (the compare screen), as after its scan; §6.7.1 step 2 (0.10.6): a dropped
+     * hs.init is never answered, so the wait ends 60 s after the transfer's stored start (not after a later re-scan) and says why.
+     */
+    private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String {
+        d.pairingSas.value?.let { return it }
+        val started = d.transferInPending?.startedAt
+        val left = if (started == null) {
+            MoveRepository.HS_RESP_WAIT_MS
+        } else {
+            (MoveRepository.HS_RESP_WAIT_MS - java.time.Duration.between(started, Instant.now()).toMillis()).coerceAtLeast(1)
+        }
+        return try {
+            withTimeout(left) { d.pairingSas.filterNotNull().first() }
+        } catch (e: TimeoutCancellationException) {
+            d.abandonTransfer()
+            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
+        }
     }
 
     override suspend fun awaitTransferIn(): Boolean = guard {

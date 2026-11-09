@@ -1092,7 +1092,70 @@ class VaultDevice private constructor(
         }
         if (q.kind != InviteKind.APP) throw NotATransferCodeException()
         if (!now().isBefore(Instant.ofEpochSecond(q.exp))) throw NotATransferCodeException(expired = true)
-        val blob = relayFor(q.relay).getClaim(q.claimId)
+        // (0.88.3 §11.14.10 rule 5) The scan is open from its claim fetch: its code is stored first, so that a scan of the
+        // same code meanwhile is refused; any failure before its transfer is recorded ends it at once.
+        val code = TransferCodeRecord(q.relay, q.claimId)
+        lock.withLock {
+            if (st.deviceId != null) throw VaultStateException("already paired with a vault")
+            checkLive()
+            val before = st.scanCode
+            st.scanCode = code
+            try {
+                save()
+            } catch (e: Exception) {
+                st.scanCode = before // nothing changed: memory stays as the file is
+                throw e
+            }
+        }
+        val blob = try {
+            relayFor(q.relay).getClaim(q.claimId)
+        } catch (e: Throwable) {
+            endScan(code)
+            throw e
+        }
+        try {
+            transferAfterClaim(q, code, blob, attester, attestedKey, unlockSecretFor)
+        } catch (e: Throwable) {
+            endScan(code)
+            throw e
+        }
+    }
+
+    /** A scan that failed before its transfer was recorded: its code goes, so the same code can be scanned again. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // a save that fails leaves the code to the next load
+    private suspend fun endScan(code: TransferCodeRecord) = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+        lock.withLock {
+            if (st.scanCode != code) return@withLock
+            st.scanCode = null
+            if (!forgotten) {
+                try {
+                    save()
+                } catch (_: Exception) {
+                    // Cleared at the next load in any case ([DeviceState.scanCode]).
+                }
+            }
+        }
+    }
+
+    /** Whether [link] is the code of the transfer to this phone that is open (recorded, or its scan under way). */
+    fun isOpenTransferCode(link: String): Boolean {
+        val q = runCatching { InviteQr.parseLink(link) }.getOrNull() ?: return false
+        val scanned = TransferCodeRecord(q.relay.trimEnd('/'), q.claimId)
+        val open = listOfNotNull(
+            st.scanCode,
+            st.transferIn?.let { r -> r.codeClaim?.let { TransferCodeRecord(r.codeRelay.orEmpty(), it) } },
+        )
+        return open.any { it.claim == scanned.claim && it.relay.trimEnd('/') == scanned.relay }
+    }
+
+    private suspend fun transferAfterClaim(
+        q: InviteQr,
+        code: TransferCodeRecord,
+        blob: ByteArray,
+        attester: Attester,
+        attestedKey: () -> String?,
+        unlockSecretFor: suspend (traits: com.vettid.core.crypto.altchan.ReleaseTraits) -> ByteArray?,
+    ) {
         lock.withLock {
             if (st.deviceId != null) throw VaultStateException("already paired with a vault")
             val t = now()
@@ -1130,7 +1193,8 @@ class VaultDevice private constructor(
             } finally {
                 unlockSecret?.fill(0)
             }
-            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = q.relay, codeClaim = q.claimId)
+            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
+            st.scanCode = null // the code is the transfer's from here on
             save()
         }
     }
@@ -2514,6 +2578,7 @@ class VaultDevice private constructor(
                 st.outboxTracked = true
             }
             dropLegacyRequests(st, Instant.now(cfg.clock))
+            st.scanCode = null // a scan the process's end cut off recorded no transfer ([DeviceState.scanCode])
             return VaultDevice(cfg, secrets, st)
         }
     }

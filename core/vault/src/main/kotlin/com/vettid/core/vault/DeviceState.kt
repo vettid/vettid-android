@@ -80,7 +80,19 @@ internal data class DeviceState(
      * latest before the next scan computes any secret ([VaultDevice.startTransfer]). Null once the app's delete held.
      */
     var droppedTransfer: DroppedTransferRecord? = null,
+    /**
+     * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5, "A second scan of the same code"; owner decision a, GC #6474) The code a
+     * scan to this phone is under way for, from before its claim is fetched until its transfer is recorded
+     * ([transferIn], which then carries the code) or the scan fails (a fetch or payload check that fails, an `hs.init`
+     * not sent): a scan of the same code meanwhile is refused. Cleared at load: a scan the process's end cut off recorded
+     * no transfer, so nothing would be there to go back to.
+     */
+    var scanCode: TransferCodeRecord? = null,
 )
+
+/** A scanned transfer code's relay `r` and claim id `c` ([DeviceState.scanCode]). */
+@Serializable
+internal data class TransferCodeRecord(val relay: String, val claim: String)
 
 /**
  * What a dropped transfer left for the app to delete ([DeviceState.droppedTransfer]): the Keystore aliases of the device

@@ -1825,6 +1825,35 @@ class VaultDeviceTest {
     }
 
     /**
+     * (0.88.3 §11.14.10 rule 5) A scan is open from its claim fetch: its code is stored before the fetch, so the same code
+     * is refused while the fetch runs; a fetch that fails ends the scan at once and leaves no code behind (the same code
+     * can be scanned again), and a code stored by a scan that a restart cut off is gone after the load.
+     */
+    @Test
+    fun aScanIsOpenFromItsClaimFetchAndAFailedFetchLeavesNoCode() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val v = FakeVault()
+            val link = transferLink(v, Ulid.new())
+            val q = InviteQr.parseLink(link)
+            claims.remove(q.claimId) // the claim is gone: the fetch answers 404
+            assertTrue("the fetch fails", runCatching { d.startTransfer(link, RecordingAttester()) }.isFailure)
+            assertFalse("no code left behind", d.isOpenTransferCode(link))
+            assertNull("nothing recorded", d.transferInPending)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            // A scan cut off between its code and its record: the load forgets the code.
+            val saved = String(store.load()!!).replace("\"scanCode\":null", "\"scanCode\":{\"relay\":\"${q.relay}\",\"claim\":\"${q.claimId}\"}")
+            store.save(saved.toByteArray())
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertFalse("a scan the process's end cut off holds no code", reloaded.isOpenTransferCode(link))
+            reloaded.stop()
+        }
+    }
+
+    /**
      * iOS #233's review (Medium, GC #6473), not repeated here: a scan that replaces an open transfer whose drop cannot be
      * SAVED stops before anything changes. No new secret is made, nothing is deposited, the file still holds the open
      * transfer (its start unchanged), and this device saves and sends nothing more, so the next session loads the open
@@ -1835,10 +1864,12 @@ class VaultDeviceTest {
         withTimeout(30_000) {
             val inner = InMemoryDeviceStateStore()
             var fail = false
+            var saves = 0
             val store = object : DeviceStateStore {
                 override fun load() = inner.load()
                 override fun save(state: ByteArray) {
-                    if (fail) throw java.io.IOException("no space left")
+                    // The scan's first write (its code, before the claim fetch) goes through; the drop's write fails.
+                    if (fail && ++saves > 1) throw java.io.IOException("no space left")
                     inner.save(state)
                 }
                 override fun clear() = inner.clear()
@@ -1846,7 +1877,8 @@ class VaultDeviceTest {
             val phone = PhoneKeyStandIn(inner)
             val secrets = appSecrets()
             val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
-            d.scan(FakeVault(), phone, "att-1")
+            val first = transferLink(FakeVault(), Ulid.new())
+            d.startTransfer(first, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() }
             nextDeposit()
             val started = d.transferInPending!!.startedAt
             fail = true
@@ -1858,6 +1890,7 @@ class VaultDeviceTest {
             assertNull("still nothing deposited", deposits.poll(500, TimeUnit.MILLISECONDS))
             val reloaded = VaultDevice.load(config(inner), secrets)!!
             assertEquals("the file still holds the open transfer", started, reloaded.transferInPending?.startedAt)
+            assertTrue("and its own code, refused if scanned again", reloaded.isOpenTransferCode(first))
             reloaded.stop()
         }
     }
