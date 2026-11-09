@@ -33,6 +33,7 @@ import org.robolectric.RuntimeEnvironment
 /** Feed items and the vault's state as notifications (ANDROID-PLAN 0.1.23, Notification modes 7, 8 and 11). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Suppress("LargeClass") // one notifier, one set of fakes: the cases read best side by side
 class FeedNotifierTest {
     private val res = RuntimeEnvironment.getApplication().resources
 
@@ -91,8 +92,12 @@ class FeedNotifierTest {
 
         /** What [refreshVotes] does: by default the list reads and [names] stays as it is. */
         var refresh: suspend () -> Boolean = { true }
+        var refreshCalls = 0
 
-        override suspend fun refreshVotes(): Boolean = refresh()
+        override suspend fun refreshVotes(): Boolean {
+            refreshCalls++
+            return refresh()
+        }
 
         /** When set, [messageText] waits for it: an item notification still being prepared. */
         var textGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
@@ -738,5 +743,244 @@ class FeedNotifierTest {
         source.refresh = { kotlinx.coroutines.awaitCancellation() }
         arrive(item("v5"))
         assertTrue(poster.shown.containsKey("v5"))
+    }
+
+    // --- #313: a vote.result is titled in its own job, one list read for a burst ---
+
+    @Test
+    fun aVoteResultDoesNotHoldUpTheItemsBehindIt() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        source.refresh = { gate.await() }
+        source.arrivals.emit(item("v1", kind = "vote.result", ref = "P1"))
+        source.arrivals.emit(item("f1"))
+        source.arrivals.emit(item("f2", kind = "item.revealed", ref = "i1"))
+        runCurrent()
+        assertEquals("posted at once, in their order", listOf("post:f1", "post:f2"), poster.log)
+        assertEquals(1, source.refreshCalls)
+        gate.complete(true)
+        runCurrent()
+        assertEquals(listOf("post:f1", "post:f2", "post:v1"), poster.log)
+        assertEquals("Vote results are out", poster.shown.getValue("v1").title)
+    }
+
+    @Test
+    fun aBurstOfVoteResultsReadsTheListOnce() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+            true
+        }
+        for (i in 1..4) source.arrivals.emit(item("v$i", kind = "vote.result", ref = "P1"))
+        runCurrent()
+        assertTrue(poster.shown.isEmpty())
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("one list read for the burst", 1, source.refreshCalls)
+        for (i in 1..4) assertEquals("Vote results not checked yet", poster.shown.getValue("v$i").title)
+        assertEquals("in the order they arrived", (1..4).map { "post:v$it" }, poster.log)
+        // Those that arrive while a read runs share the next read, one that started after they arrived.
+        val second = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            second.await()
+            true
+        }
+        voteResult("v5")
+        voteResult("v6")
+        voteResult("v7")
+        assertEquals(2, source.refreshCalls)
+        second.complete(Unit)
+        runCurrent()
+        assertEquals(3, source.refreshCalls)
+        assertTrue(listOf("v5", "v6", "v7").all { it in poster.shown })
+    }
+
+    @Test
+    fun aReadRunningWhenAVoteResultArrivesIsNotUsedForIt() = runTest {
+        notifier()
+        val first = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            first.await()
+            true
+        }
+        voteResult("v1")
+        // The list read for v1 is running; v2 arrives after the vault gave up on its vote.
+        voteResult("v2")
+        source.refresh = {
+            source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+            true
+        }
+        first.complete(Unit)
+        runCurrent()
+        assertEquals(2, source.refreshCalls)
+        assertEquals("Vote results not checked yet", poster.shown.getValue("v2").title)
+    }
+
+    @Test
+    fun underTheCoverAVoteResultIsPublicAndReadsNothing() = runTest {
+        notifier()
+        source.covered.value = true
+        voteResult("v1")
+        assertEquals("posted at once", "New activity in VettID", poster.shown.getValue("v1").title)
+        assertEquals("no list read", 0, source.refreshCalls)
+        assertEquals("no names read", 0, source.namesCalls)
+        // The cover comes up while the list is read: the public form, and no names used.
+        source.covered.value = false
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            true
+        }
+        voteResult("v2")
+        source.nowOverride = true
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("New activity in VettID", poster.shown.getValue("v2").title)
+        assertEquals(0, source.namesCalls)
+    }
+
+    @Test
+    fun aVoteResultWaitingForTheListIsDroppedByALockOrADismissal() = runTest {
+        val n = notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            true
+        }
+        voteResult("v1")
+        // Locked and opened again while it waited.
+        source.open.value = false
+        runCurrent()
+        source.open.value = true
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse(poster.shown.containsKey("v1"))
+        // A quiet re-post the member dismissed while it waited.
+        source.refresh = { true }
+        voteResult("v2")
+        assertTrue(poster.shown.containsKey("v2"))
+        val again = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            again.await()
+            true
+        }
+        arrive(item("v2", kind = "vote.result", ref = "P1").copy(quietRepost = true))
+        poster.shown.remove("v2")
+        n.onDismissed("v2")
+        again.complete(Unit)
+        runCurrent()
+        assertFalse(poster.shown.containsKey("v2"))
+    }
+
+    // --- the author's Opus review of #313 ---
+
+    /** Finding 2: one that arrives while a read runs is bounded by 3 s from its own arrival, not by the next read's cut-off. */
+    @Test
+    fun aVoteResultArrivingDuringAReadIsBoundedByThreeSecondsFromItsArrival() = runTest {
+        notifier()
+        source.refresh = { kotlinx.coroutines.awaitCancellation() }
+        voteResult("v1")
+        advanceTimeBy(1_000)
+        runCurrent()
+        voteResult("v2")
+        advanceTimeBy(FeedNotifier.VOTE_LIST_WAIT_MS - 1)
+        runCurrent()
+        assertEquals("Vote results are out", poster.shown.getValue("v1").title)
+        assertFalse("not yet at its arrival + 2.999 s", poster.shown.containsKey("v2"))
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals("at its arrival + 3.001 s, generic", "Vote results are out", poster.shown.getValue("v2").title)
+        assertEquals(2, source.refreshCalls)
+    }
+
+    /** Finding 3: a later arrival of the same item, behind the same read, replaces the one waiting: one post, the newer one. */
+    @Test
+    fun aLaterArrivalOfAWaitingVoteResultReplacesIt() = runTest {
+        notifier()
+        source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            true
+        }
+        // The same item twice (its vote changed): the older names a vote the list has not given up on.
+        source.arrivals.emit(item("v1", kind = "vote.result", ref = "P9"))
+        source.arrivals.emit(item("v1", kind = "vote.result", ref = "P1"))
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(1, source.refreshCalls)
+        assertEquals(listOf("post:v1"), poster.log)
+        assertEquals("Vote results not checked yet", poster.shown.getValue("v1").title)
+    }
+
+    /** Finding 3: posted again under the cover, it is not replaced later by the older arrival still waiting. */
+    @Test
+    fun aCoveredReArrivalIsNotOverwrittenByTheOlderWaitingOne() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            true
+        }
+        voteResult("v1")
+        source.covered.value = true
+        runCurrent()
+        voteResult("v1")
+        assertEquals("New activity in VettID", poster.shown.getValue("v1").title)
+        source.covered.value = false
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("post:v1"), poster.log)
+        assertEquals("New activity in VettID", poster.shown.getValue("v1").title)
+    }
+
+    /** Finding 5: read on another device while it waited: not posted. */
+    @Test
+    fun aVoteResultReadElsewhereWhileItWaitsIsNotPosted() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            true
+        }
+        voteResult("v1")
+        source.items.value = listOf(item("v1", kind = "vote.result", ref = "P1", status = "read"))
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse(poster.shown.containsKey("v1"))
+        assertTrue(poster.log.isEmpty())
+    }
+
+    /** The lead's review of #330: a stray cancellation out of a read does not leave the next read waiting with no runner. */
+    @Test
+    fun aStrayCancellationOutOfAReadDoesNotStrandTheReadsAfterIt() = runTest {
+        notifier()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        source.refresh = {
+            gate.await()
+            throw kotlinx.coroutines.CancellationException("stray")
+        }
+        voteResult("v1")
+        // v2 arrives during the read: it waits for the next one.
+        voteResult("v2")
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("Vote results are out", poster.shown.getValue("v1").title)
+        assertEquals("Vote results are out", poster.shown.getValue("v2").title)
+        // A later one gets a read of its own, and is titled from the list.
+        source.refresh = {
+            source.names = source.names.copy(votesGaveUp = setOf(voteKey))
+            true
+        }
+        voteResult("v3")
+        assertEquals(2, source.refreshCalls)
+        assertEquals("Vote results not checked yet", poster.shown.getValue("v3").title)
     }
 }

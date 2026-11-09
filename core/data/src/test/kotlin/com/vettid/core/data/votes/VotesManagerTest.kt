@@ -97,8 +97,12 @@ class VotesManagerTest {
             refuse[type]?.let { throw VaultOpException(type, it) }
         }
 
+        /** When set, `vote.list` waits for it: a read that has not answered yet. */
+        var listGate: CompletableDeferred<Unit>? = null
+
         override suspend fun list(after: String?, ack: List<String>): JsonObject {
             go("list")
+            listGate?.await()
             acks += ack
             return list
         }
@@ -432,6 +436,37 @@ class VotesManagerTest {
         m.onEvent(event("sync.event", """{"kind":"x"}"""))
         delay(100)
         assertEquals(1, ops.calls.count { it == "list" })
+    }
+
+    /** #313 R1-2: a read of an empty list cut off by the notifier's 3 s limit, or cancelled, does not leave it "loading". */
+    @Test
+    fun aReadCutOffWhileTheListIsEmptyDoesNotLeaveItLoading() = runTest {
+        val ops = Ops().apply {
+            list = listing(summary())
+            listGate = CompletableDeferred()
+        }
+        val m = manager(ops)
+        // The guard reports the caller's timeout as no answer: what matters is the state left behind.
+        withTimeoutOrNull(3_000) { runCatching { m.refresh() } }
+        assertEquals(ListLoad.NOT_LOADED, m.load.value)
+        // Cancelled outright, after a read that failed: back to "failed", not "loading".
+        ops.listGate = null
+        ops.refuse["list"] = "internal_error"
+        runCatching { m.refresh() }
+        assertEquals(ListLoad.FAILED, m.load.value)
+        ops.refuse.clear()
+        ops.listGate = CompletableDeferred()
+        val asked = ops.calls.count { it == "list" }
+        val read = launch { m.refresh() }
+        eventually { synchronized(ops) { ops.calls.count { it == "list" } } > asked }
+        assertEquals(ListLoad.LOADING, m.load.value)
+        read.cancel()
+        read.join()
+        assertEquals(ListLoad.FAILED, m.load.value)
+        // The next read loads it.
+        ops.listGate = null
+        m.refresh()
+        assertEquals(ListLoad.LOADED, m.load.value)
     }
 
     @Test
