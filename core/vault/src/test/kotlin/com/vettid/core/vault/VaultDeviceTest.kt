@@ -1796,6 +1796,73 @@ class VaultDeviceTest {
     }
 
     /**
+     * (owner decision a, GC #6474; vettid.org#558) The open transfer knows its own code (the same relay `r` and claim id
+     * `c`), also after a restart, so that the app refuses a re-scan of it before the claim fetch and any drop; another
+     * code is not its own.
+     */
+    @Test
+    fun theOpenTransferKnowsItsOwnCodeAcrossARestart() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val v = FakeVault()
+            // All made before the scan: the fixture numbers claim ids by the claims it still holds (a real one is random).
+            val link = transferLink(v, Ulid.new())
+            val sameVault = transferLink(v, Ulid.new())
+            val otherVault = transferLink(FakeVault(), Ulid.new())
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(link, RecordingAttester())
+            nextDeposit()
+            assertTrue("its own code", d.transferInPending!!.isCode(link))
+            assertFalse("another code of the same vault", d.transferInPending!!.isCode(sameVault))
+            assertFalse("another vault's code", d.transferInPending!!.isCode(otherVault))
+            assertFalse("not a code", d.transferInPending!!.isCode("not a link"))
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertTrue("its own code after a restart", reloaded.transferInPending!!.isCode(link))
+            reloaded.stop()
+        }
+    }
+
+    /**
+     * iOS #233's review (Medium, GC #6473), not repeated here: a scan that replaces an open transfer whose drop cannot be
+     * SAVED stops before anything changes. No new secret is made, nothing is deposited, the file still holds the open
+     * transfer (its start unchanged), and this device saves and sends nothing more, so the next session loads the open
+     * transfer and the old phone's approval of it still finds this phone's key.
+     */
+    @Test
+    fun aDropThatCannotBeSavedStopsTheScanBeforeAnythingChanges() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var fail = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (fail) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val phone = PhoneKeyStandIn(inner)
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            d.scan(FakeVault(), phone, "att-1")
+            nextDeposit()
+            val started = d.transferInPending!!.startedAt
+            fail = true
+            assertTrue("the scan fails", runCatching { d.scan(FakeVault(), phone, "att-2") }.isFailure)
+            assertNull("nothing deposited", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertEquals("no new secret, no drop", listOf("secret"), phone.events.toList())
+            fail = false
+            assertTrue("this device saves and sends nothing more", runCatching { d.scan(FakeVault(), phone, "att-3") }.isFailure)
+            assertNull("still nothing deposited", deposits.poll(500, TimeUnit.MILLISECONDS))
+            val reloaded = VaultDevice.load(config(inner), secrets)!!
+            assertEquals("the file still holds the open transfer", started, reloaded.transferInPending?.startedAt)
+            reloaded.stop()
+        }
+    }
+
+    /**
      * (review M2) A rejection that arrived while the settlement collected is still in the device's inbox after the
      * handler dropped the handshake: the wait that follows (`awaitTransfer`) ends with [PairingRejectedException].
      */

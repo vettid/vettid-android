@@ -106,6 +106,13 @@ internal data class TransferInRecord(
      * ([VaultDevice.startTransfer]'s `attestedKey`); null when it named none. Deleted with the transfer when it is dropped.
      */
     val attestKey: String? = null,
+    /**
+     * The scanned code's relay `r` and claim id `c` (owner decision a, GC #6474; vettid.org#558): a scan of the same code
+     * while this transfer is open is refused before the claim fetch and before any drop. Written with the transfer
+     * itself, so a restart that finds the transfer finds them too; null in a record written before them.
+     */
+    val codeRelay: String? = null,
+    val codeClaim: String? = null,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

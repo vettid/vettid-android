@@ -231,7 +231,21 @@ class NotATransferCodeException(val expired: Boolean = false) :
     IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
 
 /** (A6 audit N1) A transfer to this phone that is not finished ([VaultDevice.transferInPending]). */
-data class TransferInState(val startedAt: Instant, val sas: String?, val paired: Boolean, val userGuid: String?)
+data class TransferInState(
+    val startedAt: Instant,
+    val sas: String?,
+    val paired: Boolean,
+    val userGuid: String?,
+    /** The scanned code's relay `r` and claim id `c` (GC #6474), null in a record written before them. */
+    val codeRelay: String? = null,
+    val codeClaim: String? = null,
+) {
+    /** Whether [link] is this transfer's own code: the same relay `r` and claim id `c` (GC #6474, vettid.org#558). */
+    fun isCode(link: String): Boolean {
+        val q = runCatching { InviteQr.parseLink(link) }.getOrNull() ?: return false
+        return codeClaim != null && q.claimId == codeClaim && q.relay.trimEnd('/') == codeRelay?.trimEnd('/')
+    }
+}
 
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
@@ -1095,7 +1109,7 @@ class VaultDevice private constructor(
             // scan's key is made: a record still there afterwards (its delete failed) is let go here, never kept past this
             // point, so that no later settle can delete the key this scan is about to make. The app makes a new key at
             // every scan, so the dropped secret cannot be sent again either way; only an attested key may stay listed.
-            if (st.transferIn != null) dropTransferLocked()
+            if (st.transferIn != null) dropTransferOrStop()
             settleDroppedTransfer()
             if (st.droppedTransfer != null) {
                 st.droppedTransfer = null
@@ -1116,7 +1130,7 @@ class VaultDevice private constructor(
             } finally {
                 unlockSecret?.fill(0)
             }
-            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey())
+            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = q.relay, codeClaim = q.claimId)
             save()
         }
     }
@@ -1243,6 +1257,23 @@ class VaultDevice private constructor(
     }
 
     /**
+     * The drop of the open transfer a new scan replaces, or the end of the scan (iOS #233's review, Medium, GC #6473):
+     * if the drop cannot be saved, the file still holds the open transfer while memory no longer does. The scan then
+     * stops before any key, record or deposit is made (nothing is sent), and this device saves and sends nothing more
+     * ([forgotten]): the next session loads the file, open transfer included, and the old phone's approval of it still
+     * finds this phone's key.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure of the drop's save
+    private fun dropTransferOrStop() {
+        try {
+            dropTransferLocked()
+        } catch (e: Exception) {
+            forgotten = true
+            throw VaultStateException("the open transfer could not be dropped: the scan was stopped").also { it.initCause(e) }
+        }
+    }
+
+    /**
      * (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5; the failure table: a dropped transfer's phone "drops its handshake,
      * attested key and epoch-1 secret and cannot use them") Has the app delete what a dropped transfer left
      * ([DeviceState.droppedTransfer], recorded by [dropPairing]), under [lock], after the drop was saved.
@@ -1283,7 +1314,9 @@ class VaultDevice private constructor(
      * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
      */
     val transferInPending: TransferInState?
-        get() = st.transferIn?.let { TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid) }
+        get() = st.transferIn?.let {
+            TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid, it.codeRelay, it.codeClaim)
+        }
 
     /** Collect rounds of the running collection that ended, their messages handled (A6 audit N1). */
     private val roundsEnded = java.util.concurrent.atomic.AtomicLong()
