@@ -1896,6 +1896,30 @@ class VaultDeviceTest {
     }
 
     /**
+     * The scan of a different code before minute 10, after a restart: the open transfer reloaded from the file is dropped
+     * first (its attested key named once), and the new vault gets a secret the first code's vault never saw.
+     */
+    @Test
+    fun aScanAfterARestartThatReplacesAnOpenTransferDropsItFirst() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            val hostile = FakeVault()
+            d.scan(hostile, phone, "att-1")
+            val sent = hostile.secretIn(nextDeposit().second)
+            d.stop()
+            val reloaded = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)!!
+            val real = FakeVault()
+            reloaded.scan(real, phone, "att-2")
+            assertFalse(sent.contentEquals(real.secretIn(nextDeposit().second)))
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            reloaded.stop()
+        }
+    }
+
+    /**
      * (review M2) A rejection that arrived while the settlement collected is still in the device's inbox after the
      * handler dropped the handshake: the wait that follows (`awaitTransfer`) ends with [PairingRejectedException].
      */
