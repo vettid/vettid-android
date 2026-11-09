@@ -38,6 +38,10 @@ jobs:
         # Tests against the local dev stack skip themselves here; the
         # instrumented tests run on a phone, not in CI (devstack/README.md).
         run: ./gradlew testDebugUnitTest :core:crypto:test :core:relay:test
+      - name: instrumented test sources compile (no device)
+        # The instrumented tests run on a phone, not here, so nothing else builds their sources (#326). The libraries'
+        # run against debug; the app's only against devStack (its tests use :core:testing's DevStack, devstack/README.md).
+        run: ./gradlew compileDebugAndroidTestKotlin :app:compileFullDevStackAndroidTestKotlin -PvettidTestBuildType=devStack
       - name: Android lint
         run: ./gradlew :app:lintDebug
       - name: build (debug, devStack, release of both distributions, staging)

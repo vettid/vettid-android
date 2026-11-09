@@ -66,6 +66,12 @@ class RecoverTypeScreenTest {
         override fun submitPin() = Unit
         override fun setPassword(v: String) = Unit
         override fun submitPassword() = Unit
+        override fun askStartOver() = Unit
+        override fun dismissStartOver() = Unit
+        override fun confirmStartOver() = Unit
+        override fun tryPinAgain() = Unit
+        override fun checkAgain() = Unit
+        override fun useNewCode() = Unit
         override fun finish() = Unit
     }
 
