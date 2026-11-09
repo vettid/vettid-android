@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -409,6 +410,7 @@ class VotesManager(
             if (availabilityFlow.value == VotesAvailability.UNSUPPORTED) return@withLock
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
+            val before = loadState.value
             if (votesFlow.value.isEmpty()) loadState.value = ListLoad.LOADING
             val acks = synchronized(lock) { pendingAck.toList() }
             try {
@@ -443,10 +445,17 @@ class VotesManager(
                     forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
                     forgetRecheckStamps(epoch, shown.mapTo(HashSet()) { it.key })
                 }
+            } catch (e: CancellationException) {
+                synchronized(lock) { if (gen == generation) cutOff(before) }
+                throw e
             } catch (e: VaultFailure) {
+                // Cut off by the caller (a timeout the guard reports as no answer): not a failure of the list.
+                val cut = !currentCoroutineContext().isActive
                 synchronized(lock) {
                     if (gen == generation) {
-                        if (e.kind == FailureKind.NOT_SUPPORTED) {
+                        if (cut) {
+                            cutOff(before)
+                        } else if (e.kind == FailureKind.NOT_SUPPORTED) {
                             availabilityFlow.value = VotesAvailability.UNSUPPORTED
                             loadState.value = ListLoad.LOADED
                         } else {
@@ -456,6 +465,16 @@ class VotesManager(
                 }
                 throw e
             }
+        }
+    }
+
+    /**
+     * Under [lock]: a read was cancelled or timed out (the notifier's 3 s wait, #313): the load state it set goes back to
+     * what it was ([before]), so an empty list does not stay "loading" until the next read.
+     */
+    private fun cutOff(before: ListLoad) {
+        if (loadState.value == ListLoad.LOADING) {
+            loadState.value = if (before == ListLoad.LOADING) ListLoad.NOT_LOADED else before
         }
     }
 

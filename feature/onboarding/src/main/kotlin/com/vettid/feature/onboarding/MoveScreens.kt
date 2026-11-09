@@ -479,7 +479,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                     Modifier.testTag("preflight_error"),
                 )
             }
-            if (p != null) PreflightNotices(p, true, {}, state.approveOffer, actions::setApproveOffer, state.notes)
+            if (p != null) PreflightNotices(p, true, {})
             if (!blocked && p != null) {
                 SecretField(
                     value = state.pin,
@@ -502,6 +502,8 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
                 }
             }
             if (state.error != null) Failure(state.error, lockFirst, shownCode = state.errorShown)
+            // The release offer after the PIN and its failure, compact, the full notes one tap away (owner decision 2026-11-07).
+            if (p != null) ReleaseOfferNotice(p, state.approveOffer, actions::setApproveOffer, state.notes)
         }
     }
 }

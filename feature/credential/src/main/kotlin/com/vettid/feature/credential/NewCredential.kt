@@ -265,6 +265,8 @@ fun NewCredentialContent(state: NewCredentialUiState, actions: NewCredentialActi
         SecretField(
             state.confirm, actions.setConfirm, stringResource(R.string.credential_password_confirm),
             error = if (state.mismatch) stringResource(R.string.credential_password_mismatch) else null,
+            // Done hides the keyboard and sends nothing (#323): the acknowledgement and the button below still have to be used.
+            modifier = Modifier.testTag("new_credential_confirm"),
         )
         Spacer(Modifier.height(Spacing.m))
         Row(
