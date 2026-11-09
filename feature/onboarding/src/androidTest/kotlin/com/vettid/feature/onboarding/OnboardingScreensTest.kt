@@ -44,6 +44,7 @@ private object NoUnlockActions : UnlockActions {
     override fun setPassword(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
+    override fun showSignerHelp(show: Boolean) = Unit
     override fun askErase() = Unit
     override fun dismissErase() = Unit
     override fun confirmErase() = Unit
@@ -66,11 +67,16 @@ class OnboardingScreensTest {
             }
         }
         rule.onNodeWithTag("primary_button").assertIsEnabled()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_title)).assertDoesNotExist()
         rule.onNodeWithTag("backup_off").performClick()
-        rule.onNodeWithText("Losing this phone loses your credential").assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_title)).assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_warning_body)).assertExists()
+        rule.onNodeWithText(rule.activity.getString(R.string.onboarding_backup_off_ack)).assertExists()
         rule.onNodeWithTag("primary_button").assertIsNotEnabled()
         rule.onNodeWithTag("backup_off_ack").performClick()
         rule.onNodeWithTag("primary_button").assertIsEnabled()
+        rule.onNodeWithTag("backup_off_ack").performClick()
+        rule.onNodeWithTag("primary_button").assertIsNotEnabled()
     }
 
     @Test
@@ -125,12 +131,14 @@ class OnboardingScreensTest {
     }
 
     @Test
-    fun theUnlockOfferShowsWhatsNewAndTheApproval() {
+    fun theUnlockOfferIsCompactWithWhatsNewOneTapAway() {
         val preflight = PreflightInfo(release(4), 4, false, false, release(5))
         rule.setContent { VettIdTheme { UnlockContent(UnlockUiState(loading = false, preflight = preflight), NoUnlockActions) } }
-        rule.onNodeWithTag("whats_new_loading").assertExists()
-        rule.onNodeWithTag("whats_new").assertExists()
+        rule.onNodeWithTag("release_offer").assertExists()
         rule.onNodeWithTag("approve_offer").assertExists()
+        rule.onNodeWithTag("whats_new").assertDoesNotExist()
+        rule.onNodeWithTag("whats_new_open").performClick()
+        rule.onNodeWithTag("whats_new_loading").assertExists()
     }
 
     @Test
@@ -182,7 +190,7 @@ private fun FormScreenForBackup(backup: Boolean, ack: Boolean, onBackup: (Boolea
         title = "Backup",
         primaryLabel = "Continue",
         onPrimary = {},
-        primaryEnabled = backup || ack,
+        primaryEnabled = OnboardingUiState(backup = backup, backupOffAcknowledged = ack).canContinueBackup,
     ) {
         BackupChoice(backup, ack, onBackup, onAck)
     }

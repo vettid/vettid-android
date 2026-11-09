@@ -4,15 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +26,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -43,7 +38,6 @@ import com.vettid.core.data.vault.LockNotice
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.MoveUnconfirmed
 import com.vettid.core.data.vault.PreflightInfo
-import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
@@ -176,11 +170,7 @@ fun UnlockContent(
                     modifier = Modifier.testTag("unlock_service_wait"),
                 )
             }
-            if (p != null) {
-                PreflightNotices(
-                    p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer, state.notes,
-                )
-            }
+            if (p != null) PreflightNotices(p, state.updateAcknowledged, actions::acknowledgeUpdate)
             // The lock the member asked for, until the vault has confirmed it: said here, wherever they locked from.
             // These appear and change by themselves, so each is announced to a screen reader when it does.
             when (val lock = state.lock) {
@@ -420,6 +410,9 @@ fun UnlockContent(
                 state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
                 state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }
+            // The release offer last: after the PIN and every result of the unlock (their explanations and the erase come
+            // first), compact, the full notes one tap away (owner decision 2026-11-07, ANDROID-PLAN 0.1.122).
+            if (p != null) ReleaseOfferNotice(p, state.approveOffer, actions::setApproveOffer, state.notes)
         }
     }
     state.move?.takeIf { state.returnConfirm }?.let { m ->
@@ -608,23 +601,17 @@ fun AppLockScreen(onUnlock: () -> Unit, method: AppLockMethod = AppLockMethod.BI
 
 /**
  * The release check's notices before the PIN (§11.10.6): an older release (the PIN is not sent), a newer
- * one to acknowledge, a deprecated or retired release, and the newest active release to approve with
- * this unlock. Shared by the unlock and the recovery's PIN step.
+ * one to acknowledge, a deprecated or retired release. The newest active release to approve with this unlock is
+ * [ReleaseOfferNotice], below the PIN. Shared by the unlock and the recovery's PIN step.
  */
 @Composable
-internal fun PreflightNotices(
-    p: PreflightInfo,
-    updateAcknowledged: Boolean,
-    onAcknowledgeUpdate: () -> Unit,
-    approveOffer: Boolean,
-    onApproveOffer: (Boolean) -> Unit,
-    notes: ReleaseNotes?,
-) {
+internal fun PreflightNotices(p: PreflightInfo, updateAcknowledged: Boolean, onAcknowledgeUpdate: () -> Unit) {
     if (p.rollback) {
         NoticeCard(
             NoticeKind.URGENT,
             stringResource(R.string.unlock_rollback_title),
             stringResource(R.string.unlock_rollback_body, p.routed.number.toInt(), p.lastNumber.toInt()),
+            modifier = Modifier.testTag("unlock_rollback"),
         )
     } else if (p.softwareUpdated) {
         NoticeCard(
@@ -646,30 +633,8 @@ internal fun PreflightNotices(
             if (p.routed.status == "retired") NoticeKind.URGENT else NoticeKind.WARNING,
             stringResource(R.string.unlock_status_title, p.routed.number.toInt(), p.routed.status),
             ends?.let { stringResource(R.string.unlock_status_body_ends, it) } ?: stringResource(R.string.unlock_status_body),
+            modifier = Modifier.testTag("unlock_release_status"),
         )
-    }
-    val offer = p.offer
-    if (offer != null && !p.rollback) {
-        // What's new first (ANDROID-PLAN 0.1.31), then the fingerprint and the approval.
-        WhatsNew(offer.number, notes, offer.notes)
-        NoticeCard(
-            NoticeKind.INFO,
-            stringResource(R.string.unlock_offer_title, offer.number.toInt()),
-            stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint),
-            modifier = Modifier.testTag("release_offer"),
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = Spacing.touchTarget)
-                .toggleable(value = approveOffer, role = Role.Checkbox, onValueChange = onApproveOffer)
-                .testTag("approve_offer"),
-        ) {
-            Checkbox(checked = approveOffer, onCheckedChange = null)
-            Spacer(Modifier.width(Spacing.s))
-            Text(stringResource(R.string.unlock_offer_approve), style = MaterialTheme.typography.bodyMedium)
-        }
     }
 }
 
