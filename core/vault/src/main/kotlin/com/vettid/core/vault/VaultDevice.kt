@@ -1100,24 +1100,21 @@ class VaultDevice private constructor(
             checkLive()
             val before = st.scanCode
             st.scanCode = code
+            var saved = false
             try {
                 save()
-            } catch (e: Exception) {
-                st.scanCode = before // nothing changed: memory stays as the file is
-                throw e
+                saved = true
+            } finally {
+                if (!saved) st.scanCode = before // nothing changed: memory stays as the file is
             }
         }
-        val blob = try {
-            relayFor(q.relay).getClaim(q.claimId)
-        } catch (e: Throwable) {
-            endScan(code)
-            throw e
-        }
+        var recorded = false
         try {
+            val blob = relayFor(q.relay).getClaim(q.claimId)
             transferAfterClaim(q, code, blob, attester, attestedKey, unlockSecretFor)
-        } catch (e: Throwable) {
-            endScan(code)
-            throw e
+            recorded = true
+        } finally {
+            if (!recorded) endScan(code)
         }
     }
 
