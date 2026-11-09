@@ -52,7 +52,7 @@ import java.time.Instant
  * every call is recorded in [calls]; [fail] makes the next calls of a name
  * throw; the unlock outcomes are scripted in [unlockResults].
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass") // TEST ONLY: one fake for every repository the ViewModels use
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
