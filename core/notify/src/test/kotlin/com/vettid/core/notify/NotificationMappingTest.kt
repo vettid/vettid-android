@@ -41,6 +41,8 @@ class NotificationMappingTest {
             "vote.open", "vote.closing", "vote.result", "vote.problem",
             // ANDROID-PLAN 0.1.74 "Notifications": a spending limit's items, on Vault activity.
             "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
+            // VAULT-MESSAGING 0.87.0 §10.9: another of the member's devices needs an update (priority high), on Vault activity.
+            "device.update_needed",
         ),
     )
 

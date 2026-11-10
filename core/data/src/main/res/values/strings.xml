@@ -189,6 +189,9 @@
     <string name="data_feed_device_transferred">Your vault moved to this phone</string>
     <string name="data_feed_device_replaced">Your vault moved to a new phone</string>
     <string name="data_feed_device_signer_changed">Your vault moved to another version of VettID</string>
+    <!-- VAULT-MESSAGING 0.87.0 §6.3.1 "An app from before release 29", §10.9 `device.update_needed`: another of the member's devices needs an update. Owner-approved 2026-11-06 (named; the name from device.list, bidi-isolated) and 2026-11-10 (without a name), both apps (vettid-ios #238). -->
+    <string name="data_feed_device_update_needed_named">%1$s needs an update to keep working with your vault. Update the app.</string> <!-- Owner-approved 2026-11-06 -->
+    <string name="data_feed_device_update_needed">One of your devices needs an update to keep working with your vault. Update the app on it.</string> <!-- Owner-approved 2026-11-10 -->
     <string name="data_feed_signer_from_to">From %1$s to %2$s</string>
     <string name="data_signer_google_play">Google Play (signed by Google)</string>
     <string name="data_signer_vettid">F-Droid or direct (signed by VettID)</string>

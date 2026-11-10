@@ -167,6 +167,29 @@ class FeedNotifierTest {
     }
 
     /**
+     * `device.update_needed` (VAULT-MESSAGING 0.87.0 §10.9, priority high): on Vault activity, the device named by the device
+     * list as last read; under the cover no name is read or said.
+     */
+    @Test
+    fun anUpdateNeededNoticeNamesTheDeviceOnlyUncovered() = runTest {
+        notifier()
+        source.names = source.names.copy(devices = mapOf("d1" to "Al's iPad"))
+        val update = FeedItem("u1", 1, "device.update_needed", "2026-11-10T12:00:00Z", "active", "high", deviceId = "d1")
+        arrive(update)
+        val n = poster.shown.getValue("u1")
+        assertEquals(Channels.ACTIVITY, n.channel)
+        assertEquals("\u2068Al's iPad\u2069 needs an update to keep working with your vault. Update the app.", n.title)
+        source.covered.value = true
+        val before = source.namesCalls
+        arrive(update.copy(itemId = "u2"))
+        val c = poster.shown.getValue("u2")
+        assertEquals(c.publicTitle, c.title)
+        assertFalse(c.names)
+        assertFalse("${c.title} ${c.text}", "iPad" in "${c.title} ${c.text}")
+        assertEquals("no names read under the cover", before, source.namesCalls)
+    }
+
+    /**
      * The wallet's feed items (ANDROID-PLAN §4 "Wallet", "Notifications"; `wallet.created` is History only): all on Vault
      * activity; a wallet's name only with names on and no cover; under the cover nothing is read and no txid or name is said.
      */

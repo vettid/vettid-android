@@ -57,6 +57,8 @@ class InitiatorConfig(
     val id: String? = null,
     val finId: String? = null,
     val now: Instant? = null,
+    /** (0.86.0, §5.3, §10.8) The inner `features` list hs.init and hs.fin carry; null: none. */
+    val features: List<String>? = null,
 )
 
 /** The initiator's result: the active epoch and hs.fin to deposit. */
@@ -160,6 +162,7 @@ class Initiator private constructor(
                         type = HsTypes.FIN,
                         ts = now,
                         body = HsFin(Schedule.signFin(cfg.identity, th), n).marshal(cfg.purpose),
+                        features = cfg.features,
                     ),
                 )
                 return InitiatorResult(epoch, fin, resp, verifyIk.copyOf(), newKem, inner, sas)
@@ -209,7 +212,7 @@ class Initiator private constructor(
                 val bodyBytes = body.marshal()
                 // (Release R) A transfer's unlock secret: the message's copy and the marshalled body are zeroed once sealed.
                 body.wipeUnlockSecret()
-                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = bodyBytes)
+                val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = bodyBytes, features = cfg.features)
                 try {
                     return if (rekey) {
                         // §6.2: a rekey hs.init travels in session mode under the
@@ -267,6 +270,8 @@ class ResponderConfig(
     val expectedCtx: String? = null,
     val id: String? = null,
     val now: Instant? = null,
+    /** (0.86.0, §5.3) The inner `features` list hs.resp carries; null: none. */
+    val features: List<String>? = null,
 )
 
 /** A decrypted, validated hs.init awaiting the responder's decision. */
@@ -305,7 +310,9 @@ class PendingInit private constructor(
         }
         try {
             val resp = HsResp(cfg.token, cfg.reconnectToken, chosen, cfg.rotations, Schedule.signResp(cfg.identity, th), nR)
-            val inner = Inner(id = cfg.id ?: Ulid.new(now), type = HsTypes.RESP, ts = now, body = resp.marshal(body.purpose))
+            val inner = Inner(
+                id = cfg.id ?: Ulid.new(now), type = HsTypes.RESP, ts = now, body = resp.marshal(body.purpose), features = cfg.features,
+            )
             val padded = Inner.encode(inner, Mode.SEALED)
             val out = try {
                 sealer.seal(padded)

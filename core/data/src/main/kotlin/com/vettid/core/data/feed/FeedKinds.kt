@@ -168,6 +168,8 @@ object FeedKinds {
         "device.pair.pending", "device.paired", "device.unlinked", "device.transferred", "device.replaced",
         "device.signer_changed",
         "device.session.pending", "approval.pending",
+        // VAULT-MESSAGING 0.87.0 §10.9, §6.3.1 "An app from before release 29": another device's app lacks `hs_confirm`.
+        "device.update_needed",
         "credential.alarm", "credential.password_failed", "credential.rotated", "credential.reset",
         "owner_check.failed", "owner_check.locked", "owner_check.hold_changed",
         "guide",
@@ -349,6 +351,11 @@ object FeedKinds {
             "device.transferred" -> FeedText(R.string.data_feed_device_transferred)
             "device.replaced" -> FeedText(R.string.data_feed_device_replaced)
             "device.signer_changed" -> FeedText(R.string.data_feed_device_signer_changed)
+            // (0.87.0 §6.3.1, the owner's wording of 2026-11-06 and 2026-11-10) The device by its name in `device.list`; without
+            // one (the list not read, the device not listed, or listed without a name) the wording that names no device.
+            "device.update_needed" -> named(
+                R.string.data_feed_device_update_needed_named, R.string.data_feed_device_update_needed, deviceName(item, names),
+            )
             "device.session.pending" ->
                 named(R.string.data_feed_device_session_named, R.string.data_feed_device_session, deviceName(item, names))
             "approval.pending" ->
@@ -565,6 +572,8 @@ object FeedKinds {
             "device.paired" -> item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
             "device.pair.pending" -> FeedTarget.Pairing
             "device.unlinked" -> FeedTarget.DeviceList
+            // §10.9 (0.87.0): another of the member's devices needs an update; Devices & agents lists it.
+            "device.update_needed" -> FeedTarget.DeviceList
             // AA5: the agent's page (the Resume banner for a paused agent); the list when the item names no device.
             "leash.agent.suspended", "leash.referrals_limited", "leash.rate_limited" ->
                 item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
