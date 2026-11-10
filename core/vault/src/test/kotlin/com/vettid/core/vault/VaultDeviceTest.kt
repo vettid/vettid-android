@@ -1937,6 +1937,176 @@ class VaultDeviceTest {
     }
 
     /**
+     * (The blind reviews of #334, Fable L3) A scan whose hs.init is not sent (here its attestation fails, after the bundle
+     * was opened) leaves the device as it was: no vault pinned in memory or in the file the scan's end saves.
+     */
+    @Test
+    fun aScanWhoseHsInitIsNotSentLeavesNoVaultPinned() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val failing = object : com.vettid.core.altchan.Attester {
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest =
+                    throw java.io.IOException("keystore busy")
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            val link = transferLink(FakeVault(), Ulid.new())
+            assertTrue("the scan fails", runCatching { d.startTransfer(link, failing) }.isFailure)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertFalse("no vault pinned", d.hasVault)
+            assertFalse("no code left behind", d.isOpenTransferCode(link))
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertFalse("nor in the file", reloaded.hasVault)
+            reloaded.stop()
+        }
+    }
+
+    /**
+     * (The re-check of fd8f055d, Low-3; the review of c58c8fc3, L4) A scan whose hs.init deposit the relay refuses leaves
+     * the device as it was: no vault pinned and the standing token's expiry unchanged (the hs.init's token moved it before
+     * the deposit), in memory and in the file; and while the scan was under way it counted as open.
+     */
+    @Test
+    fun aScanWhoseDepositIsRefusedLeavesTheTokenExpiryAsItWas() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val before = d.issuedTokenExpMs
+            refuseDeposits = "forbidden"
+            val link = transferLink(FakeVault(), Ulid.new())
+            var openDuring = false
+            val probe = object : com.vettid.core.altchan.Attester {
+                private val real = RecordingAttester()
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest {
+                    openDuring = d.transferScanOpen // asked under the scan's lock, after its claim fetch
+                    return real.attest(challenge)
+                }
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            assertTrue("the scan fails", runCatching { d.startTransfer(link, probe) }.isFailure)
+            assertTrue("the relay was asked", refused.get() > 0)
+            assertTrue("open while under way", openDuring)
+            assertFalse("not open after it ended", d.transferScanOpen)
+            assertEquals("the expiry as it was", before, d.issuedTokenExpMs)
+            assertFalse("no vault pinned", d.hasVault)
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertEquals("nor in the file", before, reloaded.issuedTokenExpMs)
+            assertFalse(reloaded.hasVault)
+            reloaded.stop()
+        }
+    }
+
+    /**
+     * (The blind reviews of #335, Opus M1) A drop whose save fails (here the member's Cancel, [VaultDevice.abandonTransfer])
+     * leaves the file holding the open transfer: the device stops, and a later forget is still guarded
+     * ([VaultDevice.forgetIfTransferOpen] forgets it alone, so a store that cannot be cleared stops it), whatever memory says.
+     */
+    @Test
+    fun aDropWhoseSaveFailsStillGuardsTheForget() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var failSave = false
+            var failClear = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (failSave) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() {
+                    if (failClear) throw java.io.IOException("read-only")
+                    inner.clear()
+                }
+            }
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val link = transferLink(FakeVault(), Ulid.new())
+            d.startTransfer(link, RecordingAttester())
+            nextDeposit()
+            val started = d.transferInPending!!.startedAt
+            failSave = true
+            assertTrue("the drop fails", runCatching { d.abandonTransfer() }.isFailure)
+            failClear = true
+            assertTrue("the forget is guarded and stops", runCatching { d.forgetIfTransferOpen() }.isFailure)
+            val reloaded = VaultDevice.load(config(inner), secrets)!!
+            assertEquals("the file still holds the open transfer", started, reloaded.transferInPending?.startedAt)
+            reloaded.stop()
+        }
+    }
+
+    /**
+     * (#335's re-check) A device stopped by a drop it could not save says so ([VaultDevice.stopped], so the app drops it
+     * through the guard before a new scan) and never collects again (Fable L5: its handle would ack every message unread).
+     */
+    @Test
+    fun aDeviceStoppedByAnUnsavedDropSaysSoAndNeverCollects() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var failSave = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (failSave) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val d = VaultDevice.create(config(store), appSecrets())
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester())
+            nextDeposit()
+            assertFalse(d.stopped)
+            failSave = true
+            assertTrue("the drop fails", runCatching { d.abandonTransfer() }.isFailure)
+            assertTrue("stopped", d.stopped)
+            val job = d.start(this)
+            assertTrue("no collection started", job.isCompleted)
+        }
+    }
+
+    /** (#335, Opus Low-1) A forgotten device's one-off collects (the settlement's, the deadline's) take and ack nothing. */
+    @Test
+    fun aForgottenDevicesCollectsAckNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            queued.add(v.transferPaired(d))
+            d.forget()
+            assertEquals(0, d.collectOnce())
+            assertEquals(0, d.pollOnce())
+            assertNull("nothing acked", acked.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals("still waiting on the relay", 1, queued.size)
+        }
+    }
+
+    /** (The blind reviews of #335, Fable L1) The guard is decided under the device's lock: nothing open, nothing forgotten. */
+    @Test
+    fun forgetIfTransferOpenForgetsOnlyAnOpenTransfer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val idle = VaultDevice.create(config(store), secrets)
+            val before = store.load()?.toList()
+            assertFalse("nothing open: left as it is", idle.forgetIfTransferOpen())
+            assertEquals("the file is kept", before, store.load()?.toList())
+            idle.stop()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester())
+            nextDeposit()
+            assertTrue("an open transfer: forgotten", d.forgetIfTransferOpen())
+            assertNull("the file is gone", store.load())
+        }
+    }
+
+    /**
      * The scan of a different code before minute 10, after a restart: the open transfer reloaded from the file is dropped
      * first (its attested key named once), and the new vault gets a secret the first code's vault never saw.
      */

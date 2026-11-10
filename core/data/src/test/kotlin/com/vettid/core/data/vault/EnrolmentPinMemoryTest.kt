@@ -26,7 +26,7 @@ class EnrolmentPinMemoryTest {
         val set = code.indexOfFirst { it.startsWith("postedEnrol = d.pendingEnroll?.let") }
         assertEquals("forgetPostedPin()", code[set - 1])
         // When the session goes (a forget, a wipe, another code).
-        val drop = code.indexOfFirst { it.startsWith("private suspend fun dropSession(") }
+        val drop = code.indexOfFirst { it.startsWith("private suspend fun dropSessionLocked(") } // dropSession's body
         val end = (drop + 1 until code.size).first { code[it].startsWith("private ") || code[it].startsWith("override ") }
         assertTrue(code.subList(drop, end).any { it == "forgetPostedPin()" })
         // The typed PIN's digest of a comparison is zeroed.

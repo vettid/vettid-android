@@ -1576,8 +1576,38 @@ class VaultManager(
     }
 
 
-    /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
+    /**
+     * Drops the session after the vault forgot this device: fresh device keys for the next enrollment.
+     *
+     * (The re-checks of #334, Fable N3: every caller) A device that carries an open transfer is forgotten first, alone,
+     * before any key goes: if that fails, the device file still holds the transfer, which the old phone may still approve.
+     * Then nothing else is deleted: the session is dropped without forgetting (the next one reloads the file, the open
+     * transfer included) and the caller stops with [MoveRepository.CODE_TRANSFER_NOT_DROPPED], nothing changed.
+     */
+    @Suppress("TooGenericExceptionCaught") // whatever the forget threw: nothing more is deleted
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
+        // (The blind reviews of #335, Fable L1, Opus N1) Decided under the device's lock: an unpaired device with a transfer
+        // recorded or a scan under way (review L3) is forgotten there, alone. A paired device (a move being finished) is
+        // not guarded: its forget is the fail-secure erase as before.
+        val d = session?.device
+        if (forget && d != null) {
+            try {
+                d.forgetIfTransferOpen()
+            } catch (e: CancellationException) {
+                // Cancelled while waiting for the device's lock (review L2; #335's Opus L1): nothing was done, and the
+                // session is kept, so that no second device object loads the same file.
+                throw e
+            } catch (e: Exception) {
+                runCatching { dropSessionLocked(forget = false) }
+                // The phone's storage, not the move: the existing local-state text (no new text), its own code (review N4).
+                throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED, cause = e)
+            }
+        }
+        dropSessionLocked(forget)
+    }
+
+    /** [dropSession]'s body, under [mutex]. */
+    private suspend fun dropSessionLocked(forget: Boolean) {
         if (forget) lockKeeper.abandon() // the vault is no longer this phone's: nothing to lock from here
         if (forget) finishMoveRunner.clearFailure() // a deleted or forgotten vault: nothing of a move is left to say
         observer?.cancel()
@@ -1986,6 +2016,25 @@ class VaultManager(
     override suspend fun redeemSetupCode(code: SetupCodeInput): String = enrolments.redeemSetupCode(code)
 
     override suspend fun forgetSetupCode() {
+        // (The review of c58c8fc3, L1) A forget that stopped (its open transfer could not be dropped) left no session: the
+        // device file is loaded again, so that it is judged, and guarded ([dropSession]), as the file holds it.
+        // (The blind reviews of #335, Fable L3) Only when there is a device file to judge: loading none would make a device
+        // (and register its mailbox at the relay), so that offline the member could not go back.
+        if (session == null && io { slots.file(slots.active).exists() }) {
+            try {
+                guard { session() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultFailure) {
+                // (The re-check of fd8f055d, Low-2) Only the known refusals to open a session go on as before (a wipe that
+                // runs or did not finish, a deletion, an open's answer unknown); any other failure to load the file stops
+                // here, so that a file still holding an open transfer is never left unjudged while the account is reset.
+                if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_DEVICE_NOT_LOADED, cause = e)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                // (#335's Opus L3, Fable N4) Anything else (a file that does not read): stopped the same way, never a crash.
+                throw VaultFailure(FailureKind.LOCAL_STATE, CODE_DEVICE_NOT_LOADED, cause = e)
+            }
+        }
         val paired = session?.device?.deviceId != null
         if (paired) return // a vault on this phone is never dropped this way
         if (session?.device?.let(::transferPinned) == true) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
@@ -1994,6 +2043,12 @@ class VaultManager(
         lockKeeper.abandon() // no vault on this phone: nothing to lock
         io { resetLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
+    }
+
+    /** A refusal to open any session at all ([session]): nothing of a device is loaded, by rule. */
+    private fun sessionRefused(e: VaultFailure) = when (e.code) {
+        WipeRun.CODE_WIPE_PENDING, SessionGate.CODE_WIPING, CODE_DELETING, CODE_UNDECIDED -> true
+        else -> false
     }
 
     override suspend fun forgetMissingVault() {
@@ -3418,23 +3473,6 @@ class VaultManager(
     private fun transferPinned(d: VaultDevice) =
         settlements.active || TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now())
 
-    /**
-     * (The blind reviews of #334, Fable M1: iOS #233's Medium on the app's real path) A new code over an open transfer
-     * forgets the device first, alone, before any key goes: if that fails, the device file still holds the transfer, which
-     * the old phone may still approve. Then nothing else is deleted: the session is dropped without forgetting (the next
-     * one reloads the file, the open transfer included) and the scan stops, with nothing changed and nothing sent.
-     */
-    @Suppress("TooGenericExceptionCaught") // whatever the forget threw: the scan stops
-    private suspend fun forgetOpenTransferOrStop(d: VaultDevice) {
-        try {
-            d.forget()
-        } catch (e: Exception) {
-            runCatching { dropSession(forget = false) }
-            // The phone's storage, not the move: the existing local-state text (no new text), its own code (review N4).
-            throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED, cause = e)
-        }
-    }
-
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         // (0.1.78) K is never forgotten while an open's answer is unknown.
@@ -3444,9 +3482,10 @@ class VaultManager(
         // recovery and no new code may forget it ("+C+").
         if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
-        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
+        // (#335's re-check) A device stopped by a drop it could not save is stale too: dropped through the guard.
+        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null || d.stopped
         if (d.deviceId == null && stale) {
-            if (d.transferInPending != null) forgetOpenTransferOrStop(d)
+            // An open transfer is forgotten alone first; if that fails, nothing else goes ([dropSession]).
             dropSession(forget = true)
         } else {
             retireOtherDevices()
@@ -4361,25 +4400,35 @@ class VaultManager(
         val d = session().device // opened if it is not yet (L1)
         if (d.deviceId != null || !d.isOpenTransferCode(link)) return@guard null
         val deadline = (d.transferInPending?.startedAt ?: Instant.now()).plusMillis(MoveRepository.HS_RESP_WAIT_MS)
-        while (true) {
-            d.transferInPending?.sas?.let { return@guard it } // the record's, also after a restart
-            d.pairingSas.value?.let { return@guard it }
-            if (!d.isOpenTransferCode(link)) return@guard null
-            if (!Instant.now().isBefore(deadline)) {
-                throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED)
+        var sas: String? = null
+        while (sas == null) {
+            sas = d.transferInPending?.sas ?: d.pairingSas.value // the record's first, also after a restart
+            if (sas == null) {
+                if (!d.isOpenTransferCode(link)) return@guard null
+                if (!Instant.now().isBefore(deadline)) {
+                    throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED)
+                }
+                kotlinx.coroutines.delay(SAME_CODE_POLL_MS)
             }
-            kotlinx.coroutines.delay(SAME_CODE_POLL_MS)
         }
-        @Suppress("UNREACHABLE_CODE")
-        null
+        sas
     }
 
     /** The transfer's SAS once its `hs.resp` arrived (the compare screen); §6.7.1 step 2 (0.10.6): 60 s, then "not answered". */
     private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {
         withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
     } catch (e: TimeoutCancellationException) {
-        d.abandonTransfer()
-        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
+        // "Not answered" whatever the drop's save did (#335's re-check, Opus L2): its failure is the cause, not the screen.
+        val dropped = try {
+            d.abandonTransfer()
+            null
+        } catch (c: CancellationException) {
+            throw c
+        } catch (@Suppress("TooGenericExceptionCaught") x: Exception) {
+            x
+        }
+        dropped?.addSuppressed(e) // the timeout kept for the logs
+        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = dropped ?: e)
     }
 
     override suspend fun awaitTransferIn(): Boolean = guard {
@@ -5110,6 +5159,12 @@ class VaultManager(
 
         /** (0.1.78) Refused: an open's answer is unknown; K is not forgotten and the phone does not start over. */
         const val CODE_UNDECIDED = "undecided"
+
+        /**
+         * (The blind reviews of #335) [forgetSetupCode] could not load the device file it must judge first: nothing was
+         * forgotten. Shown with the existing local-state text.
+         */
+        const val CODE_DEVICE_NOT_LOADED = "device_not_loaded"
         private const val CODE_REUSE_NOT_SAVED = "reuse_not_saved"
         private const val CODE_HISTORY_NOT_SAVED = "history_not_saved"
         private const val CODE_RETRY = "retry"

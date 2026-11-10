@@ -369,7 +369,13 @@ class OnboardingViewModel @Inject constructor(
     /** "That is not my account" (or another code): the redeemed code is dropped; back to the welcome screen. */
     override fun useAnotherCode() {
         viewModelScope.launch {
-            attempt { account.forgetSetupCode() }
+            var forgotten = false
+            attempt {
+                account.forgetSetupCode()
+                forgotten = true
+            }
+            // (The blind reviews of #335, Opus) A forget that stopped is said where the member is, never reset away.
+            if (!forgotten) return@launch
             enrolled = false
             state.value = OnboardingUiState(devHint = account.devHint)
         }
