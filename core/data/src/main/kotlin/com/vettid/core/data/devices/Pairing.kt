@@ -151,36 +151,31 @@ interface PairingRepository {
      * one held for the other role is rejected and replaced in this call, and a create of the other role still in flight is
      * superseded (its answer is dropped and rejected).
      */
-    suspend fun start(role: PairRole = PairRole.AGENT) = start(role, null)
-
     /**
-     * [start] for the screen [owner] (GC #7370, as iOS): from here the pairing is [owner]'s, so that an earlier screen's late
+     * Step 1 for the screen [owner] (GC #7370, as iOS): from here the pairing is [owner]'s, so that an earlier screen's late
      * [leave] or [acknowledge] (Navigation may clear a popped screen after the next one started) touches nothing of it.
      */
     suspend fun start(role: PairRole, owner: Any?)
 
     /** A screen opened for the pairing held (from its feed item) takes it as its own: see [start]'s owner. */
-    fun claim(owner: Any) {}
-
-    /** Step 3: `device.pair.approve`, with the first access length in seconds (null: no access yet); never any grants. */
-    suspend fun approve(sessionSeconds: Int?) = approve(sessionSeconds, null)
+    fun claim(owner: Any)
 
     /**
-     * [approve] bound to the comparison the sheet showed (GC #7370): refused, with nothing sent, when the pairing held is not
-     * [pairingId] (null: whatever comparison is held).
+     * Step 3: `device.pair.approve`, with the first access length in seconds (null: no access yet); never any grants. Bound to
+     * the comparison the sheet showed (GC #7370): refused, with nothing sent, when the pairing held is not [pairingId].
      */
-    suspend fun approve(sessionSeconds: Int?, pairingId: String?)
+    suspend fun approve(sessionSeconds: Int?, pairingId: String)
 
-    /** "They don't match": `device.pair.reject`; the stage becomes [PairingStage.Rejected]. */
-    suspend fun reject()
+    /**
+     * "They don't match": `device.pair.reject`; the stage becomes [PairingStage.Rejected]. Bound to the comparison shown:
+     * nothing is done when the pairing held is not [pairingId].
+     */
+    suspend fun reject(pairingId: String)
 
-    /** Cancel on the code screen, or leaving the compare screen: a pairing not approved is rejected, and nothing is held. */
-    suspend fun cancel()
-
-    /** The screen left without an answer: the same as [cancel], without waiting for it. */
-    fun leave() = leave(null)
-
-    /** [leave] by the screen [owner]: nothing is done when the pairing held is another screen's (null: whatever is held). */
+    /**
+     * The screen [owner] left without an answer: a pairing not approved is rejected, and nothing is held; nothing is done
+     * when the pairing held is another screen's (null: whatever is held).
+     */
     fun leave(owner: Any?)
 
     /** A final stage was read (rejected, paired, ended, expired): back to nothing held. */
@@ -199,6 +194,7 @@ interface PairingRepository {
  * [knownDeviceIds] (null while the list was never read) and [readDevices] find the new device's `device_id` when the
  * `device.paired` feed item does not arrive in time ([ID_WAIT]).
  */
+@Suppress("TooManyFunctions") // the repository, plus the no-screen forms tests use
 class PairingManager(
     private val scope: CoroutineScope,
     private val ops: suspend () -> PairingOps,
@@ -248,7 +244,8 @@ class PairingManager(
 
     /**
      * (Re-check Low 1) The owner left while its approval was out (a cancel can't stop it): if the vault then keeps the
-     * comparison open (the daily check due), it is rejected instead of kept with no screen. Reset by every start and [clear].
+     * comparison open (the daily check due), it is rejected instead of kept with no screen. The same holds while the member's
+     * own reject is out (busy too): that reject settles it. Reset wherever an owner is set, by every start and by [clear].
      */
     private var ownerLeft = false
 
@@ -357,6 +354,12 @@ class PairingManager(
         }
     }
 
+    /** [start] with no screen named (tests): what is held is nobody's in particular. */
+    internal suspend fun start(role: PairRole = PairRole.AGENT) = start(role, null)
+
+    /** [leave] with no screen named (tests). */
+    internal fun leave() = leave(null)
+
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // the guards of a state machine: each is one early exit
     override suspend fun start(role: PairRole, owner: Any?) {
         val gen: Int
@@ -364,7 +367,8 @@ class PairingManager(
         // A pairing of the other role that this start replaces: the vault is told it is not wanted.
         var replaced: String? = null
         synchronized(lock) {
-            // From here what is held is this screen's, also a pairing kept below (a live code, a comparison) that it shows.
+            // From here what is held is this screen's, also a pairing kept below (a live code, a comparison) that it shows. By
+            // design before the guards: a screen that is shown a kept pairing (it returns early) owns it as much as a new one.
             if (owner != null) {
                 this.owner = owner
                 // Also for a pairing kept below (a busy comparison taken over): this screen is there.
@@ -468,7 +472,7 @@ class PairingManager(
     }
 
     @Suppress("ReturnCount")
-    override suspend fun approve(sessionSeconds: Int?, pairingId: String?) {
+    override suspend fun approve(sessionSeconds: Int?, pairingId: String) {
         val gen: Int
         val p: PendingPairing
         val forRole: PairRole
@@ -476,7 +480,7 @@ class PairingManager(
             val s = flow.value
             val c = s.stage as? PairingStage.Compare ?: return
             // Only the comparison the sheet showed (GC #7370): another pairing held now is not approved by that tap.
-            if (pairingId != null && c.pending.pairingId != pairingId) return
+            if (c.pending.pairingId != pairingId) return
             forRole = role
             // Never an approval of what cannot be compared, nor after this phone's time ran out, nor twice.
             if (s.busy || !c.pending.comparable || !c.pending.ends.isAfter(now())) return
@@ -595,10 +599,13 @@ class PairingManager(
         return list.filter { forRole.matches(it) && it.id !in known && it.name == p.name }.singleOrNull()?.id
     }
 
-    override suspend fun reject() {
+    @Suppress("ReturnCount") // the guards of a state machine: each is one early exit
+    override suspend fun reject(pairingId: String) {
         val p: PendingPairing
         synchronized(lock) {
             val c = flow.value.stage as? PairingStage.Compare ?: return
+            // Only the comparison shown (GC #7440): another pairing held now is not rejected by that tap.
+            if (c.pending.pairingId != pairingId) return
             if (flow.value.busy) return
             p = c.pending
             flow.value = PairingState(c, busy = true)
@@ -614,7 +621,8 @@ class PairingManager(
         }
     }
 
-    override suspend fun cancel() = cancel(null)
+    /** Cancel with no screen named (tests): a pairing not approved is rejected, and nothing is held. */
+    internal suspend fun cancel() = cancel(null)
 
     @Suppress("ReturnCount") // the guards of a state machine: each is one early exit
     private suspend fun cancel(by: Any?) {

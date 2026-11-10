@@ -23,19 +23,19 @@ class FakePairing : PairingRepository {
     /** The pairing id the last approval was bound to. */
     var approvedId: String? = null
 
-    override suspend fun approve(sessionSeconds: Int?, pairingId: String?) {
+    override fun claim(owner: Any) {
+        calls += "claim"
+    }
+
+    override suspend fun approve(sessionSeconds: Int?, pairingId: String) {
         calls += "approve:$sessionSeconds"
         approvedId = pairingId
     }
 
-    override suspend fun reject() {
+    override suspend fun reject(pairingId: String) {
         calls += "reject"
         val s = state.value.stage
         if (s is PairingStage.Compare) state.value = PairingState(PairingStage.Rejected(told = true))
-    }
-
-    override suspend fun cancel() {
-        calls += "cancel"
     }
 
     override fun leave(owner: Any?) {

@@ -136,8 +136,12 @@ class PairViewModel @Inject constructor(
         repo.leave(token)
     }
 
-    fun codesMatch() {
-        sheetFor.value = (repo.state.value.stage as? PairingStage.Compare)?.pending?.pairingId
+    /**
+     * "The codes match" on the comparison [pairingId] shown (GC #7440): the sheet shows only over that very comparison (the
+     * state's `sheet`), and its approval is bound to that id ([pair]).
+     */
+    fun codesMatch(pairingId: String) {
+        sheetFor.value = pairingId
     }
 
     fun closeSheet() {
@@ -156,9 +160,9 @@ class PairViewModel @Inject constructor(
     }
 
     /** "They don't match", and Reject for a pairing that cannot be compared. */
-    fun reject() {
+    fun reject(pairingId: String) {
         sheetFor.value = null
-        viewModelScope.launch { repo.reject() }
+        viewModelScope.launch { repo.reject(pairingId) }
     }
 
     /** A final stage was read. */

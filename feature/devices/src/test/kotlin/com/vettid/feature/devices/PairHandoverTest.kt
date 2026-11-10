@@ -103,8 +103,9 @@ class PairHandoverTest {
         ops.gate!!.complete(Unit)
         waitFor({ "${m.state.value} ${ops.calls}" }) { m.state.value.stage is PairingStage.Code }
         assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
-        Thread.sleep(50)
+        runCurrent()
         assertFalse("B's code is not rejected", "reject:p2" in ops.calls)
+        assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
         cleared(b)
     }
 
@@ -124,7 +125,6 @@ class PairHandoverTest {
             waitFor({ "${m.state.value} ${ops.calls}" }) { "create:p2" in ops.calls }
             cleared(a)
             runCurrent()
-            Thread.sleep(50)
             assertEquals("B's create is not cancelled", PairingStage.Creating, m.state.value.stage)
             ops.gate!!.complete(Unit)
             waitFor({ "${m.state.value} ${ops.calls}" }) { m.state.value.stage is PairingStage.Code }
@@ -142,7 +142,6 @@ class PairHandoverTest {
             if (compare) m.onEvent(pending("p1"))
             cleared(a)
             runCurrent()
-            Thread.sleep(50)
             assertFalse("$compare: not rejected", "reject:p1" in ops.calls)
             assertTrue("$compare", if (compare) m.state.value.stage is PairingStage.Compare else m.state.value.stage is PairingStage.Code)
         }
@@ -155,7 +154,7 @@ class PairHandoverTest {
             val b = screen(m)
             runCurrent()
             m.onEvent(pending("p1"))
-            b.reject()
+            b.reject("p1")
             waitFor { m.state.value.stage is PairingStage.Rejected }
             cleared(a)
             runCurrent()
@@ -196,6 +195,27 @@ class PairHandoverTest {
             waitFor { "reject:p1" in ops.calls }
             assertEquals(PairingState(), m.state.value)
         }
+    }
+
+    /**
+     * (GC #7440) A screen opened from the feed item (held) claims the comparison held: cleared, it rejects it; the screen that
+     * made the code, cleared after, touches nothing.
+     */
+    @Test
+    fun aHeldScreenClaimsTheComparisonAndRejectsItWhenCleared() = runTest {
+        val ops = Ops()
+        val m = PairingManager(backgroundScope, ops = { ops }, now = { clock })
+        val a = screen(m)
+        waitFor { m.state.value.stage is PairingStage.Code }
+        m.onEvent(pending("p1"))
+        val b = PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to true)), m, FakeVault())
+        cleared(a)
+        runCurrent()
+        assertFalse("A's late clear leaves the comparison B claimed", "reject:p1" in ops.calls)
+        assertTrue(m.state.value.stage is PairingStage.Compare)
+        cleared(b)
+        waitFor { "reject:p1" in ops.calls }
+        assertEquals(PairingState(), m.state.value)
     }
 
     @Test

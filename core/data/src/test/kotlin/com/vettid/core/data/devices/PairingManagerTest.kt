@@ -31,6 +31,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
+/** The comparison held, as a sheet that shows it would name it. */
+private fun PairingManager.shown(): String = (state.value.stage as? PairingStage.Compare)?.pending?.pairingId ?: ""
+
+/** The approval and the reject of what is shown (the screens bind both to the comparison they show, GC #7370, #7440). */
+private suspend fun PairingManager.approve(sessionSeconds: Int?) = approve(sessionSeconds, shown())
+
+private suspend fun PairingManager.reject() = reject(shown())
+
 /** Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2; "Pair a desktop", owner decision 2026-11-05; VAULT-MESSAGING §6.7, §10.3). */
 @OptIn(ExperimentalCoroutinesApi::class)
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
@@ -300,6 +308,21 @@ class PairingManagerTest {
         m.approve(3600)
         assertTrue(m.state.value.stage is PairingStage.Compare)
         assertTrue(left.isEmpty())
+    }
+
+    /** (GC #7440) A reject is bound to the comparison shown: one for another pairing does nothing, nothing sent. */
+    @Test
+    fun aRejectForAnotherPairingDoesNothing() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending())
+        m.reject("p0")
+        assertEquals(listOf("create"), ops.calls)
+        assertTrue(m.state.value.stage is PairingStage.Compare)
+        m.reject("p1")
+        assertEquals(listOf("create", "reject:p1"), ops.calls)
+        assertTrue(m.state.value.stage is PairingStage.Rejected)
     }
 
     /** (GC #7370) An approval is bound to the comparison the sheet showed: one for another pairing is refused, nothing sent. */
