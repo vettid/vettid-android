@@ -6045,11 +6045,16 @@ class VaultDeviceTest {
 
         @Volatile
         var fail = false
+
+        /** When set, a save throws this instead (a Keystore or provider failure, not an IOException). */
+        @Volatile
+        var failWith: Exception? = null
         val saved = java.util.concurrent.CopyOnWriteArrayList<DeviceState>()
 
         override fun load() = inner.load()
 
         override fun save(state: ByteArray) {
+            failWith?.let { throw it }
             if (fail) throw java.io.IOException("no space left")
             inner.save(state)
             saved.add(stateJson.decodeFromString(DeviceState.serializer(), String(state)))
@@ -6472,6 +6477,84 @@ class VaultDeviceTest {
             expectConfirm(res.epoch)
             noConfirm(res.epoch)
             assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    /**
+     * (re-check Low-1) An answer the device sends while the activation is in memory only (a `relay.token.refresh` from the
+     * vault, still on the old epoch): its save fails too, so it is not deposited by a flush until a save holds it.
+     */
+    @Test
+    fun anAnswerQueuedWhileSavesFailWaitsForASave() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            store.fail = true
+            assertTrue(runCatching { d.handle(v.msg(res.fin)) }.isFailure)
+            assertTrue(runCatching { d.handle(v.seal("relay.token.refresh", "{}")) }.isFailure)
+            assertTrue(d.outboxEntries.any { it.type == "relay.token.refresh" })
+            d.flushOutbox()
+            assertNull("nothing deposited before a save holds it", deposits.poll(500, TimeUnit.MILLISECONDS))
+            store.fail = false
+            d.flushOutbox()
+            val answer = take(res.epoch, "relay.token.refresh")
+            assertNotNull(answer.re)
+        }
+    }
+
+    /**
+     * (re-check Low-2) A store failure that is not an IOException (a Keystore or provider error) is a failed save as any:
+     * the message is neither acked nor taken for seen, nothing is deposited, and its redelivery is handled once saves work.
+     */
+    @Test
+    fun aStoreFailureOfAnotherKindIsAFailedSave() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val old = v.keyring.current()!!
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            val fin = v.msg(res.fin)
+            serveMailbox = true
+            store.failWith = java.security.ProviderException("keystore")
+            queued.add(fin)
+            assertTrue(runCatching { d.collectOnce() }.isFailure)
+            assertTrue("not acked", acked.isEmpty())
+            d.flushOutbox()
+            assertNull("nothing deposited", deposits.poll(500, TimeUnit.MILLISECONDS))
+            store.failWith = null
+            queued.add(fin) // the relay's redelivery: the same msg_id
+            assertEquals(1, d.collectOnce())
+            assertEquals(fin.msgId, acked.poll(5, TimeUnit.SECONDS))
+            assertEquals(old.ctx, savedState(store).vault!!.confirmed)
+            expectConfirm(res.epoch)
+            serveMailbox = false
+        }
+    }
+
+    /** (re-check Low-2) Such a failure at a collection start's 12-day re-send does not end the collection. */
+    @Test
+    fun aStoreFailureAtACollectionStartDoesNotEndIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val r = rekeyed(this, store)
+            serveMailbox = true
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            store.failWith = IllegalStateException("keystore")
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            r.d.start(scope)
+            kotlinx.coroutines.delay(500)
+            assertTrue("still collecting", r.d.collecting)
+            assertNull(r.d.collectionEnded.value)
+            noConfirm(r.new, 300)
+            store.failWith = null
+            r.d.stop()
+            serveMailbox = false
+            scope.cancel()
         }
     }
 

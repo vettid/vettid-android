@@ -560,6 +560,11 @@ class VaultDevice private constructor(
 
     // --- persistence ---
 
+    /**
+     * Writes the state. Every failure of the store is an [IOException] (a Keystore error, a provider's), so that whatever
+     * keeps a message unacked and its effects unsent until a save holds them (§8.3; [handle], [flushOutbox]) sees it.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure of the store
     private fun save() {
         checkLive()
         st.vault?.let { v ->
@@ -569,8 +574,22 @@ class VaultDevice private constructor(
                 runCatching { AwaitingRekey(a.createdMs, Base64s.encodeStd(a.resp.export())) }.getOrNull()
             }.toMutableList()
         }
-        cfg.store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+        try {
+            cfg.store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Exception) {
+            throw IOException("state save", e)
+        }
         unsaved.clear() // every entry in memory is in the file now
+    }
+
+    /** Puts [entry] in the outbox in memory: never deposited before a save that holds it has succeeded ([unsaved]). */
+    private fun addToOutbox(entry: OutboxEntry) {
+        st.outbox.add(entry)
+        unsaved.add(entry.id) // cleared by the save that writes it
     }
 
     /** The persisted rekeys awaiting `hs.fin`; one that does not restore or is past [HANDSHAKE_TTL] is dropped. */
@@ -619,10 +638,7 @@ class VaultDevice private constructor(
         // This collection's latest attempt went out then (elapsed clock): a cut's lease starts by it + the wait.
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val job = scope.launch {
-            launch {
-                tickConfirm() // (0.88.1) hs.confirm again 12 days after the last one, checked at each collection start
-                flushOutbox()
-            }
+            launch { startChores() }
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
@@ -663,6 +679,22 @@ class VaultDevice private constructor(
         }
         collector = job
         return job
+    }
+
+    /**
+     * A collection start's own work: (0.88.1) `hs.confirm` again 12 days after the last one, then the outbox. Nothing it
+     * meets may end the collection (a failed child would cancel it): it is tried again at the next start or flush.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun startChores() {
+        try {
+            tickConfirm()
+            flushOutbox()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // the next start or flush tries again
+        }
     }
 
     /**
@@ -1630,7 +1662,7 @@ class VaultDevice private constructor(
         )
         val env = ep.seal(inner)
         val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
-        st.outbox.add(entry)
+        addToOutbox(entry)
         save()
         deliver(entry)
         return iid
@@ -2517,8 +2549,7 @@ class VaultDevice private constructor(
         val iid = Ulid.new(t)
         val env = ep.seal(Inner(id = iid, type = type, ts = t, body = VaultJson.bytes(body), features = DeviceFeatures.ALL))
         val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
-        st.outbox.add(entry)
-        unsaved.add(entry.id) // cleared by the save that writes it
+        addToOutbox(entry)
         if (save) {
             var saved = false
             try {
