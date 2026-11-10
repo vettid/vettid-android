@@ -190,6 +190,7 @@ internal class ChangeResolver(
     /** `credential.version`'s answer and its `ts` (the vault's clock). */
     data class Version(val exists: Boolean, val version: Long?, val alarm: Boolean, val ts: Instant, val key: String? = null)
 
+    @Suppress("TooManyFunctions") // one per step of the decision the vault manager carries out
     interface Ops {
         /** The unresolved change stored on the phone, or null. */
         fun marker(): UnresolvedChange?
@@ -227,6 +228,12 @@ internal class ChangeResolver(
 
         /** (N5) Keeps [c] (a decided state) on the phone until it is seen; null once seen. */
         fun saveDecision(c: ChangeCheck?) = Unit
+
+        /**
+         * (GC #6816, as vettid-ios #236) A reset was decided as applied by the version, without its answer: it replaced the
+         * credential key and named the new one to nobody here, so the key Vault status shows is not known any more.
+         */
+        fun keyUnknown() = Unit
     }
 
     private val mutex = Mutex()
@@ -286,6 +293,8 @@ internal class ChangeResolver(
             ChangeDecision.Verdict.APPLIED -> {
                 // Decided, but without the blob nothing is written yet: the next round decides again.
                 if (attempt { ops.fetch() } == null) return ChangeCheck.Unreachable(m.kind)
+                // A reset replaced the key (a PIN or password change keeps it: nothing to ask again).
+                if (m.kind == ChangeKind.RESET) ops.keyUnknown()
                 ops.confirm(m) // shown as success even when the write fails: the next round or unlock confirms it
                 ChangeCheck.Applied(m.kind)
             }

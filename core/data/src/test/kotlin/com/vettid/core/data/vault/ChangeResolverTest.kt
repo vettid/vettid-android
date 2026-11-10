@@ -51,6 +51,13 @@ class ChangeResolverTest {
         val confirmed = mutableListOf<UnresolvedChange>()
         val cleared = mutableListOf<UnresolvedChange>()
 
+        /** How many times the key shown on Vault status was said not known any more. */
+        var keyUnknown = 0
+
+        override fun keyUnknown() {
+            keyUnknown++
+        }
+
         /** Every credential operation the app would send meanwhile, as the gate lets it through. */
         val sent = mutableListOf<String>()
 
@@ -481,6 +488,38 @@ class ChangeResolverTest {
         assertEquals(ChangeDecision.Verdict.ENDED, v(1, "key-two", alarm = true))
         // A record without a held key (written by an older build) decides nothing from the version.
         assertEquals(ChangeDecision.Verdict.ENDED, ChangeDecision.of(reset.copy(heldKey = null), true, 1, false, late, "key-two"))
+    }
+
+    /**
+     * (GC #6816, as vettid-ios #236) A lost reset decided as applied by the version says the key is not known (Vault status
+     * asks again); a lost PIN or password change decided the same way keeps the key and says nothing, nor does a reset whose
+     * own answer arrived (it named the key) or one decided as not applied.
+     */
+    @Test
+    fun onlyALostResetDecidedAppliedLeavesTheKeyUnknown() = runTest {
+        val one = reset.copy(sentVersion = 1)
+        val applied = FakeOps(one).apply { versions += version(1, exp.minusSeconds(500), key = "key-two") }
+        val (r, scope) = resolver(testScheduler, applied)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), r.decide())
+        assertEquals(1, applied.keyUnknown)
+        scope.cancel()
+        for (m in listOf(pinChange, passwordChange)) {
+            val ops = FakeOps(m).apply { versions += version(8, exp.minusSeconds(500)) }
+            val (rr, s2) = resolver(testScheduler, ops)
+            assertEquals(ChangeCheck.Applied(m.kind), rr.decide())
+            assertEquals("${m.kind}", 0, ops.keyUnknown)
+            s2.cancel()
+        }
+        val answered = FakeOps(one).apply { resendAnswer = ChangeResolver.Answer.Ok }
+        val (ra, s3) = resolver(testScheduler, answered)
+        assertEquals(ChangeCheck.Applied(ChangeKind.RESET), ra.decide())
+        assertEquals("its answer named the key", 0, answered.keyUnknown)
+        s3.cancel()
+        val notApplied = FakeOps(reset).apply { versions += version(7, exp.plusSeconds(61), key = "key-one") }
+        val (rn, s4) = resolver(testScheduler, notApplied)
+        assertEquals(ChangeCheck.NotApplied(ChangeKind.RESET), rn.decide())
+        assertEquals(0, notApplied.keyUnknown)
+        s4.cancel()
     }
 
     /** A reset from a held blob of version 1 is decided by the key alone. */
