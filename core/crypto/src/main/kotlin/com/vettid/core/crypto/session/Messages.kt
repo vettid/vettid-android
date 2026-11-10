@@ -413,6 +413,28 @@ object HsTypes {
     const val INIT = "hs.init"
     const val RESP = "hs.resp"
     const val FIN = "hs.fin"
+
+    /**
+     * (0.86.0, §6.3.1) The responder's confirmation of a new epoch: body `{}`, session mode under that epoch, durable,
+     * not a request (never answered).
+     */
+    const val CONFIRM = "hs.confirm"
+}
+
+/** The receiving-side capability names this app advertises to its vault (§10.8, §10.2 `device.features`). */
+object DeviceFeatures {
+    /**
+     * (0.87.0, §6.3.1 "Capability") It runs §6.3.1's responder half toward its vault: `hs.confirm` and the confirmed
+     * epoch. A device starts no rekey, so the initiator half does not arise.
+     */
+    const val HS_CONFIRM = "hs_confirm"
+
+    /**
+     * What this app advertises, sorted: the inner `features` of every message it deposits to its vault and the
+     * `device.features` list. `relay_follow` is not implemented (the app does not follow relay-key rotations), so it is
+     * not advertised (as vettid-vault's `client` and vettid-ios #238).
+     */
+    val ALL: List<String> = listOf(HS_CONFIRM)
 }
 
 /** Constant-time check that a relay key equals the one on record (§6.3). */
