@@ -37,6 +37,73 @@ class DevicesViewModelsTest {
 
     private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, com.vettid.core.testing.FakeSocial())
 
+    /** What a hold does to the list in memory (`DevicesManager.clear()`): empty, not loaded. */
+    private fun holdClears() {
+        devices.devices.value = emptyList()
+        devices.load.value = ListLoad.NOT_LOADED
+    }
+
+    /** The answer of the next read, as `device.list` gives it. */
+    private fun readGives() {
+        devices.devices.value = listOf(phone, agent, desktop)
+        devices.load.value = ListLoad.LOADED
+    }
+
+    /**
+     * After a hold ends, an open list reads itself again (owner decision a, GC #7047, as vettid-ios #239): it no longer stays
+     * on its spinner until the member leaves and comes back.
+     */
+    @Test
+    fun anOpenListReadsAgainWhenTheHoldEnds() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.OK) }
+        val vm = DevicesViewModel(devices, vault)
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        vault.ownerCheck.value = check(OwnerCheckState.HELD)
+        holdClears()
+        advanceUntilIdle()
+        assertTrue("the spinner while held", vm.uiState.value.loading)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        readGives()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.loading)
+    }
+
+    /** A device's page does the same: the hold cleared the list it shows from. */
+    @Test
+    fun anOpenDevicePageReadsAgainWhenTheHoldEnds() = runTest {
+        val vm = page("d1")
+        advanceUntilIdle()
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        holdClears()
+        advanceUntilIdle()
+        devices.readAgain.emit(Unit) // the manager: the hold ended
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        readGives()
+        advanceUntilIdle()
+        assertEquals("Laptop", vm.uiState.value.device?.name)
+    }
+
+    /** A daily check that passes while the list is shown and was never cleared reads nothing more. */
+    @Test
+    fun aPassedCheckWithAListShownReadsNothingMore() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.DUE) }
+        val vm = DevicesViewModel(devices, vault)
+        vm.refresh()
+        val p = page("d1")
+        advanceUntilIdle()
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        devices.readAgain.emit(Unit)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        assertEquals("Laptop", p.uiState.value.device?.name)
+        assertFalse(vm.uiState.value.loading)
+    }
+
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
     @Test

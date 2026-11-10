@@ -65,10 +65,11 @@ class DevicesViewModel @Inject constructor(
 
     init {
         // The screen reads the list when it shows (`refresh`): once on opening, once on every return.
-        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself, and so does
+        // one the hold cleared (owner decision a, GC #7047, as vettid-ios #239), which would otherwise stay on its spinner.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED || repo.load.value != ListLoad.LOADED) refresh()
             }
         }
     }
@@ -201,6 +202,15 @@ class DeviceViewModel @Inject constructor(
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
         refresh()
+        // The hold ended (or the daily check passed): a list the hold cleared, or one refused because the check was due,
+        // reads again by itself (owner decision a, GC #7047, as vettid-ios #239). An agent's rules and permissions follow when
+        // the list shows it again (the collector below).
+        // The page holds nothing that could pass the check (the repository says when it cleared).
+        viewModelScope.launch {
+            repo.readAgain.collect {
+                if (local.value.loadError == FailureKind.OWNER_CHECK_REQUIRED || repo.load.value != ListLoad.LOADED) refresh()
+            }
+        }
         // The rules are an agent's: read once the list shows this device is one (and on every return to the page).
         viewModelScope.launch {
             repo.devices.map { list -> list.firstOrNull { it.id == id }?.isAgent == true }.distinctUntilChanged().filter { it }

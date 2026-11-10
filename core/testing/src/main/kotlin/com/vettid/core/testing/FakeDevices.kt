@@ -63,6 +63,9 @@ class FakeDevices : DevicesRepository {
         return bound
     }
 
+    /** What the vault's manager emits when the hold ends or a due check passes. */
+    override val readAgain = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+
     override fun dismissRemoved() {
         calls += "dismissRemoved"
         removed.value = null

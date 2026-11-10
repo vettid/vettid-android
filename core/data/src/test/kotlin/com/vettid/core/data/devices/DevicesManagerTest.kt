@@ -13,6 +13,7 @@ import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -346,6 +347,15 @@ class DevicesManagerTest {
             }
         }
         assertTrue(ops.calls.none { it.startsWith("end:") || it.startsWith("unlink:") })
+    }
+
+    /** The vault's manager says the hold ended (or a due check passed): open pages hear it, to read the list again. */
+    @Test
+    fun aClearedCheckTellsTheOpenPages() = runTest {
+        val m = manager(Ops())
+        val heard = async(kotlinx.coroutines.Dispatchers.Unconfined) { m.readAgain.first() }
+        m.checkCleared()
+        kotlinx.coroutines.withTimeout(1_000) { heard.await() }
     }
 
     @Test

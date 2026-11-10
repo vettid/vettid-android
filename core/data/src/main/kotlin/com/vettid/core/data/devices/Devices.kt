@@ -168,6 +168,8 @@ object DeviceWire {
     const val SKEW_SECONDS = 60L
 }
 
+private val NO_READ_AGAIN: SharedFlow<Unit> = MutableSharedFlow()
+
 /** The vault calls behind [DevicesManager] (§10.3, §10.11), so that it can be tested without a vault. */
 interface DevicesOps {
     suspend fun list(): JsonObject
@@ -234,6 +236,12 @@ interface DevicesRepository {
     suspend fun removalBoundSeconds(agentId: String): Long
 
     fun dismissRemoved()
+
+    /**
+     * (Owner decision a, GC #7047, as vettid-ios #239) Emits when the hold ended or a due daily check passed: an open
+     * device's page reads the list again (the hold cleared it), without holding anything that could pass the check.
+     */
+    val readAgain: SharedFlow<Unit> get() = NO_READ_AGAIN
 
     /**
      * An agent's grants that are not share rules, and whether it is paused (`leash.grant.list{agent_id}`, AA3), by agent id;
@@ -423,6 +431,15 @@ class DevicesManager(
             return DeviceWire.MAX_STATUS_TTL + DeviceWire.SKEW_SECONDS
         }
         return if (ttls.isEmpty()) 0 else ttls.max() + DeviceWire.SKEW_SECONDS
+    }
+
+    private val readAgainFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    override val readAgain: SharedFlow<Unit> = readAgainFlow.asSharedFlow()
+
+    /** The hold ended, or a due daily check passed (the vault's manager says so): open pages read the list again. */
+    fun checkCleared() {
+        readAgainFlow.tryEmit(Unit)
     }
 
     override fun dismissRemoved() {
