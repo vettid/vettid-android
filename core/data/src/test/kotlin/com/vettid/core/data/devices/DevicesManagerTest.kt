@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -347,6 +348,29 @@ class DevicesManagerTest {
             }
         }
         assertTrue(ops.calls.none { it.startsWith("end:") || it.startsWith("unlink:") })
+    }
+
+    /**
+     * Remove ends the device's session in the app's own record as End access does (owner decision a, GC #7047, as
+     * vettid-ios #239): on Android that record is this list (a renewal's end is the device's `session_expires_at` here,
+     * read by Approvals), so after either nothing of the session is left, and the device's asks leave Approvals.
+     */
+    @Test
+    fun aRemovalEndsTheSessionAsEndAccessDoes() = runTest {
+        val ops = Ops().apply { devices = fleet }
+        val gone = mutableListOf<String>()
+        val m = manager(ops, gone = gone)
+        m.refresh()
+        assertNotNull(m.devices.value.first { it.id == "a-new" }.sessionExpiresAt)
+        m.endAccess("a-new")
+        assertNull(m.devices.value.first { it.id == "a-new" }.sessionExpiresAt)
+        m.refresh()
+        assertNotNull("the vault's list again (the fake still has it)", m.devices.value.first { it.id == "a-new" }.sessionExpiresAt)
+        ops.gate = CompletableDeferred() // the re-read after the removal waits: what the removal itself did is seen
+        m.remove("a-new")
+        assertTrue("no session left for it", m.devices.value.none { it.id == "a-new" && it.sessionExpiresAt != null })
+        assertEquals(listOf("a-new", "a-new"), gone)
+        ops.gate!!.complete(Unit)
     }
 
     /** The vault's manager says the hold ended (or a due check passed): open pages hear it, to read the list again. */
