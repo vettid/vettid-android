@@ -90,6 +90,10 @@ class VaultDeviceTest {
     @Volatile
     private var refuseStatus = 403
 
+    /** When set, a deposit under this token is refused `token_expired` (401): a token the vault has replaced. */
+    @Volatile
+    private var expiredToken: String? = null
+
     /** When set, a deposit waits for it (a send in progress); [depositsStarted] counts the deposits that arrived. */
     @Volatile
     private var depositGate: java.util.concurrent.CountDownLatch? = null
@@ -239,6 +243,11 @@ class VaultDeviceTest {
                         """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,"visibility_timeout_seconds":60,""" +
                             """"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,"max_claim_bytes":1,"claim_ttl_seconds":1}}""",
                     ).build()
+                    path.startsWith("/v1/mailbox/") && request.method == "POST" && expiredToken != null &&
+                        request.headers["Authorization"] == "VettID-Deposit $expiredToken" -> {
+                        refused.incrementAndGet()
+                        MockResponse.Builder().code(401).body("""{"code":"token_expired","message":""}""").build()
+                    }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
                         refused.incrementAndGet()
                         MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
@@ -6555,6 +6564,115 @@ class VaultDeviceTest {
             r.d.stop()
             serveMailbox = false
             scope.cancel()
+        }
+    }
+
+    /**
+     * (blind reviews) Keys past their life leave the saved keyring at the next handled message or collection start, not at
+     * the next rekey: the kept confirmed epoch after its 48 days, a released one after its 16.
+     */
+    @Test
+    fun keysPastTheirLifeLeaveTheSavedKeyring() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            fun saved(r: Rekeyed, id: ByteArray) =
+                Keyring.import(Base64s.decodeStd(savedState(r.store).vault!!.sessions)).find(id, Instant.EPOCH)
+            // Kept, then past 48 days: gone at a collection start's check.
+            val kept = rekeyed(this)
+            assertNotNull(saved(kept, kept.old.id))
+            ahead(java.time.Duration.ofDays(49))
+            kept.d.tickConfirm()
+            assertNull("the kept epoch's rk and receive key are gone", saved(kept, kept.old.id))
+            kept.d.stop()
+            clockAheadMs = 0
+            Thread.sleep(300)
+            deposits.clear() // the first device's re-send
+            // Released, then past 16 days: gone after the next handled message.
+            val rel = rekeyed(this)
+            rel.d.handle(rel.v.msg(rel.new.seal(message())))
+            assertNotNull(saved(rel, rel.old.id))
+            ahead(java.time.Duration.ofDays(17))
+            rel.d.handle(rel.v.msg(rel.new.seal(message())))
+            assertNull("the released receive key is gone", saved(rel, rel.old.id))
+        }
+    }
+
+    /**
+     * (Fable L1) A re-confirmation queued in the same handling as a `relay.token.issued` (the vault, still on the old
+     * epoch, replaced the token) carries the token before it; refused `token_expired`, it goes again at once under the
+     * new one.
+     */
+    @Test
+    fun aConfirmationUnderAReplacedTokenGoesAgainUnderTheNewOne() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            val before = r.d.vaultToken!!
+            expiredToken = before
+            refused.set(0)
+            Thread.sleep(1_100) // a later exp than the held token's (whole seconds)
+            val fresh = r.v.tokenFor(r.d)
+            r.d.handle(r.v.msg(r.old.seal(Inner(id = Ulid.new(), type = "relay.token.issued", ts = deviceNow(), body = """{"kind":"standing","token":"$fresh"}""".toByteArray()))))
+            assertEquals(1, refused.get())
+            assertEquals(fresh, r.d.vaultToken)
+            take(r.new, "hs.confirm")
+            assertTrue(r.d.outboxEntries.isEmpty())
+            // Refused under the held token too: nothing more (at most once per token).
+            expiredToken = fresh
+            refused.set(0)
+            ahead(java.time.Duration.ofSeconds(61))
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            assertEquals(1, refused.get())
+            noConfirm(r.new)
+            expiredToken = null
+        }
+    }
+
+    /** (Fable N1) A redelivered hs.fin of the active epoch is not published as an event. */
+    @Test
+    fun aRedeliveredHsFinIsNotAnEvent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            d.handle(v.msg(res.fin))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("hs.fin", java.time.Duration.ofMillis(200)) }
+            }
+        }
+    }
+
+    /** (Fable N2) A collection start whose 12-day check fails still flushes what the outbox holds. */
+    @Test
+    fun aFailedCheckAtAStartStillFlushesTheOutbox() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            assertEquals(listOf("hs.confirm"), r.d.outboxEntries.map { it.type })
+            refuseDeposits = null
+            r.d.startChores(tick = { throw IllegalStateException("keystore") })
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /**
+     * The minute counts from a confirmation actually queued: one that could not be queued (no token yet) does not hold the
+     * next back.
+     */
+    @Test
+    fun aConfirmationThatWasNotQueuedDoesNotStartTheMinute() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.dropVaultToken()
+            val fresh = r.v.tokenFor(r.d)
+            // The message itself brings the token, after its confirmation found none.
+            r.d.handle(r.v.msg(r.old.seal(Inner(id = Ulid.new(), type = "relay.token.issued", ts = deviceNow(), body = """{"kind":"standing","token":"$fresh"}""".toByteArray()))))
+            noConfirm(r.new, 300)
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            take(r.new, "hs.confirm")
         }
     }
 

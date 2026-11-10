@@ -294,18 +294,22 @@ class Keyring {
     @Synchronized
     fun current(): Epoch? = current
 
+    /** Destroys the retained epochs whose keys' life has ended; true when one was. */
     @Synchronized
-    fun prune(now: Instant) = pruneLocked(now)
+    fun prune(now: Instant): Boolean = pruneLocked(now)
 
-    private fun pruneLocked(now: Instant) {
+    private fun pruneLocked(now: Instant): Boolean {
+        var dropped = false
         val it = retired.iterator()
         while (it.hasNext()) {
             val r = it.next()
             if (now.isAfter(r.until)) {
                 r.epoch.destroy()
                 it.remove()
+                dropped = true
             }
         }
+        return dropped
     }
 
     /**

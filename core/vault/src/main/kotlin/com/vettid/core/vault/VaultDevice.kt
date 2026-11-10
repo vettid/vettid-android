@@ -686,14 +686,16 @@ class VaultDevice private constructor(
      * meets may end the collection (a failed child would cancel it): it is tried again at the next start or flush.
      */
     @Suppress("TooGenericExceptionCaught")
-    private suspend fun startChores() {
-        try {
-            tickConfirm()
-            flushOutbox()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            // the next start or flush tries again
+    internal suspend fun startChores(tick: suspend () -> Unit = { tickConfirm() }) {
+        // Each on its own: a failed 12-day check does not hold back the entries the outbox already holds (Fable N2).
+        for (chore in listOf(tick, { flushOutbox() })) {
+            try {
+                chore()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // the next start or flush tries again
+            }
         }
     }
 
@@ -1987,6 +1989,9 @@ class VaultDevice private constructor(
         // (0.88.1) hs.confirm again 12 days after the last one while the current epoch is unconfirmed: checked after each
         // handled message (and at each collection start, [start]).
         if (!forgotten) tickConfirmLocked(t, save = false)?.let { afterHandle.add(it) }
+        // Keys past their life (a kept confirmed epoch after 48 days, a released one after 16) leave memory and the file now,
+        // not at the next rekey: the save below writes the keyring without them.
+        keyring.prune(t)
         // A drop by the message (a rejection, [dropPairing]) is saved as every drop is ([saveDropOrStop]); what it left
         // goes now, under the same lock.
         if (open && st.transferIn == null) saveDropOrStop() else save()
@@ -2034,6 +2039,8 @@ class VaultDevice private constructor(
         }
         // Not a request, so never answered; a device starts no rekey, so one from the vault confirms nothing here (§6.3.1).
         if (inner.type == HsTypes.CONFIRM) return
+        // (Fable N1) A redelivered hs.fin of the active epoch: its handshake is done; it is not an event.
+        if (inner.type == HsTypes.FIN) return
         try {
             inner.checkTime(t, inner.exp == null)
         } catch (e: CryptoException.Time) {
@@ -2114,6 +2121,7 @@ class VaultDevice private constructor(
             it.confirmed = null
             it.confirmAtMs = null
         }
+        // Belt and braces: any later confirmed epoch comes with a new pairing, whose [handleResp] resets it too.
         reconfirmedAt = null
     }
 
@@ -2155,6 +2163,14 @@ class VaultDevice private constructor(
 
     /** Tests: the outbox in memory. */
     internal val outboxEntries: List<OutboxEntry> get() = st.outbox.toList()
+
+    /** Tests: the vault's token as held, and taken away (a device that has none to deposit with). */
+    internal val vaultToken: String? get() = st.vault?.token
+
+    internal fun dropVaultToken() {
+        st.vault?.token = ""
+        st.vault?.tokenExpMs = 0
+    }
 
     /** Tests: a dropped transfer's keys are still to be deleted ([DeviceState.droppedTransfer]), as saved. */
     internal val droppedTransferPending: Boolean get() = st.droppedTransfer != null
@@ -2448,6 +2464,7 @@ class VaultDevice private constructor(
      */
     private fun tickConfirmLocked(t: Instant, save: Boolean): OutboxEntry? {
         val v = st.vault ?: return null
+        // Without a current epoch the queue would fail anyway ("no session", the time restored): an early way out.
         if (v.confirmed == null || keyring.current() == null || confirmQueued()) return null
         // A time ahead of now (a wall clock that was ahead and was set back) does not hold the re-send back: it is due.
         val last = v.confirmAtMs ?: 0L
@@ -2464,7 +2481,16 @@ class VaultDevice private constructor(
     /** [tickConfirmLocked] under the device lock at a collection start, and the deposit of what it queued. */
     internal suspend fun tickConfirm() = lock.withLock {
         if (forgotten) return@withLock
-        tickConfirmLocked(now(), save = true)?.let { deliverConfirm(it) }
+        val t = now()
+        // Keys past their life go at a collection start too (a phone that hears nothing for weeks).
+        if (keyring.prune(t)) {
+            try {
+                save()
+            } catch (_: IOException) {
+                // pruned in memory; the next save writes it
+            }
+        }
+        tickConfirmLocked(t, save = true)?.let { deliverConfirm(it) }
     }
 
     /**
@@ -2474,16 +2500,33 @@ class VaultDevice private constructor(
      * waiting in the outbox. A retryable refusal and `quota_exceeded` keep the entry, and so its time.
      */
     internal suspend fun deliverConfirm(e: OutboxEntry) {
+        var readdressed = false
         try {
             // The floor goes into the same write as the entry's removal: a crash between two writes would leave no
             // hs.confirm and the old time, 12 days away.
             deliver(e) { x ->
                 if (isTerminal(x) && !confirmQueued()) {
                     st.vault?.confirmAtMs = now().toEpochMilli() - CONFIRM_RESEND.minus(RECONFIRM_EVERY).toMillis()
+                    // (Fable L1) Queued under a token the vault has since replaced (a `relay.token.issued` handled after it,
+                    // in the same batch): the same confirmation goes again at once under the held one.
+                    val held = st.vault?.token
+                    readdressed = x.code == RelayException.TOKEN_EXPIRED && !held.isNullOrEmpty() && held != e.token
                 }
             }
         } catch (_: IOException) {
             // a transport failure or a refusal: a kept entry stays for the next flush
+        }
+        if (!readdressed) return
+        // Not a new confirmation but the refused one under the held token: the minute's limit (which bounds confirmations
+        // brought by messages) is not consulted, and "not while one is waiting" holds (only when none was left, above). Its
+        // own refusal under the same token re-addresses nothing, so this happens at most once per token. A failure to
+        // queue leaves the floor.
+        try {
+            deliverConfirm(queueConfirmLocked(now(), save = true))
+        } catch (_: IOException) {
+            // not queued: the floor stands
+        } catch (_: CryptoException) {
+            // likewise
         }
     }
 
