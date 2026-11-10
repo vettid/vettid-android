@@ -166,6 +166,22 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.WELCOME, vm.uiState.value.step)
     }
 
+    /** (The blind reviews of #335, Opus) A "use another code" whose forget stopped is said where the member is. */
+    @Test
+    fun aStoppedForgetIsShownNotResetAway() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        val vm = vm()
+        advanceUntilIdle()
+        val step = vm.uiState.value.step
+        vault.fail["forgetSetupCode"] = FakeVault.failure(FailureKind.LOCAL_STATE, "device_not_loaded")
+        vm.useAnotherCode()
+        advanceUntilIdle()
+        assertTrue("forgetSetupCode" in vault.calls)
+        assertEquals("the screen stays", step, vm.uiState.value.step)
+        assertEquals(FailureKind.LOCAL_STATE, vm.uiState.value.error)
+        assertFalse(vm.uiState.value.busy)
+    }
+
     @Test
     fun backupOffNeedsTheAcknowledgement() = runTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)

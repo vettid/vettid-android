@@ -2003,6 +2003,63 @@ class VaultDeviceTest {
     }
 
     /**
+     * (The blind reviews of #335, Opus M1) A drop whose save fails (here the member's Cancel, [VaultDevice.abandonTransfer])
+     * leaves the file holding the open transfer: the device stops, and a later forget is still guarded
+     * ([VaultDevice.forgetIfTransferOpen] forgets it alone, so a store that cannot be cleared stops it), whatever memory says.
+     */
+    @Test
+    fun aDropWhoseSaveFailsStillGuardsTheForget() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var failSave = false
+            var failClear = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (failSave) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() {
+                    if (failClear) throw java.io.IOException("read-only")
+                    inner.clear()
+                }
+            }
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val link = transferLink(FakeVault(), Ulid.new())
+            d.startTransfer(link, RecordingAttester())
+            nextDeposit()
+            val started = d.transferInPending!!.startedAt
+            failSave = true
+            assertTrue("the drop fails", runCatching { d.abandonTransfer() }.isFailure)
+            failClear = true
+            assertTrue("the forget is guarded and stops", runCatching { d.forgetIfTransferOpen() }.isFailure)
+            val reloaded = VaultDevice.load(config(inner), secrets)!!
+            assertEquals("the file still holds the open transfer", started, reloaded.transferInPending?.startedAt)
+            reloaded.stop()
+        }
+    }
+
+    /** (The blind reviews of #335, Fable L1) The guard is decided under the device's lock: nothing open, nothing forgotten. */
+    @Test
+    fun forgetIfTransferOpenForgetsOnlyAnOpenTransfer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val idle = VaultDevice.create(config(store), secrets)
+            val before = store.load()?.toList()
+            assertFalse("nothing open: left as it is", idle.forgetIfTransferOpen())
+            assertEquals("the file is kept", before, store.load()?.toList())
+            idle.stop()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester())
+            nextDeposit()
+            assertTrue("an open transfer: forgotten", d.forgetIfTransferOpen())
+            assertNull("the file is gone", store.load())
+        }
+    }
+
+    /**
      * The scan of a different code before minute 10, after a restart: the open transfer reloaded from the file is dropped
      * first (its attested key named once), and the new vault gets a secret the first code's vault never saw.
      */

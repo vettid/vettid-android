@@ -51,22 +51,19 @@ class TransferInSameCodeTest {
     @Test
     fun everyForgetOfAnOpenTransferForgetsTheDeviceAloneFirst() {
         val drop = body("private suspend fun dropSession(forget: Boolean) = mutex.withLock {")
-        // An open transfer, or a scan still under way (the review of c58c8fc3, L3).
-        val guard = drop.indexOfFirst { it.contains("it.transferInPending != null || it.transferScanOpen") }
-        val alone = drop.indexOfFirst { it == "open.forget()" }
+        // Decided and done under the device's lock (#335's blind reviews; tested in :core:vault, VaultDeviceTest).
+        val alone = drop.indexOfFirst { it == "d.forgetIfTransferOpen()" }
         val keep = drop.indexOfFirst { it.contains("dropSessionLocked(forget = false)") }
         val stop = drop.indexOfFirst { it.contains("MoveRepository.CODE_TRANSFER_NOT_DROPPED") }
         val full = drop.indexOfFirst { it == "dropSessionLocked(forget)" }
-        assertTrue("the open transfer's guard", guard >= 0)
-        assertTrue("its forget alone, first", alone in guard + 1 until full)
+        assertTrue("its forget alone, first", alone in 0 until full)
         assertTrue("a failed forget keeps the file, then stops", keep in alone + 1 until stop && stop < full)
-        // The body itself never forgets an open transfer unguarded: every key step is in dropSessionLocked, which only
-        // dropSession calls.
-        assertTrue(code.count { it.contains("dropSessionLocked(") } == 4)
-        // A cancel is rethrown as itself, never turned into a storage failure (L2).
+        // A cancel is rethrown as itself, and keeps the session (L2; #335's Opus L1).
         val cancel = drop.indexOfFirst { it.startsWith("} catch (e: CancellationException)") }
-        assertTrue("the cancel first", cancel in alone + 1 until stop)
-        assertTrue("rethrown as itself", drop.subList(cancel + 1, stop).takeWhile { !it.startsWith("} catch") }.contains("throw e"))
+        assertTrue("the cancel first", cancel in alone + 1 until keep)
+        assertTrue("rethrown as itself", drop.subList(cancel + 1, keep).takeWhile { !it.startsWith("} catch") }.contains("throw e"))
+        // Every key step is in dropSessionLocked, which only dropSession calls.
+        assertTrue(code.count { it.contains("dropSessionLocked(") } == 3)
         assertFalse(code.any { it.contains("forgetOpenTransferOrStop") })
         for (sig in listOf("private suspend fun freshDeviceIfUnpaired() {", "override suspend fun forgetSetupCode() {")) {
             assertTrue("$sig goes through the guard", body(sig).any { it.contains("dropSession(forget = true)") })
@@ -76,7 +73,7 @@ class TransferInSameCodeTest {
         val load = setup.indexOfFirst { it == "guard { session() }" }
         assertTrue("loaded before it is judged", load in 0 until setup.indexOfFirst { it.startsWith("val paired") })
         // (The re-check of fd8f055d, Low-2) Only the known refusals to open a session go on; any other load failure stops.
-        val stops = "if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED"
+        val stops = "if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_DEVICE_NOT_LOADED, cause = e)"
         assertTrue(setup.any { it.startsWith(stops) })
     }
 

@@ -1325,9 +1325,30 @@ class VaultDevice private constructor(
         st.vault = null
         st.transferIn = null
         sasState.value = null
-        save()
+        saveDropOrStop()
         settleDroppedTransfer()
     }
+
+    /**
+     * (The blind reviews of #335, Opus M1) The save of a transfer's drop, under [lock]. If it fails, memory no longer
+     * holds the open transfer while the file still does: nothing more is saved, sent or collected from this device
+     * ([forgotten], as [dropTransferOrStop] does), so that nothing (a forget's guard above all) is decided against memory,
+     * and the next session loads the file, open transfer included.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure of the drop's save
+    private fun saveDropOrStop() {
+        try {
+            save()
+        } catch (e: Exception) {
+            forgotten = true
+            dropNotSaved = true // the file still holds the transfer: a forget is guarded ([forgetIfTransferOpen])
+            stop()
+            throw VaultStateException("the open transfer could not be dropped: this device was stopped").also { it.initCause(e) }
+        }
+    }
+
+    /** A transfer's drop could not be saved ([saveDropOrStop]): the file still holds it, whatever memory says. */
+    @Volatile private var dropNotSaved = false
 
     /**
      * The drop of the open transfer a new scan replaces, or the end of the scan (iOS #233's review, Medium, GC #6473):
@@ -1336,21 +1357,14 @@ class VaultDevice private constructor(
      * ([forgotten]): the next session loads the file, open transfer included, and the old phone's approval of it still
      * finds this phone's key.
      */
-    @Suppress("TooGenericExceptionCaught") // any failure of the drop's save
     private fun dropTransferOrStop() {
         dropPairing()
         st.vault = null
         st.transferIn = null
         sasState.value = null
-        try {
-            save()
-        } catch (e: Exception) {
-            // Memory no longer matches the file, which still holds the open transfer: nothing more is saved, sent or
-            // collected from this device (a message collected now would be handled against the wrong state and acked).
-            forgotten = true
-            stop()
-            throw VaultStateException("the open transfer could not be dropped: the scan was stopped").also { it.initCause(e) }
-        }
+        // Memory no longer matches the file if this fails, and the file still holds the open transfer: nothing more is
+        // saved, sent or collected from this device (a message collected now would be handled against the wrong state).
+        saveDropOrStop()
         settleDroppedTransfer() // the drop is on disk: a failure here is the delete's, retried as any other
     }
 
@@ -1391,7 +1405,7 @@ class VaultDevice private constructor(
     }
 
     /** (The review of c58c8fc3, L3) A scan to this phone is under way: its code is stored and its transfer not yet recorded. */
-    val transferScanOpen: Boolean get() = st.scanCode != null
+    internal val transferScanOpen: Boolean get() = st.scanCode != null
 
     /**
      * (A6 audit N1) The transfer to this phone that is not finished: started (its `hs.init` sent), with its SAS once
@@ -1840,6 +1854,7 @@ class VaultDevice private constructor(
         // Collected before this device was forgotten: nothing of it is kept, and nothing is answered.
         if (forgotten) return@withLock
         val t = now()
+        val open = st.transferIn != null
         if (st.seen.containsKey(m.msgId)) return@withLock
         st.seen[m.msgId] = t.toEpochMilli()
         prune(st.seen, t)
@@ -1867,8 +1882,9 @@ class VaultDevice private constructor(
             // would end the collector, and without the ack the same message would fail again at every start, so the
             // device.unlinked queued behind it would never be read.
         }
-        save()
-        // A drop by the message (a rejection, [dropPairing]) is saved above: what it left goes now, under the same lock.
+        // A drop by the message (a rejection, [dropPairing]) is saved as every drop is ([saveDropOrStop]); what it left
+        // goes now, under the same lock.
+        if (open && st.transferIn == null) saveDropOrStop() else save()
         settleDroppedTransfer()
     }
 
@@ -2467,12 +2483,26 @@ class VaultDevice private constructor(
      * Forgets the vault and every key's state on this device (a wipe, a deletion, a start-over, a new redeem). Taken under
      * [lock], so it waits for a send in progress; after it, saves are refused and sends fail ([forgotten]).
      */
-    suspend fun forget() = lock.withLock {
+    suspend fun forget() = lock.withLock { forgetLocked() }
+
+    private fun forgetLocked() {
         forgotten = true
         opened(null)
         stop()
         keyring.destroy()
         cfg.store.clear()
+    }
+
+    /**
+     * (The blind reviews of #335, Fable L1, Opus N1) [forget], but only when this device, unpaired, holds a transfer to
+     * this phone that is open (recorded, or its scan under way): decided and done under [lock], so the answer cannot be
+     * stale. True when it forgot; a failure of the forget is thrown. A device that holds nothing open is left as it is.
+     */
+    suspend fun forgetIfTransferOpen(): Boolean = lock.withLock {
+        val open = st.transferIn != null || st.scanCode != null || dropNotSaved
+        if (st.deviceId != null || !open) return@withLock false
+        forgetLocked()
+        true
     }
 
     /**
