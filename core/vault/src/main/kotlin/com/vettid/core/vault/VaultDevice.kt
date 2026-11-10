@@ -42,7 +42,9 @@ import com.vettid.core.crypto.invite.InviteKind
 import com.vettid.core.crypto.invite.InviteQr
 import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.session.DeviceFeatures
 import com.vettid.core.crypto.session.Epoch
+import com.vettid.core.crypto.session.HsTypes
 import com.vettid.core.crypto.session.Initiator
 import com.vettid.core.crypto.session.InitiatorConfig
 import com.vettid.core.crypto.session.Keyring
@@ -333,6 +335,18 @@ class VaultDevice private constructor(
     private class Awaiting(val resp: Responder, val createdMs: Long)
 
     private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
+
+    /**
+     * Outbox entries a handling queued (`hs.confirm`, `device.features`, §6.3.1, §10.2): stored by the save that ends the
+     * handling and deposited after it, under the same lock ([deliverQueued]). Memory only; under [lock].
+     */
+    private val afterHandle = ArrayList<OutboxEntry>()
+
+    /**
+     * When `hs.confirm` was last queued again for a message under the confirmed epoch (VAULT-MESSAGING §6.3.1 "Devices
+     * and agents"): at most once a minute. Memory only, as vettid-vault's `client`; under [lock].
+     */
+    private var reconfirmedAt: Instant? = null
     private var pendingUnlock: PendingUnlock? = null
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Inner>>()
     private val inbox = ArrayList<VaultMessage>()
@@ -597,7 +611,10 @@ class VaultDevice private constructor(
         // This collection's latest attempt went out then (elapsed clock): a cut's lease starts by it + the wait.
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val job = scope.launch {
-            launch { flushOutbox() }
+            launch {
+                tickConfirm() // (0.88.1) hs.confirm again 12 days after the last one, checked at each collection start
+                flushOutbox()
+            }
             try {
                 MailboxCollector(
                     own, cfg.collectMode, cfg.pollWait, clock = clock,
@@ -1041,6 +1058,7 @@ class VaultDevice private constructor(
                 responderIk = Base64s.decodeStd(v.ik),
                 responderEk = KemPublicKey.parse(Base64s.decodeStd(v.kem)),
                 responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
+                features = DeviceFeatures.ALL, // §5.3, §10.8: the pairing's hs.init and hs.fin
             ),
         )
         checkLive()
@@ -1546,7 +1564,7 @@ class VaultDevice private constructor(
         val v = requireVault()
         val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
-        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body)))
+        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body), features = DeviceFeatures.ALL))
         save() // the epoch's send counter
         depositToVault(v, env)
         return id
@@ -1598,7 +1616,10 @@ class VaultDevice private constructor(
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
         val t = now()
         val iid = id ?: Ulid.new(t)
-        val inner = Inner(id = iid, type = type, ts = t, re = re, status = status, exp = exp, body = VaultJson.bytes(body))
+        // §10.8 (0.86.0) "On every message": the list of this device's `device.features` in the inner `features`.
+        val inner = Inner(
+            id = iid, type = type, ts = t, re = re, status = status, exp = exp, body = VaultJson.bytes(body), features = DeviceFeatures.ALL,
+        )
         val env = ep.seal(inner)
         val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
         st.outbox.add(entry)
@@ -1620,7 +1641,7 @@ class VaultDevice private constructor(
         val v = requireVault()
         val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
-        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body)))
+        val env = ep.seal(Inner(id = id, type = type, ts = now(), exp = exp, body = VaultJson.bytes(body), features = DeviceFeatures.ALL))
         save() // the epoch's send counter
         depositToVault(v, env)
     }
@@ -1693,7 +1714,10 @@ class VaultDevice private constructor(
         val entries = lock.withLock { st.outbox.toList() }
         for (e in entries) {
             try {
-                lock.withLock { if (st.outbox.contains(e)) deliver(e) }
+                lock.withLock {
+                    if (!st.outbox.contains(e)) return@withLock
+                    if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e) // hs.confirm's time follows a refusal for good
+                }
             } catch (_: IOException) {
                 // retried at the next flush
             }
@@ -1878,6 +1902,17 @@ class VaultDevice private constructor(
         if (st.seen.containsKey(m.msgId)) return@withLock
         st.seen[m.msgId] = t.toEpochMilli()
         prune(st.seen, t)
+        afterHandle.clear()
+        try {
+            handleLocked(m, t, open)
+        } finally {
+            // What the handling queued (hs.confirm, device.features) goes now, after the save that stored it; also if that
+            // save failed: the activation stands in memory, as everything this handling changed does (nothing is undone).
+            deliverQueued()
+        }
+    }
+
+    private suspend fun handleLocked(m: RelayMessage, t: Instant, open: Boolean) {
         try {
             process(m, t)
         } catch (e: CryptoException.Early) {
@@ -1902,6 +1937,9 @@ class VaultDevice private constructor(
             // would end the collector, and without the ack the same message would fail again at every start, so the
             // device.unlinked queued behind it would never be read.
         }
+        // (0.88.1) hs.confirm again 12 days after the last one while the current epoch is unconfirmed: checked after each
+        // handled message (and at each collection start, [start]).
+        if (!forgotten) tickConfirmLocked(t, save = false)?.let { afterHandle.add(it) }
         // A drop by the message (a rejection, [dropPairing]) is saved as every drop is ([saveDropOrStop]); what it left
         // goes now, under the same lock.
         if (open && st.transferIn == null) saveDropOrStop() else save()
@@ -1932,16 +1970,23 @@ class VaultDevice private constructor(
             val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
             // CryptoException.Early: a message of the new epoch ahead of its hs.fin (handle leaves it for redelivery).
             val fr = r.resp.handleFin(raw, sender, t)
-            keyring.activate(fr.epoch, t)
+            // §6.3.1 "Responder": activated at the verified hs.fin; hs.confirm and device.features queued in the same write.
+            activateRekeyLocked(fr.epoch, t)
             awaiting.remove(r)
+            queueConfirmedLocked(t)
             return
         }
         val (inner, ep) = opened
         refusalCount.value = 0 // the vault spoke to this device under its session
+        // §6.3.1: any message but hs.fin tells which epoch the vault uses (a redelivered hs.fin of an active epoch opens here,
+        // and confirms nothing: the initiator may abandon an epoch right after its hs.fin).
+        if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t)
         if (inner.type == TYPE_HS_INIT) {
             handleRekey(raw, ep, sender, t)
             return
         }
+        // Not a request, so never answered; a device starts no rekey, so one from the vault confirms nothing here (§6.3.1).
+        if (inner.type == HsTypes.CONFIRM) return
         try {
             inner.checkTime(t, inner.exp == null)
         } catch (e: CryptoException.Time) {
@@ -1963,6 +2008,8 @@ class VaultDevice private constructor(
             "device.paired" -> {
                 storeVaultToken(VaultJson.parseObject(inner.body))
                 applyTransferPaired(inner.body)
+                // §10.2 (0.87.0): device.features after each epoch this device activates; the pairing's is this one.
+                queueFeaturesLocked()
             }
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
@@ -2017,7 +2064,10 @@ class VaultDevice private constructor(
         st.vault?.let {
             it.token = ""
             it.tokenExpMs = 0
+            it.confirmed = null
+            it.confirmAtMs = null
         }
+        reconfirmedAt = null
     }
 
     /**
@@ -2041,6 +2091,23 @@ class VaultDevice private constructor(
             st.droppedTransfer = null // a sweep that did not hold is not kept: it runs again at the next start
         }
     }
+
+    /** Tests: the confirmed epoch's id ([VaultRecord.confirmed]) and the time of the last `hs.confirm`, in memory. */
+    internal val confirmState: Pair<String?, Long?> get() = st.vault?.let { it.confirmed to it.confirmAtMs } ?: (null to null)
+
+    /** Tests: sets the confirmed epoch and the time of the last `hs.confirm` in memory (a state left from before). */
+    internal fun setConfirmState(confirmed: String?, atMs: Long?) {
+        st.vault?.confirmed = confirmed
+        st.vault?.confirmAtMs = atMs
+    }
+
+    /** Tests: the current or retained epoch [id] while its receive key is kept at [at], and the current one's id. */
+    internal fun keptEpoch(id: ByteArray, at: Instant): Epoch? = keyring.find(id, at)
+
+    internal val currentEpochId: ByteArray? get() = keyring.current()?.id
+
+    /** Tests: the outbox in memory. */
+    internal val outboxEntries: List<OutboxEntry> get() = st.outbox.toList()
 
     /** Tests: a dropped transfer's keys are still to be deleted ([DeviceState.droppedTransfer]), as saved. */
     internal val droppedTransferPending: Boolean get() = st.droppedTransfer != null
@@ -2119,6 +2186,9 @@ class VaultDevice private constructor(
             }
         }
         if (res.epoch.suite > v.suite) v.suite = res.epoch.suite
+        // A new pairing (enrollment, transfer, recovery) starts with its own epoch confirmed (§6.3.1), as [dropPairing].
+        v.confirmed = null
+        v.confirmAtMs = null
         keyring.activate(res.epoch, t)
         // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
         // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
@@ -2134,13 +2204,15 @@ class VaultDevice private constructor(
      * it would leave this device unable to read anything the vault sends from then on.
      */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant) {
-        if (keyring.current() !== ep) return
+        // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
+        if (keyring.current() !== ep && !isConfirmedLocked(ep)) return
         val pi = PendingInit.openRekey(raw, ep, t)
         val v = requireVault()
         val (resp, env) = pi.respond(
             ResponderConfig(
                 identity = secrets.identity, policy = Policy.VAULT_TO_DEVICE, pinnedSuite = v.suite, collectSender = sender,
                 recordRelayKey = Base64s.decodeStd(v.relayPk), knownInitiatorIk = Base64s.decodeStd(v.ik), now = t,
+                features = DeviceFeatures.ALL,
             ),
         )
         val a = Awaiting(resp, t.toEpochMilli())
@@ -2231,6 +2303,207 @@ class VaultDevice private constructor(
         } catch (_: IOException) {
             // retried at the next message
         }
+    }
+
+    // --- activation on confirmation, the responder half (VAULT-MESSAGING 0.87.0–0.88.1 §6.3.1) ---
+    //
+    // For the vault's rekeys of this device. The device activates at a verified `hs.fin` and queues `hs.confirm` under the new
+    // epoch in the same write. Its confirmed epoch (the newest the vault sent it anything but `hs.fin` under) keeps its rk
+    // and receive key while not current, up to 48 days; a rekey under it is accepted as if it were current, and a message
+    // under it while it is not current brings `hs.confirm` again (at most once a minute, unless one is still in the
+    // outbox). While the current epoch is unconfirmed, `hs.confirm` goes again 12 days after the last one, checked at each
+    // collection start and after each handled message (not on a timer). After each epoch it activates the device sends
+    // `device.features` (§10.2). Mirrors vettid-vault `client/confirm.go` and vettid-ios #238.
+    //
+    // Not here: rule E and §3.4.1's demotion (a device applies neither, §15 item 51), and the initiator half (a device
+    // starts no rekey with its vault). Everything below runs under [lock].
+
+    /** The confirmed epoch's id: the recorded one, else the current epoch's. */
+    private fun confirmedId(): ByteArray? {
+        st.vault?.confirmed?.let { c -> return runCatching { Base64s.decodeStd(c) }.getOrNull() }
+        return keyring.current()?.id
+    }
+
+    /** Whether [ep] is the confirmed epoch and still holds its rk (a rekey under it is accepted). */
+    private fun isConfirmedLocked(ep: Epoch): Boolean = st.vault != null && ep.id.contentEquals(confirmedId()) && ep.hasRk()
+
+    private fun confirmQueued(): Boolean = st.outbox.any { it.type == HsTypes.CONFIRM }
+
+    /**
+     * Activates the vault's rekey epoch at its verified `hs.fin`. When the current epoch is the confirmed one, it stays the
+     * confirmed epoch with its rk and receive key for [CONFIRMED_KEYS_FOR]; otherwise the current one is retired as before
+     * (an unconfirmed epoch is not kept).
+     */
+    private fun activateRekeyLocked(e: Epoch, t: Instant) {
+        val cur = keyring.current()
+        val v = st.vault
+        if (cur != null && v != null && cur.id.contentEquals(confirmedId())) {
+            if (v.confirmed == null) v.confirmed = cur.ctx
+            keyring.activateKeeping(e, t, t.plus(CONFIRMED_KEYS_FOR))
+        } else {
+            keyring.activate(e, t)
+        }
+    }
+
+    /**
+     * After an activation: `hs.confirm` and `device.features` into the outbox, stored by the save that ends the handling and
+     * deposited after it ([deliverQueued]). A failure to queue (no token) is left to the 12-day re-send ([tickConfirmLocked]).
+     */
+    private fun queueConfirmedLocked(t: Instant) {
+        try {
+            afterHandle.add(queueConfirmLocked(t, save = false))
+        } catch (_: IOException) {
+            // no token or no session: the 12-day re-send tries again
+        } catch (_: CryptoException) {
+            // likewise
+        }
+        queueFeaturesLocked()
+    }
+
+    /**
+     * A message other than `hs.fin` opened under [ep]. Under the current epoch it confirms it: the previous confirmed epoch
+     * loses its rk and keeps its receive key for 16 days (§6.3.1 table). Under the confirmed epoch while it is not current,
+     * `hs.confirm` goes again, at most once a minute and not while one is still in the outbox.
+     */
+    private fun noteConfirmedLocked(ep: Epoch, t: Instant) {
+        val v = st.vault ?: return
+        if (keyring.current() === ep) {
+            val previous = v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
+            if (previous != null && !previous.contentEquals(ep.id)) keyring.release(previous, t.plus(Epoch.RECEIVE_KEY_RETENTION))
+            v.confirmed = null
+            return
+        }
+        if (!ep.id.contentEquals(confirmedId()) || confirmQueued()) return
+        reconfirmedAt?.let { if (Duration.between(it, t) < RECONFIRM_EVERY) return }
+        // The minute counts from a confirmation actually queued: a failed one (no token) does not hold the next back.
+        try {
+            afterHandle.add(queueConfirmLocked(t, save = false))
+            reconfirmedAt = t
+        } catch (_: IOException) {
+            // not queued
+        } catch (_: CryptoException) {
+            // not queued
+        }
+    }
+
+    /**
+     * (0.88.1) `hs.confirm` again [CONFIRM_RESEND] after the last one queued while the current epoch is unconfirmed, unless
+     * one is still in the outbox; in gap F (§3.4.1, the vault no longer opens the epoch) it goes on until the device is
+     * paired again. [save]: false while a message is being handled (the caller adds the entry to [afterHandle]), true
+     * otherwise (the caller deposits the entry returned). Null when nothing was queued.
+     */
+    private fun tickConfirmLocked(t: Instant, save: Boolean): OutboxEntry? {
+        val v = st.vault ?: return null
+        if (v.confirmed == null || keyring.current() == null || confirmQueued()) return null
+        if (t.toEpochMilli() - (v.confirmAtMs ?: 0L) < CONFIRM_RESEND.toMillis()) return null
+        return try {
+            queueConfirmLocked(t, save)
+        } catch (_: IOException) {
+            null
+        } catch (_: CryptoException) {
+            null
+        }
+    }
+
+    /** [tickConfirmLocked] under the device lock at a collection start, and the deposit of what it queued. */
+    internal suspend fun tickConfirm() = lock.withLock {
+        if (forgotten) return@withLock
+        tickConfirmLocked(now(), save = true)?.let { deliverConfirm(it) }
+    }
+
+    /**
+     * Deposits an `hs.confirm` (also from [flushOutbox] and [deliverQueued]). One the relay refuses for good ([isTerminal]) is
+     * gone from the outbox: the next is due a minute later, not 12 days later (chosen; not in the spec), so a refusal is
+     * retried at most once a minute and never on every message; and never over the time of a newer `hs.confirm` still
+     * waiting in the outbox. A retryable refusal and `quota_exceeded` keep the entry, and so its time.
+     */
+    internal suspend fun deliverConfirm(e: OutboxEntry) {
+        try {
+            deliver(e)
+        } catch (x: RelayException) {
+            if (!isTerminal(x) || confirmQueued()) return
+            st.vault?.confirmAtMs = now().toEpochMilli() - CONFIRM_RESEND.minus(RECONFIRM_EVERY).toMillis()
+            try {
+                save()
+            } catch (_: IOException) {
+                // kept in memory; the next save stores it
+            }
+        } catch (_: IOException) {
+            // a transport failure: the entry stays for the next flush
+        }
+    }
+
+    /** Deposits what the handling queued ([afterHandle]) that is still in the outbox; a failure leaves it for the next flush. */
+    private suspend fun deliverQueued() {
+        if (afterHandle.isEmpty()) return
+        val queued = afterHandle.toList()
+        afterHandle.clear()
+        for (e in queued) {
+            if (!st.outbox.contains(e)) continue
+            if (e.type == HsTypes.CONFIRM) {
+                deliverConfirm(e)
+            } else {
+                try {
+                    deliver(e)
+                } catch (_: IOException) {
+                    // retried at the next flush
+                }
+            }
+        }
+    }
+
+    /**
+     * Queues `hs.confirm` (body `{}`, durable, not a request) and records when, in the same write. [save]: true outside a
+     * handling (it is written at once); false inside one (the save that ends the handling writes it). A failure to queue
+     * restores the time of the last one.
+     */
+    private fun queueConfirmLocked(t: Instant, save: Boolean): OutboxEntry {
+        val v = requireVault()
+        val before = v.confirmAtMs
+        v.confirmAtMs = t.toEpochMilli()
+        var queued = false
+        try {
+            return enqueueLocked(HsTypes.CONFIRM, EMPTY, save).also { queued = true }
+        } finally {
+            if (!queued) v.confirmAtMs = before
+        }
+    }
+
+    /** Queues `device.features` with this app's list (§10.2) while a message is being handled; a failure is left (no token). */
+    private fun queueFeaturesLocked() {
+        val body = buildJsonObject { put("features", kotlinx.serialization.json.JsonArray(DeviceFeatures.ALL.map { JsonPrimitive(it) })) }
+        try {
+            afterHandle.add(enqueueLocked(TYPE_DEVICE_FEATURES, body, save = false))
+        } catch (_: IOException) {
+            // not queued: no token, or no session
+        } catch (_: CryptoException) {
+            // not queued
+        }
+    }
+
+    /**
+     * Seals a message of [OUTBOX_TYPES] in the current epoch into the outbox, not deposited. [save]: written at once (the entry
+     * is taken out again if that fails); false: the caller's save writes it.
+     */
+    private fun enqueueLocked(type: String, body: JsonObject, save: Boolean): OutboxEntry {
+        val v = requireVault()
+        val ep = keyring.current() ?: throw VaultStateException("no session with the vault")
+        if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
+        val t = now()
+        val iid = Ulid.new(t)
+        val env = ep.seal(Inner(id = iid, type = type, ts = t, body = VaultJson.bytes(body), features = DeviceFeatures.ALL))
+        val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
+        st.outbox.add(entry)
+        if (save) {
+            var saved = false
+            try {
+                save()
+                saved = true
+            } finally {
+                if (!saved) st.outbox.remove(entry)
+            }
+        }
+        return entry
     }
 
     // --- the Protean Credential (§3.5) ---
@@ -2543,6 +2816,19 @@ class VaultDevice private constructor(
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
         private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
+        internal const val TYPE_DEVICE_FEATURES = "device.features"
+
+        /** How long the confirmed epoch keeps its rk and receive key while not current (§6.3.1 table). */
+        internal val CONFIRMED_KEYS_FOR: Duration = Duration.ofDays(48)
+
+        /** `hs.confirm` again for messages under the confirmed epoch while it is not current: at most once a minute. */
+        internal val RECONFIRM_EVERY: Duration = Duration.ofMinutes(1)
+
+        /** (0.88.1) `hs.confirm` again 12 days after the last one while the current epoch is unconfirmed. Not scaled (§11.10.8). */
+        internal val CONFIRM_RESEND: Duration = Duration.ofDays(12)
+
+        /** A relay answer that trying again will not cure (`quota_exceeded` and a retryable one are kept for a later flush). */
+        internal fun isTerminal(x: RelayException): Boolean = !(x.retryable || x.code == RelayException.QUOTA_EXCEEDED)
         private const val EVENT_BUFFER = 256
         /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */
         const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
@@ -2615,9 +2901,11 @@ class VaultDevice private constructor(
         /**
          * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that
          * mean the same whenever they arrive (a standing token for the vault, a token renewal and its answer, the end
-         * of a call). Every request is deposited from memory ([sendRequestLocked]).
+         * of a call). Every request is deposited from memory ([sendRequestLocked]). (0.87.0) `hs.confirm` and
+         * `device.features` too: durable, never answered, and the same whenever they arrive (VAULT-MESSAGING §6.3.1
+         * "Responder": "queues `hs.confirm` … durable"; §10.2).
          */
-        internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end")
+        internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end", HsTypes.CONFIRM, TYPE_DEVICE_FEATURES)
 
         /**
          * (A6 audit N2) A state written by an app version that put requests in the outbox: every entry that is not of

@@ -169,6 +169,7 @@ class VaultDeviceTest {
             val p = PendingInit.open(raw, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
             assertEquals(Purpose.APP, p.body.purpose)
             assertEquals(vaultId, p.body.ctx)
+            assertEquals(listOf("hs_confirm"), p.inner.features) // §5.3, §10.8 (0.87.0): every message the device deposits
             val (r, env) = p.respond(
                 ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()),
             )
@@ -178,6 +179,7 @@ class VaultDeviceTest {
 
         fun fin(raw: ByteArray, d: VaultDevice) {
             val fr = responder!!.handleFin(raw, d.relayAddr.pk(), Instant.now())
+            assertEquals(listOf("hs_confirm"), fr.inner.features)
             // The enrollment handshake carries the commitment (0.10.3); no code is shown, but both sides have it.
             assertEquals(6, fr.sas!!.length)
             keyring.activate(fr.epoch, Instant.now())
@@ -190,6 +192,38 @@ class VaultDeviceTest {
     }
 
     private fun nextDeposit(): Pair<String, ByteArray> = deposits.poll(10, TimeUnit.SECONDS) ?: error("no deposit")
+
+    /**
+     * Takes the `device.features` the device deposits after each epoch it activates (VAULT-MESSAGING §10.2, 0.87.0) and
+     * checks it: this app's list, in the body and as the inner `features`.
+     */
+    /**
+     * After a rekey's verified `hs.fin`: `hs.confirm` (body `{}`, not a request, the inner `features`) under the new epoch
+     * [epoch] (the vault's side), then `device.features` (VAULT-MESSAGING §6.3.1 "Responder", §10.2).
+     */
+    private fun expectConfirm(epoch: com.vettid.core.crypto.session.Epoch) {
+        val raw = nextDeposit().second
+        assertEquals(epoch.recvKid, Envelope.parse(raw).recipientKid)
+        val c = epoch.open(Envelope.parse(raw))
+        assertEquals("hs.confirm", c.type)
+        assertNull(c.re)
+        assertNull(c.exp)
+        assertEquals("{}", String(c.body))
+        assertEquals(listOf("hs_confirm"), c.features)
+        val f = epoch.open(Envelope.parse(nextDeposit().second))
+        assertEquals("device.features", f.type)
+        assertEquals("""{"features":["hs_confirm"]}""", String(f.body))
+        assertEquals(listOf("hs_confirm"), f.features)
+    }
+
+    private fun takeFeatures(v: FakeVault): Inner {
+        val m = v.open(nextDeposit().second)
+        assertEquals("device.features", m.type)
+        assertEquals("""{"features":["hs_confirm"]}""", String(m.body))
+        assertEquals(listOf("hs_confirm"), m.features)
+        assertNull(m.re)
+        return m
+    }
 
     @Before
     fun start() {
@@ -308,6 +342,7 @@ class VaultDeviceTest {
         assertEquals("dev-1", d.deviceId)
         assertTrue(d.paired.value)
         assertEquals(3, d.altState.releaseNumber)
+        takeFeatures(v) // the pairing's device.features (§10.2)
         return d to v
     }
 
@@ -531,6 +566,7 @@ class VaultDeviceTest {
             val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), Instant.now())
             v.keyring.activate(res.epoch, Instant.now())
             d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
             // The device now answers in the new epoch.
             val status = async(Dispatchers.IO) { d.op("vault.status") }
             val raw = nextDeposit().second
@@ -781,6 +817,7 @@ class VaultDeviceTest {
             assertTrue(savedState(store).seen[early.msgId] == null)
             again.handle(v.msg(res.fin))
             assertTrue(savedState(store).vault!!.awaiting.isEmpty())
+            expectConfirm(res.epoch)
             again.handle(early) // the relay's redelivery: same msg_id
             assertEquals("early", VaultJson.str(again.awaitEvent("message.new", java.time.Duration.ofSeconds(2)).body, "text"))
             // The device now answers in the new epoch.
@@ -1323,6 +1360,7 @@ class VaultDeviceTest {
                 val paired = v.transferPaired(d)
                 if (order == 0) {
                     d.handle(paired)
+                    takeFeatures(v) // the pairing's device.features (§10.2)
                     d.abandonTransfer()
                     assertTrue("paired first: kept", d.transferInPending!!.paired && d.hasVault && d.deviceId == "dev-2")
                 } else {
@@ -5923,6 +5961,619 @@ class VaultDeviceTest {
             assertNull(store.load())
             assertNull("no deposit after the forget", deposits.poll(300, TimeUnit.MILLISECONDS))
             depositGate = null
+        }
+    }
+
+    // --- activation on confirmation, the device's responder half (VAULT-MESSAGING 0.87.0–0.88.1 §6.3.1) ---
+    //
+    // The fake vault stays on its old epoch after a rekey, as a release-29 vault keeps its pending epoch until `hs.confirm`
+    // arrives; the device's deposits are opened with the rekey's epoch. Mirrors vettid-ios #238 `ConfirmTests`,
+    // vettid-vault `client/reconfirm_test.go` and, where it applies to a device, `vault/r29_device_test.go`.
+
+    private class Rekeyed(
+        val d: VaultDevice,
+        val v: FakeVault,
+        val old: com.vettid.core.crypto.session.Epoch,
+        val new: com.vettid.core.crypto.session.Epoch,
+        val store: DeviceStateStore,
+        val secrets: DeviceSecrets,
+    )
+
+    /** The phone's clock (moved by [clockAheadMs]); the vault's messages are stamped by it, as a vault in step. */
+    private fun deviceNow(): Instant = Instant.now(phoneClock)
+
+    private fun ahead(d: java.time.Duration) {
+        clockAheadMs += d.toMillis()
+    }
+
+    private fun message(text: String = "hi", at: Instant = deviceNow()) = Inner(
+        id = Ulid.new(), type = "message.new", ts = at,
+        body = """{"connection_id":"c1","message_id":"m1","direction":"in","text":"$text","sent_at":"x"}""".toByteArray(),
+    )
+
+    /** The vault's rekey of [d] under its epoch [under] (the vault's current one by default), stamped by the phone's clock. */
+    private fun FakeVault.rekeyInit(d: VaultDevice, under: com.vettid.core.crypto.session.Epoch = keyring.current()!!) = Initiator.create(
+        InitiatorConfig(
+            purpose = Purpose.REKEY, ctx = "", identity = ik, staticKem = kem.publicKey, relay = principal().relay,
+            responderIk = d.identityKey, responderEk = null, responderRelayKey = d.relayAddr.pk(), current = under,
+            policy = Policy.VAULT_TO_DEVICE, now = deviceNow(),
+        ),
+    )
+
+    /**
+     * The next deposit of [type] the device made under [epoch] (the vault's side of it), skipping the others (a token
+     * renewal, a deposit under another epoch); null when none comes within [ms].
+     */
+    private fun depositOf(epoch: com.vettid.core.crypto.session.Epoch, type: String, ms: Long = 10_000): Inner? {
+        val until = System.currentTimeMillis() + ms
+        while (true) {
+            val left = until - System.currentTimeMillis()
+            if (left <= 0) return null
+            val raw = deposits.poll(left, TimeUnit.MILLISECONDS)?.second ?: return null
+            val inner = runCatching { epoch.open(Envelope.parse(raw)) }.getOrNull()
+            if (inner?.type == type) return inner
+        }
+    }
+
+    private fun take(epoch: com.vettid.core.crypto.session.Epoch, type: String): Inner = depositOf(epoch, type) ?: error("no $type")
+
+    private fun noConfirm(epoch: com.vettid.core.crypto.session.Epoch, ms: Long = 500) =
+        assertNull("no hs.confirm", depositOf(epoch, "hs.confirm", ms))
+
+    /** A paired device that answered the vault's rekey and got its `hs.fin`; the confirmation and `device.features` are taken. */
+    private suspend fun rekeyed(
+        scope: CoroutineScope,
+        store: DeviceStateStore = InMemoryDeviceStateStore(),
+        secrets: DeviceSecrets = DeviceSecrets.generate(),
+    ): Rekeyed {
+        val (d, v) = pairedDevice(scope, store, secrets)
+        val old = v.keyring.current()!!
+        val ini = v.rekeyInit(d)
+        d.handle(v.msg(ini.envelope()))
+        val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+        assertEquals("hs.resp carries the list too", listOf("hs_confirm"), res.inner.features)
+        d.handle(v.msg(res.fin))
+        expectConfirm(res.epoch)
+        return Rekeyed(d, v, old, res.epoch, store, secrets)
+    }
+
+    private fun confirmsQueued(d: VaultDevice) = d.outboxEntries.count { it.type == "hs.confirm" }
+
+    /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
+    private class RecordingFlakyStore : DeviceStateStore {
+        private val inner = InMemoryDeviceStateStore()
+
+        @Volatile
+        var fail = false
+        val saved = java.util.concurrent.CopyOnWriteArrayList<DeviceState>()
+
+        override fun load() = inner.load()
+
+        override fun save(state: ByteArray) {
+            if (fail) throw java.io.IOException("no space left")
+            inner.save(state)
+            saved.add(stateJson.decodeFromString(DeviceState.serializer(), String(state)))
+        }
+
+        override fun clear() = inner.clear()
+    }
+
+    @Test
+    fun theOldEpochStaysConfirmedAndAMessageUnderItConfirmsAgainOnceAMinute() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            assertEquals(r.old.ctx, savedState(r.store).vault!!.confirmed)
+            assertNotNull(savedState(r.store).vault!!.confirmAtMs)
+            // The vault, still on its old epoch, sends under it: hs.confirm again, under the new epoch.
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            val again = take(r.new, "hs.confirm")
+            assertEquals("{}", String(again.body))
+            assertNull(again.re)
+            // Within the minute, nothing more.
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            noConfirm(r.new)
+            // At +30 s, still nothing; after the minute, again.
+            ahead(java.time.Duration.ofSeconds(30))
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            noConfirm(r.new, 300)
+            ahead(java.time.Duration.ofSeconds(31))
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            take(r.new, "hs.confirm")
+            assertEquals("still the old one", r.old.ctx, savedState(r.store).vault!!.confirmed)
+        }
+    }
+
+    @Test
+    fun aMessageUnderTheNewEpochConfirmsItAndEndsTheOld() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.handle(r.v.msg(r.new.seal(message())))
+            assertNull(savedState(r.store).vault!!.confirmed)
+            // The old epoch keeps its receive key (16 days) but not its rk: a message under it brings no confirmation, and a
+            // rekey under it is not answered.
+            ahead(java.time.Duration.ofSeconds(120))
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            r.d.handle(r.v.msg(r.v.rekeyInit(r.d, r.old).envelope()))
+            assertNull("nothing at all", deposits.poll(500, TimeUnit.MILLISECONDS))
+            // Released: its rk is gone and its receive key ends 16 days on, not 48 (§6.3.1 table).
+            assertEquals(false, r.d.keptEpoch(r.old.id, deviceNow())?.hasRk())
+            assertNull(r.d.keptEpoch(r.old.id, deviceNow().plus(java.time.Duration.ofDays(17))))
+            // The new one is confirmed: no 12-day re-send.
+            ahead(java.time.Duration.ofDays(13))
+            r.d.tickConfirm()
+            noConfirm(r.new)
+        }
+    }
+
+    @Test
+    fun aRekeyUnderTheConfirmedEpochIsAnsweredAsIfCurrent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            // The vault never got hs.confirm and rekeys again from its old epoch.
+            val ini = r.v.rekeyInit(r.d, r.old)
+            r.d.handle(r.v.msg(ini.envelope()))
+            // The answer (sealed to the initiator's ephemeral key), then the hs.init under the confirmed epoch brings
+            // hs.confirm again.
+            val resp = nextDeposit().second
+            assertEquals(Mode.SEALED, Envelope.parse(resp).mode)
+            take(r.new, "hs.confirm")
+            val res = ini.handleResp(resp, r.d.relayAddr.pk(), deviceNow())
+            r.d.handle(r.v.msg(res.fin))
+            expectConfirm(res.epoch)
+            // The confirmed epoch is still the old one: the unconfirmed one was retired, not kept.
+            assertEquals(r.old.ctx, savedState(r.store).vault!!.confirmed)
+            assertEquals(false, r.d.keptEpoch(r.new.id, deviceNow())?.hasRk())
+            r.d.handle(r.v.msg(res.epoch.seal(message())))
+            assertNull(savedState(r.store).vault!!.confirmed)
+        }
+    }
+
+    @Test
+    fun hsConfirmGoesAgainTwelveDaysAfterTheLastWhileUnconfirmed() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // kept in the outbox, so it can be counted
+            ahead(java.time.Duration.ofDays(12).minusSeconds(60))
+            r.d.tickConfirm()
+            assertEquals(0, confirmsQueued(r.d))
+            ahead(java.time.Duration.ofSeconds(120))
+            r.d.tickConfirm()
+            assertEquals(1, confirmsQueued(r.d))
+            assertTrue(savedState(r.store).outbox.any { it.type == "hs.confirm" })
+            // Not a second while one is still in the outbox.
+            ahead(java.time.Duration.ofDays(13))
+            r.d.tickConfirm()
+            assertEquals(1, confirmsQueued(r.d))
+            // Once confirmed, none.
+            refuseDeposits = null
+            r.d.flushOutbox()
+            take(r.new, "hs.confirm")
+            r.d.handle(r.v.msg(r.new.seal(message())))
+            ahead(java.time.Duration.ofDays(30))
+            r.d.tickConfirm()
+            assertEquals(0, confirmsQueued(r.d))
+            noConfirm(r.new)
+        }
+    }
+
+    /**
+     * Gap F (§3.4.1 Invariants, "The device exception"; §6.3.1 "Devices and agents"): the device keeps re-sending under an
+     * epoch the vault may no longer open, past the confirmed epoch's 48 days, until it is paired again.
+     */
+    @Test
+    fun theReSendGoesOnPastTheConfirmedEpochsKeys() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            ahead(java.time.Duration.ofDays(60))
+            r.d.tickConfirm()
+            take(r.new, "hs.confirm")
+            assertNull("the confirmed epoch's keys are gone", r.d.keptEpoch(r.old.id, deviceNow()))
+            assertEquals(r.old.ctx, savedState(r.store).vault!!.confirmed)
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            r.d.tickConfirm()
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    @Test
+    fun theConfirmedEpochSurvivesARestart() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            // Day 20: past the 16 days a plain retirement keeps, within the confirmed epoch's 48.
+            ahead(java.time.Duration.ofDays(20))
+            again.handle(r.v.msg(r.old.seal(message("day 20"))))
+            take(r.new, "hs.confirm")
+            assertEquals("day 20", VaultJson.str(again.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "day 20" }.body, "text"))
+        }
+    }
+
+    @Test
+    fun noSecondConfirmWhileOneIsStillInTheOutbox() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // retryable: the entry stays
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            assertEquals(1, confirmsQueued(r.d))
+            ahead(java.time.Duration.ofSeconds(61))
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            assertEquals(1, confirmsQueued(r.d))
+            refuseDeposits = null
+        }
+    }
+
+    /** §6.3.1 "Responder": the activation and its `hs.confirm` (with `device.features`) are in the same write. */
+    @Test
+    fun theActivationAndItsConfirmationAreSavedTogether() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val old = v.keyring.current()!!
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            val before = store.saved.size
+            d.handle(v.msg(res.fin))
+            // The first write after the hs.fin holds the activation, the confirmation and its time together.
+            val first = store.saved.drop(before).first()
+            assertEquals(old.ctx, first.vault!!.confirmed)
+            assertTrue(first.vault!!.awaiting.isEmpty())
+            assertEquals(listOf("hs.confirm", "device.features"), first.outbox.map { it.type })
+            assertNotNull(first.vault!!.confirmAtMs)
+            assertEquals(Base64s.encodeStd(res.epoch.id), Keyring.import(Base64s.decodeStd(first.vault!!.sessions)).current()!!.ctx)
+            assertEquals(listOf("hs.confirm", "device.features"), savedState(store).outbox.map { it.type })
+            refuseDeposits = null
+        }
+    }
+
+    /**
+     * A refusal for good (`token_revoked`) takes the entry out; the next is due a minute later, not 12 days later, and not
+     * at once (so never on every message).
+     */
+    @Test
+    fun aConfirmationRefusedForGoodIsDueAgainAMinuteLater() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refused.set(0)
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            r.d.tickConfirm()
+            assertEquals(1, refused.get())
+            assertTrue(savedState(r.store).outbox.isEmpty())
+            // Not again at once (every message would retry it), but a minute later.
+            r.d.tickConfirm()
+            ahead(java.time.Duration.ofSeconds(30))
+            r.d.tickConfirm()
+            assertEquals(1, refused.get())
+            ahead(java.time.Duration.ofSeconds(31))
+            r.d.tickConfirm()
+            assertEquals(2, refused.get())
+            refuseDeposits = null
+        }
+    }
+
+    /**
+     * A retryable refusal and `quota_exceeded` keep the time: the entry stays (the relay's 429 and 503), or, refused
+     * otherwise, the next one goes 12 days on rather than a minute on.
+     */
+    @Test
+    fun aRetryableRefusalOrAFullQuotaKeepsTheTime() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            for ((code, status) in listOf(RelayException.QUOTA_EXCEEDED to 429, "unavailable" to 503, RelayException.QUOTA_EXCEEDED to 403)) {
+                clockAheadMs = 0
+                val r = rekeyed(this)
+                ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+                refuseDeposits = code
+                refuseStatus = status
+                val from = deviceNow().toEpochMilli()
+                r.d.tickConfirm()
+                val at = savedState(r.store).vault!!.confirmAtMs!!
+                assertTrue("$code $status: the time of this one", at >= from && at <= deviceNow().toEpochMilli())
+                assertEquals("$code $status", status != 403, savedState(r.store).outbox.any { it.type == "hs.confirm" })
+                refused.set(0)
+                ahead(java.time.Duration.ofSeconds(120))
+                r.d.tickConfirm()
+                assertEquals("$code $status", at, savedState(r.store).vault!!.confirmAtMs)
+                assertEquals("$code $status: nothing again", 0, refused.get())
+                refuseDeposits = null
+                refuseStatus = 403
+                r.d.stop()
+            }
+        }
+    }
+
+    /** A refusal for good met by the outbox flush ([VaultDevice.flushOutbox]) sets the same floor: due again a minute later. */
+    @Test
+    fun aRefusalForGoodDuringAFlushSetsTheFloor() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // the confirmation a message brings stays in the outbox
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            assertEquals(listOf("hs.confirm"), r.d.outboxEntries.map { it.type })
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            val from = deviceNow().toEpochMilli()
+            r.d.flushOutbox()
+            val to = deviceNow().toEpochMilli()
+            assertTrue(savedState(r.store).outbox.isEmpty())
+            val floor = VaultDevice.CONFIRM_RESEND.minus(VaultDevice.RECONFIRM_EVERY).toMillis()
+            val at = savedState(r.store).vault!!.confirmAtMs!!
+            assertTrue("the floor", at >= from - floor && at <= to - floor)
+            refuseDeposits = null
+        }
+    }
+
+    /** The floor never goes over the time of a newer `hs.confirm` still waiting in the outbox (a rekey's activation). */
+    @Test
+    fun aRefusalForGoodLeavesANewerWaitingConfirmationsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            r.d.handle(r.v.msg(r.old.seal(message()))) // A, kept
+            ahead(java.time.Duration.ofSeconds(5))
+            val ini = r.v.rekeyInit(r.d, r.old)
+            refuseDeposits = null
+            r.d.handle(r.v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, r.d.relayAddr.pk(), deviceNow())
+            refuseDeposits = "unavailable"
+            r.d.handle(r.v.msg(res.fin)) // B and device.features, kept
+            val confirms = r.d.outboxEntries.filter { it.type == "hs.confirm" }
+            assertEquals(2, confirms.size)
+            val bAt = r.d.confirmState.second!!
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            r.d.deliverConfirm(confirms[0])
+            assertEquals("B's time stands", bAt, r.d.confirmState.second)
+            assertEquals(1, r.d.outboxEntries.count { it.type == "hs.confirm" })
+            r.d.deliverConfirm(confirms[1])
+            val floor = VaultDevice.CONFIRM_RESEND.minus(VaultDevice.RECONFIRM_EVERY).toMillis()
+            assertTrue("then the floor", r.d.confirmState.second!! <= deviceNow().toEpochMilli() - floor)
+            refuseDeposits = null
+        }
+    }
+
+    /**
+     * A dropped pairing (`device.pair.rejected` while the pairing waits) forgets the confirmed epoch and its time, as a
+     * state left from before would otherwise carry them.
+     */
+    @Test
+    fun aDroppedPairingForgetsTheConfirmedEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            val waiting = async(Dispatchers.IO) { runCatching { d.completeEnrollment(java.time.Duration.ofSeconds(10)) } }
+            d.handle(v.respond(nextDeposit().second, d))
+            v.fin(nextDeposit().second, d)
+            d.setConfirmState(Base64s.encodeStd(ByteArray(16) { 7 }), 5)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertTrue(waiting.await().exceptionOrNull() is PairingRejectedException)
+            assertEquals(null to null, d.confirmState)
+        }
+    }
+
+    /**
+     * A new pairing's hs.resp starts with its own epoch confirmed: a confirmed epoch and time left from before are cleared
+     * (enrollment, transfer and recovery all pass there).
+     */
+    @Test
+    fun aNewPairingClearsTheConfirmedEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            d.setConfirmState(Base64s.encodeStd(ByteArray(16) { 7 }), 5)
+            val paired = async(Dispatchers.IO) { d.completeEnrollment(java.time.Duration.ofSeconds(10)) }
+            d.handle(v.respond(nextDeposit().second, d))
+            assertEquals(null to null, d.confirmState)
+            v.fin(nextDeposit().second, d)
+            d.handle(v.seal("device.paired", """{"device_id":"dev-1","role":"app","vault_id":"${v.vaultId}"}"""))
+            paired.await()
+            takeFeatures(v)
+        }
+    }
+
+    /** (0.88.1) The 12-day re-send when collecting starts ([VaultDevice.start]). */
+    @Test
+    fun aCollectionStartAfterTwelveDaysConfirmsAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            serveMailbox = true
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            r.d.start(scope)
+            take(r.new, "hs.confirm")
+            r.d.stop()
+            serveMailbox = false
+            scope.cancel()
+        }
+    }
+
+    /**
+     * (0.88.1) The 12-day re-send after a handled message that neither confirms nor brings a confirmation: one under a
+     * third, retired epoch.
+     */
+    @Test
+    fun aMessageAfterTwelveDaysConfirmsAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            // A second rekey under the confirmed epoch: the unconfirmed one (r.new) is retired, the old stays confirmed.
+            val ini = r.v.rekeyInit(r.d, r.old)
+            r.d.handle(r.v.msg(ini.envelope()))
+            val resp = nextDeposit().second
+            take(r.new, "hs.confirm")
+            val res = ini.handleResp(resp, r.d.relayAddr.pk(), deviceNow())
+            r.d.handle(r.v.msg(res.fin))
+            expectConfirm(res.epoch)
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            r.d.handle(r.v.msg(r.new.seal(message())))
+            take(res.epoch, "hs.confirm")
+        }
+    }
+
+    /**
+     * A redelivered `hs.fin` (a new msg_id, the same inner) opens under the new epoch and confirms nothing: only a message
+     * other than `hs.fin` does (§6.3.1 "Responder", "The received flag").
+     */
+    @Test
+    fun aRedeliveredHsFinConfirmsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val old = v.keyring.current()!!
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            d.handle(v.msg(res.fin)) // the relay's redelivery: a new msg_id, the same hs.fin
+            assertEquals(old.ctx, savedState(store).vault!!.confirmed)
+            // And the old epoch still brings hs.confirm: it is still the confirmed one.
+            d.handle(v.msg(old.seal(message())))
+            take(res.epoch, "hs.confirm")
+        }
+    }
+
+    /**
+     * A save that fails after the activation: the activation stands in memory, so its hs.confirm and device.features are
+     * kept and still go out, and the time of the confirmation stays.
+     */
+    @Test
+    fun aFailedSaveAfterTheActivationKeepsItsConfirmation() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            store.fail = true
+            assertTrue(runCatching { d.handle(v.msg(res.fin)) }.isFailure)
+            assertArrayEquals(res.epoch.id, d.currentEpochId)
+            assertNotNull(d.confirmState.second)
+            expectConfirm(res.epoch)
+            store.fail = false
+        }
+    }
+
+    /** A confirmation that cannot be queued (its save fails) is not counted: the time of the last one is restored. */
+    @Test
+    fun aConfirmationThatCannotBeQueuedKeepsTheLastTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val r = rekeyed(this, store)
+            val last = r.d.confirmState.second
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            store.fail = true
+            r.d.tickConfirm()
+            assertEquals(last, r.d.confirmState.second)
+            assertEquals(0, confirmsQueued(r.d))
+            noConfirm(r.new, 300)
+            store.fail = false
+            r.d.tickConfirm()
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /** The kept epoch's 48 days (§6.3.1 table): on day 47 a message under it still brings hs.confirm; on day 49 it no longer opens. */
+    @Test
+    fun theConfirmedEpochKeepsItsKeysFortyEightDays() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            ahead(java.time.Duration.ofDays(47))
+            r.d.handle(r.v.msg(r.old.seal(message("day 47"))))
+            take(r.new, "hs.confirm")
+            // It opened (not only the 12-day re-send): its receive key is still kept.
+            assertEquals("day 47", VaultJson.str(r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "day 47" }.body, "text"))
+            ahead(java.time.Duration.ofDays(2))
+            r.d.handle(r.v.msg(r.old.seal(message("late"))))
+            noConfirm(r.new)
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { r.d.awaitEvent("message.new", java.time.Duration.ofMillis(200)) { VaultJson.str(it, "text") == "late" } }
+            }
+        }
+    }
+
+    /** Every sealed message carries the inner `features` (§10.8 "On every message"): a request, one sent once, an outbox message. */
+    @Test
+    fun everyMessageToTheVaultCarriesTheFeatures() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val once = async(Dispatchers.IO) { d.opOnce("vault.status") }
+            val r1 = v.open(nextDeposit().second)
+            assertEquals("vault.status" to listOf("hs_confirm"), r1.type to r1.features)
+            d.handle(v.seal("vault.status", "{}", re = r1.id, status = Inner.STATUS_OK))
+            once.await()
+            val op = async(Dispatchers.IO) { d.op("vault.status") }
+            val r2 = v.open(nextDeposit().second)
+            assertEquals(listOf("hs_confirm"), r2.features)
+            d.handle(v.seal("vault.status", "{}", re = r2.id, status = Inner.STATUS_OK))
+            op.await()
+            d.send("call.end")
+            assertEquals(listOf("hs_confirm"), v.open(nextDeposit().second).features)
+            // An answer the device sends (a token refresh's).
+            d.handle(v.seal("relay.token.refresh", "{}"))
+            assertEquals(listOf("hs_confirm"), v.open(nextDeposit().second).features)
+        }
+    }
+
+    /** An hs.confirm not yet deposited is still in the outbox after a restart (an outbox type), and goes at the next flush. */
+    @Test
+    fun anUndeliveredConfirmationSurvivesARestart() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            r.d.handle(r.v.msg(r.old.seal(message())))
+            r.d.stop()
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            assertEquals(listOf("hs.confirm"), again.outboxEntries.map { it.type })
+            refuseDeposits = null
+            deposits.clear()
+            again.flushOutbox()
+            take(r.new, "hs.confirm")
+            assertTrue(again.outboxEntries.isEmpty())
+        }
+    }
+
+    /** An `hs.confirm` from the vault is ignored: not an event, nothing answered, nothing confirmed by it beyond its epoch. */
+    @Test
+    fun anHsConfirmFromTheVaultIsIgnored() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            d.handle(v.seal("hs.confirm", "{}"))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("hs.confirm", java.time.Duration.ofMillis(200)) }
+            }
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** A state stored before release 29 (no `confirmed`, no `confirmAtMs`) still reads. */
+    @Test
+    fun aStateWithoutTheConfirmMembersStillReads() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            d.stop()
+            val json = String(store.load()!!)
+            assertTrue(json.contains("\"confirmed\":null") && json.contains("\"confirmAtMs\":null"))
+            store.save(json.replace(",\"confirmed\":null", "").replace(",\"confirmAtMs\":null", "").toByteArray())
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertEquals(null to null, again.confirmState)
+            val op = async(Dispatchers.IO) { again.op("vault.status") }
+            val req = v.open(nextDeposit().second)
+            again.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
+            op.await()
         }
     }
 }
