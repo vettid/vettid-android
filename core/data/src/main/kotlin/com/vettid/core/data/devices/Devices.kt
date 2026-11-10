@@ -145,12 +145,17 @@ object DeviceWire {
         // A body that does not read as a list of grants is the worst case, never "no permission".
     } ?: listOf(MAX_STATUS_TTL)
 
-    /** One grant's `status_ttl` in seconds: 60-3,600, 900 when absent, the longest when it does not read. */
+    /**
+     * One grant's `status_ttl` in seconds: 60-3,600, 900 when absent, the longest when it does not read (a string, an object,
+     * an array, null, not a whole number: owner decision a, GC #7047, as vettid-ios #239), so the removal text never says
+     * access ends sooner than it does.
+     */
     fun statusTtl(g: JsonObject): Long {
-        val ttl = g["status_ttl"] as? JsonPrimitive
+        val raw = g["status_ttl"]
+        val ttl = raw as? JsonPrimitive
         return when {
-            ttl == null -> DEFAULT_STATUS_TTL
-            ttl.isString -> MAX_STATUS_TTL
+            raw == null -> DEFAULT_STATUS_TTL
+            ttl == null || ttl.isString -> MAX_STATUS_TTL
             else -> ttl.longOrNull?.coerceIn(MIN_STATUS_TTL, MAX_STATUS_TTL) ?: MAX_STATUS_TTL
         }
     }

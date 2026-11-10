@@ -417,6 +417,17 @@ class DevicesManagerTest {
         assertEquals(listOf(3_600L), DeviceWire.statusTtls(obj("""{}""")))
         val ttls = DeviceWire.statusTtls(obj("""{"grants":[{"status_ttl":"x"},{"status_ttl":99999},"junk",{"status_ttl":10}]}"""))
         assertEquals(listOf(3_600L, 3_600L, 3_600L, 60L), ttls)
+        // An object, an array, null or a fraction is the longest too, never the default (owner decision a, GC #7047).
+        val odd = DeviceWire.statusTtls(obj("""{"grants":[{"status_ttl":{"s":60}},{"status_ttl":[60]},{"status_ttl":null},{"status_ttl":90.5},{}]}"""))
+        assertEquals(listOf(3_600L, 3_600L, 3_600L, 3_600L, 900L), odd)
+    }
+
+    @Test
+    fun aRemovalBoundWithAnUnreadableLifetimeIsTheWorstCase() = runTest {
+        val ops = Ops().apply {
+            grantsByAgent["a"] = obj("""{"grants":[{"grant_id":"g1","status_ttl":120},{"grant_id":"g2","status_ttl":{"seconds":120}}],"suspended":[]}""")
+        }
+        assertEquals(3_660L, manager(ops).removalBoundSeconds("a"))
     }
 
     private companion object {
