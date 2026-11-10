@@ -241,9 +241,12 @@ The A2 exit test:
   takes the device's entries out of Approvals (`ApprovalsRepository.dropDeviceRequests`). The remove text names the
   longest `status_ttl` of the agent's grants plus 60 s, the worst case (3,660 s) when the vault cannot be asked; a
   `status_ttl` that does not read as a whole number (a string, object, array, null) counts as 3,600 s, never the default
-  (owner decision a, GC #7047, as vettid-ios #239). After the hold ends (or a due check passes) an open list and an open
-  device's page read the list again (`DevicesRepository.readAgain`, emitted by `VaultManager`). The renewal's session end
-  is the list's `session_expires_at`, so Remove (the entry goes) ends it as End access (the field cleared) does. A device's
+  (owner decision a, GC #7047, as vettid-ios #239); an agent share rule's `status_ttl` is read the same way. After the hold
+  ends (or a due check passes) an open list and an open device's page read the list again (`DevicesRepository.readAgain`,
+  emitted by `VaultManager` per `devicesReadAgain`; the list also on `checkCleared()`). The renewal's session end is the
+  list's `session_expires_at`, so Remove (the entry goes) ends it as End access (the field cleared) does. After Remove the
+  page itself says "<name> was removed" for 3 s (`REMOVED_NOTICE_MS`), with the device shown and no actions, then goes back;
+  the list does not repeat it (owner decision a, GC #7101). A device's
   name is its own, self-asserted and never edited. Pairing an agent (AA2; `PairingManager` / `PairingRepository` in
   `:core:data` `devices/`, `VaultManager.pairing`, `PairViewModel` / `PairScreen`, `PairRoute`): the floating button on the
   list; `device.pair.create{role: "agent"}` (the link must parse as an agent pairing, else it is never shown), the QR and
