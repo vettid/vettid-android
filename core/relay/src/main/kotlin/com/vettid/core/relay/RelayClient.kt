@@ -22,6 +22,7 @@ import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
 /**
@@ -129,9 +130,11 @@ data class StoredRef(val id: String, val expiresAt: Instant?)
  * network ([RequestSigner]): a signature never waits in a frozen process and
  * then reaches the relay stale. 429, 5xx, `timestamp_stale`, `replay_detected`
  * and transport errors are retried with exponential backoff and jitter,
- * honouring `retry_after` (§7.2, CLIENT-NOTES §6); other client errors are not
- * retried, and a claim GET is never retried (it may already have consumed the
- * claim).
+ * honouring `retry_after` (§7.2, CLIENT-NOTES §6) up to [CallLimits.maxRetryAfterS];
+ * every attempt but a long-poll's has a call timeout ([CallLimits]). Other
+ * client errors are not retried, a claim GET is never retried (it may already
+ * have consumed the claim), and a blob upload is not sent again once it went
+ * out (it may already be stored).
  *
  * [baseUrl] is the relay's base URL as tokens name it (`aud`). Transport
  * concerns (TLS trust, a development address mapping) belong to [http]'s
@@ -145,7 +148,23 @@ class RelayClient(
     private val maxAttempts: Int = DEFAULT_ATTEMPTS,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
+    private val limits: CallLimits = CallLimits(),
 ) {
+    /**
+     * Bounds on how long one request may take, so that a relay (a claim's comes from a scanned code) cannot keep a
+     * caller waiting for hours: each attempt's whole call ([callMs], [blobMs] for a blob's bytes) and the longest
+     * `retry_after` honoured ([maxRetryAfterS]); a longer one ends the request at once with its error, as the last
+     * attempt's would. A long-poll has no call timeout: a full batch (up to 100 messages of 256 KiB) may take long
+     * on a slow link and still be arriving, and only the read timeout ends one that stalls (a collect that must
+     * end sooner passes its own call timeout, as the transfer's settlement window does: a coroutine timeout cannot cut a
+     * body read that is blocked).
+     */
+    data class CallLimits(
+        val callMs: Long = CALL_TIMEOUT_MS,
+        val blobMs: Long = BLOB_CALL_TIMEOUT_MS,
+        val maxRetryAfterS: Int = MAX_RETRY_AFTER_S,
+    )
+
     val baseUrl: String = baseUrl.trimEnd('/')
 
     /** The raw public key. */
@@ -174,6 +193,15 @@ class RelayClient(
         val contentType: String? = null,
         val unsigned: Boolean = false,
         val longPoll: Boolean = false,
+        /** Carries a blob's bytes (up to 8 MiB): the longer call timeout. */
+        val blob: Boolean = false,
+        /** Each attempt's call timeout instead of the default one; also bounds a long-poll (a caller's own bound). */
+        val callMs: Long? = null,
+        /**
+         * False: an attempt that went out and then failed without the relay's own refusal (an I/O error, a timeout,
+         * a 5xx) is not sent again, since it may have been done (a blob upload: each one fills the mailbox).
+         */
+        val resendAfterSent: Boolean = true,
         /** A signed request's signature is accepted once (§4.1): [TransportRetry] resends it only if it never went out. */
         val transportRetry: TransportRetry.Policy = TransportRetry.Policy.UNSENT_ONLY,
         /**
@@ -199,6 +227,7 @@ class RelayClient(
 
     internal suspend fun <T> execute(c: Call, read: (Response) -> T): T {
         var last: IOException? = null
+        val sent = AtomicBoolean()
         for (i in 0 until maxOf(maxAttempts, 1)) {
             if (i > 0) {
                 val e = last
@@ -210,22 +239,34 @@ class RelayClient(
                 sleep(wait)
                 c.onRetrySent?.invoke()
             }
+            sent.set(false)
             try {
-                return once(c, read)
+                return once(c, sent, read)
             } catch (e: RelayException) {
                 if (e.status >= HTTP_SERVER_ERROR) c.onLostAttempt?.invoke()
-                if (!e.retryable) throw e
+                if (!mayRetry(c, e, sent.get())) throw e
                 last = e
             } catch (e: IOException) {
                 c.onLostAttempt?.invoke()
+                if (!c.resendAfterSent && sent.get()) throw e
                 last = e
             }
         }
         throw last ?: IOException("relay: no attempt made")
     }
 
+    /**
+     * Whether a refused attempt is tried again: a retryable refusal, not `quota_exceeded` (RELAY-PROTOCOL §7.1: never
+     * retried unchanged), a `retry_after` within the cap, and not a resend that [Call.resendAfterSent] forbids: after a
+     * send, neither a 5xx nor `replay_detected` (OkHttp may have resent the request on a failed connection, and the
+     * relay may have done the first).
+     */
+    private fun mayRetry(c: Call, e: RelayException, sent: Boolean): Boolean =
+        e.retryable && e.code != RelayException.QUOTA_EXCEEDED && e.retryAfterSeconds <= limits.maxRetryAfterS &&
+            (c.resendAfterSent || !sent || e.status < HTTP_SERVER_ERROR && e.code != RelayException.REPLAY_DETECTED)
+
     @Suppress("CyclomaticComplexMethod") // one branch per request shape (signed, token, body, content type, long-poll)
-    internal suspend fun <T> once(c: Call, read: (Response) -> T): T {
+    internal suspend fun <T> once(c: Call, sent: AtomicBoolean? = null, read: (Response) -> T): T {
         val url = baseUrl + c.path + (c.query?.let { "?$it" } ?: "")
         val rb = Request.Builder().url(url)
         if (!c.unsigned) {
@@ -244,10 +285,18 @@ class RelayClient(
         rb.tag(TransportRetry.Policy::class.java, c.transportRetry)
         val client = if (c.longPoll) pollHttp else http
         val call = client.newCall(rb.build())
-        c.onSent?.let { sent ->
+        val timeoutMs = c.callMs ?: if (c.longPoll) null else if (c.blob) limits.blobMs else limits.callMs
+        if (timeoutMs != null) {
+            // The whole attempt, the body read by [read] included (it runs before the response is closed).
+            call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
+        }
+        if (c.onSent != null || sent != null) {
             call.addEventListener(
                 object : EventListener() {
-                    override fun requestHeadersStart(call: okhttp3.Call) = sent()
+                    override fun requestHeadersStart(call: okhttp3.Call) {
+                        sent?.set(true)
+                        c.onSent?.invoke()
+                    }
                 },
             )
         }
@@ -263,7 +312,7 @@ class RelayClient(
 
     private fun errorOf(resp: Response): RelayException {
         val text = resp.body.bytesAtMost(ERROR_BODY_LIMIT.toLong())
-        val headerRetry = resp.header("Retry-After")?.trim()?.toIntOrNull() ?: 0
+        val headerRetry = resp.header("Retry-After")?.trim()?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         val o = try {
             StrictJson.parseObject(text)
         } catch (_: CryptoException) {
@@ -273,7 +322,7 @@ class RelayClient(
         if (o == null || code.isNullOrEmpty()) {
             return RelayException(resp.code, "http_${resp.code}", String(text, Charsets.UTF_8).trim().take(MAX_MESSAGE), headerRetry)
         }
-        val retry = (o["retry_after"] as? JsonNumber)?.raw?.toIntOrNull() ?: headerRetry
+        val retry = (o["retry_after"] as? JsonNumber)?.raw?.toIntOrNull()?.coerceAtLeast(0) ?: headerRetry
         return RelayException(resp.code, code, (o["message"] as? JsonString)?.value ?: "", retry)
     }
 
@@ -281,16 +330,31 @@ class RelayClient(
         if (resp.code == HTTP_NO_CONTENT) {
             null
         } else {
-            val b = resp.body.bytes()
+            // A collect's batch can be large; any other answer is a few fields. Neither is read without a bound.
+            val limit = if (c.longPoll) MAX_COLLECT_READ else MAX_JSON_READ
+            val b = boundedBody(resp, limit)
             if (b.isEmpty()) null else StrictJson.parseObject(b)
         }
     }
+
+    /**
+     * A 2xx answer's body, at most [limit] bytes. A longer one is [AnswerTooLarge], an [IOException]: the relay
+     * answered, so a collect's batch may be leased to it, and its caller counts it as a lost attempt (the lease held).
+     */
+    private fun boundedBody(resp: Response, limit: Long): ByteArray {
+        val b = resp.body.bytesAtMost(limit + 1)
+        if (b.size > limit) throw AnswerTooLarge(limit)
+        return b
+    }
+
+    /** A 2xx answer over the client's bound (see [boundedBody]); not a [RelayException]: no refusal. */
+    class AnswerTooLarge(limit: Long) : IOException("relay: answer over $limit bytes")
 
     /** Registers this principal's mailbox (idempotent, §6.1). */
     suspend fun register(): Registration {
         val body = JsonBuilder().string("pubkey", publicKeyB64).bytes()
         return execute(Call("POST", "/v1/register", body = body)) { resp ->
-            val o = StrictJson.parseObject(resp.body.bytes())
+            val o = StrictJson.parseObject(boundedBody(resp, MAX_JSON_READ))
             val l = o.obj("limits")
             fun n(k: String): Long = l.uint(k, 0, StrictJson.MAX_SAFE_INTEGER)
             fun opt(k: String): Long? = l.optUint(k, 0, StrictJson.MAX_SAFE_INTEGER)
@@ -330,18 +394,22 @@ class RelayClient(
         return json(Call("POST", "/v1/mailbox/$mailboxId", body = body, token = token))!!.string("msg_id")
     }
 
-    /** Long-polls this mailbox (§6.3): [wait] ≤ 25 s, [max] ≤ 100. */
+    /**
+     * Long-polls this mailbox (§6.3): [wait] ≤ 25 s, [max] ≤ 100. [callTimeout] bounds each attempt, the body read
+     * included; none by default ([CallLimits]): a caller that must end sooner passes one (the transfer's settlement window).
+     */
     suspend fun collect(
         wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S),
         max: Int = DEFAULT_MAX,
         onLostAttempt: (() -> Unit)? = null,
         onRetrySent: (() -> Unit)? = null,
         onSent: (() -> Unit)? = null,
+        callTimeout: Duration? = null,
     ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
         val call = Call(
             "GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent,
-            onSent = onSent,
+            onSent = onSent, callMs = callTimeout?.toMillis(),
         )
         val o = json(call) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }
@@ -375,23 +443,28 @@ class RelayClient(
 
     /** Uploads ciphertext to [mailboxId] (claim-check, §6.8). */
     suspend fun putBlob(mailboxId: String, token: String, ciphertext: ByteArray): StoredRef {
-        val o = json(Call("PUT", "/v1/blob/$mailboxId", body = ciphertext, token = token, contentType = OCTET))!!
+        val call = Call(
+            "PUT", "/v1/blob/$mailboxId", body = ciphertext, token = token, contentType = OCTET, blob = true,
+            resendAfterSent = false,
+        )
+        val o = json(call)!!
         return StoredRef(o.string("blob_id"), time(o.optString("expires_at")))
     }
 
     /** Fetches a blob deposited to this mailbox (§6.8). */
-    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { resp ->
-        // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
-        // that grows beyond it.
-        val declared = resp.header("Content-Length")?.toLongOrNull()
-        if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
-        val b = resp.body.bytesAtMost(maxBytes + 1)
-        if (b.size > maxBytes) {
-            b.fill(0)
-            throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray =
+        execute(Call("GET", "/v1/blob/$blobId", blob = true)) { resp ->
+            // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
+            // that grows beyond it.
+            val declared = resp.header("Content-Length")?.toLongOrNull()
+            if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+            val b = resp.body.bytesAtMost(maxBytes + 1)
+            if (b.size > maxBytes) {
+                b.fill(0)
+                throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+            }
+            b
         }
-        b
-    }
 
     /** Deletes a blob (idempotent). */
     suspend fun deleteBlob(blobId: String) {
@@ -444,6 +517,21 @@ class RelayClient(
         private const val MAX_WAIT_S = 25L
         private const val MAX_COLLECT = 100
         private const val POLL_READ_TIMEOUT_S = 60L
+
+        /** Any call but a long-poll or a blob's: a claim fetch, a deposit. */
+        const val CALL_TIMEOUT_MS = 60_000L
+
+        /** A blob's upload or download (8 MiB at about 30 KiB/s). */
+        const val BLOB_CALL_TIMEOUT_MS = 300_000L
+
+        /** The longest `retry_after` waited for; a longer one ends the request. */
+        const val MAX_RETRY_AFTER_S = 30
+
+        /** Any JSON answer but a collect's. */
+        private const val MAX_JSON_READ = 1L shl 20
+
+        /** A collect's: [MAX_COLLECT] messages of 256 KiB, base64, with their fields. */
+        private const val MAX_COLLECT_READ = 40L shl 20
         private const val BACKOFF_BASE_MS = 250L
         private const val BACKOFF_MAX_SHIFT = 6
         private const val JITTER_MS = 250L

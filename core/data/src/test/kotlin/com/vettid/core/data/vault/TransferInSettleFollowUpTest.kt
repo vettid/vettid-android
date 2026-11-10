@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import com.vettid.core.relay.RelayClient
 import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.CollectorCut
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -364,6 +365,34 @@ class TransferInSettleFollowUpTest {
                 if (finals.size == 1) {
                     delay(20_000)
                     error("unreadable")
+                }
+            }
+        }
+        assertFalse(TransferInResume.atDeadline({ false }, collect, {}, settle = settle))
+        assertEquals(listOf(185_000L, 280_000L), finals)
+    }
+
+    /** (#336 re-check) The device's settlement collect is bounded by the window's own transport bound. */
+    @Test
+    fun theDevicesSettleTransportIsTheWindows() {
+        assertEquals(TransferInResume.DEADLINE_COLLECT_MS, com.vettid.core.vault.VaultDevice.SETTLE_TRANSPORT.toMillis())
+    }
+
+    /**
+     * (#336 review, item 1) The same for a last collect whose 200 answer was over the client's bound
+     * ([RelayClient.AnswerTooLarge]): the relay answered, so the batch may be leased.
+     */
+    @Test
+    fun anOversizedLastCollectLeasesFromTheFailure() = runTest {
+        val clock = FrozenClock(this)
+        val finals = mutableListOf<Long>()
+        val settle = TransferInResume.Settle(windowMs = 185_000, maxExtraMs = 0, now = clock::now)
+        val collect: suspend (Long) -> Unit = { w ->
+            if (w == 0L && clock.now() >= 185_000) {
+                finals += clock.now()
+                if (finals.size == 1) {
+                    delay(20_000)
+                    throw RelayClient.AnswerTooLarge(40L shl 20)
                 }
             }
         }

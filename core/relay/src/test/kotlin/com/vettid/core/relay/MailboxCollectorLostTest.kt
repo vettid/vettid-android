@@ -63,6 +63,16 @@ class MailboxCollectorLostTest {
         assertTrue("counted: $lost", lost >= 1)
     }
 
+    /** (#336 review, item 1) A 200 over the client's bound: the batch may be leased, so it is counted, and retried. */
+    @Test
+    fun anAnswerOverTheBoundIsCountedAndRetried() = runBlocking<Unit> {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"messages":[],"x":"${"a".repeat(40 shl 20)}"}""").build())
+        server.enqueue(empty())
+        assertEquals(0, collector().pollOnce {})
+        assertTrue("counted: $lost", lost >= 1)
+        assertEquals(2, server.requestCount)
+    }
+
     /** A 4xx that is the relay's own answer handed nothing out. */
     @Test
     fun aClientErrorIsNotCounted() = runBlocking<Unit> {

@@ -102,6 +102,13 @@ class VaultDeviceTest {
     @Volatile
     private var serveMailbox = false
 
+    /** The query of each GET /v1/mailbox. */
+    private val collectQueries = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /** When true, GET /v1/mailbox answers only after 5 s. */
+    @Volatile
+    private var slowCollect = false
+
     /** When set, GET /v1/mailbox is refused with this code (403). */
     @Volatile
     private var refuseCollect: String? = null
@@ -190,7 +197,10 @@ class VaultDeviceTest {
         relay.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val path = request.url.encodedPath
+                if (path == "/v1/mailbox" && request.method == "GET") collectQueries.add(request.url.encodedQuery ?: "")
                 return when {
+                    path == "/v1/mailbox" && request.method == "GET" && slowCollect ->
+                        MockResponse.Builder().code(200).body("""{"messages":[]}""").headersDelay(5, TimeUnit.SECONDS).build()
                     path == "/v1/register" -> MockResponse.Builder().code(201).body(
                         """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,"visibility_timeout_seconds":60,""" +
                             """"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,"max_claim_bytes":1,"claim_ttl_seconds":1}}""",
@@ -1348,6 +1358,32 @@ class VaultDeviceTest {
             assertTrue(d.transferInPending!!.paired)
             assertEquals("dev-2", d.deviceId)
             assertEquals("acked", 1, acked.size)
+            serveMailbox = false
+        }
+    }
+
+    /**
+     * (#336 re-check, items 1 and 2) The settlement window's collect asks a small batch (a backlog on a slow link still
+     * arrives within its bound), and each attempt ends at its wait + the transport bound, the body read included.
+     */
+    @Test
+    fun theSettlementsCollectAsksASmallBatchWithinItsBound() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            collectQueries.clear()
+            assertEquals(0, d.settleCollect(java.time.Duration.ZERO))
+            assertTrue(collectQueries.toList().toString(), collectQueries.all { "max=${VaultDevice.SETTLE_COLLECT_MAX}" in it })
+            assertEquals(32, VaultDevice.SETTLE_COLLECT_MAX)
+            slowCollect = true
+            val t0 = System.nanoTime()
+            assertTrue(runCatching { d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofMillis(300)) }.isFailure)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            assertTrue("ended after $ms ms", ms < 4_000)
+            slowCollect = false
             serveMailbox = false
         }
     }
