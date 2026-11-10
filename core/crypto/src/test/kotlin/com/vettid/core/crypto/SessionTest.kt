@@ -3,6 +3,7 @@ package com.vettid.core.crypto
 import com.vettid.core.crypto.envelope.Envelope
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
+import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.session.Epoch
 import com.vettid.core.crypto.session.HsFin
@@ -25,6 +26,8 @@ import com.vettid.core.crypto.session.Schedule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -331,6 +334,121 @@ class SessionTest {
             restored.open(Envelope.parse(v1.seal(m)), now.plus(Epoch.RECEIVE_KEY_RETENTION).plusSeconds(120))
         }
         assertEquals(0, Keyring.import(Keyring().export()).let { if (it.current() == null) 0 else 1 })
+    }
+
+    /** A rekey hs.init of the initiator (here standing for the vault) under its epoch [current]. */
+    private fun rekeyInitiator(current: Epoch) = Initiator.create(
+        InitiatorConfig(
+            purpose = Purpose.REKEY, ctx = "", identity = app.ik, staticKem = app.kem.publicKey, relay = app.relay,
+            responderIk = vault.ik.publicKey, responderEk = null, responderRelayKey = vault.relayKey.publicKey,
+            current = current, policy = Policy.VAULT_TO_DEVICE, now = now,
+        ),
+    )
+
+    private val rekeyRespCfg = ResponderConfig(
+        identity = vault.ik, policy = Policy.VAULT_TO_DEVICE, collectSender = app.relayKey.publicKey,
+        recordRelayKey = app.relayKey.publicKey, knownInitiatorIk = app.ik.publicKey, now = now,
+    )
+
+    /** A rekey the initiator side starts under [initiatorCurrent], answered by the responder (the device) under [current]. */
+    private fun rekey(current: Epoch, initiatorCurrent: Epoch): Pair<Epoch, Epoch> {
+        val i = rekeyInitiator(initiatorCurrent)
+        val (r, resp) = PendingInit.openRekey(i.envelope(), current, now).respond(rekeyRespCfg)
+        val res = i.handleResp(resp, vault.relayKey.publicKey, now)
+        return r.handleFin(res.fin, app.relayKey.publicKey, now).epoch to res.epoch
+    }
+
+    private fun ping() = Inner(id = Ulid.new(now), type = "x.y", ts = now)
+
+    /**
+     * §6.3.1 "Responder" (0.87.0): the responder (a device) keeps its confirmed epoch's rk and receive key while a newer
+     * one is current: it still opens messages and takes a rekey, survives an export, and keeps its keys up to the given
+     * time (48 days) rather than 16 days. Mirrors vettid-ios `aKeptConfirmedEpochStillOpensAndTakesARekey`.
+     */
+    @Test
+    fun aKeptConfirmedEpochStillOpensAndTakesARekey() {
+        val (a1, v1) = pair()
+        val k = Keyring()
+        k.activate(v1, now)
+        val (v2, _) = rekey(v1, a1)
+        val until = now.plus(Duration.ofDays(48))
+        k.activateKeeping(v2, now, until)
+        assertFalse(v1.canSend())
+        assertTrue(v1.hasRk())
+        assertSame(v1, k.find(v1.id, now))
+        assertSame(v2, k.current())
+        // Survives a restart with its rk.
+        val restored = Keyring.import(k.export())
+        val kept = restored.find(v1.id, now)!!
+        assertTrue(kept.hasRk())
+        assertFalse(kept.canSend())
+        assertEquals("x.y", restored.open(Envelope.parse(a1.seal(ping())), now).first.type)
+        // A rekey under the confirmed epoch opens with its rk (§6.2: K_s is the epoch's rk).
+        PendingInit.openRekey(rekeyInitiator(a1).envelope(), kept, now)
+        // After 16 days a plain activation would have dropped it; kept, it still opens up to `until`.
+        val day20 = now.plus(Duration.ofDays(20))
+        restored.prune(day20)
+        assertEquals("x.y", restored.open(Envelope.parse(a1.seal(ping())), day20).first.type)
+        restored.prune(until.plusSeconds(1))
+        assertNull(restored.find(v1.id, until.plusSeconds(1)))
+        assertThrows(CryptoException.Protocol::class.java) { restored.open(Envelope.parse(a1.seal(ping())), until.plusSeconds(1)) }
+    }
+
+    /** `release` drops the rk at once and only ever shortens the receive key's life; a plain activation drops the rk as before. */
+    @Test
+    fun releaseDropsTheRkAndOnlyShortensTheKeys() {
+        val (a1, v1) = pair()
+        val k = Keyring()
+        k.activate(v1, now)
+        val (v2, _) = rekey(v1, a1)
+        k.activateKeeping(v2, now, now.plus(Duration.ofDays(48)))
+        // A release never lengthens the life.
+        k.release(v1.id, now.plus(Duration.ofDays(60)))
+        assertFalse(v1.hasRk())
+        val day47 = now.plus(Duration.ofDays(47))
+        assertSame("not lengthened past 48 days, and not cut", v1, k.find(v1.id, day47))
+        assertNull(k.find(v1.id, now.plus(Duration.ofDays(49))))
+        k.release(v1.id, now.plus(Duration.ofDays(16)))
+        val day17 = now.plus(Duration.ofDays(17))
+        assertNull(k.find(v1.id, day17))
+        assertThrows(CryptoException.Protocol::class.java) { k.open(Envelope.parse(a1.seal(ping())), day17) }
+        // A plain activation deletes the rk at once, as before.
+        val k2 = Keyring()
+        val (_, w1) = pair()
+        k2.activate(w1, now)
+        val (_, w2) = pair()
+        k2.activate(w2, now)
+        assertFalse(w1.hasRk())
+        assertTrue(w2.hasRk())
+    }
+
+    /** hs.init, hs.fin and hs.resp carry the configured inner `features` (§5.3, §10.8); without it none. */
+    @Test
+    fun handshakeMessagesCarryTheFeatures() {
+        val f = listOf("hs_confirm")
+        val i = Initiator.create(
+            InitiatorConfig(
+                purpose = Purpose.APP, ctx = "vault-0001", identity = app.ik, staticKem = app.kem.publicKey, relay = app.relay,
+                token = token, responderIk = vault.ik.publicKey, responderEk = vault.kem.publicKey,
+                responderRelayKey = vault.relayKey.publicKey, policy = Policy.VAULT_TO_DEVICE, now = now, features = f,
+            ),
+        )
+        val p = PendingInit.open(i.envelope(), vault.lookup, now)
+        assertEquals(f, p.inner.features)
+        val (r, resp) = p.respond(respCfg())
+        val res = i.handleResp(resp, vault.relayKey.publicKey, now)
+        assertNull("hs.resp without the member", res.inner.features)
+        assertEquals(f, r.handleFin(res.fin, app.relayKey.publicKey, now).inner.features)
+        // A rekey's hs.resp.
+        val (a1, v1) = pair()
+        val ri = rekeyInitiator(a1)
+        val (_, rresp) = PendingInit.openRekey(ri.envelope(), v1, now).respond(
+            ResponderConfig(
+                identity = vault.ik, policy = Policy.VAULT_TO_DEVICE, collectSender = app.relayKey.publicKey,
+                recordRelayKey = app.relayKey.publicKey, knownInitiatorIk = app.ik.publicKey, now = now, features = f,
+            ),
+        )
+        assertEquals(f, ri.handleResp(rresp, vault.relayKey.publicKey, now).inner.features)
     }
 
     @Test

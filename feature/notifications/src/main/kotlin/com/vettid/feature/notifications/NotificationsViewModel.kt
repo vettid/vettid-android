@@ -148,11 +148,15 @@ class NotificationsViewModel @Inject constructor(
     /** Items marked read by viewing, or marked unread by the member: never marked read by viewing (again). */
     private val handled = mutableSetOf<String>()
 
+    /** The device ids a read of the device list was made for (or is under way): asked again only after a failed read. */
+    private val devicesAsked = mutableSetOf<String>()
+
     init {
         viewModelScope.launch {
             combine(feed.items, feed.load) { i, l -> i to l }.collect { (i, l) ->
                 state.update { it.copy(items = i, load = l) }
                 if (inView) markViewed(arrivalsOnly = true)
+                readDevicesIfNeeded(i)
             }
         }
         viewModelScope.launch {
@@ -220,6 +224,27 @@ class NotificationsViewModel @Inject constructor(
 
     fun refresh() {
         viewModelScope.launch { guard { feed.refresh() } }
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.87.0 §10.9, as vettid-ios #238) `device.update_needed` names a device by its id only: when such an
+     * item is listed and the device list in memory has no name for its id (the list not read, or read before that device
+     * was paired or renamed), the list is read afresh. Once per id; an id whose read failed is asked again with the next
+     * change of the feed list. A device listed without a name stays unnamed (the item's wording then names none).
+     */
+    private fun readDevicesIfNeeded(items: List<FeedItem>) {
+        val named = FeedNames.deviceNames(devices.devices.value).keys
+        val missing = items.asSequence().filter { it.kind == KIND_UPDATE_NEEDED }
+            .mapNotNull { it.deviceId?.takeIf(String::isNotEmpty) }.toSet() - named - devicesAsked
+        if (missing.isEmpty()) return
+        devicesAsked += missing
+        viewModelScope.launch {
+            try {
+                devices.refresh()
+            } catch (_: VaultFailure) {
+                devicesAsked -= missing // the read failed: asked again with the next change of the list
+            }
+        }
     }
 
     fun setUnreadOnly(on: Boolean) = state.update { it.copy(unreadOnly = on) }
@@ -330,5 +355,6 @@ class NotificationsViewModel @Inject constructor(
 
     companion object {
         const val ARG_ARCHIVED = "archived"
+        private const val KIND_UPDATE_NEEDED = "device.update_needed"
     }
 }

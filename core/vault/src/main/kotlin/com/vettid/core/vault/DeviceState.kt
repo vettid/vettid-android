@@ -146,6 +146,17 @@ internal data class VaultRecord(
      * [sessions].
      */
     var awaiting: MutableList<AwaitingRekey> = mutableListOf(),
+    /**
+     * (0.87.0, VAULT-MESSAGING §6.3.1 "Responder") The device's confirmed epoch with its vault (the id, standard base64): the
+     * newest in which the vault sent it anything but `hs.fin`, while that is not the current epoch. Null: the current epoch.
+     * Optional, as a state written before release 29 has none. Cleared by a dropped pairing and by a new pairing.
+     */
+    var confirmed: String? = null,
+    /**
+     * When the device last queued `hs.confirm` (epoch ms): it queues one again 12 days later while its current epoch is not
+     * its confirmed one (0.88.1, "`hs.confirm` again"). Not scaled.
+     */
+    var confirmAtMs: Long? = null,
 )
 
 /** A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began. */

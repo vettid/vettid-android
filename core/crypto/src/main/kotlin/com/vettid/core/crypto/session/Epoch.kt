@@ -120,6 +120,20 @@ class Epoch private constructor(
         rk = null
     }
 
+    /**
+     * Deletes only the send key: a responder's confirmed epoch keeps its rk and receive key while a newer epoch is
+     * current (§6.3.1 "Responder").
+     */
+    @Synchronized
+    internal fun retireSendOnly() {
+        Bytes.wipe(sendKey)
+        sendKey = null
+    }
+
+    /** Whether the epoch still holds its rk (a rekey under it can be opened, §6.2). */
+    @Synchronized
+    fun hasRk(): Boolean = rk != null
+
     @Synchronized
     fun destroy() {
         Bytes.wipe(sendKey, recvKey, rk)
@@ -225,34 +239,77 @@ class Epoch private constructor(
  */
 class Keyring {
     private var current: Epoch? = null
-    private val retired = ArrayList<Pair<Epoch, Instant>>()
+    private val retired = ArrayList<Retained>()
+
+    /** A previous epoch and the end of its receive key's life ([release] may shorten it). */
+    private class Retained(val epoch: Epoch, var until: Instant)
 
     /** Makes [e] current; the previous epoch's send key and rk are deleted at once. */
     @Synchronized
     fun activate(e: Epoch, now: Instant) {
         current?.let {
             it.retireSend()
-            retired.add(it to now.plus(Epoch.RECEIVE_KEY_RETENTION))
+            retired.add(Retained(it, now.plus(Epoch.RECEIVE_KEY_RETENTION)))
         }
         current = e
         pruneLocked(now)
     }
 
+    /**
+     * Makes [e] current while the previous current epoch stays the responder's confirmed epoch (§6.3.1 "Responder"):
+     * only its send key is deleted, and its rk and receive key are kept until [until]. Mirrors vettid-vault
+     * `Keyring.ActivateKeeping(…, KeepRK)`.
+     */
+    @Synchronized
+    fun activateKeeping(e: Epoch, now: Instant, until: Instant) {
+        current?.let {
+            it.retireSendOnly()
+            retired.add(Retained(it, until))
+        }
+        current = e
+        pruneLocked(now)
+    }
+
+    /**
+     * Ends a retained epoch's extra life once it stops being the confirmed epoch (§6.3.1 table): its rk goes at once,
+     * and its receive key is kept until [until] at most (never longer than it already was). Mirrors vettid-vault
+     * `Keyring.Release`.
+     */
+    @Synchronized
+    fun release(id: ByteArray, until: Instant) {
+        for (r in retired) {
+            if (!r.epoch.id.contentEquals(id)) continue
+            r.epoch.retireSend()
+            if (until.isBefore(r.until)) r.until = until
+        }
+    }
+
+    /** The current or a retained epoch with [id], while its receive key is kept. */
+    @Synchronized
+    fun find(id: ByteArray, now: Instant): Epoch? {
+        current?.let { if (it.id.contentEquals(id)) return it }
+        return retired.firstOrNull { !now.isAfter(it.until) && it.epoch.id.contentEquals(id) }?.epoch
+    }
+
     @Synchronized
     fun current(): Epoch? = current
 
+    /** Destroys the retained epochs whose keys' life has ended; true when one was. */
     @Synchronized
-    fun prune(now: Instant) = pruneLocked(now)
+    fun prune(now: Instant): Boolean = pruneLocked(now)
 
-    private fun pruneLocked(now: Instant) {
+    private fun pruneLocked(now: Instant): Boolean {
+        var dropped = false
         val it = retired.iterator()
         while (it.hasNext()) {
-            val (e, until) = it.next()
-            if (now.isAfter(until)) {
-                e.destroy()
+            val r = it.next()
+            if (now.isAfter(r.until)) {
+                r.epoch.destroy()
                 it.remove()
+                dropped = true
             }
         }
+        return dropped
     }
 
     /**
@@ -264,8 +321,8 @@ class Keyring {
         val e = synchronized(this) {
             var found: Epoch? = null
             current?.let { if (env.recipientKid == it.recvKid) found = it }
-            for ((r, until) in retired) {
-                if (!now.isAfter(until) && env.recipientKid == r.recvKid && found == null) found = r
+            for (r in retired) {
+                if (!now.isAfter(r.until) && env.recipientKid == r.epoch.recvKid && found == null) found = r.epoch
             }
             found
         } ?: throw CryptoException.Protocol("kid")
@@ -276,7 +333,7 @@ class Keyring {
     fun destroy() {
         current?.destroy()
         current = null
-        retired.forEach { it.first.destroy() }
+        retired.forEach { it.epoch.destroy() }
         retired.clear()
     }
 
@@ -289,7 +346,7 @@ class Keyring {
     fun export(): ByteArray {
         val b = JsonBuilder()
         current?.let { b.raw("current", it.export()) }
-        val r = retired.map { (e, until) -> JsonBuilder().uint("until_ms", until.toEpochMilli()).raw("epoch", e.export()).build() }
+        val r = retired.map { JsonBuilder().uint("until_ms", it.until.toEpochMilli()).raw("epoch", it.epoch.export()).build() }
         b.raw("retired", JsonBuilder.array(r))
         return b.bytes()
     }
@@ -303,7 +360,7 @@ class Keyring {
             for (r in o.array("retired")) {
                 val ro = r.asObject()
                 val e = Epoch.import(ro.obj("epoch").rawBytes())
-                k.retired.add(e to Instant.ofEpochMilli(ro.uint("until_ms", 0, StrictJson.MAX_SAFE_INTEGER)))
+                k.retired.add(Retained(e, Instant.ofEpochMilli(ro.uint("until_ms", 0, StrictJson.MAX_SAFE_INTEGER))))
             }
             return k
         }

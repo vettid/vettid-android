@@ -140,6 +140,61 @@ class NotificationsTest {
     private fun vm(archived: Boolean = false) =
         NotificationsViewModel(SavedStateHandle(mapOf(NotificationsViewModel.ARG_ARCHIVED to archived)), feed, social, social, items, com.vettid.core.testing.FakeDevices(), com.vettid.core.testing.FakePairing())
 
+    private fun device(id: String, name: String) = com.vettid.core.data.devices.DeviceInfo(id, "desktop", name, null, null, null, null)
+
+    private fun updateNeeded(id: String, deviceId: String) =
+        FeedItem(id, 1, "device.update_needed", now.toString(), "active", "high", deviceId = deviceId)
+
+    /**
+     * `device.update_needed` names a device by its id only (VAULT-MESSAGING 0.87.0 §10.9, as vettid-ios #238): the device
+     * list is read when such an item is listed and the list in memory has no name for it; asked again after a failed read,
+     * once per id otherwise, and never when nothing names a device.
+     */
+    @Test
+    fun anUpdateNeededItemReadsTheDeviceNames() = runTest {
+        val devices = com.vettid.core.testing.FakeDevices()
+        feed.seed(listOf(item("message.received", "m1")))
+        val m = NotificationsViewModel(SavedStateHandle(), feed, social, social, items, devices, com.vettid.core.testing.FakePairing())
+        advanceUntilIdle()
+        assertEquals("nothing names a device", 0, devices.calls.count { it == "refresh" })
+        devices.fail["refresh"] = com.vettid.core.data.vault.VaultFailure(com.vettid.core.data.vault.FailureKind.NETWORK)
+        feed.seed(listOf(updateNeeded("u1", "d1"), item("message.received", "m1")))
+        advanceUntilIdle()
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        assertTrue("the read failed", m.uiState.value.names.devices.isEmpty())
+        // Asked again with the next change of the list; this time it reads (the fake's list is the read's answer).
+        feed.seed(listOf(updateNeeded("u1", "d1")))
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        devices.devices.value = listOf(device("d1", "Al's iPad"))
+        advanceUntilIdle()
+        assertEquals(mapOf("d1" to "Al's iPad"), m.uiState.value.names.devices)
+        assertEquals(
+            "\u2068Al's iPad\u2069 needs an update to keep working with your vault. Update the app.",
+            FeedKinds.title(updateNeeded("u1", "d1"), m.uiState.value.names).resolve(res),
+        )
+        // A named id is not asked for again.
+        feed.seed(listOf(updateNeeded("u1", "d1"), item("message.received", "m2")))
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        // A device the list in memory lacks (paired since it was read): read afresh, once, even when it stays unnamed.
+        feed.seed(listOf(updateNeeded("u2", "d2"), updateNeeded("u1", "d1")))
+        advanceUntilIdle()
+        assertEquals(3, devices.calls.count { it == "refresh" })
+        feed.seed(listOf(updateNeeded("u2", "d2"), updateNeeded("u1", "d1"), item("message.received", "m3")))
+        advanceUntilIdle()
+        assertEquals(3, devices.calls.count { it == "refresh" })
+        assertEquals(
+            "One of your devices needs an update to keep working with your vault. Update the app on it.",
+            FeedKinds.title(updateNeeded("u2", "d2"), m.uiState.value.names).resolve(res),
+        )
+        // A device the list in memory already names is not read for.
+        devices.devices.value = listOf(device("d1", "Al's iPad"), device("d3", "Desk"))
+        feed.seed(listOf(updateNeeded("u3", "d3"), updateNeeded("u1", "d1")))
+        advanceUntilIdle()
+        assertEquals(3, devices.calls.count { it == "refresh" })
+    }
+
     @Test
     fun aTapMarksReadAndOpensTheTargetOrTheSheetWhenItIsGone() = runTest {
         val ask = item("grant.request", "f1", ref = "g1")
