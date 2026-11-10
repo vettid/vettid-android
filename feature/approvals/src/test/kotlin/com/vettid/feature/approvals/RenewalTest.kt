@@ -64,6 +64,43 @@ class RenewalTest {
         assertNull(Renewal.expiresAt(request(), listOf(device()), false, now))
     }
 
+    /**
+     * Remove and End access end the renewal's session (owner decision a, GC #7047): the session's end is the device list's
+     * `session_expires_at`, and the devices manager takes a removed device out of that list (End access clears the field).
+     */
+    @Test
+    fun aRemovedOrEndedDeviceLeavesNoSessionToRenew() = runTest {
+        fun json(s: String) = com.vettid.core.vault.VaultJson.parseObject(s.toByteArray())
+        val laptop = """{"id":"dev1","kind":"desktop","state":"active","name":"Laptop","session_expires_at":"$live"}"""
+        val ops = object : com.vettid.core.data.devices.DevicesOps {
+            var listed = true
+
+            override suspend fun list() = json(if (listed) """{"devices":[$laptop]}""" else """{"devices":[]}""")
+
+            override suspend fun grants(agentId: String?) = json("""{"grants":[],"suspended":[]}""")
+
+            override suspend fun endAccess(deviceId: String) = Unit
+
+            override suspend fun unlink(deviceId: String) {
+                listed = false
+            }
+
+            override suspend fun revokeGrant(grantId: String) = Unit
+
+            override suspend fun resumeAgent(agentId: String) = Unit
+        }
+        val ends = listOf<suspend (com.vettid.core.data.devices.DevicesManager) -> Unit>({ it.remove("dev1") }, { it.endAccess("dev1") })
+        for (end in ends) {
+            ops.listed = true
+            val m = com.vettid.core.data.devices.DevicesManager(backgroundScope, ops = { ops }, self = { "me" })
+            m.refresh()
+            assertNotNull("a renewal before", Renewal.sessionEnd(request(), m.devices.value, true))
+            end(m)
+            assertNull("no session to renew after", Renewal.sessionEnd(request(), m.devices.value, true))
+            assertNull(Renewal.expiresAt(request(), m.devices.value, true, now))
+        }
+    }
+
     // --- the screen's model ---
 
     private val social = FakeSocial()

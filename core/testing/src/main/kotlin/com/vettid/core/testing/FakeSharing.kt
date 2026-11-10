@@ -176,7 +176,7 @@ class FakeSharing : SharingRepository {
         val r = ShareRule(
             draft.ruleId ?: "01RULE${next++}", (draft.version ?: 0) + 1, null, draft.agentId, draft.tags, draft.match, draft.mode,
             draft.uses, draft.expiresAt, draft.includeExisting, perHour = draft.perHour, perDay = draft.perDay,
-            statusTtl = draft.statusTtl,
+            statusTtl = draft.statusTtl, statusTtlBound = draft.statusTtl,
         )
         rulesStored.removeAll { it.ruleId == r.ruleId }
         rulesStored += r

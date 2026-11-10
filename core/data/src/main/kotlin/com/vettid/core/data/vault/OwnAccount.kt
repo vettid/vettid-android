@@ -82,6 +82,14 @@ internal class OwnAccount {
 internal fun isOwnProfileOpen(phase: AppPhase, check: OwnerCheckView?): Boolean =
     phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
 
+/**
+ * (Owner decision a, GC #7047) Whether the vault manager tells the open Devices & agents screens to read the list again
+ * ([com.vettid.core.data.devices.DevicesManager.checkCleared]) when the owner check moved: the hold (or a due check) ended
+ * ([wasHeld] and no longer [held]), or a check due by its deadline alone passed ([gatedEnded]); only while unlocked.
+ */
+internal fun devicesReadAgain(wasHeld: Boolean, held: Boolean, gatedEnded: Boolean, phase: AppPhase): Boolean =
+    phase == AppPhase.Unlocked && !held && (wasHeld || gatedEnded)
+
 /** What the vault manager does with the own profile when the phase or the owner check moves (ANDROID-PLAN §4). */
 internal enum class OwnProfileStep {
     /** Forget the own account and profile (the vault is not open). */

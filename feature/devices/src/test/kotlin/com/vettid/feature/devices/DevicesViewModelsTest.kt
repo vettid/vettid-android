@@ -13,7 +13,9 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeDevices
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,6 +38,73 @@ class DevicesViewModelsTest {
     private val devices = FakeDevices().apply { this.devices.value = listOf(phone, agent, desktop) }
 
     private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, com.vettid.core.testing.FakeSocial())
+
+    /** What a hold does to the list in memory (`DevicesManager.clear()`): empty, not loaded. */
+    private fun holdClears() {
+        devices.devices.value = emptyList()
+        devices.load.value = ListLoad.NOT_LOADED
+    }
+
+    /** The answer of the next read, as `device.list` gives it. */
+    private fun readGives() {
+        devices.devices.value = listOf(phone, agent, desktop)
+        devices.load.value = ListLoad.LOADED
+    }
+
+    /**
+     * After a hold ends, an open list reads itself again (owner decision a, GC #7047, as vettid-ios #239): it no longer stays
+     * on its spinner until the member leaves and comes back.
+     */
+    @Test
+    fun anOpenListReadsAgainWhenTheHoldEnds() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.OK) }
+        val vm = DevicesViewModel(devices, vault)
+        vm.refresh()
+        advanceUntilIdle()
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        vault.ownerCheck.value = check(OwnerCheckState.HELD)
+        holdClears()
+        advanceUntilIdle()
+        assertTrue("the spinner while held", vm.uiState.value.loading)
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        readGives()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.loading)
+    }
+
+    /** A device's page does the same: the hold cleared the list it shows from. */
+    @Test
+    fun anOpenDevicePageReadsAgainWhenTheHoldEnds() = runTest {
+        val vm = page("d1")
+        advanceUntilIdle()
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        holdClears()
+        advanceUntilIdle()
+        devices.readAgain.emit(Unit) // the manager: the hold ended
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        readGives()
+        advanceUntilIdle()
+        assertEquals("Laptop", vm.uiState.value.device?.name)
+    }
+
+    /** A daily check that passes while the list is shown and was never cleared reads nothing more. */
+    @Test
+    fun aPassedCheckWithAListShownReadsNothingMore() = runTest {
+        val vault = FakeVault().apply { ownerCheck.value = check(OwnerCheckState.DUE) }
+        val vm = DevicesViewModel(devices, vault)
+        vm.refresh()
+        val p = page("d1")
+        advanceUntilIdle()
+        vault.ownerCheck.value = check(OwnerCheckState.OK)
+        devices.readAgain.emit(Unit)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
+        assertEquals("Laptop", p.uiState.value.device?.name)
+        assertFalse(vm.uiState.value.loading)
+    }
 
     private fun check(state: OwnerCheckState) = OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
 
@@ -143,8 +212,96 @@ class DevicesViewModelsTest {
         vm.confirm()
         advanceUntilIdle()
         assertEquals(listOf("remove:a1"), devices.calls.filter { it.startsWith("remove:") })
+        assertEquals("Claude", vm.uiState.value.removedDevice?.name)
+        vm.removedNoticeShown(REMOVED_NOTICE_MS)
+        advanceUntilIdle()
         assertTrue(vm.uiState.value.removed)
-        assertEquals("Claude", devices.removed.value?.name)
+        // Told on the page (owner decision a, GC #7101): the list does not say it again.
+        assertNull(devices.removed.value)
+        assertTrue("dismissRemoved" in devices.calls)
+    }
+
+    /**
+     * After Remove (owner decision a, GC #7101, as vettid-ios #239): the page itself says "<name> was removed" for 3 seconds,
+     * with the device still shown and no action of it taken, then leaves.
+     */
+    @Test
+    fun theRemovedNoticeStaysThreeSecondsOnThePageWithNoActions() = runTest {
+        val vm = page("a1")
+        advanceUntilIdle()
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        runCurrent()
+        val s = vm.uiState.value
+        assertEquals("Claude", s.removedDevice?.name)
+        assertEquals("the device stays shown", "a1", s.device?.id)
+        assertFalse(s.gone)
+        assertFalse(s.removed)
+        assertNull("the list does not repeat it", devices.removed.value)
+        // No action while the notice is up.
+        vm.askEndAccess()
+        vm.askRemove()
+        runCurrent()
+        assertNull(vm.uiState.value.confirm)
+        assertEquals(1, devices.calls.count { it == "removalBound:a1" })
+        advanceTimeBy(10_000)
+        assertFalse("not before the screen says the notice is up", vm.uiState.value.removed)
+        vm.removedNoticeShown(REMOVED_NOTICE_MS)
+        advanceTimeBy(REMOVED_NOTICE_MS - 1)
+        assertFalse(vm.uiState.value.removed)
+        advanceTimeBy(2)
+        assertTrue("then it leaves", vm.uiState.value.removed)
+        assertEquals(3_000L, REMOVED_NOTICE_MS)
+    }
+
+    /** (review Low A) A longer accessibility time is honoured, and 3 s is the floor. */
+    @Test
+    fun theNoticeLastsTheAccessibilityTimeAtLeastThreeSeconds() = runTest {
+        for ((asked, lasts) in listOf(10_000L to 10_000L, 1_000L to REMOVED_NOTICE_MS)) {
+            val vm = page("a1")
+            advanceUntilIdle()
+            vm.askRemove()
+            advanceUntilIdle()
+            vm.confirm()
+            runCurrent()
+            vm.removedNoticeShown(asked)
+            vm.removedNoticeShown(asked) // once
+            advanceTimeBy(lasts - 1)
+            assertFalse("$asked", vm.uiState.value.removed)
+            advanceTimeBy(2)
+            assertTrue("$asked", vm.uiState.value.removed)
+            devices.devices.value = listOf(phone, agent, desktop)
+        }
+    }
+
+    /** (review nit 3) A Remove whose answer was lost: the vault no longer lists the device, so the page says it was removed. */
+    @Test
+    fun aLostRemovalAnswerIsToldAsARemoval() = runTest {
+        val vm = page("d1")
+        advanceUntilIdle()
+        devices.fail["remove:d1"] = VaultFailure(FailureKind.NETWORK)
+        devices.onRefresh = { devices.devices.value = listOf(phone, agent) }
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        advanceUntilIdle()
+        assertEquals("Laptop", vm.uiState.value.removedDevice?.name)
+        assertNull("no failure shown", vm.uiState.value.failure)
+        assertEquals("d1", vm.uiState.value.device?.id)
+        assertFalse(vm.uiState.value.gone)
+    }
+
+    /** (review Low 1) The list reads again on the repository's word alone (the collector that cleared it). */
+    @Test
+    fun theListReadsAgainOnTheRepositorysWordAlone() = runTest {
+        val vm = DevicesViewModel(devices, FakeVault().apply { ownerCheck.value = check(OwnerCheckState.OK) })
+        vm.refresh()
+        advanceUntilIdle()
+        holdClears()
+        devices.readAgain.emit(Unit)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
     }
 
     @Test

@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -579,7 +580,11 @@ class SharingManager(
                 declined = strings(o, "declined"),
                 createdAt = instant(VaultJson.str(o, "created_at")),
                 updatedAt = instant(VaultJson.str(o, "updated_at")),
-                statusTtl = VaultJson.long(o, "status_ttl")?.toInt(),
+                // The draft's: as sent, never wrapped (an out-of-range one stays invalid); null when it does not read.
+                statusTtl = (o["status_ttl"] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull
+                    ?.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong())?.toInt(),
+                // The delete text's, at its worst (DeviceWire.statusTtl): absent stays null (the vault's default).
+                statusTtlBound = o["status_ttl"]?.let { com.vettid.core.data.devices.DeviceWire.statusTtl(o).toInt() },
             )
         }
 

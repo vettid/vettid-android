@@ -1202,6 +1202,10 @@ class VaultManager(
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 }
+                // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
+                if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
+                    steps.step { devices.checkCleared() }
+                }
                 // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
                 if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     steps.step { presence.start() }
