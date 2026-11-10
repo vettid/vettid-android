@@ -13,6 +13,8 @@ import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.ui.components.ShellChrome
 import org.junit.After
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Rule
@@ -246,6 +248,69 @@ class DevicesScreenTest {
         rule.onNodeWithContentDescription("Remove").assertDoesNotExist()
         rule.onNodeWithTag("resume").assertDoesNotExist()
         rule.onNodeWithTag("access_status").assertTextContains("Access until", substring = true) // the facts stay
+    }
+
+    /** (review Low A) The notice's time is the accessibility time for it ("Time to take action"), 3 s at least. */
+    @Test
+    fun theRemovalNoticeTakesTheAccessibilityTime() {
+        val asked = mutableListOf<Long>()
+        var recommended by androidx.compose.runtime.mutableLongStateOf(10_000L)
+        val manager = object : androidx.compose.ui.platform.AccessibilityManager {
+            override fun calculateRecommendedTimeoutMillis(
+                originalTimeoutMillis: Long,
+                containsIcons: Boolean,
+                containsText: Boolean,
+                containsControls: Boolean,
+            ): Long = if (containsText) recommended else originalTimeoutMillis
+        }
+        var removed by androidx.compose.runtime.mutableStateOf<DeviceInfo?>(agent)
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalAccessibilityManager provides manager) {
+                DevicePageScreen(
+                    DeviceUiState(device = agent, loaded = true, removedDevice = removed),
+                    DevicePageActions(onRemovedNoticeShown = { asked += it }),
+                    now = now,
+                )
+            }
+        }
+        rule.waitForIdle()
+        assertEquals(listOf(10_000L), asked)
+        // A shorter one still gets the 3 s.
+        recommended = 1_000L
+        removed = desktop
+        rule.waitForIdle()
+        assertEquals(listOf(10_000L, REMOVED_NOTICE_MS), asked)
+    }
+
+    /**
+     * (review Low B) The page leaves only while it is the current entry: with a destination pushed over it (its lifecycle
+     * below RESUMED) nothing is popped; it leaves once it is current again, once.
+     */
+    @Test
+    fun thePageLeavesOnlyWhileItIsTheCurrentEntry() {
+        val owner = object : androidx.lifecycle.LifecycleOwner {
+            val registry = androidx.lifecycle.LifecycleRegistry(this)
+            override val lifecycle: androidx.lifecycle.Lifecycle get() = registry
+        }
+        rule.runOnUiThread { owner.registry.currentState = androidx.lifecycle.Lifecycle.State.STARTED }
+        var backs = 0
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.lifecycle.compose.LocalLifecycleOwner provides owner) {
+                val leaving = DeviceUiState(device = agent, loaded = true, removed = true)
+                DevicePageScreen(leaving, DevicePageActions(onBack = { backs++ }), now = now)
+            }
+        }
+        rule.waitForIdle()
+        assertEquals("not while another destination is on top", 0, backs)
+        rule.runOnUiThread { owner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED }
+        rule.waitForIdle()
+        assertEquals(1, backs)
+        rule.runOnUiThread {
+            owner.registry.currentState = androidx.lifecycle.Lifecycle.State.STARTED
+            owner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+        }
+        rule.waitForIdle()
+        assertEquals("once", 1, backs)
     }
 
     @Test

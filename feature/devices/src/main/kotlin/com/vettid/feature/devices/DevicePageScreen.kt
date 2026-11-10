@@ -36,7 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -97,6 +101,8 @@ data class DevicePageActions(
     val onRetryPermissions: () -> Unit = {},
     val onResume: () -> Unit = {},
     val onNoticeShown: () -> Unit = {},
+    /** The removal notice is up for this long (ms; the accessibility time for it, 3 s at least): the page leaves after it. */
+    val onRemovedNoticeShown: (Long) -> Unit = {},
 )
 
 /**
@@ -109,7 +115,14 @@ data class DevicePageActions(
 fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier: Modifier = Modifier, now: Instant = Instant.now()) {
     // One way out, however it came about (removed here, or no longer listed): a single step back.
     val leave = state.gone || state.removed
-    LaunchedEffect(leave) { if (leave) actions.onBack() }
+    // (Review Low B) Only while this page is the current entry: a destination pushed meanwhile (a notification's, the owner
+    // check's) is not the one popped; the page leaves when it is current again.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(leave, lifecycle) {
+        if (!leave) return@LaunchedEffect
+        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+        actions.onBack()
+    }
     val snackbar = remember { SnackbarHostState() }
     val ended = stringResource(R.string.devices_access_ended)
     LaunchedEffect(state.accessEnded) {
@@ -123,7 +136,7 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         actions.onRuleSavedShown()
         snackbar.showSnackbar(savedText)
     }
-    RemovedNotice(state.removedDevice, snackbar)
+    RemovedNotice(state.removedDevice, snackbar, actions.onRemovedNoticeShown)
     val noticeText = state.notice?.let { stringResource(PermissionText.noticeRes(it)) }
     LaunchedEffect(state.notice) {
         if (noticeText == null) return@LaunchedEffect
@@ -177,10 +190,14 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
 
 /** Removed here (owner decision a, GC #7101): "<name> was removed" on this page until it leaves ([REMOVED_NOTICE_MS]). */
 @Composable
-private fun RemovedNotice(removed: DeviceInfo?, snackbar: SnackbarHostState) {
+private fun RemovedNotice(removed: DeviceInfo?, snackbar: SnackbarHostState, onShown: (Long) -> Unit) {
     val text = removed?.let { stringResource(R.string.devices_removed, DeviceText.sentenceName(it)) }
+    // (Review Low A) The member's "Time to take action" (TalkBack) may ask for longer: 3 s is the floor.
+    val a11y = LocalAccessibilityManager.current
     LaunchedEffect(text) {
         if (text == null) return@LaunchedEffect
+        val ms = a11y?.calculateRecommendedTimeoutMillis(REMOVED_NOTICE_MS, containsText = true) ?: REMOVED_NOTICE_MS
+        onShown(maxOf(ms, REMOVED_NOTICE_MS))
         snackbar.showSnackbar(text, duration = SnackbarDuration.Indefinite)
     }
 }

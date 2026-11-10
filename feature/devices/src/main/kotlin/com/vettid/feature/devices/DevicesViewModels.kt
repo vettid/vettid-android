@@ -382,11 +382,7 @@ class DeviceViewModel @Inject constructor(
                     }
                     DeviceConfirm.REMOVE -> {
                         repo.remove(d.id)
-                        // Told here, once: the list under the page (when there is one) has nothing left to say.
-                        local.update { it.copy(busy = false, removedDevice = d) }
-                        repo.dismissRemoved()
-                        delay(REMOVED_NOTICE_MS)
-                        local.update { it.copy(removed = true) }
+                        removedHere(d)
                     }
                 }
             } catch (e: VaultFailure) {
@@ -398,10 +394,36 @@ class DeviceViewModel @Inject constructor(
                 local.update { it.copy(busy = false, failure = failure, error = e.kind, errorCode = e.shownCode) }
                 // What the vault says now settles whether the device is still there, with or without access. A refused
                 // permission removal keeps its row: the grants are not read again.
-                if (what != DeviceConfirm.REMOVE_PERMISSION) runCatching { repo.refresh() }
+                if (what != DeviceConfirm.REMOVE_PERMISSION) {
+                    val read = runCatching { repo.refresh() }.isSuccess
+                    // (Nit 3) A Remove whose answer was lost: the vault no longer lists the device, so it was removed.
+                    if (what == DeviceConfirm.REMOVE && read && repo.devices.value.none { it.id == d.id }) removedHere(d)
+                }
             }
         }
     }
+
+    /**
+     * Removed here: told on this page, once (the list under it, when there is one, has nothing left to say), and the page
+     * leaves when the screen says the notice's time is over ([removedNoticeShown]).
+     */
+    private fun removedHere(d: DeviceInfo) {
+        local.update { it.copy(busy = false, failure = null, error = null, errorCode = null, removedDevice = d) }
+        repo.dismissRemoved()
+    }
+
+    /** The removal notice is up: the page leaves after [forMs] (the accessibility time, as the screen reads it), 3 s at least. */
+    fun removedNoticeShown(forMs: Long) {
+        if (local.value.removedDevice == null || noticeTimer) return
+        noticeTimer = true
+        viewModelScope.launch {
+            delay(maxOf(forMs, REMOVED_NOTICE_MS))
+            local.update { it.copy(removed = true) }
+        }
+    }
+
+    /** The removal notice's timer is running (once per page). */
+    private var noticeTimer = false
 
     fun accessEndedShown() = local.update { it.copy(accessEnded = false) }
 

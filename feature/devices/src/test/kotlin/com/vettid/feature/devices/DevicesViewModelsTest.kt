@@ -212,6 +212,9 @@ class DevicesViewModelsTest {
         vm.confirm()
         advanceUntilIdle()
         assertEquals(listOf("remove:a1"), devices.calls.filter { it.startsWith("remove:") })
+        assertEquals("Claude", vm.uiState.value.removedDevice?.name)
+        vm.removedNoticeShown(REMOVED_NOTICE_MS)
+        advanceUntilIdle()
         assertTrue(vm.uiState.value.removed)
         // Told on the page (owner decision a, GC #7101): the list does not say it again.
         assertNull(devices.removed.value)
@@ -242,11 +245,51 @@ class DevicesViewModelsTest {
         runCurrent()
         assertNull(vm.uiState.value.confirm)
         assertEquals(1, devices.calls.count { it == "removalBound:a1" })
+        advanceTimeBy(10_000)
+        assertFalse("not before the screen says the notice is up", vm.uiState.value.removed)
+        vm.removedNoticeShown(REMOVED_NOTICE_MS)
         advanceTimeBy(REMOVED_NOTICE_MS - 1)
         assertFalse(vm.uiState.value.removed)
         advanceTimeBy(2)
         assertTrue("then it leaves", vm.uiState.value.removed)
         assertEquals(3_000L, REMOVED_NOTICE_MS)
+    }
+
+    /** (review Low A) A longer accessibility time is honoured, and 3 s is the floor. */
+    @Test
+    fun theNoticeLastsTheAccessibilityTimeAtLeastThreeSeconds() = runTest {
+        for ((asked, lasts) in listOf(10_000L to 10_000L, 1_000L to REMOVED_NOTICE_MS)) {
+            val vm = page("a1")
+            advanceUntilIdle()
+            vm.askRemove()
+            advanceUntilIdle()
+            vm.confirm()
+            runCurrent()
+            vm.removedNoticeShown(asked)
+            vm.removedNoticeShown(asked) // once
+            advanceTimeBy(lasts - 1)
+            assertFalse("$asked", vm.uiState.value.removed)
+            advanceTimeBy(2)
+            assertTrue("$asked", vm.uiState.value.removed)
+            devices.devices.value = listOf(phone, agent, desktop)
+        }
+    }
+
+    /** (review nit 3) A Remove whose answer was lost: the vault no longer lists the device, so the page says it was removed. */
+    @Test
+    fun aLostRemovalAnswerIsToldAsARemoval() = runTest {
+        val vm = page("d1")
+        advanceUntilIdle()
+        devices.fail["remove:d1"] = VaultFailure(FailureKind.NETWORK)
+        devices.onRefresh = { devices.devices.value = listOf(phone, agent) }
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        advanceUntilIdle()
+        assertEquals("Laptop", vm.uiState.value.removedDevice?.name)
+        assertNull("no failure shown", vm.uiState.value.failure)
+        assertEquals("d1", vm.uiState.value.device?.id)
+        assertFalse(vm.uiState.value.gone)
     }
 
     /** (review Low 1) The list reads again on the repository's word alone (the collector that cleared it). */

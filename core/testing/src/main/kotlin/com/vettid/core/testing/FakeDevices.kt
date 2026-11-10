@@ -29,9 +29,13 @@ class FakeDevices : DevicesRepository {
         fail.remove(name)?.let { throw it }
     }
 
+    /** Runs at each [refresh] that answers: what the vault's list says then (a device gone, say). */
+    var onRefresh: (() -> Unit)? = null
+
     override suspend fun refresh() {
         try {
             call("refresh")
+            onRefresh?.invoke()
             load.value = ListLoad.LOADED
         } catch (e: VaultFailure) {
             load.value = ListLoad.FAILED
