@@ -246,6 +246,12 @@ class PairingManager(
      */
     private var owner: Any? = null
 
+    /**
+     * (Re-check Low 1) The owner left while its approval was out (a cancel can't stop it): if the vault then keeps the
+     * comparison open (the daily check due), it is rejected instead of kept with no screen. Reset by every start and [clear].
+     */
+    private var ownerLeft = false
+
     /** Whether [by] may act on the pairing held: an unowned call, or the owner's. */
     private fun mayAct(by: Any?): Boolean = by == null || owner === by
 
@@ -277,6 +283,7 @@ class PairingManager(
             watching = false
             role = PairRole.AGENT
             owner = null
+            ownerLeft = false
             flow.value = PairingState()
         }
     }
@@ -377,6 +384,8 @@ class PairingManager(
             // and its arrivals are not this pairing's.
             generation++
             arrivals = mutableListOf()
+            watching = false
+            ownerLeft = false
             gen = generation
             timer?.cancel()
             this.role = wanted
@@ -520,13 +529,20 @@ class PairingManager(
                 runCatching { onPaired() }
                 return
             }
-            // The daily check is due: the approval was not sent for it, and the same code may still be compared.
-            if (e.kind == FailureKind.OWNER_CHECK_REQUIRED && p.ends.isAfter(now())) {
+            // The daily check is due: the approval was not sent for it, and the same code may still be compared, unless the
+            // screen that asked has left (then nothing may approve it any more: it is rejected below).
+            if (e.kind == FailureKind.OWNER_CHECK_REQUIRED && p.ends.isAfter(now()) && !ownerLeft) {
                 flow.value = PairingState(PairingStage.Compare(p), error = e.kind, errorCode = e.shownCode)
                 return
             }
             timer?.cancel()
             timer = null
+            if (ownerLeft) {
+                // Its screen is gone: nothing is held, and the vault is told the pairing is not wanted.
+                flow.value = PairingState()
+                scope.launch { sendReject(p.pairingId) }
+                return
+            }
             // Any other answer: the pairing may have ended (the app does not know when, §10.3), so nothing is paired
             // as far as this phone knows. When there was no answer at all the vault may have taken it: say so.
             flow.value = PairingState(
@@ -600,7 +616,13 @@ class PairingManager(
             val s = flow.value
             id = when (val st = s.stage) {
                 is PairingStage.Code -> st.code.pairingId
-                is PairingStage.Compare -> if (s.busy) return else st.pending.pairingId
+                is PairingStage.Compare -> if (s.busy) {
+                    // The approval is out: it settles by its answer, which rejects rather than keeps it (re-check Low 1).
+                    ownerLeft = true
+                    return
+                } else {
+                    st.pending.pairingId
+                }
                 // A late handshake of the expired code may still be live: the vault is told this one is not wanted.
                 is PairingStage.CodeExpired -> st.pairingId
                 else -> {

@@ -581,6 +581,44 @@ class PairingManagerTest {
         assertNull((m.state.value.stage as PairingStage.Paired).deviceId)
     }
 
+    /**
+     * (Re-check Low 1) The screen left while its approval was out, and the vault then keeps the comparison (the daily check
+     * due): it is rejected, not kept approvable with no screen.
+     */
+    @Test
+    fun aComparisonWhoseScreenLeftDuringTheApprovalIsRejectedNotKept() = runTest {
+        val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdApprove = gate
+        val m = manager(ops)
+        val screen = Any()
+        m.start(PairRole.AGENT, screen)
+        m.onEvent(pending())
+        val approval = launch { m.approve(3600) }
+        try {
+            pump { ops.approveEntered.isCompleted }
+            m.leave(screen)
+            pump { true }
+            assertTrue("the approval is out: nothing changes yet", m.state.value.busy)
+        } finally {
+            gate.complete(Unit)
+        }
+        approval.join()
+        pump { "reject:p1" in ops.calls }
+        assertEquals(PairingState(), m.state.value)
+        // The next screen's pairing starts afresh: its refused approval keeps its comparison.
+        m.start(PairRole.AGENT, Any())
+        m.onEvent(pending())
+        m.approve(3600)
+        assertTrue("a new start forgets the earlier screen's leaving", m.state.value.stage is PairingStage.Compare)
+        // With the screen still there, the same refusal keeps the comparison for another try (as before).
+        val kept = manager(Ops().apply { refuse["approve"] = "owner_check_required" })
+        kept.start(PairRole.AGENT, Any())
+        kept.onEvent(pending())
+        kept.approve(3600)
+        assertTrue(kept.state.value.stage is PairingStage.Compare)
+    }
+
     @Test
     fun aDueDailyCheckKeepsTheComparisonForAnotherTry() = runTest {
         val ops = Ops().apply { refuse["approve"] = "owner_check_required" }

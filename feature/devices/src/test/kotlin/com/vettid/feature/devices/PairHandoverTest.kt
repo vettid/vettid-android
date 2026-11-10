@@ -163,6 +163,41 @@ class PairHandoverTest {
         }
     }
 
+    /**
+     * (Re-check High 1) Back on a comparison or while creating calls Done, then the screen is cleared: the comparison is
+     * still rejected, and the create's answer is rejected when it arrives. Nothing is left approvable with no screen.
+     */
+    @Test
+    fun backOnAComparisonOrWhileCreatingStillRejects() = runTest {
+        // A comparison.
+        run {
+            val ops = Ops()
+            val m = PairingManager(backgroundScope, ops = { ops }, now = { clock })
+            val a = screen(m)
+            waitFor { m.state.value.stage is PairingStage.Code }
+            m.onEvent(pending("p1"))
+            assertTrue(m.state.value.stage is PairingStage.Compare)
+            a.done()
+            cleared(a)
+            waitFor { "reject:p1" in ops.calls }
+            assertEquals(PairingState(), m.state.value)
+        }
+        // A create still out.
+        run {
+            val ops = Ops()
+            ops.gate = CompletableDeferred()
+            val m = PairingManager(backgroundScope, ops = { ops }, now = { clock })
+            val a = screen(m)
+            waitFor { "create:p1" in ops.calls }
+            a.done()
+            cleared(a)
+            runCurrent()
+            ops.gate!!.complete(Unit)
+            waitFor { "reject:p1" in ops.calls }
+            assertEquals(PairingState(), m.state.value)
+        }
+    }
+
     @Test
     fun aScreenClearedAloneStillRejectsItsOwnPairing() = runTest {
         val ops = Ops()
