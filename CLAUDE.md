@@ -267,7 +267,8 @@ The A2 exit test:
   keeps the same choices; `grants` is for an agent only, and this app never sends any. A desktop's paired screen says it is
   paired and that its access requests come to Approvals; it offers only **Done** (no "Choose what it may use", no rules or
   permissions). Desktops are listed, ended and removed as before and their session requests are approved as before. The
-  desktop's texts are `*_desktop` strings marked `NEW: not in the plan`; the agent's are unchanged. Catalog: `devices.pair_desktop_*`.
+  desktop's texts (`*_desktop`, `devices_pair_new`, `devices_pair_desktop`, `devices_empty_*_any`) are owner-approved 2026-11-10
+  (GC #7195, #7212; `PairDesktopTextsTest`), the menu's "Menu open/closed" are NEW; the agent's are unchanged. Catalog: `devices.pair_desktop_*`.
   **The role switch is atomic** in `PairingManager.start(role)` (under its lock): a pairing held for the other role (a live or
   expired code, a comparison not being approved) is replaced and its id rejected in the background; a create of the other role
   still in flight is superseded (`generation`), its answer is dropped and rejected when it arrives (any dropped create is
