@@ -162,10 +162,55 @@ class RelayClientTest {
         assertTrue(sleeps.single() in RelayClient.MAX_RETRY_AFTER_S * 1000L until RelayClient.MAX_RETRY_AFTER_S * 1000L + 250L)
     }
 
-    private fun bounded(callMs: Long, attempts: Int = 1) = RelayClient(
+    private fun bounded(callMs: Long, attempts: Int = 1, blobMs: Long = RelayClient.BLOB_CALL_TIMEOUT_MS) = RelayClient(
         server.url("/").toString(), key, OkHttpClient(), maxAttempts = attempts, sleep = { sleeps.add(it) },
-        limits = RelayClient.CallLimits(callMs = callMs),
+        limits = RelayClient.CallLimits(callMs = callMs, blobMs = blobMs),
     )
+
+    @Test
+    fun aBlobUploadThatTimedOutIsNotSentAgain() = runBlocking<Unit> {
+        repeat(3) { server.enqueue(json(201, """{"blob_id":"b1"}""").newBuilder().headersDelay(2, TimeUnit.SECONDS).build()) }
+        val c = bounded(callMs = 60_000, attempts = 3, blobMs = 300)
+        assertThrows(java.io.IOException::class.java) { runBlocking { c.putBlob("mbx", "tok", ByteArray(100)) } }
+        assertEquals(1, server.requestCount)
+        assertTrue(sleeps.isEmpty())
+    }
+
+    @Test
+    fun aBlobUploadAnswered5xxIsNotSentAgainButA429Is() = runBlocking<Unit> {
+        server.enqueue(json(503, """{"code":"internal","message":""}"""))
+        val e = assertThrows(RelayException::class.java) { runBlocking { client.putBlob("mbx", "tok", ByteArray(100)) } }
+        assertEquals(503, e.status)
+        assertEquals(1, server.requestCount)
+        server.enqueue(json(429, """{"code":"rate_limited","message":"","retry_after":1}"""))
+        server.enqueue(json(201, """{"blob_id":"b2"}"""))
+        assertEquals("b2", client.putBlob("mbx", "tok", ByteArray(100)).id)
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun aLongPollIsNotCutByTheCallTimeout() = runBlocking<Unit> {
+        val body = """{"messages":[{"msg_id":"01L","deposited_at":"x","sender":"${VectorsTest.SENDER_PUB}","payload":"${"A".repeat(4096)}"}]}"""
+        server.enqueue(MockResponse.Builder().code(200).body(body).throttleBody(1024, 200, TimeUnit.MILLISECONDS).build())
+        val msgs = bounded(callMs = 300).collect(wait = Duration.ZERO)
+        assertEquals("01L", msgs.single().msgId)
+    }
+
+    @Test
+    fun anAnswerOverItsBoundIsRefusedAndNotRetried() = runBlocking<Unit> {
+        server.enqueue(json(200, """{"msg_id":"${"m".repeat((1 shl 20) + 1)}"}"""))
+        val e = assertThrows(RelayException::class.java) { runBlocking { client.deposit("m", "t", ByteArray(1)) } }
+        assertEquals(RelayException.PAYLOAD_TOO_LARGE, e.code)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun aNegativeRetryAfterIsNoWait() = runBlocking<Unit> {
+        server.enqueue(json(429, """{"code":"rate_limited","message":"slow","retry_after":-5}"""))
+        server.enqueue(MockResponse.Builder().code(204).build())
+        client.ack("x")
+        assertTrue(sleeps.single() < 1000L)
+    }
 
     @Test
     fun aClaimWhoseBodyTricklesEndsAtTheCallTimeout() = runBlocking<Unit> {
@@ -181,7 +226,7 @@ class RelayClientTest {
 
     @Test
     fun aDepositWhoseAnswerNeverComesEndsAtTheCallTimeoutPerAttempt() = runBlocking<Unit> {
-        repeat(3) { server.enqueue(json(200, """{"msg_id":"m1"}""").newBuilder().headersDelay(10, TimeUnit.SECONDS).build()) }
+        repeat(3) { server.enqueue(json(200, """{"msg_id":"m1"}""").newBuilder().headersDelay(2, TimeUnit.SECONDS).build()) }
         val c = bounded(callMs = 300, attempts = 3)
         val t0 = System.nanoTime()
         assertThrows(java.io.IOException::class.java) { runBlocking { c.deposit("m", "t", ByteArray(1)) } }
