@@ -129,7 +129,8 @@ data class StoredRef(val id: String, val expiresAt: Instant?)
  * network ([RequestSigner]): a signature never waits in a frozen process and
  * then reaches the relay stale. 429, 5xx, `timestamp_stale`, `replay_detected`
  * and transport errors are retried with exponential backoff and jitter,
- * honouring `retry_after` (§7.2, CLIENT-NOTES §6); other client errors are not
+ * honouring `retry_after` (§7.2, CLIENT-NOTES §6) up to [CallLimits.maxRetryAfterS]; every attempt has a call timeout
+ * ([CallLimits]); other client errors are not
  * retried, and a claim GET is never retried (it may already have consumed the
  * claim).
  *
@@ -145,7 +146,21 @@ class RelayClient(
     private val maxAttempts: Int = DEFAULT_ATTEMPTS,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
+    private val limits: CallLimits = CallLimits(),
 ) {
+    /**
+     * Bounds on how long one request may take, so that a relay (a claim's comes from a scanned code) cannot keep a
+     * caller waiting for hours: each attempt's whole call ([callMs], [pollMs] for a long-poll, [blobMs] for a blob's
+     * bytes) and the longest `retry_after` honoured ([maxRetryAfterS]); a longer one ends the request at once with
+     * its error, as the last attempt's would.
+     */
+    data class CallLimits(
+        val callMs: Long = CALL_TIMEOUT_MS,
+        val pollMs: Long = POLL_CALL_TIMEOUT_MS,
+        val blobMs: Long = BLOB_CALL_TIMEOUT_MS,
+        val maxRetryAfterS: Int = MAX_RETRY_AFTER_S,
+    )
+
     val baseUrl: String = baseUrl.trimEnd('/')
 
     /** The raw public key. */
@@ -174,6 +189,8 @@ class RelayClient(
         val contentType: String? = null,
         val unsigned: Boolean = false,
         val longPoll: Boolean = false,
+        /** Carries a blob's bytes (up to 8 MiB): the longer call timeout. */
+        val blob: Boolean = false,
         /** A signed request's signature is accepted once (§4.1): [TransportRetry] resends it only if it never went out. */
         val transportRetry: TransportRetry.Policy = TransportRetry.Policy.UNSENT_ONLY,
         /**
@@ -214,7 +231,7 @@ class RelayClient(
                 return once(c, read)
             } catch (e: RelayException) {
                 if (e.status >= HTTP_SERVER_ERROR) c.onLostAttempt?.invoke()
-                if (!e.retryable) throw e
+                if (!e.retryable || e.retryAfterSeconds > limits.maxRetryAfterS) throw e
                 last = e
             } catch (e: IOException) {
                 c.onLostAttempt?.invoke()
@@ -244,6 +261,13 @@ class RelayClient(
         rb.tag(TransportRetry.Policy::class.java, c.transportRetry)
         val client = if (c.longPoll) pollHttp else http
         val call = client.newCall(rb.build())
+        val timeoutMs = when {
+            c.longPoll -> limits.pollMs
+            c.blob -> limits.blobMs
+            else -> limits.callMs
+        }
+        // The whole attempt, the body read by [read] included (it runs before the response is closed).
+        call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
         c.onSent?.let { sent ->
             call.addEventListener(
                 object : EventListener() {
@@ -375,23 +399,25 @@ class RelayClient(
 
     /** Uploads ciphertext to [mailboxId] (claim-check, §6.8). */
     suspend fun putBlob(mailboxId: String, token: String, ciphertext: ByteArray): StoredRef {
-        val o = json(Call("PUT", "/v1/blob/$mailboxId", body = ciphertext, token = token, contentType = OCTET))!!
+        val call = Call("PUT", "/v1/blob/$mailboxId", body = ciphertext, token = token, contentType = OCTET, blob = true)
+        val o = json(call)!!
         return StoredRef(o.string("blob_id"), time(o.optString("expires_at")))
     }
 
     /** Fetches a blob deposited to this mailbox (§6.8). */
-    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray = execute(Call("GET", "/v1/blob/$blobId")) { resp ->
-        // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
-        // that grows beyond it.
-        val declared = resp.header("Content-Length")?.toLongOrNull()
-        if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
-        val b = resp.body.bytesAtMost(maxBytes + 1)
-        if (b.size > maxBytes) {
-            b.fill(0)
-            throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+    suspend fun getBlob(blobId: String, maxBytes: Long = MAX_BLOB_READ): ByteArray =
+        execute(Call("GET", "/v1/blob/$blobId", blob = true)) { resp ->
+            // At most [maxBytes] are ever held: a declared length over it is refused before reading, and so is a body
+            // that grows beyond it.
+            val declared = resp.header("Content-Length")?.toLongOrNull()
+            if (declared != null && declared > maxBytes) throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+            val b = resp.body.bytesAtMost(maxBytes + 1)
+            if (b.size > maxBytes) {
+                b.fill(0)
+                throw RelayException(resp.code, RelayException.PAYLOAD_TOO_LARGE, "blob")
+            }
+            b
         }
-        b
-    }
 
     /** Deletes a blob (idempotent). */
     suspend fun deleteBlob(blobId: String) {
@@ -444,6 +470,18 @@ class RelayClient(
         private const val MAX_WAIT_S = 25L
         private const val MAX_COLLECT = 100
         private const val POLL_READ_TIMEOUT_S = 60L
+
+        /** Any call but a long-poll or a blob's: a claim fetch, a deposit. */
+        const val CALL_TIMEOUT_MS = 60_000L
+
+        /** A long-poll: its wait (at most [MAX_WAIT_S]) and a batch's read. */
+        const val POLL_CALL_TIMEOUT_MS = 120_000L
+
+        /** A blob's upload or download (8 MiB at about 30 KiB/s). */
+        const val BLOB_CALL_TIMEOUT_MS = 300_000L
+
+        /** The longest `retry_after` waited for; a longer one ends the request. */
+        const val MAX_RETRY_AFTER_S = 30
         private const val BACKOFF_BASE_MS = 250L
         private const val BACKOFF_MAX_SHIFT = 6
         private const val JITTER_MS = 250L
