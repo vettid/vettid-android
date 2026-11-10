@@ -579,7 +579,10 @@ class SharingManager(
                 declined = strings(o, "declined"),
                 createdAt = instant(VaultJson.str(o, "created_at")),
                 updatedAt = instant(VaultJson.str(o, "updated_at")),
-                statusTtl = VaultJson.long(o, "status_ttl")?.toInt(),
+                // As the removal bound reads it (DeviceWire.statusTtl): absent stays null (the vault's default); one that
+                // does not read is the longest, and any is clamped to 60–3,600 s with no Int overflow, so the delete text
+                // never says a rule's last acceptance comes sooner than it does.
+                statusTtl = o["status_ttl"]?.let { com.vettid.core.data.devices.DeviceWire.statusTtl(o).toInt() },
             )
         }
 

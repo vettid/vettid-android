@@ -247,6 +247,22 @@ class SharingManagerTest {
         assertNull(SharingManager.rule(o("""{"version":1}""")))
     }
 
+    /**
+     * An agent rule's `status_ttl` reads as the removal bound does (review Low 3): absent stays the vault's default (null),
+     * one that does not read is the longest, and any is clamped to 60–3,600 s without overflowing an Int.
+     */
+    @Test
+    fun anAgentRulesStatusLifetimeNeverReadsShorter() {
+        fun ttl(v: String?) = SharingManager.rule(
+            o("""{"rule_id":"r1","version":1,"subject":{"agent_id":"a1"},"tags":["api"]${v?.let { ""","status_ttl":$it""" } ?: ""}}"""),
+        )!!.statusTtl
+        assertNull(ttl(null))
+        assertEquals(300, ttl("300"))
+        for (bad in listOf("\"x\"", "{}", "[1]", "null", "90.5", "4294967356", "99999")) assertEquals(bad, 3_600, ttl(bad))
+        assertEquals(60, ttl("-5"))
+        assertEquals(60, ttl("10"))
+    }
+
     @Test
     fun rulesAreListedPageByPage() = runTest {
         ops.rulePages = ArrayDeque(
