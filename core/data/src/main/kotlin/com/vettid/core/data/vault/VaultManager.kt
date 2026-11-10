@@ -2019,8 +2019,11 @@ class VaultManager(
         if (session == null) {
             try {
                 guard { session() }
-            } catch (_: VaultFailure) {
-                // nothing to load: forgotten as before
+            } catch (e: VaultFailure) {
+                // (The re-check of fd8f055d, Low-2) Only the known refusals to open a session go on as before (a wipe that
+                // runs or did not finish, a deletion, an open's answer unknown); any other failure to load the file stops
+                // here, so that a file still holding an open transfer is never left unjudged while the account is reset.
+                if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED, cause = e)
             }
         }
         val paired = session?.device?.deviceId != null
@@ -2031,6 +2034,12 @@ class VaultManager(
         lockKeeper.abandon() // no vault on this phone: nothing to lock
         io { resetLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
+    }
+
+    /** A refusal to open any session at all ([session]): nothing of a device is loaded, by rule. */
+    private fun sessionRefused(e: VaultFailure) = when (e.code) {
+        WipeRun.CODE_WIPE_PENDING, SessionGate.CODE_WIPING, CODE_DELETING, CODE_UNDECIDED -> true
+        else -> false
     }
 
     override suspend fun forgetMissingVault() {

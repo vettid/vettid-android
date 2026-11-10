@@ -75,6 +75,9 @@ class TransferInSameCodeTest {
         val setup = body("override suspend fun forgetSetupCode() {")
         val load = setup.indexOfFirst { it == "guard { session() }" }
         assertTrue("loaded before it is judged", load in 0 until setup.indexOfFirst { it.startsWith("val paired") })
+        // (The re-check of fd8f055d, Low-2) Only the known refusals to open a session go on; any other load failure stops.
+        val stops = "if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED"
+        assertTrue(setup.any { it.startsWith(stops) })
     }
 
     /** (The blind reviews of #334, item 3) The start-up sweep of an orphaned ("", 1) key only while the phone holds no vault. */

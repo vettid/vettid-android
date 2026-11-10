@@ -1151,6 +1151,8 @@ class VaultDevice private constructor(
     ) {
         lock.withLock {
             if (st.deviceId != null) throw VaultStateException("already paired with a vault")
+            // (The re-check of fd8f055d, Nit-3) A device forgotten during the claim fetch makes no key and no attestation.
+            checkLive()
             val t = now()
             val b = try {
                 InviteBundle.open(blob, q, t)
@@ -1388,13 +1390,13 @@ class VaultDevice private constructor(
         save()
     }
 
+    /** (The review of c58c8fc3, L3) A scan to this phone is under way: its code is stored and its transfer not yet recorded. */
+    val transferScanOpen: Boolean get() = st.scanCode != null
+
     /**
      * (A6 audit N1) The transfer to this phone that is not finished: started (its `hs.init` sent), with its SAS once
      * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
      */
-    /** (The review of c58c8fc3, L3) A scan to this phone is under way: its code is stored and its transfer not yet recorded. */
-    val transferScanOpen: Boolean get() = st.scanCode != null
-
     val transferInPending: TransferInState?
         get() = st.transferIn?.let {
             TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid, it.codeRelay, it.codeClaim)

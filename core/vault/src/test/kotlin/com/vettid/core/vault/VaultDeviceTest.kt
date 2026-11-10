@@ -1965,6 +1965,44 @@ class VaultDeviceTest {
     }
 
     /**
+     * (The re-check of fd8f055d, Low-3; the review of c58c8fc3, L4) A scan whose hs.init deposit the relay refuses leaves
+     * the device as it was: no vault pinned and the standing token's expiry unchanged (the hs.init's token moved it before
+     * the deposit), in memory and in the file; and while the scan was under way it counted as open.
+     */
+    @Test
+    fun aScanWhoseDepositIsRefusedLeavesTheTokenExpiryAsItWas() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val before = d.issuedTokenExpMs
+            refuseDeposits = "forbidden"
+            val link = transferLink(FakeVault(), Ulid.new())
+            var openDuring = false
+            val probe = object : com.vettid.core.altchan.Attester {
+                private val real = RecordingAttester()
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest {
+                    openDuring = d.transferScanOpen // asked under the scan's lock, after its claim fetch
+                    return real.attest(challenge)
+                }
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            assertTrue("the scan fails", runCatching { d.startTransfer(link, probe) }.isFailure)
+            assertTrue("the relay was asked", refused.get() > 0)
+            assertTrue("open while under way", openDuring)
+            assertFalse("not open after it ended", d.transferScanOpen)
+            assertEquals("the expiry as it was", before, d.issuedTokenExpMs)
+            assertFalse("no vault pinned", d.hasVault)
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertEquals("nor in the file", before, reloaded.issuedTokenExpMs)
+            assertFalse(reloaded.hasVault)
+            reloaded.stop()
+        }
+    }
+
+    /**
      * The scan of a different code before minute 10, after a restart: the open transfer reloaded from the file is dropped
      * first (its attested key named once), and the new vault gets a secret the first code's vault never saw.
      */
