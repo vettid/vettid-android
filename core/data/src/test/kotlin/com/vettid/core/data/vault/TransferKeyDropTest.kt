@@ -28,6 +28,7 @@ class TransferKeyDropTest {
     private class SoftKey : PhoneKeyHandle {
         var key: ByteArray? = null
         var failDelete = false
+        var failHmac = false
 
         override fun create(): KeyLevel {
             key = ByteArray(32).also { SecureRandom().nextBytes(it) }
@@ -41,8 +42,10 @@ class TransferKeyDropTest {
             key = null
         }
 
-        override fun hmac(message: ByteArray): ByteArray =
-            Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key!!, "HmacSHA256")) }.doFinal(message)
+        override fun hmac(message: ByteArray): ByteArray {
+            if (failHmac) throw KeystoreException("key not usable")
+            return Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key!!, "HmacSHA256")) }.doFinal(message)
+        }
     }
 
     private val keys = mutableMapOf<String, SoftKey>()
@@ -130,6 +133,45 @@ class TransferKeyDropTest {
         assertEquals(PhoneSecretState("", 0), record.value.phone)
         assertFalse(keys.getValue("").exists())
         assertFalse(first.contentEquals(scanReusing().first))
+    }
+
+    private fun newKey(): PhoneSecretState {
+        val phone = secrets.create("")
+        record.update(RecordStore.UNBOUND) { it.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch) }
+        return phone
+    }
+
+    private fun secretOfNewKey(beforeSecret: () -> Unit = {}) = TransferKeyDrop.secretOfNewKey(
+        secrets,
+        resetPhone = { record.update(RecordStore.UNBOUND, TransferKeyDrop::resetRecord) },
+        log = { logs += it },
+    ) { newKey().also { beforeSecret() } }
+
+    /**
+     * (#344's blind reviews, item 1) The secret came back exactly when the scan's key was made and stands: a key whose
+     * secret cannot be had is undone at once (the record reset to ("", 0), the key deleted) and the failure thrown.
+     */
+    @Test
+    fun aNewKeyWhoseSecretCannotBeHadIsUndone() {
+        assertTrue("an ordinary one", secretOfNewKey().isNotEmpty())
+        assertEquals(PhoneSecretState("", 1), record.value.phone)
+        assertTrue(keys.getValue("").exists())
+        val e = runCatching { secretOfNewKey { keys.getValue("").failHmac = true } }.exceptionOrNull()
+        assertTrue("thrown", e is VaultFailure)
+        assertEquals("the record reset", PhoneSecretState("", 0), record.value.phone)
+        assertFalse("the key deleted", keys.getValue("").exists())
+    }
+
+    /** A failure of the making itself undoes nothing: no key of this scan is known to exist. */
+    @Test
+    fun aFailedMakeUndoesNothing() {
+        scan() // an earlier ("", 1) key and record
+        val e = runCatching {
+            TransferKeyDrop.secretOfNewKey(secrets, resetPhone = { error("not asked") }, log = { logs += it }) { error("no key") }
+        }.exceptionOrNull()
+        assertTrue(e is IllegalStateException)
+        assertEquals(PhoneSecretState("", 1), record.value.phone)
+        assertTrue(keys.getValue("").exists())
     }
 
     /**
@@ -260,7 +302,10 @@ class TransferKeyDropTest {
         val start = code.indexOfFirst { it == "d.startTransfer(link, att, attestedKey = { att.made }) { traits ->" }
         assertTrue("the scan names its attested key", start >= 0)
         assertEquals("val att = attester()", code[start - 1])
-        assertEquals("a new key, in the lambda", "if (r) phoneSecrets.secret(newTransferPhoneKey(rec)) else null", code[start + 2])
+        // (#344, item 1) A new key, in the lambda, undone there if its secret cannot be had.
+        val lambda = code.subList(start, start + 12)
+        assertTrue("a new key, in the lambda", lambda.any { it == ") { newTransferPhoneKey(rec) }" })
+        assertTrue(lambda.any { it == "TransferKeyDrop.secretOfNewKey(" })
         val fresh = code.indexOfFirst { it == "private fun newTransferPhoneKey(since: Int): PhoneSecretState {" }
         assertEquals("never reused", "val phone = phoneSecrets.create(TransferKeyDrop.TRANSFER_KEY_VAULT)", code[fresh + 1])
         assertFalse(

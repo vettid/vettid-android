@@ -1251,21 +1251,24 @@ class VaultDevice private constructor(
             }
             var startedMs: Long? = null
             var keyMade = false // (GC #6761 review, Low 1) the app made this scan's phone key: its secret came back
+            var attested = false // (#344, item 3) the attestation returned: its alias is this scan's key
             try {
-                startedMs = sendTransferInit(b, attester, unlockSecretFor(traits)?.also { keyMade = true }, t)
+                startedMs = sendTransferInit(b, attester, unlockSecretFor(traits)?.also { keyMade = true }, t) { attested = true }
             } finally {
                 // (GC #6761: #6574, #335's Opus L5) An hs.init that was not sent leaves no key behind: the phone key the app
                 // made for its epoch-1 secret and the key its attestation made are no transfer's, and go as a dropped
                 // transfer's do (recorded first, then deleted by the app, [settleDroppedTransfer]). Nothing live needs
                 // them: an earlier transfer was dropped above, and this one never went out. The phone key only if this
                 // scan made it (a secret came back): a ("", 1) key it did not make is never deleted from here.
-                if (startedMs == null) leaveNoTransferKeys(attestedKey(), phoneKey = keyMade)
+                if (startedMs == null) leaveNoTransferKeys(if (attested) attestedKey() else null, phoneKey = keyMade)
             }
             // (GC #6761, #335's Opus L4) The transfer is recorded in the same write that ends the scan; if that write fails,
             // memory must not hold a transfer the file does not: the hs.init went out, but the transfer is dropped (its keys
             // with it, [dropTransferOrStop]) and the failure is thrown.
             val started = checkNotNull(startedMs) // set: a send that failed threw above
-            st.transferIn = TransferInRecord(started, attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
+            st.transferIn = TransferInRecord(
+                started, attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim, phoneKey = keyMade,
+            )
             st.scanCode = null // the code is the transfer's from here on
             var saved = false
             try {
@@ -1282,7 +1285,13 @@ class VaultDevice private constructor(
      * it pinned is put back (the blind reviews of #334, Fable L3; GC #6761 N2: the keyring and the rekeys awaiting `hs.fin`
      * too), so that the save at the scan's end ([endScan]) writes the device as it was. [unlockSecret] is zeroed either way.
      */
-    private suspend fun sendTransferInit(b: InviteBundle, attester: Attester, unlockSecret: ByteArray?, t: Instant): Long {
+    private suspend fun sendTransferInit(
+        b: InviteBundle,
+        attester: Attester,
+        unlockSecret: ByteArray?,
+        t: Instant,
+        onAttested: () -> Unit,
+    ): Long {
         val vaultBefore = st.vault
         val vaultIdBefore = st.vaultId
         val signerBefore = st.signerSeen
@@ -1297,6 +1306,7 @@ class VaultDevice private constructor(
             st.vaultId = null
             sasState.value = null
             val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
+            onAttested()
             st.signerSeen = false // a new attestation is a new key (§11.7.1)
             val profile = JsonBuilder().string("name", st.name).bytes()
             // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
@@ -1305,9 +1315,10 @@ class VaultDevice private constructor(
         } finally {
             unlockSecret?.fill(0)
             if (sent) {
-                // Replaced for good: the earlier session's keys and answers are of no use any more.
-                awaitingBefore.forEach { it.resp.abort() }
-                if (keyringBefore !== keyring) keyringBefore.destroy()
+                // Replaced for good: the earlier session's keys and answers are of no use any more. (#344, item 4) Nothing
+                // thrown here may make the sent hs.init look unsent (its keys would then be deleted).
+                awaitingBefore.forEach { runCatching { it.resp.abort() } }
+                if (keyringBefore !== keyring) runCatching { keyringBefore.destroy() }
             } else {
                 st.vault = vaultBefore
                 st.vaultId = vaultIdBefore
@@ -1475,7 +1486,9 @@ class VaultDevice private constructor(
             save()
         } catch (e: Exception) {
             forgotten = true
-            dropNotSaved = true // the file still holds the transfer: a forget is guarded ([forgetIfTransferOpen])
+            // The file still holds the transfer, or (a failed save of the transfer's record, GC #6761 L4) the scan's open code
+            // that was to record it: a forget is guarded either way ([forgetIfTransferOpen]).
+            dropNotSaved = true
             stop()
             throw VaultStateException("the open transfer could not be dropped: this device was stopped").also { it.initCause(e) }
         }
@@ -2232,6 +2245,9 @@ class VaultDevice private constructor(
 
     internal val currentEpochId: ByteArray? get() = keyring.current()?.id
 
+    /** Tests: the vault's rekeys this device answered that wait for their `hs.fin`. */
+    internal val awaitingCount: Int get() = awaiting.size
+
     /** Tests: the outbox in memory. */
     internal val outboxEntries: List<OutboxEntry> get() = st.outbox.toList()
 
@@ -2251,7 +2267,8 @@ class VaultDevice private constructor(
         val tr = st.transferIn ?: return
         if (st.deviceId != null || tr.paired) return
         val keys = (st.droppedTransfer?.attestKeys.orEmpty() + listOfNotNull(tr.attestKey)).distinct()
-        st.droppedTransfer = DroppedTransferRecord(keys)
+        // (#344, item 2) The phone key only if this transfer's scan made it, or an earlier record still names it.
+        st.droppedTransfer = DroppedTransferRecord(keys, phoneKey = tr.phoneKey || st.droppedTransfer?.phoneKey == true)
     }
 
     private fun prune(m: MutableMap<String, Long>, t: Instant) {

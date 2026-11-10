@@ -505,7 +505,16 @@ class VaultManager(
                 val att = attester()
                 d.startTransfer(link, att, attestedKey = { att.made }) { traits ->
                     val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
-                    if (r) phoneSecrets.secret(newTransferPhoneKey(rec)) else null
+                    // (#344, item 1) The secret came back exactly when this scan made the key and it stands.
+                    if (!r) {
+                        null
+                    } else {
+                        TransferKeyDrop.secretOfNewKey(
+                            phoneSecrets,
+                            resetPhone = { record.update(RecordStore.UNBOUND, TransferKeyDrop::resetRecord) },
+                            log = { android.util.Log.w("VaultManager", "transfer key undone: $it") },
+                        ) { newTransferPhoneKey(rec) }
+                    }
                 }
                 awaitTransferSas(d)
             }
