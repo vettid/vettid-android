@@ -4532,7 +4532,8 @@ class VaultManager(
         override suspend fun awaitCollectorRound() = d.awaitCollectorRound()
 
         override suspend fun collectOnce(wait: Duration) {
-            d.collectOnce(wait)
+            // Each attempt within the window's own bound (wait + 30 s, above rule 5's wait + 10 s), the body read included.
+            d.collectOnce(wait, callTimeout = wait.plusMillis(TransferInResume.DEADLINE_COLLECT_MS))
         }
 
         override suspend fun abandonTransfer(onlyStartedAt: Instant) = d.abandonTransfer(onlyStartedAt)

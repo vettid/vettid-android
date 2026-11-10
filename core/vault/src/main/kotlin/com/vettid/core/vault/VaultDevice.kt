@@ -1445,9 +1445,10 @@ class VaultDevice private constructor(
      * already, it comes again after its lease and is dropped by the `seenInner` check, and the rest of the batch
      * (a `device.paired` behind it) must still be handled. The settlement window's caller bounds it by its wait plus a
      * transport bound, and waits for the collection's round ([awaitCollectorRound]) outside that bound: a message the
-     * round leased is invisible to this collect until the round ended.
+     * round leased is invisible to this collect until the round ended. [callTimeout] bounds each attempt, the body read
+     * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4).
      */
-    suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
+    suspend fun collectOnce(wait: Duration = Duration.ZERO, callTimeout: Duration? = null): Int {
         if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
@@ -1458,6 +1459,7 @@ class VaultDevice private constructor(
                 attemptSent.set(at)
                 noteSend(wait.toMillis(), at)
             },
+            callTimeout = callTimeout,
         )
         for (m in msgs) {
             try {

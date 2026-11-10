@@ -566,6 +566,8 @@ internal object TransferInResume {
                     if (ourSends.size > MAX_SENDS) ourSends.removeFirst()
                 }
                 // Never shorter than its own wait: a poll parked at the relay is not cut while it can hold a message.
+                // A body read blocked in the transport is not cut by this coroutine timeout: the collect's own call
+                // timeout (the same bound, `VaultManager`'s settlement device) ends it.
                 if (withTimeoutOrNull(bound) { collect(waitMs) } == null) {
                     failures++
                     // It may have reached the relay, and been answered, as late as it was abandoned.
