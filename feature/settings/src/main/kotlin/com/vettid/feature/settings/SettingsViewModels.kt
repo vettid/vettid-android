@@ -229,6 +229,23 @@ class VaultStatusViewModel @Inject constructor(private val vault: VaultRepositor
         }
     }
 
+    /** The screen was hidden (the app in the background, or another screen over it) since it was last shown. */
+    private var hidden = false
+
+    /**
+     * (GC #6816, as vettid-ios #236) The screen is shown ([visible]) or hidden: shown again after it was hidden (a return to
+     * the app, say), the key is asked again, since it may have changed elsewhere meanwhile (a recovery, a move). Not at the
+     * first showing: opening asks already.
+     */
+    fun setVisible(visible: Boolean) {
+        if (!visible) {
+            hidden = true
+        } else if (hidden) {
+            hidden = false
+            loadCredentialKey()
+        }
+    }
+
     /** Asks `credential.version` (each time the screen opens, and Retry). A newer ask replaces an older one. */
     fun loadCredentialKey() {
         keyJob?.cancel()

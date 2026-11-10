@@ -280,6 +280,9 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val vm: VaultStatusViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
         val credentialKey by vm.credentialKey.collectAsStateWithLifecycle()
+        // Back in front (the app's return, or the screen over it gone): the key is asked again (GC #6816).
+        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
         VaultStatusContent(
             state, vm::load, host.onBack,
             credentialKey = credentialKey, onRetryCredentialKey = vm::loadCredentialKey,

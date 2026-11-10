@@ -104,6 +104,44 @@ class CredentialKeyRowTest {
         assertEquals(CredentialKeyUi.Shown(fp), vm.credentialKey.value)
     }
 
+    /**
+     * (GC #6816, as vettid-ios #236) Back in front (the app's return, or the screen over it gone) the key is asked again; the
+     * first showing asks nothing more than the opening did, and a screen never hidden asks nothing more.
+     */
+    @Test
+    fun shownAgainAfterBeingHiddenAsksTheKeyAgain() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val vm = VaultStatusViewModel(vault)
+        vm.setVisible(true) // the first showing
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "credentialKey" })
+        vm.setVisible(true) // shown again without being hidden: nothing changed
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "credentialKey" })
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, "0000 1111 2222 3333")
+        vm.setVisible(false)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "credentialKey" })
+        assertEquals(CredentialKeyUi.Shown("0000 1111 2222 3333"), vm.credentialKey.value)
+    }
+
+    /**
+     * (GC #6816) A change whose answer was lost, decided later as having replaced the key (a reset): the repository says the
+     * key is not known, and the open row asks again instead of keeping the old fingerprint.
+     */
+    @Test
+    fun aKeyMadeUnknownLaterIsAskedAgain() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val vm = VaultStatusViewModel(vault)
+        advanceUntilIdle()
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, "0000 1111 2222 3333")
+        vault.answerWithKey(null)
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "credentialKey" })
+        assertEquals(CredentialKeyUi.Shown("0000 1111 2222 3333"), vm.credentialKey.value)
+    }
+
     @Test
     fun noCredentialIsNoneYet() = runTest {
         vault.credentialKeyAnswer = CredentialKeyAnswer(false, null)
