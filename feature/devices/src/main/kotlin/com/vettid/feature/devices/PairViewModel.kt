@@ -65,6 +65,9 @@ class PairViewModel @Inject constructor(
     private val role: PairRole = if (saved.get<Boolean>(PairRoute.DESKTOP) == true) PairRole.DESKTOP else PairRole.AGENT
     private val local = MutableStateFlow(PairUiState(held = held))
 
+    /** This screen as the repository knows it (GC #7370): a token, so that a cleared screen is never held by the repository. */
+    private val token = Any()
+
     /** The pairing the sheet was opened for. */
     private val sheetFor = MutableStateFlow<String?>(null)
 
@@ -100,13 +103,16 @@ class PairViewModel @Inject constructor(
         // From the feed item the pairing is whatever is held; from the button, a new code (an unfinished one is kept).
         if (!held) {
             repo.acknowledge()
-            // A pairing held for the other role is rejected and replaced by the repository in this one call.
-            viewModelScope.launch { repo.start(role) }
+            // A pairing held for the other role is rejected and replaced by the repository in this one call. From here the
+            // pairing is this screen's (GC #7370): an earlier screen cleared late touches none of it.
+            viewModelScope.launch { repo.start(role, token) }
+        } else {
+            repo.claim(token)
         }
         // The daily check passed: a refused approval may be sent again.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge()
+                if (repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge(token)
             }
         }
     }
@@ -117,8 +123,8 @@ class PairViewModel @Inject constructor(
         sheetFor.value = null
         sawStage = false
         viewModelScope.launch {
-            repo.acknowledge()
-            repo.start(codeRole())
+            repo.acknowledge(token)
+            repo.start(codeRole(), token)
         }
     }
 
@@ -127,11 +133,15 @@ class PairViewModel @Inject constructor(
     /** Cancel on the code screen: the vault is told, nothing is held. */
     fun cancel() {
         closing.value = true
-        repo.leave()
+        repo.leave(token)
     }
 
-    fun codesMatch() {
-        sheetFor.value = (repo.state.value.stage as? PairingStage.Compare)?.pending?.pairingId
+    /**
+     * "The codes match" on the comparison [pairingId] shown (GC #7440): the sheet shows only over that very comparison (the
+     * state's `sheet`), and its approval is bound to that id ([pair]).
+     */
+    fun codesMatch(pairingId: String) {
+        sheetFor.value = pairingId
     }
 
     fun closeSheet() {
@@ -142,26 +152,30 @@ class PairViewModel @Inject constructor(
 
     fun pair() {
         val s = local.value
+        // Bound to the comparison the sheet showed (GC #7370).
+        val id = sheetFor.value ?: return
         viewModelScope.launch {
-            repo.approve(s.session.seconds)
+            repo.approve(s.session.seconds, id)
         }
     }
 
     /** "They don't match", and Reject for a pairing that cannot be compared. */
-    fun reject() {
+    fun reject(pairingId: String) {
         sheetFor.value = null
-        viewModelScope.launch { repo.reject() }
+        viewModelScope.launch { repo.reject(pairingId) }
     }
 
     /** A final stage was read. */
     fun done() {
         closing.value = true
-        repo.acknowledge()
+        repo.acknowledge(token)
     }
 
     override fun onCleared() {
-        // The screen is gone: a code not used or a comparison not answered is rejected (best effort), never kept.
-        repo.leave()
-        repo.acknowledge()
+        // The screen is gone: a code not used, a create still out or a comparison not answered is rejected (best effort), never
+        // kept, also after Done (Back on a comparison or while creating calls it). Only this screen's pairing (GC #7370): a
+        // later screen's is left alone by the owner check.
+        repo.leave(token)
+        repo.acknowledge(token)
     }
 }

@@ -15,30 +15,34 @@ class FakePairing : PairingRepository {
 
     override val state = MutableStateFlow(PairingState())
 
-    override suspend fun start(role: PairRole) {
+    override suspend fun start(role: PairRole, owner: Any?) {
         calls += if (role == PairRole.AGENT) "start" else "start:${role.wire}"
         state.value = state.value.copy(role = role)
     }
 
-    override suspend fun approve(sessionSeconds: Int?) {
-        calls += "approve:$sessionSeconds"
+    /** The pairing id the last approval was bound to. */
+    var approvedId: String? = null
+
+    override fun claim(owner: Any) {
+        calls += "claim"
     }
 
-    override suspend fun reject() {
+    override suspend fun approve(sessionSeconds: Int?, pairingId: String) {
+        calls += "approve:$sessionSeconds"
+        approvedId = pairingId
+    }
+
+    override suspend fun reject(pairingId: String) {
         calls += "reject"
         val s = state.value.stage
         if (s is PairingStage.Compare) state.value = PairingState(PairingStage.Rejected(told = true))
     }
 
-    override suspend fun cancel() {
-        calls += "cancel"
-    }
-
-    override fun leave() {
+    override fun leave(owner: Any?) {
         calls += "leave"
     }
 
-    override fun acknowledge() {
+    override fun acknowledge(owner: Any?) {
         calls += "acknowledge"
     }
 }
