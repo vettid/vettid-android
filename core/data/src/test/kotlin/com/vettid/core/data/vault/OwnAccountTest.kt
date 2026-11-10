@@ -199,6 +199,23 @@ class OwnAccountTest {
         assertEquals(OwnProfileStep.NONE, OwnProfileStep.onCheck(wasHeld = false, held = false, phase = AppPhase.Unlocked))
     }
 
+    /**
+     * The vault manager tells the open Devices & agents screens to read again (`DevicesManager.checkCleared`, review Low 2):
+     * at the end of a hold (held → OK), when a check due by its deadline alone passes (DUE by deadline → OK), and never while
+     * not unlocked or still held.
+     */
+    @Test
+    fun theDeviceScreensReadAgainWhenTheHoldOrADueCheckEnds() {
+        assertTrue("held → OK", devicesReadAgain(wasHeld = true, held = false, gatedEnded = false, phase = AppPhase.Unlocked))
+        assertTrue("due by deadline → OK", devicesReadAgain(wasHeld = false, held = false, gatedEnded = true, phase = AppPhase.Unlocked))
+        assertFalse("still held", devicesReadAgain(wasHeld = true, held = true, gatedEnded = true, phase = AppPhase.Unlocked))
+        assertFalse("into the hold", devicesReadAgain(wasHeld = false, held = true, gatedEnded = false, phase = AppPhase.Unlocked))
+        assertFalse("nothing moved", devicesReadAgain(wasHeld = false, held = false, gatedEnded = false, phase = AppPhase.Unlocked))
+        for (p in listOf(AppPhase.Starting, AppPhase.Locked, AppPhase.SignedOut)) {
+            assertFalse("$p", devicesReadAgain(wasHeld = true, held = false, gatedEnded = true, phase = p))
+        }
+    }
+
     @Test
     fun theStartFindsTheOwnAccountOfAnOlderBuildInTheRecord() {
         val json = Json { ignoreUnknownKeys = true }

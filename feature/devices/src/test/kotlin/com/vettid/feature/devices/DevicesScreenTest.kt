@@ -231,6 +231,23 @@ class DevicesScreenTest {
         rule.onNodeWithContentDescription("Remove").assertExists()
     }
 
+    /**
+     * Removed here (owner decision a, GC #7101): the page itself says "<name> was removed" and offers no action while the
+     * notice is up (no End access, no History or Remove, no rule or permission action, no Resume).
+     */
+    @Test
+    fun aDeviceRemovedHereIsToldOnItsPageWithNoActions() {
+        val removed = DeviceUiState(device = agent, loaded = true, removedDevice = agent)
+        rule.setContent { DevicePageScreen(removed, DevicePageActions(), now = now) }
+        rule.onNodeWithText("Claude\u2069 was removed", substring = true).assertIsDisplayed()
+        rule.onNodeWithTag("device_name").assertTextContains("Claude")
+        rule.onNodeWithTag("end_access").assertDoesNotExist()
+        rule.onNodeWithContentDescription("History").assertDoesNotExist()
+        rule.onNodeWithContentDescription("Remove").assertDoesNotExist()
+        rule.onNodeWithTag("resume").assertDoesNotExist()
+        rule.onNodeWithTag("access_status").assertTextContains("Access until", substring = true) // the facts stay
+    }
+
     @Test
     fun withoutAccessThePageSaysHowTheAgentAsksAndOffersNoEnd() {
         page(DeviceUiState(device = agent.copy(sessionExpiresAt = null), loaded = true))

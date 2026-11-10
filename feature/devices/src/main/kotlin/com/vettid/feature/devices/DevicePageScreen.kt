@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -122,6 +123,7 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         actions.onRuleSavedShown()
         snackbar.showSnackbar(savedText)
     }
+    RemovedNotice(state.removedDevice, snackbar)
     val noticeText = state.notice?.let { stringResource(PermissionText.noticeRes(it)) }
     LaunchedEffect(state.notice) {
         if (noticeText == null) return@LaunchedEffect
@@ -133,7 +135,8 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         onBackClick = actions.onBack,
         modifier = modifier,
         overlay = {
-            if (d != null) {
+            // A device removed here shows no actions while its notice is up.
+            if (d != null && state.removedDevice == null) {
                 FloatingPillActionBar(
                     listOfNotNull(
                         // An empty name would open the unfiltered log: no History for it.
@@ -172,6 +175,16 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
     if (d != null) PageDialogs(state, d, actions)
 }
 
+/** Removed here (owner decision a, GC #7101): "<name> was removed" on this page until it leaves ([REMOVED_NOTICE_MS]). */
+@Composable
+private fun RemovedNotice(removed: DeviceInfo?, snackbar: SnackbarHostState) {
+    val text = removed?.let { stringResource(R.string.devices_removed, DeviceText.sentenceName(it)) }
+    LaunchedEffect(text) {
+        if (text == null) return@LaunchedEffect
+        snackbar.showSnackbar(text, duration = SnackbarDuration.Indefinite)
+    }
+}
+
 @Composable
 private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePageActions, now: Instant) {
     val name = DeviceText.name(d)
@@ -179,7 +192,8 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = PILL_SPACE),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
-        if (d.isAgent && d.paused) PausedBanner(DeviceText.sentenceName(d), busy = state.busy, onResume = actions.onResume)
+        val acting = state.removedDevice == null
+        if (acting && d.isAgent && d.paused) PausedBanner(DeviceText.sentenceName(d), busy = state.busy, onResume = actions.onResume)
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
             InitialTile(
                 name = name,
@@ -203,9 +217,9 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
             )
         }
         state.failure?.let { f -> FailureNotice(state, f, DeviceText.sentenceName(d), actions.onDismissFailure) }
-        AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess)
-        if (d.isAgent) RulesCard(state, actions)
-        if (d.isAgent) PermissionsCard(state, actions)
+        AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess, acting = acting)
+        if (acting && d.isAgent) RulesCard(state, actions)
+        if (acting && d.isAgent) PermissionsCard(state, actions)
         DetailCard(Modifier.testTag("about_card")) {
             CardTitle(stringResource(R.string.devices_about))
             InfoLine(stringResource(R.string.devices_role), DeviceText.role(d))
@@ -267,11 +281,12 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
 
 /** Access: its end and **End access**, or "No access" and how the device asks (§6.8); agents also read the rule. */
 @Composable
-private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: () -> Unit) {
+private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: () -> Unit, acting: Boolean = true) {
     DetailCard(Modifier.testTag("access_card")) {
         CardTitle(stringResource(R.string.devices_access))
         Text(DeviceText.access(d, now), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("access_status"))
-        if (d.actionable && d.hasAccess(now)) {
+        // Removed here ([acting] false): nothing to do or ask for.
+        if (acting && d.actionable && d.hasAccess(now)) {
             Spacer(Modifier.height(Spacing.m))
             SecondaryButton(
                 stringResource(UiR.string.devices_end_access),
@@ -279,7 +294,7 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
                 enabled = !busy,
                 modifier = Modifier.testTag("end_access"),
             )
-        } else if (d.actionable) {
+        } else if (acting && d.actionable) {
             Spacer(Modifier.height(Spacing.xs))
             Text(
                 stringResource(if (d.isAgent) R.string.devices_no_access_agent else R.string.devices_no_access_desktop),

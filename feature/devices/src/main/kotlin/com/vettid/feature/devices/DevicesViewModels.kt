@@ -18,6 +18,7 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -67,8 +69,10 @@ class DevicesViewModel @Inject constructor(
         // The screen reads the list when it shows (`refresh`): once on opening, once on every return.
         // The daily check passed (or the hold ended): a list refused because it was due reads again by itself, and so does
         // one the hold cleared (owner decision a, GC #7047, as vettid-ios #239), which would otherwise stay on its spinner.
+        // Also on the repository's own word (`readAgain`, from the collector that cleared the list): a quick held-then-OK
+        // can reach this collector as OK only, and a check due by its deadline alone changes no state here.
         viewModelScope.launch {
-            ownerCheck.checkCleared().collect {
+            merge(ownerCheck.checkCleared(), repo.readAgain).collect {
                 if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED || repo.load.value != ListLoad.LOADED) refresh()
             }
         }
@@ -112,8 +116,14 @@ data class DeviceUiState(
     val errorCode: String? = null,
     /** "Access ended", once. */
     val accessEnded: Boolean = false,
-    /** The device was removed here: the screen leaves. */
+    /** The device was removed here and its notice was shown: the screen leaves. */
     val removed: Boolean = false,
+    /**
+     * (Owner decision a, GC #7101, as vettid-ios #239) The device just removed here, until the screen leaves: the page itself
+     * says "<name> was removed" for [REMOVED_NOTICE_MS] (opened from the feed, it has no list under it to say it), keeps
+     * the device on screen meanwhile with no actions, and the list does not say it again.
+     */
+    val removedDevice: DeviceInfo? = null,
     /** The list could not be read and no device is known: the page says so and offers Retry. */
     val loadError: FailureKind? = null,
     val loadErrorCode: String? = null,
@@ -178,7 +188,7 @@ class DeviceViewModel @Inject constructor(
 
     private val base = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
         s.copy(
-            device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
+            device = list.firstOrNull { it.id == id } ?: s.removedDevice, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
             itemWays = sharing.itemWays,
         )
     }
@@ -293,9 +303,12 @@ class DeviceViewModel @Inject constructor(
 
     fun ruleSavedShown() = sharing.ruleSavedShown(id)
 
+    /** Nothing more is asked of a device removed here (its notice is up). */
+    private val acting: Boolean get() = !local.value.busy && local.value.removedDevice == null
+
     fun askEndAccess() {
         val d = uiState.value.device
-        if (local.value.busy || d == null || !d.actionable) return
+        if (!acting || d == null || !d.actionable) return
         local.update { it.copy(confirm = DeviceConfirm.END_ACCESS, failure = null, error = null, errorCode = null) }
     }
 
@@ -305,7 +318,7 @@ class DeviceViewModel @Inject constructor(
      */
     fun askRemove() {
         val d = uiState.value.device ?: return
-        if (local.value.busy || !d.actionable) return
+        if (!acting || !d.actionable) return
         local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
         viewModelScope.launch {
             val bound = if (d.isAgent) repo.removalBoundSeconds(d.id) else 0L
@@ -316,7 +329,7 @@ class DeviceViewModel @Inject constructor(
     /** The ⋯ menu's **Remove** on a permission: asks first; nothing is sent until the confirmation. */
     fun askRemovePermission(grantId: String) {
         val grant = uiState.value.permissions.firstOrNull { it.grantId == grantId }
-        if (local.value.busy || grant == null || uiState.value.device?.isAgent != true) return
+        if (!acting || grant == null || uiState.value.device?.isAgent != true) return
         local.update {
             it.copy(confirm = DeviceConfirm.REMOVE_PERMISSION, confirmGrant = grant, failure = null, error = null, errorCode = null)
         }
@@ -325,7 +338,7 @@ class DeviceViewModel @Inject constructor(
     /** **Resume** on the paused banner: no confirmation and no unlock window (it signs nothing). */
     fun resume() {
         val d = uiState.value.device?.takeIf { it.isAgent && it.paused }
-        if (local.value.busy || d == null) return
+        if (!acting || d == null) return
         local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
         viewModelScope.launch {
             try {
@@ -347,7 +360,7 @@ class DeviceViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod")
     fun confirm() {
         val s = local.value
-        val d = uiState.value.device?.takeIf { it.actionable && !s.busy }
+        val d = uiState.value.device?.takeIf { it.actionable && acting }
         val what = s.confirm
         if (d == null || what == null) return
         val grant = s.confirmGrant
@@ -369,7 +382,11 @@ class DeviceViewModel @Inject constructor(
                     }
                     DeviceConfirm.REMOVE -> {
                         repo.remove(d.id)
-                        local.update { it.copy(busy = false, removed = true) }
+                        // Told here, once: the list under the page (when there is one) has nothing left to say.
+                        local.update { it.copy(busy = false, removedDevice = d) }
+                        repo.dismissRemoved()
+                        delay(REMOVED_NOTICE_MS)
+                        local.update { it.copy(removed = true) }
                     }
                 }
             } catch (e: VaultFailure) {
@@ -390,6 +407,9 @@ class DeviceViewModel @Inject constructor(
 
     fun dismissFailure() = local.update { it.copy(failure = null, error = null, errorCode = null) }
 }
+
+/** How long a device's page says "<name> was removed" before it leaves (as vettid-ios #239). */
+const val REMOVED_NOTICE_MS = 3_000L
 
 /** A vault holds at most 64 share rules per subject (§10.12 `share_rules_subject`). */
 private const val RULE_LIMIT = 64

@@ -13,7 +13,9 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeDevices
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -211,7 +213,52 @@ class DevicesViewModelsTest {
         advanceUntilIdle()
         assertEquals(listOf("remove:a1"), devices.calls.filter { it.startsWith("remove:") })
         assertTrue(vm.uiState.value.removed)
-        assertEquals("Claude", devices.removed.value?.name)
+        // Told on the page (owner decision a, GC #7101): the list does not say it again.
+        assertNull(devices.removed.value)
+        assertTrue("dismissRemoved" in devices.calls)
+    }
+
+    /**
+     * After Remove (owner decision a, GC #7101, as vettid-ios #239): the page itself says "<name> was removed" for 3 seconds,
+     * with the device still shown and no action of it taken, then leaves.
+     */
+    @Test
+    fun theRemovedNoticeStaysThreeSecondsOnThePageWithNoActions() = runTest {
+        val vm = page("a1")
+        advanceUntilIdle()
+        vm.askRemove()
+        advanceUntilIdle()
+        vm.confirm()
+        runCurrent()
+        val s = vm.uiState.value
+        assertEquals("Claude", s.removedDevice?.name)
+        assertEquals("the device stays shown", "a1", s.device?.id)
+        assertFalse(s.gone)
+        assertFalse(s.removed)
+        assertNull("the list does not repeat it", devices.removed.value)
+        // No action while the notice is up.
+        vm.askEndAccess()
+        vm.askRemove()
+        runCurrent()
+        assertNull(vm.uiState.value.confirm)
+        assertEquals(1, devices.calls.count { it == "removalBound:a1" })
+        advanceTimeBy(REMOVED_NOTICE_MS - 1)
+        assertFalse(vm.uiState.value.removed)
+        advanceTimeBy(2)
+        assertTrue("then it leaves", vm.uiState.value.removed)
+        assertEquals(3_000L, REMOVED_NOTICE_MS)
+    }
+
+    /** (review Low 1) The list reads again on the repository's word alone (the collector that cleared it). */
+    @Test
+    fun theListReadsAgainOnTheRepositorysWordAlone() = runTest {
+        val vm = DevicesViewModel(devices, FakeVault().apply { ownerCheck.value = check(OwnerCheckState.OK) })
+        vm.refresh()
+        advanceUntilIdle()
+        holdClears()
+        devices.readAgain.emit(Unit)
+        advanceUntilIdle()
+        assertEquals(2, devices.calls.count { it == "refresh" })
     }
 
     @Test
