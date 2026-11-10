@@ -1586,10 +1586,15 @@ class VaultManager(
      */
     @Suppress("TooGenericExceptionCaught") // whatever the forget threw: nothing more is deleted
     private suspend fun dropSession(forget: Boolean) = mutex.withLock {
-        val open = session?.device?.takeIf { forget && it.transferInPending != null }
+        // A scan still under way counts too (review L3): its forget waits for the scan's device lock, then runs alone.
+        val open = session?.device?.takeIf { forget && (it.transferInPending != null || it.transferScanOpen) }
         if (open != null) {
             try {
                 open.forget()
+            } catch (e: CancellationException) {
+                // A cancel is not a storage failure (review L2): nothing more is deleted, and the cancel goes on.
+                runCatching { dropSessionLocked(forget = false) }
+                throw e
             } catch (e: Exception) {
                 runCatching { dropSessionLocked(forget = false) }
                 // The phone's storage, not the move: the existing local-state text (no new text), its own code (review N4).
@@ -2009,6 +2014,15 @@ class VaultManager(
     override suspend fun redeemSetupCode(code: SetupCodeInput): String = enrolments.redeemSetupCode(code)
 
     override suspend fun forgetSetupCode() {
+        // (The review of c58c8fc3, L1) A forget that stopped (its open transfer could not be dropped) left no session: the
+        // device file is loaded again, so that it is judged, and guarded ([dropSession]), as the file holds it.
+        if (session == null) {
+            try {
+                guard { session() }
+            } catch (_: VaultFailure) {
+                // nothing to load: forgotten as before
+            }
+        }
         val paired = session?.device?.deviceId != null
         if (paired) return // a vault on this phone is never dropped this way
         if (session?.device?.let(::transferPinned) == true) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)

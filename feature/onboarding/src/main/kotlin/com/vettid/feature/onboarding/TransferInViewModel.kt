@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -240,19 +239,14 @@ class TransferInViewModel @Inject constructor(
         waiter?.cancel()
         waiter = viewModelScope.launch {
             val deadline = Instant.now(clock).plus(WINDOW)
+            // (The review of c58c8fc3, M1) No timer of the screen's own: the repository's 60 s for the hs.resp (§6.7.1
+            // step 2) start only once the hs.init is sent, after a claim fetch and a deposit that are each bounded but may
+            // take longer than any margin here, so a screen timer could abandon a transfer still waited for. The repository
+            // decides "not answered" (CODE_HS_UNANSWERED, [connectFailed]); Cancel leaves meanwhile.
             val sas = try {
-                // The repository's own 60 s decides (from the transfer's stored start, after the claim fetch; a same-code
-                // return waits only for what is left of it): this is a backstop with a margin, so it never cuts that wait
-                // short, and so never abandons a transfer the repository is still waiting for (the re-checks of #334, Opus N2).
-                withTimeoutOrNull(MoveRepository.HS_RESP_WAIT_MS + BACKSTOP_MARGIN_MS) { move.transferIn(text) }
+                move.transferIn(text)
             } catch (e: VaultFailure) {
                 connectFailed(from, e)
-                return@launch
-            }
-            if (sas == null) {
-                // §6.7.1 step 2: the repository did not answer even past its own 60 s; the handshake state is dropped.
-                state.update { it.copy(step = TransferInStep.NOT_ANSWERED, busy = false) }
-                abandon()
                 return@launch
             }
             // The countdown from the stored start (what the repository judges by), not from before the claim.
@@ -380,8 +374,5 @@ class TransferInViewModel @Inject constructor(
     private companion object {
         val WINDOW: Duration = com.vettid.core.data.vault.TransferInWait.VAULT_WINDOW
         const val TICK_MS = 1000L
-
-        /** Over [MoveRepository.HS_RESP_WAIT_MS] for the claim fetch and the hs.init deposit before the repository's wait starts. */
-        const val BACKSTOP_MARGIN_MS = 30_000L
     }
 }

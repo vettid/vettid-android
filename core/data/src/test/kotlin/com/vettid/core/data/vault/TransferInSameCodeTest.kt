@@ -51,7 +51,8 @@ class TransferInSameCodeTest {
     @Test
     fun everyForgetOfAnOpenTransferForgetsTheDeviceAloneFirst() {
         val drop = body("private suspend fun dropSession(forget: Boolean) = mutex.withLock {")
-        val guard = drop.indexOfFirst { it.contains("forget && it.transferInPending != null") }
+        // An open transfer, or a scan still under way (the review of c58c8fc3, L3).
+        val guard = drop.indexOfFirst { it.contains("it.transferInPending != null || it.transferScanOpen") }
         val alone = drop.indexOfFirst { it == "open.forget()" }
         val keep = drop.indexOfFirst { it.contains("dropSessionLocked(forget = false)") }
         val stop = drop.indexOfFirst { it.contains("MoveRepository.CODE_TRANSFER_NOT_DROPPED") }
@@ -61,11 +62,19 @@ class TransferInSameCodeTest {
         assertTrue("a failed forget keeps the file, then stops", keep in alone + 1 until stop && stop < full)
         // The body itself never forgets an open transfer unguarded: every key step is in dropSessionLocked, which only
         // dropSession calls.
-        assertTrue(code.count { it.contains("dropSessionLocked(") } == 3)
+        assertTrue(code.count { it.contains("dropSessionLocked(") } == 4)
+        // A cancel is rethrown as itself, never turned into a storage failure (L2).
+        val cancel = drop.indexOfFirst { it.startsWith("} catch (e: CancellationException)") }
+        assertTrue("the cancel first", cancel in alone + 1 until stop)
+        assertTrue("rethrown as itself", drop.subList(cancel + 1, stop).takeWhile { !it.startsWith("} catch") }.contains("throw e"))
         assertFalse(code.any { it.contains("forgetOpenTransferOrStop") })
         for (sig in listOf("private suspend fun freshDeviceIfUnpaired() {", "override suspend fun forgetSetupCode() {")) {
             assertTrue("$sig goes through the guard", body(sig).any { it.contains("dropSession(forget = true)") })
         }
+        // (L1) After a forget that stopped, the file is loaded again first, so a second try is guarded too.
+        val setup = body("override suspend fun forgetSetupCode() {")
+        val load = setup.indexOfFirst { it == "guard { session() }" }
+        assertTrue("loaded before it is judged", load in 0 until setup.indexOfFirst { it.startsWith("val paired") })
     }
 
     /** (The blind reviews of #334, item 3) The start-up sweep of an orphaned ("", 1) key only while the phone holds no vault. */

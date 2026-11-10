@@ -1177,6 +1177,7 @@ class VaultDevice private constructor(
             val vaultBefore = st.vault
             val vaultIdBefore = st.vaultId
             val signerBefore = st.signerSeen
+            val issuedBefore = st.issuedExpMs // set by the hs.init's token when its deposit then fails (review L4)
             val at = t.truncatedTo(ChronoUnit.MILLIS)
             val id = Ulid.new(at)
             var sent = false
@@ -1196,6 +1197,7 @@ class VaultDevice private constructor(
                     st.vault = vaultBefore
                     st.vaultId = vaultIdBefore
                     st.signerSeen = signerBefore
+                    st.issuedExpMs = issuedBefore
                 }
             }
             st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
@@ -1390,6 +1392,9 @@ class VaultDevice private constructor(
      * (A6 audit N1) The transfer to this phone that is not finished: started (its `hs.init` sent), with its SAS once
      * `hs.fin` was sent, and paired once `device.paired{transfer: true}` was applied. Null when there is none.
      */
+    /** (The review of c58c8fc3, L3) A scan to this phone is under way: its code is stored and its transfer not yet recorded. */
+    val transferScanOpen: Boolean get() = st.scanCode != null
+
     val transferInPending: TransferInState?
         get() = st.transferIn?.let {
             TransferInState(Instant.ofEpochMilli(it.startedMs), it.sas, it.paired, it.userGuid, it.codeRelay, it.codeClaim)

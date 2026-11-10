@@ -400,35 +400,33 @@ class TransferInViewModelTest {
     }
 
     /**
-     * §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered. The repository's own 60 s decides (below); a repository
-     * that never answers at all is stopped by the screen's backstop, 30 s later (the re-checks of #334, Opus N2).
+     * §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered. The repository's own 60 s decide
+     * ([theRepositorysOwnHsRespTimeoutSaysTheSame]); the screen has no timer of its own (the review of c58c8fc3, M1), so a repository still
+     * waiting is never cut short and nothing is abandoned, and Cancel leaves meanwhile.
      */
     @Test
-    fun noHsRespWithin60SecondsSaysWhyAndOffersANewCode() = runTest {
+    fun theScreenNeverCutsTheRepositorysWaitShortAndCancelLeaves() = runTest {
         vault.transferHsResp = CompletableDeferred()
         val vm = TransferInViewModel(vault, vault)
         vm.scan()
         vm.scanned(qr())
-        advanceTimeBy(89_000)
-        assertEquals("the repository's wait is never cut short", TransferInStep.CONNECTING, vm.uiState.value.step)
-        assertFalse("abandonTransferIn" in vault.calls)
-        advanceTimeBy(1_100)
-        assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
-        assertFalse(vm.uiState.value.busy)
+        advanceTimeBy(300_000)
+        assertEquals("still waiting for the repository", TransferInStep.CONNECTING, vm.uiState.value.step)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
+        vm.cancel()
         advanceUntilIdle()
-        assertTrue("abandonTransferIn" in vault.calls)
-        assertFalse("awaitTransferIn" in vault.calls)
+        assertEquals(TransferInStep.INTRO, vm.uiState.value.step)
+        assertTrue("Cancel drops it", "abandonTransferIn" in vault.calls)
         // A late hs.resp changes nothing: the wait was cancelled.
         vault.transferHsResp!!.complete("042817")
         advanceUntilIdle()
-        assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
-        vm.again()
-        assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+        assertEquals(TransferInStep.INTRO, vm.uiState.value.step)
     }
 
     /**
-     * (The re-checks of #334, Opus N2) The repository's 60 s start after the claim fetch, so an hs.resp may come more than
-     * 60 s after the scan: the screen shows it, and abandons nothing (a same-code return included).
+     * (The re-checks of #334, Opus N2; the review of c58c8fc3, M1) The repository's 60 s start once the hs.init is sent,
+     * after the claim fetch and the deposit, so an hs.resp may come well over 60 s after the scan: the screen shows it,
+     * and abandons nothing (a same-code return included).
      */
     @Test
     fun anHsRespAfterSixtySecondsFromTheScanStillShowsTheCode() = runTest {
@@ -444,7 +442,7 @@ class TransferInViewModelTest {
         }
         vm.scan()
         vm.scanned(qr())
-        advanceTimeBy(70_000)
+        advanceTimeBy(150_000)
         vault.transferHsResp!!.complete("042817")
         advanceTimeBy(100)
         assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
