@@ -18,6 +18,7 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -65,10 +67,13 @@ class DevicesViewModel @Inject constructor(
 
     init {
         // The screen reads the list when it shows (`refresh`): once on opening, once on every return.
-        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself.
+        // The daily check passed (or the hold ended): a list refused because it was due reads again by itself, and so does
+        // one the hold cleared (owner decision a, GC #7047, as vettid-ios #239), which would otherwise stay on its spinner.
+        // Also on the repository's own word (`readAgain`, from the collector that cleared the list): a quick held-then-OK
+        // can reach this collector as OK only, and a check due by its deadline alone changes no state here.
         viewModelScope.launch {
-            ownerCheck.checkCleared().collect {
-                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED) refresh()
+            merge(ownerCheck.checkCleared(), repo.readAgain).collect {
+                if (local.value.error == FailureKind.OWNER_CHECK_REQUIRED || repo.load.value != ListLoad.LOADED) refresh()
             }
         }
     }
@@ -111,8 +116,14 @@ data class DeviceUiState(
     val errorCode: String? = null,
     /** "Access ended", once. */
     val accessEnded: Boolean = false,
-    /** The device was removed here: the screen leaves. */
+    /** The device was removed here and its notice was shown: the screen leaves. */
     val removed: Boolean = false,
+    /**
+     * (Owner decision a, GC #7101, as vettid-ios #239) The device just removed here, until the screen leaves: the page itself
+     * says "<name> was removed" for [REMOVED_NOTICE_MS] (opened from the feed, it has no list under it to say it), keeps
+     * the device on screen meanwhile with no actions, and the list does not say it again.
+     */
+    val removedDevice: DeviceInfo? = null,
     /** The list could not be read and no device is known: the page says so and offers Retry. */
     val loadError: FailureKind? = null,
     val loadErrorCode: String? = null,
@@ -177,7 +188,7 @@ class DeviceViewModel @Inject constructor(
 
     private val base = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
         s.copy(
-            device = list.firstOrNull { it.id == id }, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
+            device = list.firstOrNull { it.id == id } ?: s.removedDevice, loaded = load == ListLoad.LOADED, ruleSaved = saved == id,
             itemWays = sharing.itemWays,
         )
     }
@@ -201,6 +212,15 @@ class DeviceViewModel @Inject constructor(
     init {
         // A page opened from a feed item (or after a process start) may be the first reader of the list.
         refresh()
+        // The hold ended (or the daily check passed): a list the hold cleared, or one refused because the check was due,
+        // reads again by itself (owner decision a, GC #7047, as vettid-ios #239). An agent's rules and permissions follow when
+        // the list shows it again (the collector below).
+        // The page holds nothing that could pass the check (the repository says when it cleared).
+        viewModelScope.launch {
+            repo.readAgain.collect {
+                if (local.value.loadError == FailureKind.OWNER_CHECK_REQUIRED || repo.load.value != ListLoad.LOADED) refresh()
+            }
+        }
         // The rules are an agent's: read once the list shows this device is one (and on every return to the page).
         viewModelScope.launch {
             repo.devices.map { list -> list.firstOrNull { it.id == id }?.isAgent == true }.distinctUntilChanged().filter { it }
@@ -283,9 +303,12 @@ class DeviceViewModel @Inject constructor(
 
     fun ruleSavedShown() = sharing.ruleSavedShown(id)
 
+    /** Nothing more is asked of a device removed here (its notice is up). */
+    private val acting: Boolean get() = !local.value.busy && local.value.removedDevice == null
+
     fun askEndAccess() {
         val d = uiState.value.device
-        if (local.value.busy || d == null || !d.actionable) return
+        if (!acting || d == null || !d.actionable) return
         local.update { it.copy(confirm = DeviceConfirm.END_ACCESS, failure = null, error = null, errorCode = null) }
     }
 
@@ -295,7 +318,7 @@ class DeviceViewModel @Inject constructor(
      */
     fun askRemove() {
         val d = uiState.value.device ?: return
-        if (local.value.busy || !d.actionable) return
+        if (!acting || !d.actionable) return
         local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
         viewModelScope.launch {
             val bound = if (d.isAgent) repo.removalBoundSeconds(d.id) else 0L
@@ -306,7 +329,7 @@ class DeviceViewModel @Inject constructor(
     /** The ⋯ menu's **Remove** on a permission: asks first; nothing is sent until the confirmation. */
     fun askRemovePermission(grantId: String) {
         val grant = uiState.value.permissions.firstOrNull { it.grantId == grantId }
-        if (local.value.busy || grant == null || uiState.value.device?.isAgent != true) return
+        if (!acting || grant == null || uiState.value.device?.isAgent != true) return
         local.update {
             it.copy(confirm = DeviceConfirm.REMOVE_PERMISSION, confirmGrant = grant, failure = null, error = null, errorCode = null)
         }
@@ -315,7 +338,7 @@ class DeviceViewModel @Inject constructor(
     /** **Resume** on the paused banner: no confirmation and no unlock window (it signs nothing). */
     fun resume() {
         val d = uiState.value.device?.takeIf { it.isAgent && it.paused }
-        if (local.value.busy || d == null) return
+        if (!acting || d == null) return
         local.update { it.copy(busy = true, failure = null, error = null, errorCode = null) }
         viewModelScope.launch {
             try {
@@ -337,7 +360,7 @@ class DeviceViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod")
     fun confirm() {
         val s = local.value
-        val d = uiState.value.device?.takeIf { it.actionable && !s.busy }
+        val d = uiState.value.device?.takeIf { it.actionable && acting }
         val what = s.confirm
         if (d == null || what == null) return
         val grant = s.confirmGrant
@@ -359,7 +382,7 @@ class DeviceViewModel @Inject constructor(
                     }
                     DeviceConfirm.REMOVE -> {
                         repo.remove(d.id)
-                        local.update { it.copy(busy = false, removed = true) }
+                        removedHere(d)
                     }
                 }
             } catch (e: VaultFailure) {
@@ -371,15 +394,44 @@ class DeviceViewModel @Inject constructor(
                 local.update { it.copy(busy = false, failure = failure, error = e.kind, errorCode = e.shownCode) }
                 // What the vault says now settles whether the device is still there, with or without access. A refused
                 // permission removal keeps its row: the grants are not read again.
-                if (what != DeviceConfirm.REMOVE_PERMISSION) runCatching { repo.refresh() }
+                if (what != DeviceConfirm.REMOVE_PERMISSION) {
+                    val read = runCatching { repo.refresh() }.isSuccess
+                    // (Nit 3) A Remove whose answer was lost: the vault no longer lists the device, so it was removed.
+                    if (what == DeviceConfirm.REMOVE && read && repo.devices.value.none { it.id == d.id }) removedHere(d)
+                }
             }
         }
     }
+
+    /**
+     * Removed here: told on this page, once (the list under it, when there is one, has nothing left to say), and the page
+     * leaves when the screen says the notice's time is over ([removedNoticeShown]).
+     */
+    private fun removedHere(d: DeviceInfo) {
+        local.update { it.copy(busy = false, failure = null, error = null, errorCode = null, removedDevice = d) }
+        repo.dismissRemoved()
+    }
+
+    /** The removal notice is up: the page leaves after [forMs] (the accessibility time, as the screen reads it), 3 s at least. */
+    fun removedNoticeShown(forMs: Long) {
+        if (local.value.removedDevice == null || noticeTimer) return
+        noticeTimer = true
+        viewModelScope.launch {
+            delay(maxOf(forMs, REMOVED_NOTICE_MS))
+            local.update { it.copy(removed = true) }
+        }
+    }
+
+    /** The removal notice's timer is running (once per page). */
+    private var noticeTimer = false
 
     fun accessEndedShown() = local.update { it.copy(accessEnded = false) }
 
     fun dismissFailure() = local.update { it.copy(failure = null, error = null, errorCode = null) }
 }
+
+/** How long a device's page says "<name> was removed" before it leaves (as vettid-ios #239). */
+const val REMOVED_NOTICE_MS = 3_000L
 
 /** A vault holds at most 64 share rules per subject (§10.12 `share_rules_subject`). */
 private const val RULE_LIMIT = 64

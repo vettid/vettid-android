@@ -23,6 +23,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -35,7 +36,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.testTag
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -96,6 +101,8 @@ data class DevicePageActions(
     val onRetryPermissions: () -> Unit = {},
     val onResume: () -> Unit = {},
     val onNoticeShown: () -> Unit = {},
+    /** The removal notice is up for this long (ms; the accessibility time for it, 3 s at least): the page leaves after it. */
+    val onRemovedNoticeShown: (Long) -> Unit = {},
 )
 
 /**
@@ -108,7 +115,14 @@ data class DevicePageActions(
 fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier: Modifier = Modifier, now: Instant = Instant.now()) {
     // One way out, however it came about (removed here, or no longer listed): a single step back.
     val leave = state.gone || state.removed
-    LaunchedEffect(leave) { if (leave) actions.onBack() }
+    // (Review Low B) Only while this page is the current entry: a destination pushed meanwhile (a notification's, the owner
+    // check's) is not the one popped; the page leaves when it is current again.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(leave, lifecycle) {
+        if (!leave) return@LaunchedEffect
+        lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+        actions.onBack()
+    }
     val snackbar = remember { SnackbarHostState() }
     val ended = stringResource(R.string.devices_access_ended)
     LaunchedEffect(state.accessEnded) {
@@ -122,6 +136,7 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         actions.onRuleSavedShown()
         snackbar.showSnackbar(savedText)
     }
+    RemovedNotice(state.removedDevice, snackbar, actions.onRemovedNoticeShown)
     val noticeText = state.notice?.let { stringResource(PermissionText.noticeRes(it)) }
     LaunchedEffect(state.notice) {
         if (noticeText == null) return@LaunchedEffect
@@ -133,7 +148,8 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
         onBackClick = actions.onBack,
         modifier = modifier,
         overlay = {
-            if (d != null) {
+            // A device removed here shows no actions while its notice is up.
+            if (d != null && state.removedDevice == null) {
                 FloatingPillActionBar(
                     listOfNotNull(
                         // An empty name would open the unfiltered log: no History for it.
@@ -172,6 +188,20 @@ fun DevicePageScreen(state: DeviceUiState, actions: DevicePageActions, modifier:
     if (d != null) PageDialogs(state, d, actions)
 }
 
+/** Removed here (owner decision a, GC #7101): "<name> was removed" on this page until it leaves ([REMOVED_NOTICE_MS]). */
+@Composable
+private fun RemovedNotice(removed: DeviceInfo?, snackbar: SnackbarHostState, onShown: (Long) -> Unit) {
+    val text = removed?.let { stringResource(R.string.devices_removed, DeviceText.sentenceName(it)) }
+    // (Review Low A) The member's "Time to take action" (TalkBack) may ask for longer: 3 s is the floor.
+    val a11y = LocalAccessibilityManager.current
+    LaunchedEffect(text) {
+        if (text == null) return@LaunchedEffect
+        val ms = a11y?.calculateRecommendedTimeoutMillis(REMOVED_NOTICE_MS, containsText = true) ?: REMOVED_NOTICE_MS
+        onShown(maxOf(ms, REMOVED_NOTICE_MS))
+        snackbar.showSnackbar(text, duration = SnackbarDuration.Indefinite)
+    }
+}
+
 @Composable
 private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePageActions, now: Instant) {
     val name = DeviceText.name(d)
@@ -179,7 +209,8 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = PILL_SPACE),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
-        if (d.isAgent && d.paused) PausedBanner(DeviceText.sentenceName(d), busy = state.busy, onResume = actions.onResume)
+        val acting = state.removedDevice == null
+        if (acting && d.isAgent && d.paused) PausedBanner(DeviceText.sentenceName(d), busy = state.busy, onResume = actions.onResume)
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
             InitialTile(
                 name = name,
@@ -203,9 +234,9 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
             )
         }
         state.failure?.let { f -> FailureNotice(state, f, DeviceText.sentenceName(d), actions.onDismissFailure) }
-        AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess)
-        if (d.isAgent) RulesCard(state, actions)
-        if (d.isAgent) PermissionsCard(state, actions)
+        AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess, acting = acting)
+        if (acting && d.isAgent) RulesCard(state, actions)
+        if (acting && d.isAgent) PermissionsCard(state, actions)
         DetailCard(Modifier.testTag("about_card")) {
             CardTitle(stringResource(R.string.devices_about))
             InfoLine(stringResource(R.string.devices_role), DeviceText.role(d))
@@ -267,11 +298,12 @@ private fun FailureNotice(state: DeviceUiState, f: DeviceFailure, name: String, 
 
 /** Access: its end and **End access**, or "No access" and how the device asks (§6.8); agents also read the rule. */
 @Composable
-private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: () -> Unit) {
+private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: () -> Unit, acting: Boolean = true) {
     DetailCard(Modifier.testTag("access_card")) {
         CardTitle(stringResource(R.string.devices_access))
         Text(DeviceText.access(d, now), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("access_status"))
-        if (d.actionable && d.hasAccess(now)) {
+        // Removed here ([acting] false): nothing to do or ask for.
+        if (acting && d.actionable && d.hasAccess(now)) {
             Spacer(Modifier.height(Spacing.m))
             SecondaryButton(
                 stringResource(UiR.string.devices_end_access),
@@ -279,7 +311,7 @@ private fun AccessCard(d: DeviceInfo, now: Instant, busy: Boolean, onEndAccess: 
                 enabled = !busy,
                 modifier = Modifier.testTag("end_access"),
             )
-        } else if (d.actionable) {
+        } else if (acting && d.actionable) {
             Spacer(Modifier.height(Spacing.xs))
             Text(
                 stringResource(if (d.isAgent) R.string.devices_no_access_agent else R.string.devices_no_access_desktop),

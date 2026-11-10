@@ -136,22 +136,22 @@
         <item quantity="other">%1$d minutes left</item>
     </plurals>
 
-    <!-- Pair a desktop (owner decision 2026-11-05, reversing ANDROID-PLAN decision 9). Every string in this block is NEW: not
-         in the plan, not yet approved. The agent's texts above are unchanged; these are the desktop's variants and the
-         chooser's. -->
-    <string name="devices_pair_new">Pair an agent or desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <!-- Pair a desktop (owner decision 2026-11-05, reversing ANDROID-PLAN decision 9). The desktop's variants and the
+         chooser's; the agent's texts above are unchanged. Eleven are owner-approved 2026-11-10 (GC #7195, #7212, as iOS);
+         the menu's two state texts are NEW: not in the plan, not yet approved. -->
+    <string name="devices_pair_new">Pair an agent or desktop</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
     <string name="devices_pair_menu_open">Menu open</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
     <string name="devices_pair_menu_closed">Menu closed</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="devices_empty_title_any">Nothing paired yet</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="devices_empty_body_any">Pair VettID on your computer, or pair an agent to let an AI assistant use items you choose. They act only while you allow access.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="devices_pair_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_title_desktop">Pair a desktop</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_code_body_desktop">Copy this code into VettID on your computer. It works once and expires in 10 minutes.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_compare_body_desktop">Does the desktop show %1$s? Approve only if the codes match.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_calls_itself_note_desktop">The code proves this phone talks to the desktop you just gave the code to. The name is only what the desktop says about itself.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_rejected_body_desktop">The desktop is told it was rejected. If you did not expect a code, someone else may have the pairing code; it no longer works.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_allow_body_desktop">A desktop acts only while you allow access.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
-    <string name="pair_paired_body_desktop">When it asks for access, the request comes to Approvals.</string> <!-- NEW: not in the plan (Pair a desktop, owner decision 2026-11-05) -->
+    <string name="devices_empty_title_any">Nothing paired yet</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="devices_empty_body_any">Pair VettID on your computer, or pair an agent to let an AI assistant use items you choose. They act only while you allow access.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="devices_pair_desktop">Pair a desktop</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_title_desktop">Pair a desktop</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_code_body_desktop">Copy this code into VettID on your computer. It works once and expires in 10 minutes.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_compare_body_desktop">Does the desktop show %1$s? Approve only if the codes match.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_calls_itself_note_desktop">The code proves this phone talks to the desktop you just gave the code to. The name is only what the desktop says about itself.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_rejected_body_desktop">The desktop is told it was rejected. If you did not expect a code, someone else may have the pairing code; it no longer works.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_allow_body_desktop">A desktop acts only while you allow access.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
+    <string name="pair_paired_body_desktop">When it asks for access, the request comes to Approvals.</string> <!-- Owner-approved 2026-11-10 (GC #7195, #7212) -->
 
     <!-- AA4, ANDROID-PLAN 0.1.116 §4 "What an agent may use: share rules": "draft" = the plan\'s text word for word, "new" = proposed here. -->
     <string name="devices_rules_title">What it may use</string> <!-- draft -->

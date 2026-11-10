@@ -145,12 +145,17 @@ object DeviceWire {
         // A body that does not read as a list of grants is the worst case, never "no permission".
     } ?: listOf(MAX_STATUS_TTL)
 
-    /** One grant's `status_ttl` in seconds: 60-3,600, 900 when absent, the longest when it does not read. */
+    /**
+     * One grant's `status_ttl` in seconds: 60-3,600, 900 when absent, the longest when it does not read (a string, an object,
+     * an array, null, not a whole number: owner decision a, GC #7047, as vettid-ios #239), so the removal text never says
+     * access ends sooner than it does.
+     */
     fun statusTtl(g: JsonObject): Long {
-        val ttl = g["status_ttl"] as? JsonPrimitive
+        val raw = g["status_ttl"]
+        val ttl = raw as? JsonPrimitive
         return when {
-            ttl == null -> DEFAULT_STATUS_TTL
-            ttl.isString -> MAX_STATUS_TTL
+            raw == null -> DEFAULT_STATUS_TTL
+            ttl == null || ttl.isString -> MAX_STATUS_TTL
             else -> ttl.longOrNull?.coerceIn(MIN_STATUS_TTL, MAX_STATUS_TTL) ?: MAX_STATUS_TTL
         }
     }
@@ -162,6 +167,8 @@ object DeviceWire {
     /** §10.11's revocation bound: `status_ttl` plus 60 s of skew. */
     const val SKEW_SECONDS = 60L
 }
+
+private val NO_READ_AGAIN: SharedFlow<Unit> = MutableSharedFlow()
 
 /** The vault calls behind [DevicesManager] (§10.3, §10.11), so that it can be tested without a vault. */
 interface DevicesOps {
@@ -229,6 +236,12 @@ interface DevicesRepository {
     suspend fun removalBoundSeconds(agentId: String): Long
 
     fun dismissRemoved()
+
+    /**
+     * (Owner decision a, GC #7047, as vettid-ios #239) Emits when the hold ended or a due daily check passed: an open
+     * device's page reads the list again (the hold cleared it), without holding anything that could pass the check.
+     */
+    val readAgain: SharedFlow<Unit> get() = NO_READ_AGAIN
 
     /**
      * An agent's grants that are not share rules, and whether it is paused (`leash.grant.list{agent_id}`, AA3), by agent id;
@@ -418,6 +431,15 @@ class DevicesManager(
             return DeviceWire.MAX_STATUS_TTL + DeviceWire.SKEW_SECONDS
         }
         return if (ttls.isEmpty()) 0 else ttls.max() + DeviceWire.SKEW_SECONDS
+    }
+
+    private val readAgainFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    override val readAgain: SharedFlow<Unit> = readAgainFlow.asSharedFlow()
+
+    /** The hold ended, or a due daily check passed (the vault's manager says so): open pages read the list again. */
+    fun checkCleared() {
+        readAgainFlow.tryEmit(Unit)
     }
 
     override fun dismissRemoved() {

@@ -91,8 +91,17 @@ data class ShareRule(
     val declined: List<String> = emptyList(),
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
-    /** An agent rule's `status_ttl` (60–3,600 s, §10.11); null for a connection rule or when not sent. */
+    /**
+     * An agent rule's `status_ttl` as sent (§10.11: 60–3,600 s), for the editor's draft: null for a connection rule, when not
+     * sent, or when it does not read as a whole number (the member then chooses); a value out of range stays out of range
+     * (an invalid draft), never wrapped.
+     */
     val statusTtl: Int? = null,
+    /**
+     * The same read for the delete text, at its worst (review Low 3, as `DeviceWire.statusTtl`): one that does not read is
+     * 3,600 s and any is clamped to 60–3,600 s, so the rule's last acceptance is never said to come sooner. Null when not sent.
+     */
+    val statusTtlBound: Int? = null,
 ) {
     /** Whether the rule is an agent's (subject `{agent_id}`, §10.12). */
     val forAgent: Boolean get() = agentId != null
