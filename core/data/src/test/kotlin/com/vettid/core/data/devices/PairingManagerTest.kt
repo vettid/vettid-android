@@ -796,6 +796,76 @@ class PairingManagerTest {
         assertEquals(listOf("create", "reject:pa"), ops.calls)
     }
 
+    /**
+     * (iOS #242 review, item 1) Leaving while the create is out: nothing is held, and its answer, when it arrives, is not shown
+     * but rejected (no live code without a screen).
+     */
+    @Test
+    fun leavingWhileTheCreateIsOutRejectsItsAnswer() = runTest {
+        val ops = Ops().also { both(it) }
+        val gate = CompletableDeferred<Unit>()
+        ops.holdNext = gate
+        val m = manager(ops)
+        val first = launch { m.start(PairRole.AGENT) }
+        pump { ops.held.isCompleted }
+        m.leave()
+        try {
+            pump(timeoutMs = 2_000) { m.state.value == PairingState() }
+        } finally {
+            gate.complete(Unit) // the create runs NonCancellable: never left waiting
+        }
+        pump { first.isCompleted && ops.calls.contains("reject:pa") }
+        assertEquals(PairingState(), m.state.value)
+        assertEquals(listOf("create", "reject:pa"), ops.calls)
+    }
+
+    /** (iOS #242 review, item 2) A late pending that arrives before the code's timer has run is taken up to a minute after its end. */
+    @Test
+    fun aLatePendingBeforeTheTimerRanIsTakenForAMinute() = runTest {
+        val m = manager(Ops())
+        m.start()
+        clock = clock.plusSeconds(630) // past the code's end, the timer not run yet (no time advanced)
+        assertTrue(m.state.value.stage is PairingStage.Code)
+        m.onEvent(pending())
+        assertEquals("123456", (m.state.value.stage as PairingStage.Compare).pending.sas)
+
+        val late = manager(Ops())
+        late.start()
+        clock = clock.plusSeconds(661)
+        late.onEvent(pending())
+        assertTrue("past the minute: dropped", late.state.value.stage is PairingStage.Code)
+    }
+
+    /** (iOS #242 review, item 3) "New code" after the code expired rejects the old pairing (a late handshake may still be live). */
+    @Test
+    fun aNewCodeAfterAnExpiredOneRejectsTheOld() = runTest {
+        // As the screen does it: the expired stage read, then a start.
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        clock = clock.plusSeconds(601)
+        advanceTimeBy(601_000)
+        ops.created = obj("""{"pairing_id":"p2","link":"${link(exp = clock.plusSeconds(600))}"}""")
+        m.acknowledge()
+        m.start()
+        runCurrent()
+        assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
+        assertEquals(listOf("create", "create", "reject:p1"), ops.calls.sorted()) // the reject goes in the manager's scope
+        // A start straight from the expired stage, or from a code past its end whose timer has not run: the same.
+        for (advance in listOf(true, false)) {
+            val o = Ops()
+            val n = manager(o)
+            n.start()
+            clock = clock.plusSeconds(601)
+            if (advance) advanceTimeBy(601_000)
+            o.created = obj("""{"pairing_id":"p3","link":"${link(exp = clock.plusSeconds(600))}"}""")
+            n.start()
+            runCurrent()
+            assertEquals("$advance", "p3", (n.state.value.stage as PairingStage.Code).code.pairingId)
+            assertTrue("$advance", "reject:p1" in o.calls)
+        }
+    }
+
     @Test
     fun anApprovalInFlightIsNotSwitchedByTheOtherButton() = runTest {
         val ops = Ops().also { both(it) }

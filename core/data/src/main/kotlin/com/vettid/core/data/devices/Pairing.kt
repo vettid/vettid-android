@@ -285,7 +285,9 @@ class PairingManager(
 
     /** Whether [stage] is the pairing [id] this phone made and still takes the device's answer at [at]. */
     private fun ours(stage: PairingStage, id: String, at: Instant): Boolean = when (stage) {
-        is PairingStage.Code -> stage.code.pairingId == id && stage.code.exp.isAfter(at)
+        // (iOS #242 review) Up to a minute after the code's end also while the code timer has not run yet: the same late
+        // answer [PairingStage.CodeExpired] takes.
+        is PairingStage.Code -> stage.code.pairingId == id && !at.isAfter(stage.code.exp.plus(PairingStage.CodeExpired.LATE))
         is PairingStage.CodeExpired -> stage.pairingId == id && !at.isAfter(stage.exp.plus(PairingStage.CodeExpired.LATE))
         else -> false
     }
@@ -326,11 +328,15 @@ class PairingManager(
                     is PairingStage.Compare -> st.pending.pairingId
                     else -> null
                 }
-                generation++
             } else {
                 if (s.busy || s.stage is PairingStage.Creating || s.stage is PairingStage.Compare) return
                 if (s.stage is PairingStage.Code && s.stage.code.exp.isAfter(now())) return
+                // (iOS #242 review) "New code" after the code ended: its pairing may still take a late handshake, so the
+                // vault is told it is not wanted, as for the other role.
+                replaced = heldId(s.stage)
             }
+            // Every start is a new generation (iOS #242 review): nothing of an earlier start's request or timer applies.
+            generation++
             gen = generation
             timer?.cancel()
             this.role = wanted
@@ -545,7 +551,16 @@ class PairingManager(
                 // A late handshake of the expired code may still be live: the vault is told this one is not wanted.
                 is PairingStage.CodeExpired -> st.pairingId
                 else -> {
-                    if (!s.busy) flow.value = PairingState()
+                    // (iOS #242 review) Leaving while the create is out: a new generation, so that its answer is dropped and
+                    // rejected when it arrives (as for any dropped create), and nothing is held.
+                    if (st is PairingStage.Creating) {
+                        generation++
+                        timer?.cancel()
+                        timer = null
+                        flow.value = PairingState()
+                    } else if (!s.busy) {
+                        flow.value = PairingState()
+                    }
                     return
                 }
             }
@@ -565,9 +580,14 @@ class PairingManager(
         synchronized(lock) {
             val s = flow.value
             if (s.busy) return
-            when (s.stage) {
-                is PairingStage.Rejected, is PairingStage.Paired, PairingStage.Ended, PairingStage.CodeExpired ->
+            when (val st = s.stage) {
+                is PairingStage.Rejected, is PairingStage.Paired, PairingStage.Ended -> flow.update { PairingState() }
+                // (iOS #242 review) An expired code's pairing may still take a late handshake: the vault is told it is not
+                // wanted ("New code" reads the expired stage first).
+                is PairingStage.CodeExpired -> {
                     flow.update { PairingState() }
+                    scope.launch { sendReject(st.pairingId) }
+                }
                 PairingStage.Idle -> if (s.error != null) flow.value = PairingState()
                 // The daily check passed: the refused approval may be sent again for the same comparison.
                 is PairingStage.Compare -> if (s.error != null) flow.value = PairingState(s.stage)
