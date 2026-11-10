@@ -598,7 +598,7 @@ class PairingManagerTest {
         try {
             pump { ops.approveEntered.isCompleted }
             m.leave(screen)
-            pump { true }
+            runCurrent() // the leave's cancel runs now
             assertTrue("the approval is out: nothing changes yet", m.state.value.busy)
         } finally {
             gate.complete(Unit)
@@ -606,8 +606,8 @@ class PairingManagerTest {
         approval.join()
         pump { "reject:p1" in ops.calls }
         assertEquals(PairingState(), m.state.value)
-        // The next screen's pairing starts afresh: its refused approval keeps its comparison.
-        m.start(PairRole.AGENT, Any())
+        // The next pairing starts afresh (also one started with no screen named): its refused approval keeps its comparison.
+        m.start()
         m.onEvent(pending())
         m.approve(3600)
         assertTrue("a new start forgets the earlier screen's leaving", m.state.value.stage is PairingStage.Compare)
@@ -617,6 +617,70 @@ class PairingManagerTest {
         kept.onEvent(pending())
         kept.approve(3600)
         assertTrue(kept.state.value.stage is PairingStage.Compare)
+    }
+
+    /**
+     * (Re-check nit 1) A screen that takes the busy comparison over (a start that keeps it, or a claim) is there: a refusal of
+     * the approval then keeps the comparison for another try, whatever the earlier screen did.
+     */
+    @Test
+    fun aScreenThatTakesTheComparisonOverKeepsItAfterTheEarlierOneLeft() = runTest {
+        for (byClaim in listOf(false, true)) {
+            val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
+            val gate = CompletableDeferred<Unit>()
+            ops.holdApprove = gate
+            val m = manager(ops)
+            val a = Any()
+            m.start(PairRole.AGENT, a)
+            m.onEvent(pending())
+            val approval = launch { m.approve(3600) }
+            try {
+                pump { ops.approveEntered.isCompleted }
+                m.leave(a)
+                runCurrent() // the leave's cancel runs now
+                assertTrue("$byClaim: still busy", m.state.value.busy)
+                val b = Any()
+                if (byClaim) m.claim(b) else m.start(PairRole.AGENT, b) // kept: the comparison is busy
+            } finally {
+                gate.complete(Unit)
+            }
+            approval.join()
+            runCurrent()
+            assertTrue("$byClaim: kept for another try", m.state.value.stage is PairingStage.Compare)
+            assertFalse("$byClaim", "reject:p1" in ops.calls)
+        }
+    }
+
+    /**
+     * (Re-check nit 2) The screen left during the approval and the answer was lost: the vault may have taken it, so it is not
+     * rejected; it ends with the outcome unknown, as before.
+     */
+    @Test
+    fun aLostAnswerAfterTheScreenLeftIsNotRejected() = runTest {
+        val ops = Ops()
+        val gate = CompletableDeferred<Unit>()
+        ops.holdApprove = gate
+        val m = PairingManager(this, ops = { ops }, now = { clock }, knownDeviceIds = { setOf("me") }, readDevices = { emptyList() })
+        ops.onApprove = { throw java.io.IOException("lost") }
+        val a = Any()
+        m.start(PairRole.AGENT, a)
+        m.onEvent(pending())
+        val approval = launch { m.approve(3600) }
+        try {
+            pump { ops.approveEntered.isCompleted }
+            m.leave(a)
+            runCurrent() // the leave's cancel runs now
+        } finally {
+            gate.complete(Unit)
+        }
+        pump {
+            advanceTimeBy(500) // through the search for the device (none found)
+            !m.state.value.busy
+        }
+        approval.join()
+        assertFalse("not rejected", "reject:p1" in ops.calls)
+        assertEquals(PairingStage.Ended, m.state.value.stage)
+        assertTrue(m.state.value.unknownOutcome)
     }
 
     @Test

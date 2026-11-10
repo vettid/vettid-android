@@ -256,7 +256,11 @@ class PairingManager(
     private fun mayAct(by: Any?): Boolean = by == null || owner === by
 
     override fun claim(owner: Any) {
-        synchronized(lock) { this.owner = owner }
+        synchronized(lock) {
+            // A screen that takes the pairing over is there: the earlier one's leaving no longer decides it (re-check nit 1).
+            this.owner = owner
+            ownerLeft = false
+        }
     }
 
     /** What the pairing in hand is for; every state is stamped with it. */
@@ -361,7 +365,11 @@ class PairingManager(
         var replaced: String? = null
         synchronized(lock) {
             // From here what is held is this screen's, also a pairing kept below (a live code, a comparison) that it shows.
-            if (owner != null) this.owner = owner
+            if (owner != null) {
+                this.owner = owner
+                // Also for a pairing kept below (a busy comparison taken over): this screen is there.
+                ownerLeft = false
+            }
             val s = flow.value
             if (s.stage !is PairingStage.Idle && this.role != wanted) {
                 // The other button: the held pairing is rejected and replaced in one step, so no state of it is left behind. An
@@ -537,7 +545,8 @@ class PairingManager(
             }
             timer?.cancel()
             timer = null
-            if (ownerLeft) {
+            // A definite refusal only: when there was no answer at all the vault may have taken it, which the ending below says.
+            if (ownerLeft && !unknown) {
                 // Its screen is gone: nothing is held, and the vault is told the pairing is not wanted.
                 flow.value = PairingState()
                 scope.launch { sendReject(p.pairingId) }
