@@ -3,6 +3,7 @@ package com.vettid.core.crypto.envelope
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.json.asString
 import java.time.Duration
 import java.time.Instant
 
@@ -22,7 +23,7 @@ data class InnerError(val code: String, val message: String = "")
 
 /**
  * The inner plaintext (§5.3). Marshalling writes members in the order
- * v, id, type, ts, seq, re, exp, status, error, body, exactly as the Go
+ * v, id, type, ts, seq, re, exp, status, error, features, body, exactly as the Go
  * reference does; parsing is strict (unknown members ignored, known members
  * exactly typed, duplicate names rejected at any depth).
  */
@@ -40,9 +41,15 @@ class Inner(
     val error: InnerError? = null,
     /** The body object's JSON (`{}` when empty). */
     val body: ByteArray = EMPTY_BODY,
+    /**
+     * (0.86.0, §5.3, §10.8) The sender's capability names as it advertises them to this recipient: sorted, each once,
+     * each `[a-z0-9_]{1,32}`, 1 to [MAX_FEATURES]; null when the member is absent (nothing is written). Last here so
+     * that a positional caller is unchanged; on the wire it sits between `error` and `body`.
+     */
+    val features: List<String>? = null,
 ) {
     /** A copy with [seq] set (sealing in an epoch assigns it). */
-    fun withSeq(seq: Long): Inner = Inner(id, type, ts, seq, re, exp, status, error, body)
+    fun withSeq(seq: Long): Inner = Inner(id, type, ts, seq, re, exp, status, error, body, features)
 
     @Suppress("CyclomaticComplexMethod")
     internal fun validate(mode: Mode) {
@@ -65,6 +72,7 @@ class Inner(
                 throw CryptoException.Format("inner error")
             }
         }
+        if (features != null && !validFeatures(features)) throw CryptoException.Format("inner features")
     }
 
     /** Encodes the inner plaintext as compact JSON. */
@@ -85,6 +93,7 @@ class Inner(
             if (it.message.isNotEmpty()) eb.string("message", it.message)
             jb.raw("error", eb.build())
         }
+        features?.let { f -> jb.raw("features", JsonBuilder.array(f.map { JsonBuilder.quote(it) })) }
         jb.raw("body", b)
         return jb.bytes()
     }
@@ -111,6 +120,25 @@ class Inner(
         val MAX_CLOCK_SKEW_FUTURE: Duration = Duration.ofMinutes(5)
         val MAX_DURABLE_AGE: Duration = Duration.ofDays(16)
         internal val EMPTY_BODY = "{}".toByteArray()
+
+        /** The bound on the inner `features` list (as `device.features` is bounded, §10.2; Go `envelope.MaxFeatures`). */
+        const val MAX_FEATURES = 32
+        private const val MAX_FEATURE_LEN = 32
+
+        /**
+         * Whether [names] is a well-formed `features` list (§5.3): 1 to [MAX_FEATURES] names, in ascending byte order,
+         * each once, each `[a-z0-9_]{1,32}` (Go `envelope.ValidFeatures`).
+         */
+        fun validFeatures(names: List<String>): Boolean {
+            if (names.isEmpty() || names.size > MAX_FEATURES) return false
+            for ((i, n) in names.withIndex()) {
+                if (n.isEmpty() || n.length > MAX_FEATURE_LEN) return false
+                if (!n.all { c -> c in 'a'..'z' || c in '0'..'9' || c == '_' }) return false
+                // ASCII only (checked above), so the string order is the byte order; strictly ascending: sorted and unique.
+                if (i > 0 && names[i - 1] >= n) return false
+            }
+            return true
+        }
 
         /** `[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*`, at most 64 bytes. */
         fun validType(s: String): Boolean {
@@ -150,8 +178,10 @@ class Inner(
             val status = o.optString("status")
             if (status != null && status.isEmpty()) throw CryptoException.Format("inner status")
             val error = o.optObj("error")?.let { InnerError(it.string("code"), it.optString("message") ?: "") }
+            // 0.86.0 (§5.3): a known member, so its form is checked (validate).
+            val features = o.optArray("features")?.map { it.asString() }
             val body = o.obj("body").rawBytes()
-            val inner = Inner(id, type, ts, seq ?: 0, re, exp, status, error, body)
+            val inner = Inner(id, type, ts, seq ?: 0, re, exp, status, error, body, features)
             inner.validate(mode)
             return inner
         }
