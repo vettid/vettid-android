@@ -542,6 +542,12 @@ interface MoveRepository {
     suspend fun transferIn(code: String): String
 
     /**
+     * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5) Whether [code] is the open transfer's own code (the same relay and claim id,
+     * whatever its `exp`): asked before a code is refused as expired, since [transferIn] then returns that move as it stands.
+     */
+    suspend fun isOpenTransferCode(code: String): Boolean = false
+
+    /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
      * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for the settlement
@@ -677,5 +683,8 @@ interface MoveRepository {
          * new code and the member's abandon are refused until it ends ([FailureKind.BUSY]); the screen does not offer them.
          */
         const val CODE_TRANSFER_SETTLING = "transfer_settling"
+
+        /** The open transfer could not be dropped for a new code (its device file could not be cleared): nothing changed. */
+        const val CODE_TRANSFER_NOT_DROPPED = "transfer_not_dropped"
     }
 }

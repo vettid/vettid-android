@@ -97,6 +97,17 @@ object InviteLinks {
         }
     }
 
+    /**
+     * A transfer code's link whatever its `exp` (null when [text] is not one): the same-code compare of VAULT-MESSAGING
+     * 0.88.3 §11.14.10 rule 5 uses the payload's `r` and `c` alone, so the open transfer's own code is recognised after
+     * its 10 minutes too (the transfer stays open longer: the deadline and the window).
+     */
+    fun transferLinkAnyExp(text: String): String? {
+        val t = text.trim()
+        val q = if (t.isEmpty()) null else candidates(t).firstNotNullOfOrNull { decode(it) }
+        return q?.takeIf { it.kind == InviteKind.APP }?.link()
+    }
+
     fun parse(text: String, now: Instant = Instant.now()): Parsed {
         val t = text.trim()
         val q = if (t.isEmpty()) null else candidates(t).firstNotNullOfOrNull { decode(it) }

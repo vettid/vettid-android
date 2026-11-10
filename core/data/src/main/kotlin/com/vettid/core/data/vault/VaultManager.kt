@@ -499,19 +499,18 @@ class VaultManager(
                 if (!local.transferIn) io { updateLocal(rec) { it.copy(transferIn = true) } }
                 // Release R (§11.14.10): this phone's key and its secret of epoch 1 go in the hs.init. The vault id is not
                 // known yet: the key and the secret are made for "" (as vettid-vault's reference client does).
-                // Stored before the hs.init is sent; a retry reuses the key. §11.10.9: only when the bundle lists `recovery_r`.
-                d.startTransfer(link, attester()) { traits ->
+                // Stored before the hs.init is sent, and NEW at every scan ([newTransferPhoneKey]): a scan is never a retry of
+                // an earlier request. §11.10.9: only when the bundle lists `recovery_r`.
+                // The attested key is named with the transfer, so that a drop deletes it with the epoch-1 secret.
+                val att = attester()
+                d.startTransfer(link, att, attestedKey = { att.made }) { traits ->
                     val r = choosePath(traits, makesPhoneKey = true, rec) == ReleasePath.Path.R
-                    if (r) phoneSecrets.secret(keepPhoneKey("", rec)) else null
+                    if (r) phoneSecrets.secret(newTransferPhoneKey(rec)) else null
                 }
-                try {
-                    // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
-                    withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
-                } catch (e: TimeoutCancellationException) {
-                    d.abandonTransfer()
-                    throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
-                }
+                awaitTransferSas(d)
             }
+
+            private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = this@VaultManager.awaitTransferSas(d)
 
             override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
                 // (0.1.78) Undecided: a new code only reuses K (the claim, the earlier open's slot, a new identity), or is refused.
@@ -1409,6 +1408,25 @@ class VaultManager(
     /** The phone keys of release R (§11.14.1): the Keystore's, one per vault this phone holds. */
     private val phoneSecrets = PhoneSecrets { com.vettid.core.keystore.PhoneKey(it) }
 
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5) What a dropped transfer to this phone leaves goes: the device of identity
+     * [slot] calls this ([DeviceConfig.transferDropped]) under its lock after every device-level drop of an unpaired
+     * transfer, so it never races the next scan's [keepPhoneKey], which runs under the same lock. See [TransferKeyDrop].
+     */
+    private fun transferKeyDrop(slot: Int) = TransferKeyDrop(
+        phoneSecrets = phoneSecrets,
+        phone = { local.phone },
+        // UNBOUND: the phone key is the phone's, whatever record is current; written only if it still says ("", 1).
+        resetPhone = {
+            record.update(RecordStore.UNBOUND, TransferKeyDrop::resetRecord)
+        },
+        removeAttestKeys = { aliases ->
+            slots.attestation.remove(slot, aliases)
+            slots.attestation.candidates(slot).map { it.alias }.filter { it in aliases }
+        },
+        log = { android.util.Log.w("VaultManager", "transfer dropped: $it") },
+    )
+
     init {
         // A lock that was pending when the process ended: locked here from the start, and tried again at once
         // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver, the pending
@@ -1468,11 +1486,20 @@ class VaultManager(
                 for (k in KeySlot.entries) if (!keys.has(k)) keys.generate(k)
                 val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
                 val store = KeystoreFileStore(slots.file(slot), "vault-device")
+                val drops = transferKeyDrop(slot)
                 val cfg = DeviceConfig(
                     name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust,
                     elapsedMs = { android.os.SystemClock.elapsedRealtime() },
+                    transferDropped = drops::dropped,
                 )
                 val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
+                // What a dropped transfer left (a drop whose delete did not hold, a process killed between the drop and the
+                // delete, a build before this one), before anything can scan: [VaultDevice.settleTransferKeysAtStart].
+                // The orphan sweep only while the phone holds no vault: the ("", 1) record and key are the phone's, not the
+                // device's, so a fresh device in another slot must not delete a transferred vault's unlock key.
+                device.settleTransferKeysAtStart(
+                    sweep = !local.setupComplete && synchronized(liveDevices) { liveDevices.none { it.deviceId != null } },
+                )
                 liveDevices += device
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
@@ -2602,6 +2629,29 @@ class VaultManager(
      * this phone already holds for it when the earlier try never got that far ([PhoneSecrets.reuseOrCreate]), a new
      * one otherwise.
      */
+    /**
+     * (VAULT-MESSAGING §11.14.10 rule 2, §6.7.1) A transfer scan's phone key: always a NEW key, stored before the `hs.init`
+     * is sent; never [keepPhoneKey]'s reuse. Rule 2 allows reuse only for a retry of the same request, and a transfer
+     * has none on Android: [com.vettid.core.vault.VaultDevice.startTransfer] is called only from `transferIn` (one call
+     * per scan), each call builds a new initiator (a new `hs.init` id and ephemeral key) and deposits it once
+     * (`VaultDevice.startInit`), `hs.init` is never put in the outbox (`OUTBOX_TYPES`), and the initiator is held in memory
+     * only, so after a restart or a failed deposit nothing can answer the earlier `hs.init`'s `hs.resp` anyway. Reusing the
+     * key would send the SAME epoch-1 secret to whichever vault the next QR names (another vault's included): a hostile
+     * first QR would learn the secret this phone later presents to the member's real vault. Called under the device's lock
+     * (`startTransfer`'s `unlockSecretFor`), which [TransferKeyDrop] also holds. [PhoneKey.create] replaces the alias.
+     */
+    private fun newTransferPhoneKey(since: Int): PhoneSecretState {
+        val phone = phoneSecrets.create(TransferKeyDrop.TRANSFER_KEY_VAULT)
+        updateLocal(since) { it.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch) }
+        return phone
+    }
+
+    /**
+     * The phone key of an enrollment's request ([keyVault] = the vault id), reused on a retry of THAT request: the
+     * enrollment's post is stored ([com.vettid.core.vault.VaultDevice.pendingEnroll]) and resumed, never posted over, so a
+     * lost answer or a crash re-sends the same request, and the vault may already hold its secret (§11.14.10 rule 2). Not
+     * for a transfer ([newTransferPhoneKey]).
+     */
     private fun keepPhoneKey(keyVault: String, since: Int): PhoneSecretState {
         val phone = phoneSecrets.reuseOrCreate(local.phone, keyVault)
         if (phone != local.phone) updateLocal(since) { it.copy(phoneKeyVault = phone.keyVault, phoneEpoch = phone.epoch) }
@@ -3368,6 +3418,23 @@ class VaultManager(
     private fun transferPinned(d: VaultDevice) =
         settlements.active || TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now())
 
+    /**
+     * (The blind reviews of #334, Fable M1: iOS #233's Medium on the app's real path) A new code over an open transfer
+     * forgets the device first, alone, before any key goes: if that fails, the device file still holds the transfer, which
+     * the old phone may still approve. Then nothing else is deleted: the session is dropped without forgetting (the next
+     * one reloads the file, the open transfer included) and the scan stops, with nothing changed and nothing sent.
+     */
+    @Suppress("TooGenericExceptionCaught") // whatever the forget threw: the scan stops
+    private suspend fun forgetOpenTransferOrStop(d: VaultDevice) {
+        try {
+            d.forget()
+        } catch (e: Exception) {
+            runCatching { dropSession(forget = false) }
+            // The phone's storage, not the move: the existing local-state text (no new text), its own code (review N4).
+            throw VaultFailure(FailureKind.LOCAL_STATE, MoveRepository.CODE_TRANSFER_NOT_DROPPED, cause = e)
+        }
+    }
+
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
     private suspend fun freshDeviceIfUnpaired() {
         // (0.1.78) K is never forgotten while an open's answer is unknown.
@@ -3378,7 +3445,12 @@ class VaultManager(
         if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
         val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
-        if (d.deviceId == null && stale) dropSession(forget = true) else retireOtherDevices()
+        if (d.deviceId == null && stale) {
+            if (d.transferInPending != null) forgetOpenTransferOrStop(d)
+            dropSession(forget = true)
+        } else {
+            retireOtherDevices()
+        }
     }
 
     override suspend fun recoveryStage(): RecoveryStage = guard {
@@ -4260,9 +4332,54 @@ class VaultManager(
     private var openTransferId: String? = null
 
     override suspend fun transferIn(code: String): String {
+        // (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5, owner decision a, GC #6474) A scan of the open transfer's own code (the
+        // same relay `r` and claim id `c`) is refused before anything else, the window's and the deadline's refusals
+        // included: nothing is fetched, dropped or sent, and the member is back on that move's screen as it stands. A
+        // different code is handled as before.
+        sameTransferCode(code)?.let { return it }
         // One transfer and one window at a time: a new code only after the settlement window ended.
         if (settlements.active) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         return enrolments.transferIn(code)
+    }
+
+    /**
+     * The open transfer's SAS when [code] is its own code (see [transferIn]), else null. The move as it stands, from its
+     * stored state: nothing is fetched, sent or dropped, whatever happens (0.88.3 §11.14.10 rule 5; the review of 1cfdc080,
+     * H1: never an abandon here). Its `hs.resp` not yet in: the wait for it, until 60 s after the transfer's stored start,
+     * ending with "not answered" and nothing dropped; a scan of it still in flight that ends without a transfer: null, so this
+     * scan is handled as a scan of its own (M1).
+     */
+    override suspend fun isOpenTransferCode(code: String): Boolean = guard {
+        val link = InviteLinks.transferLinkAnyExp(code) ?: return@guard false
+        val d = session().device
+        d.deviceId == null && d.isOpenTransferCode(link)
+    }
+
+    private suspend fun sameTransferCode(code: String): String? = guard {
+        // The payload's r and c alone, whatever its exp (review of #334, item 1).
+        val link = InviteLinks.transferLinkAnyExp(code) ?: return@guard null
+        val d = session().device // opened if it is not yet (L1)
+        if (d.deviceId != null || !d.isOpenTransferCode(link)) return@guard null
+        val deadline = (d.transferInPending?.startedAt ?: Instant.now()).plusMillis(MoveRepository.HS_RESP_WAIT_MS)
+        while (true) {
+            d.transferInPending?.sas?.let { return@guard it } // the record's, also after a restart
+            d.pairingSas.value?.let { return@guard it }
+            if (!d.isOpenTransferCode(link)) return@guard null
+            if (!Instant.now().isBefore(deadline)) {
+                throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED)
+            }
+            kotlinx.coroutines.delay(SAME_CODE_POLL_MS)
+        }
+        @Suppress("UNREACHABLE_CODE")
+        null
+    }
+
+    /** The transfer's SAS once its `hs.resp` arrived (the compare screen); §6.7.1 step 2 (0.10.6): 60 s, then "not answered". */
+    private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {
+        withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
+    } catch (e: TimeoutCancellationException) {
+        d.abandonTransfer()
+        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
     }
 
     override suspend fun awaitTransferIn(): Boolean = guard {
@@ -4903,6 +5020,8 @@ class VaultManager(
     }
 
     companion object {
+        /** How often a same-code re-scan looks at the open transfer while its `hs.resp` is not in. */
+        private const val SAME_CODE_POLL_MS = 250L
         /** The lock record's seal: the app's Keystore file key, purpose `lock-record`. */
         private fun lockSealer(file: File): LockRecordFile.Sealer {
             val store = KeystoreFileStore(file, "lock-record")

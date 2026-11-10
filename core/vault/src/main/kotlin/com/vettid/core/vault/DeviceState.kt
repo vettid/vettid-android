@@ -72,7 +72,35 @@ internal data class DeviceState(
      * that arrives after a restart, or after the screen stopped waiting, still completes the transfer.
      */
     var transferIn: TransferInRecord? = null,
+    /**
+     * A transfer to this phone was dropped while unpaired (every device-level drop records it in [VaultDevice.dropPairing])
+     * and the app has not yet deleted what it held for that transfer: the epoch-1 phone secret and the attested key
+     * (VAULT-MESSAGING §6.7.1, §11.14.10 rule 5; [DeviceConfig.transferDropped]). Saved in the same write as the drop, so a
+     * process killed between the drop and the app's delete runs the delete again: at the next handled message, and at the
+     * latest before the next scan computes any secret ([VaultDevice.startTransfer]). Null once the app's delete held.
+     */
+    var droppedTransfer: DroppedTransferRecord? = null,
+    /**
+     * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5, "A second scan of the same code"; owner decision a, GC #6474) The code a
+     * scan to this phone is under way for, from before its claim is fetched until its transfer is recorded
+     * ([transferIn], which then carries the code) or the scan fails (a fetch or payload check that fails, an `hs.init`
+     * not sent): a scan of the same code meanwhile is refused. Cleared at load: a scan the process's end cut off recorded
+     * no transfer, so nothing would be there to go back to.
+     */
+    var scanCode: TransferCodeRecord? = null,
 )
+
+/** A scanned transfer code's relay `r` and claim id `c` ([DeviceState.scanCode]). */
+@Serializable
+internal data class TransferCodeRecord(val relay: String, val claim: String)
+
+/**
+ * What a dropped transfer left for the app to delete ([DeviceState.droppedTransfer]): the Keystore aliases of the device
+ * attestation keys its `hs.init`s carried ([TransferInRecord.attestKey]; empty when the app named none). The phone key is
+ * not named: the app holds it, and only for a transfer ([DeviceConfig.transferDropped]).
+ */
+@Serializable
+internal data class DroppedTransferRecord(val attestKeys: List<String> = emptyList())
 
 /**
  * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
@@ -85,6 +113,18 @@ internal data class TransferInRecord(
     val sas: String? = null,
     val paired: Boolean = false,
     val userGuid: String? = null,
+    /**
+     * The Keystore alias of the device attestation key this transfer's `hs.init` carried, as the app named it
+     * ([VaultDevice.startTransfer]'s `attestedKey`); null when it named none. Deleted with the transfer when it is dropped.
+     */
+    val attestKey: String? = null,
+    /**
+     * The scanned code's relay `r` and claim id `c` (owner decision a, GC #6474; vettid.org#558): a scan of the same code
+     * while this transfer is open is refused before the claim fetch and before any drop. Written with the transfer
+     * itself, so a restart that finds the transfer finds them too; null in a record written before them.
+     */
+    val codeRelay: String? = null,
+    val codeClaim: String? = null,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

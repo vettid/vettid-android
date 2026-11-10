@@ -52,7 +52,7 @@ import java.time.Instant
  * every call is recorded in [calls]; [fail] makes the next calls of a name
  * throw; the unlock outcomes are scripted in [unlockResults].
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass") // TEST ONLY: one fake for every repository the ViewModels use
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
@@ -663,6 +663,14 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPassword = password
         if (recoverOutcome == RecoverOutcome.RECOVERED) phase.value = AppPhase.Setup(SetupStage.FINISHING)
         return recoverOutcome
+    }
+
+    /** The code [isOpenTransferCode] recognises as the open transfer's own (whatever its exp); null: none. */
+    var openTransferCode: String? = null
+
+    override suspend fun isOpenTransferCode(code: String): Boolean {
+        call("isOpenTransferCode")
+        return code == openTransferCode
     }
 
     override suspend fun transferIn(code: String): String {
