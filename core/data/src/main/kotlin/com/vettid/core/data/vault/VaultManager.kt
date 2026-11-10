@@ -3482,7 +3482,8 @@ class VaultManager(
         // recovery and no new code may forget it ("+C+").
         if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
-        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null
+        // (#335's re-check) A device stopped by a drop it could not save is stale too: dropped through the guard.
+        val stale = d.hasVault || d.vaultId != null || d.pendingEnroll != null || d.stopped
         if (d.deviceId == null && stale) {
             // An open transfer is forgotten alone first; if that fails, nothing else goes ([dropSession]).
             dropSession(forget = true)
@@ -4417,8 +4418,16 @@ class VaultManager(
     private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {
         withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
     } catch (e: TimeoutCancellationException) {
-        d.abandonTransfer()
-        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
+        // "Not answered" whatever the drop's save did (#335's re-check, Opus L2): its failure is the cause, not the screen.
+        val dropped = try {
+            d.abandonTransfer()
+            null
+        } catch (c: CancellationException) {
+            throw c
+        } catch (@Suppress("TooGenericExceptionCaught") x: Exception) {
+            x
+        }
+        throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = dropped ?: e)
     }
 
     override suspend fun awaitTransferIn(): Boolean = guard {

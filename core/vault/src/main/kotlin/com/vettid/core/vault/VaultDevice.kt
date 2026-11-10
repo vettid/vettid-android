@@ -586,6 +586,8 @@ class VaultDevice private constructor(
     @Synchronized
     @Suppress("TooGenericExceptionCaught") // whatever ends the collection is reported in collectionEnded
     fun start(scope: CoroutineScope): Job {
+        // (#335's re-check, Fable L5) A forgotten device collects nothing: its [handle] would ack every message unread.
+        if (forgotten) return Job().apply { complete() }
         collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
@@ -1346,6 +1348,12 @@ class VaultDevice private constructor(
             throw VaultStateException("the open transfer could not be dropped: this device was stopped").also { it.initCause(e) }
         }
     }
+
+    /**
+     * (#335's re-check) This device was stopped (forgotten, or a drop it could not save): it saves, sends and collects
+     * nothing more, so a new scan starts from a fresh device ([forgetIfTransferOpen] guarding the file it leaves).
+     */
+    val stopped: Boolean get() = forgotten
 
     /** A transfer's drop could not be saved ([saveDropOrStop]): the file still holds it, whatever memory says. */
     @Volatile private var dropNotSaved = false

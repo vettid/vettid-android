@@ -2040,6 +2040,35 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (#335's re-check) A device stopped by a drop it could not save says so ([VaultDevice.stopped], so the app drops it
+     * through the guard before a new scan) and never collects again (Fable L5: its handle would ack every message unread).
+     */
+    @Test
+    fun aDeviceStoppedByAnUnsavedDropSaysSoAndNeverCollects() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var failSave = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (failSave) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val d = VaultDevice.create(config(store), appSecrets())
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester())
+            nextDeposit()
+            assertFalse(d.stopped)
+            failSave = true
+            assertTrue("the drop fails", runCatching { d.abandonTransfer() }.isFailure)
+            assertTrue("stopped", d.stopped)
+            val job = d.start(this)
+            assertTrue("no collection started", job.isCompleted)
+        }
+    }
+
     /** (The blind reviews of #335, Fable L1) The guard is decided under the device's lock: nothing open, nothing forgotten. */
     @Test
     fun forgetIfTransferOpenForgetsOnlyAnOpenTransfer() = runBlocking<Unit> {
