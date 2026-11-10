@@ -372,6 +372,12 @@ class TransferInSettleFollowUpTest {
         assertEquals(listOf(185_000L, 280_000L), finals)
     }
 
+    /** (#336 re-check) The device's settlement collect is bounded by the window's own transport bound. */
+    @Test
+    fun theDevicesSettleTransportIsTheWindows() {
+        assertEquals(TransferInResume.DEADLINE_COLLECT_MS, com.vettid.core.vault.VaultDevice.SETTLE_TRANSPORT.toMillis())
+    }
+
     /**
      * (#336 review, item 1) The same for a last collect whose 200 answer was over the client's bound
      * ([RelayClient.AnswerTooLarge]): the relay answered, so the batch may be leased.

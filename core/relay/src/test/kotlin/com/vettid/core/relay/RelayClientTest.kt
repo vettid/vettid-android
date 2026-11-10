@@ -209,6 +209,21 @@ class RelayClientTest {
         assertEquals(1, lost)
     }
 
+    /** (#336 re-check) register()'s answer is read with the bound too. */
+    @Test
+    fun aRegisterAnswerOverItsBoundIsALostAttempt() = runBlocking<Unit> {
+        server.enqueue(json(201, """{"mailbox_id":"${"m".repeat((1 shl 20) + 1)}"}"""))
+        assertThrows(RelayClient.AnswerTooLarge::class.java) { runBlocking { bounded(callMs = 60_000).register() } }
+    }
+
+    /** (#336 re-check) A negative `Retry-After` header is no wait either. */
+    @Test
+    fun aNegativeRetryAfterHeaderIsNoWait() = runBlocking<Unit> {
+        server.enqueue(MockResponse.Builder().code(503).addHeader("Retry-After", "-7").body("busy").build())
+        val e = assertThrows(RelayException::class.java) { runBlocking { bounded(callMs = 60_000).ack("x") } }
+        assertEquals(0, e.retryAfterSeconds)
+    }
+
     /** A collect's batch over the 1 MiB of other answers is read (a 1 MiB bound on a collect would fail this). */
     @Test
     fun aLargeCollectIsRead() = runBlocking<Unit> {

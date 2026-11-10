@@ -1448,11 +1448,11 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended. [callTimeout] bounds each attempt, the body read
      * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4).
      */
-    suspend fun collectOnce(wait: Duration = Duration.ZERO, callTimeout: Duration? = null): Int {
+    suspend fun collectOnce(wait: Duration = Duration.ZERO, callTimeout: Duration? = null, max: Int = Int.MAX_VALUE): Int {
         if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
-            wait, Int.MAX_VALUE,
+            wait, max,
             onLostAttempt = { noteCut(attemptSent.get(), wait.toMillis()) },
             onSent = {
                 val at = cfg.elapsedMs()
@@ -1471,6 +1471,14 @@ class VaultDevice private constructor(
         }
         return msgs.size
     }
+
+    /**
+     * The transfer's settlement window's collect ([collectOnce]): a batch of at most [SETTLE_COLLECT_MAX] (so a backlog on a
+     * slow link still arrives within the bound; the rest is left for the next look), each attempt within its wait +
+     * [transport] (a coroutine timeout cannot cut a blocked body read: #336 review, item 4).
+     */
+    suspend fun settleCollect(wait: Duration, transport: Duration = SETTLE_TRANSPORT): Int =
+        collectOnce(wait, callTimeout = wait.plus(transport), max = SETTLE_COLLECT_MAX)
 
     @Suppress("TooGenericExceptionCaught") // whatever the ack hits, the batch goes on
     private suspend fun ackBestEffort(msgId: String) {
@@ -2527,6 +2535,11 @@ class VaultDevice private constructor(
     }
 
     companion object {
+        /** [settleCollect]'s batch: RELAY-PROTOCOL's default `max`. */
+        const val SETTLE_COLLECT_MAX = 32
+
+        /** [settleCollect]'s bound over the wait: the settlement window's own (`TransferInResume.DEADLINE_COLLECT_MS`). */
+        val SETTLE_TRANSPORT: Duration = Duration.ofSeconds(30)
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
         private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
