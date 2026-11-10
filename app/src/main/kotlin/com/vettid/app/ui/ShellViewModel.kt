@@ -67,6 +67,7 @@ class ShellViewModel @Inject constructor(
     wallet: WalletAccess,
     private val presence: PresenceRepository,
     location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
+    private val devices: com.vettid.core.data.devices.DevicesRepository? = null,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -75,6 +76,13 @@ class ShellViewModel @Inject constructor(
 
     /** The asks waiting now: a batch's notification leads to the ones that are still open. */
     fun openAsks() = approvals.approvals.value
+
+    /**
+     * Where a tapped notification's [item] leads, as the Notifications screen opens it: with the device list in memory (empty
+     * when not read), `device.update_needed` opens its device's page only if it is listed (GC #7254).
+     */
+    fun tapTarget(item: FeedItem) =
+        com.vettid.core.data.feed.FeedKinds.target(item, openAsks(), devices?.devices?.value.orEmpty().map { it.id })
 
     /** The tapped item, read (not waiting for the answer); waits a little for the feed after a cold start. */
     suspend fun openItem(itemId: String): FeedItem? {
