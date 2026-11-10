@@ -256,11 +256,6 @@ class VaultManager(
 
             override fun pinUncertain(): Boolean = local.uncertainPinFromEpoch != null
 
-            // A lost reset decided as applied by the version: an open Credential key row asks `credential.version` again (§10.8).
-            override fun keyUnknown() {
-                credentialKeyFlow.tryEmit(null)
-            }
-
             override fun savedDecision(): ChangeCheck? = local.changeDecision?.toCheck()
 
             override fun saveDecision(c: ChangeCheck?) {
