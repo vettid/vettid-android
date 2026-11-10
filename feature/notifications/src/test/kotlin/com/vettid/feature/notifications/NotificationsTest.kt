@@ -210,6 +210,12 @@ class NotificationsTest {
         advanceUntilIdle()
         m.open(update)
         assertEquals(FeedTarget.Device("d1"), m.uiState.value.open)
+        // An item naming this phone: the list (its page would close at once).
+        m.targetTaken()
+        devices.devices.value = listOf(com.vettid.core.data.devices.DeviceInfo("d1", "app", "Pixel", null, null, null, null, thisPhone = true))
+        advanceUntilIdle()
+        m.open(update)
+        assertEquals(FeedTarget.DeviceList, m.uiState.value.open)
     }
 
     @Test

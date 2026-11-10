@@ -19,6 +19,13 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
+import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -49,12 +56,44 @@ class ShellTapTargetTest {
     private val item = FeedItem("u1", 1, "device.update_needed", "2026-11-10T12:00:00Z", "active", "high", deviceId = "d1")
 
     @Test
-    fun aTappedUpdateNoticeOpensTheListedDevicesPageElseTheList() {
+    fun aTappedUpdateNoticeOpensTheListedDevicesPageElseTheList() = runTest {
         val vm = vm()
         assertEquals("the list not read", FeedTarget.DeviceList, vm.tapTarget(item))
         devices.devices.value = listOf(DeviceInfo("d1", "desktop", "Laptop", null, null, null, null))
         assertEquals(FeedTarget.Device("d1"), vm.tapTarget(item))
         devices.devices.value = listOf(DeviceInfo("d2", "desktop", "Other", null, null, null, null))
         assertEquals("the device gone", FeedTarget.DeviceList, vm.tapTarget(item))
+        // An item naming this phone: the list, not a page that would close at once.
+        devices.devices.value = listOf(DeviceInfo("d1", "app", "Pixel", null, null, null, null, thisPhone = true))
+        assertEquals(FeedTarget.DeviceList, vm.tapTarget(item))
+    }
+
+    /** (Review Low 1) A tap finds the list unread: it is read first, briefly; a read that fails or takes too long opens the list. */
+    @Test
+    fun aTapWithTheListUnreadReadsItFirst() = runTest {
+        val vm = vm()
+        devices.load.value = ListLoad.NOT_LOADED
+        devices.onRefresh = { devices.devices.value = listOf(DeviceInfo("d1", "desktop", "Laptop", null, null, null, null)) }
+        assertEquals(FeedTarget.Device("d1"), vm.tapTarget(item))
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        // Read already: no second read.
+        vm.tapTarget(item)
+        assertEquals(1, devices.calls.count { it == "refresh" })
+        // A read that fails.
+        devices.devices.value = emptyList()
+        devices.load.value = ListLoad.NOT_LOADED
+        devices.fail["refresh"] = VaultFailure(FailureKind.NETWORK)
+        assertEquals(FeedTarget.DeviceList, vm.tapTarget(item))
+        // A read that does not answer in time.
+        devices.load.value = ListLoad.NOT_LOADED
+        devices.refreshGate = CompletableDeferred()
+        val t = async { vm.tapTarget(item) }
+        advanceTimeBy(3_001)
+        assertEquals(FeedTarget.DeviceList, t.await())
+        // Another kind reads nothing.
+        devices.load.value = ListLoad.NOT_LOADED
+        val calls = devices.calls.count { it == "refresh" }
+        vm.tapTarget(item.copy(kind = "device.paired"))
+        assertEquals(calls, devices.calls.count { it == "refresh" })
     }
 }
