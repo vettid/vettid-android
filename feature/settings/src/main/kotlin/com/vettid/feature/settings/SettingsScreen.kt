@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
@@ -280,9 +281,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val vm: VaultStatusViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
         val credentialKey by vm.credentialKey.collectAsStateWithLifecycle()
-        // Back in front (the app's return, or the screen over it gone): the key is asked again (GC #6816).
-        LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.setVisible(true) }
-        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.setVisible(false) }
+        // Back in front (the app's return, the screen over it gone, the app lock's screen gone): the key is asked again (GC #6816).
+        ShownWhileStarted(vm::setVisible)
         VaultStatusContent(
             state, vm::load, host.onBack,
             credentialKey = credentialKey, onRetryCredentialKey = vm::loadCredentialKey,
@@ -866,4 +866,20 @@ fun AppLockMethodDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_cancel)) } },
     )
+}
+
+/**
+ * (GC #6816, #343's review) Tells [onShown] whether the screen is in front: true at ON_START, false at ON_STOP and when it leaves
+ * the composition. The app lock never engages while the activity stays started: it locks only in `MainActivity.onStart`
+ * (`AppLock.onForeground`, the one caller of its private `lockNow`; the public `lockNow()` has no caller), so there is no idle lock
+ * in the foreground. But the lock is engaged at a return, after the screen's ON_START, and `AppLockGate` then takes the content
+ * out of the composition: the screen's ON_STOP and ON_START go unseen while the lock screen is up (the member may leave and come
+ * back meanwhile). Leaving the composition therefore counts as hidden, and coming back (the observer's catch-up ON_START after
+ * the unlock) as shown again, so the key is asked again after every unlock.
+ */
+@Composable
+internal fun ShownWhileStarted(onShown: (Boolean) -> Unit) {
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { onShown(true) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { onShown(false) }
+    DisposableEffect(Unit) { onDispose { onShown(false) } }
 }

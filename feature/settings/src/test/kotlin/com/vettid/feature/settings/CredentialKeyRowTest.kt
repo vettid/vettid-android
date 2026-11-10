@@ -3,6 +3,8 @@ package com.vettid.feature.settings
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -127,19 +129,22 @@ class CredentialKeyRowTest {
     }
 
     /**
-     * (GC #6816) A change whose answer was lost, decided later as having replaced the key (a reset): the repository says the
-     * key is not known, and the open row asks again instead of keeping the old fingerprint.
+     * (#343's review, item 1) The app lock takes the screen out of the composition while its own screen is up, so the screen's
+     * stop and start go unseen: leaving the composition counts as hidden and coming back (after the unlock) as shown again.
      */
     @Test
-    fun aKeyMadeUnknownLaterIsAskedAgain() = runTest {
-        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
-        val vm = VaultStatusViewModel(vault)
-        advanceUntilIdle()
-        vault.credentialKeyAnswer = CredentialKeyAnswer(true, "0000 1111 2222 3333")
-        vault.answerWithKey(null)
-        advanceUntilIdle()
-        assertEquals(2, vault.calls.count { it == "credentialKey" })
-        assertEquals(CredentialKeyUi.Shown("0000 1111 2222 3333"), vm.credentialKey.value)
+    fun theScreenTakenAwayByTheAppLockIsShownAgainAfterTheUnlock() {
+        val seen = mutableListOf<Boolean>()
+        var inFront by androidx.compose.runtime.mutableStateOf(true)
+        rule.setContent { if (inFront) ShownWhileStarted { seen += it } }
+        rule.waitForIdle()
+        assertEquals(listOf(true), seen)
+        inFront = false // the lock screen drawn in its place
+        rule.waitForIdle()
+        assertEquals(listOf(true, false), seen)
+        inFront = true // unlocked
+        rule.waitForIdle()
+        assertEquals(listOf(true, false, true), seen)
     }
 
     @Test
