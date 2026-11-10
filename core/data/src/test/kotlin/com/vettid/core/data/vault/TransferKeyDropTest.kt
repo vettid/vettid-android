@@ -132,6 +132,20 @@ class TransferKeyDropTest {
         assertFalse(first.contentEquals(scanReusing().first))
     }
 
+    /**
+     * (GC #6761 review, Low 1) An unsent scan that made no phone key names only its attested key: the ("", 1) key the record
+     * holds (one this scan did not make, maybe a transferred vault's only unlock key) and the record stay.
+     */
+    @Test
+    fun aDropWithoutThePhoneKeyLeavesTheRecordAndTheKey() {
+        val (first, alias) = scan()
+        assertTrue(drop.dropped(DroppedTransfer(listOf(alias), phoneKey = false)))
+        assertEquals(PhoneSecretState("", 1), record.value.phone)
+        assertTrue("the key stays", keys.getValue("").exists())
+        assertArrayEquals("the same key", first, secrets.secret(record.value.phone))
+        assertFalse("the attested key goes", alias in attestKeystore)
+    }
+
     @Test
     fun afterADropTheNextScanSendsANewSecretAndTheAttestedKeyIsGone() {
         val (first, alias) = scanReusing()

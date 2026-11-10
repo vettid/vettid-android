@@ -1543,6 +1543,9 @@ class VaultDeviceTest {
         @Volatile
         var key: ByteArray? = null
         val drops = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+
+        /** Each drop's [DroppedTransfer.phoneKey]. */
+        val phoneKeys = java.util.concurrent.CopyOnWriteArrayList<Boolean>()
         val events = java.util.concurrent.CopyOnWriteArrayList<String>()
 
         /** "throw" (a crash right after the drop's save), "false" (the app's delete did not hold), or null: it works. */
@@ -1574,7 +1577,8 @@ class VaultDeviceTest {
                 "false" -> return false
             }
             drops += d.attestKeys
-            key = null
+            phoneKeys += d.phoneKey
+            if (d.phoneKey) key = null
             return true
         }
     }
@@ -1733,6 +1737,42 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (GC #6761 review, Low 1) A scan that made no phone key (a bundle before release R: no secret asked back, or a
+     * failure before the key was made) never asks for the ("", 1) key to go: it may be one this scan did not make.
+     */
+    @Test
+    fun anUnsentScanThatMadeNoPhoneKeyLeavesThePhoneKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            phone.secret() // a ("", 1) key this scan does not make
+            val held = phone.key!!.copyOf()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            // No secret: only the attested key goes.
+            refuseDeposits = "denied"
+            assertTrue(
+                runCatching { d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester(), attestedKey = { "att-1" }) { null } }
+                    .isFailure,
+            )
+            refuseDeposits = null
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            assertEquals("not the phone key", listOf(false), phone.phoneKeys.toList())
+            assertArrayEquals("the key stays", held, phone.key)
+            // The phone key's making failed: no key made, none attested: nothing asked at all.
+            val r = runCatching {
+                d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester(), attestedKey = { null }) {
+                    throw java.io.IOException("keystore busy")
+                }
+            }
+            assertTrue(r.isFailure)
+            assertEquals("no second delete", 1, phone.drops.size)
+            assertArrayEquals(held, phone.key)
+            assertFalse(d.droppedTransferPending)
+            d.stop()
+        }
+    }
+
     /** A delete that fails after an unsent `hs.init` stays recorded, in the file too, and is asked again at the next scan. */
     @Test
     fun aFailedDeleteAfterAnUnsentInitIsKeptForTheNextScan() = runBlocking<Unit> {
@@ -1819,8 +1859,22 @@ class VaultDeviceTest {
             )
             assertEquals(null to null, asked)
             assertFalse(enrolled.stopped)
+            assertThrows("a throw of the app's rule is passed on", IllegalStateException::class.java) {
+                runBlocking { enrolled.forgetIfStaleUnpaired { _, _ -> error("rule") } }
+            }
+            assertFalse("nothing forgotten", enrolled.stopped)
             assertEquals("stale and unpaired", VaultDevice.StaleForget.FORGOT, enrolled.forgetIfStaleUnpaired { _, _ -> false })
             assertTrue(enrolled.stopped)
+
+            val unclearable = object : DeviceStateStore {
+                val inner = InMemoryDeviceStateStore()
+                override fun load(): ByteArray? = inner.load()
+                override fun save(state: ByteArray) = inner.save(state)
+                override fun clear() = throw java.io.IOException("disk")
+            }
+            val stuck = VaultDevice.create(config(unclearable), DeviceSecrets.generate())
+            stuck.handle(FakeVault().enrolled(stuck))
+            assertEquals("its forget failed", VaultDevice.StaleForget.FORGET_FAILED, stuck.forgetIfStaleUnpaired { _, _ -> false })
 
             val (paired, _) = pairedDevice(this)
             assertEquals("paired: kept", VaultDevice.StaleForget.KEPT, paired.forgetIfStaleUnpaired { _, _ -> false })

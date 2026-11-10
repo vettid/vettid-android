@@ -62,14 +62,14 @@ class TransferInDeadlineCallTest {
     fun theSetupLinkPathsAreGuardedAndAStartPastTheDeadlineSettlesOnItsOwn() {
         // (GC #6761) Asked under the device's lock, with the settlement rule, in the same call that forgets.
         val fresh = body("private suspend fun freshDeviceIfUnpaired()")
-        val ask = "d.forgetIfStaleUnpaired { t, id -> settlements.active || TransferInResume.deadlineDue(t, id, "
-        assertTrue(fresh.any { it.contains(ask) })
+        assertTrue(fresh.any { it == "when (d.forgetIfStaleUnpaired(::pinsTransfer)) {" })
         assertTrue(fresh.any { it == "throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)" })
         val forget = "if (session?.device?.let(::transferPinned) == true) throw VaultFailure(FailureKind.BUSY, " +
             "MoveRepository.CODE_TRANSFER_SETTLING)"
         assertTrue(body("override suspend fun forgetSetupCode()").any { it == forget })
-        val pinned = body("private fun transferPinned(")
-        assertTrue(pinned.any { it.contains("settlements.active") && it.contains("TransferInResume.deadlineDue(") })
+        assertTrue(body("private fun transferPinned(").any { it.endsWith("= pinsTransfer(d.transferInPending, d.deviceId)") })
+        val pinned = body("private fun pinsTransfer(")
+        assertTrue(pinned.any { it.contains("settlements.active") && it.contains("TransferInResume.deadlineDue(t, deviceId, ") })
         val ev = body("private suspend fun evaluate()")
         val at = ev.indexOfFirst { it == "TransferInResume.Action.DEADLINE -> {" }
         assertTrue("the start settles at once", at >= 0 && ev[at + 1] == "startSettlement(s)")

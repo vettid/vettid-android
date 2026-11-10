@@ -56,7 +56,8 @@ internal class TransferKeyDrop(
     @Suppress("TooGenericExceptionCaught") // any failure of a step: logged, the next step still runs
     fun dropped(drop: DroppedTransfer): Boolean {
         val before = phone()
-        val transferKey = before.keyVault == TRANSFER_KEY_VAULT && before.epoch <= 1L
+        // (GC #6761 review, Low 1) Only when the drop names the phone key: an unsent scan that made none leaves it alone.
+        val transferKey = drop.phoneKey && before.keyVault == TRANSFER_KEY_VAULT && before.epoch <= 1L
         var reset = false
         if (transferKey && before.epoch == 1L) {
             reset = try {

@@ -3474,11 +3474,13 @@ class VaultManager(
     // --- MoveRepository: recovery on this (new) phone (§11.11) ---
 
     /** Whether [d] holds a transfer that waits for its approval or its settlement: it is not forgotten meanwhile. */
-    private fun transferPinned(d: VaultDevice) =
-        settlements.active || TransferInResume.deadlineDue(d.transferInPending, d.deviceId, Instant.now())
+    private fun transferPinned(d: VaultDevice) = pinsTransfer(d.transferInPending, d.deviceId)
+
+    /** [transferPinned] for a transfer as the device holds it under its lock ([VaultDevice.forgetIfStaleUnpaired]). */
+    private fun pinsTransfer(t: com.vettid.core.vault.TransferInState?, deviceId: String?) =
+        settlements.active || TransferInResume.deadlineDue(t, deviceId, Instant.now())
 
     /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
-    @Suppress("ThrowsCount") // the undecided open, a cancellation passed on, and a pinned transfer
     private suspend fun freshDeviceIfUnpaired() {
         // (0.1.78) K is never forgotten while an open's answer is unknown.
         if (!Rules.mayForget(undecidedNow())) throw VaultFailure(FailureKind.NOT_SUPPORTED, CODE_UNDECIDED)
@@ -3489,21 +3491,15 @@ class VaultManager(
         // recovery and no new code may forget it ("+C+").
         // (A6 audit N3) An outstanding enrollment belongs to the code redeemed before: a new code starts afresh too.
         // (#335's re-check) A device stopped by a drop it could not save is stale too.
-        val outcome = try {
-            d.forgetIfStaleUnpaired { t, id -> settlements.active || TransferInResume.deadlineDue(t, id, Instant.now()) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-            // The forget failed: [dropSession]'s guard decides again, and stops the caller as it does for any failed forget.
-            null
-        }
-        when (outcome) {
+        when (d.forgetIfStaleUnpaired(::pinsTransfer)) {
             com.vettid.core.vault.VaultDevice.StaleForget.PINNED ->
                 throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)
             com.vettid.core.vault.VaultDevice.StaleForget.KEPT -> retireOtherDevices()
-            // Forgotten (or its forget failed): the session goes with fresh keys; an open transfer was the device's own
-            // forget's, already done or failing again here alone first ([dropSession]).
-            else -> dropSession(forget = true)
+            // Forgotten, or its forget failed: the session goes with fresh keys; an open transfer was the device's own
+            // forget's, already done or failing again here alone first ([dropSession]), which stops the caller as it
+            // does for any failed forget.
+            com.vettid.core.vault.VaultDevice.StaleForget.FORGOT, com.vettid.core.vault.VaultDevice.StaleForget.FORGET_FAILED ->
+                dropSession(forget = true)
         }
     }
 
