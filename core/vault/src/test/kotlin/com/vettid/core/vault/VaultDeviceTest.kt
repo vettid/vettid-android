@@ -90,6 +90,14 @@ class VaultDeviceTest {
     @Volatile
     private var refuseStatus = 403
 
+    /** When set, a refused deposit's body also carries this `quota` (RELAY-PROTOCOL §7.1). */
+    @Volatile
+    private var refuseQuota: String? = null
+
+    /** The token of each deposit the relay refused, and of each it took. */
+    private val refusedTokens = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val acceptedTokens = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
     /** When set, a deposit under this token is refused `token_expired` (401): a token the vault has replaced. */
     @Volatile
     private var expiredToken: String? = null
@@ -125,6 +133,9 @@ class VaultDeviceTest {
     /** When set, a collect (GET) is answered with a dropped connection (a lost response, an I/O error). */
     @Volatile
     private var dropCollect = false
+
+    /** When set, only the next collect (GET) is refused at once with a 503 (an attempt that fails fast). */
+    private val failNextCollectFast = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /** When set, only the next collect (GET) is dropped; the one after it is served (a lost response, then the retry). */
     private val dropNextCollect = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -237,6 +248,8 @@ class VaultDeviceTest {
                 val path = request.url.encodedPath
                 if (path == "/v1/mailbox" && request.method == "GET") collectQueries.add(request.url.encodedQuery ?: "")
                 return when {
+                    path == "/v1/mailbox" && request.method == "GET" && failNextCollectFast.compareAndSet(true, false) ->
+                        MockResponse.Builder().code(503).body("""{"code":"unavailable","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && slowCollect ->
                         MockResponse.Builder().code(200).body("""{"messages":[]}""").headersDelay(5, TimeUnit.SECONDS).build()
                     path == "/v1/register" -> MockResponse.Builder().code(201).body(
@@ -250,7 +263,9 @@ class VaultDeviceTest {
                     }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
                         refused.incrementAndGet()
-                        MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
+                        refusedTokens.add(request.headers["Authorization"].orEmpty().removePrefix("VettID-Deposit "))
+                        val q = refuseQuota?.let { ""","quota":"$it"""" } ?: ""
+                        MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""$q}""").build()
                     }
                     path == "/v1/mailbox" && request.method == "GET" && dropNextCollect.compareAndSet(true, false) ->
                         MockResponse.Builder().onResponseStart(mockwebserver3.SocketEffect.CloseSocket()).build()
@@ -277,6 +292,7 @@ class VaultDeviceTest {
                     path.startsWith("/v1/mailbox/") && request.method == "POST" -> {
                         depositsStarted.incrementAndGet()
                         depositGate?.await(10, TimeUnit.SECONDS)
+                        acceptedTokens.add(request.headers["Authorization"].orEmpty().removePrefix("VettID-Deposit "))
                         val o = StrictJson.parseObject(request.body!!.toByteArray())
                         deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
                         MockResponse.Builder().code(201).body("""{"msg_id":"${Ulid.new()}"}""").build()
@@ -1432,6 +1448,126 @@ class VaultDeviceTest {
             assertTrue("ended after $ms ms", ms < 4_000)
             slowCollect = false
             serveMailbox = false
+        }
+    }
+
+    /**
+     * (GC #6847, #336's Opus L1) A first attempt that fails fast does not stretch the window's collect past its bound: the
+     * collect is one attempt, so no second one (here a slow one) follows it inside the same request.
+     */
+    @Test
+    fun aFastFailingFirstAttemptDoesNotStretchTheSettlementsCollect() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            collectQueries.clear()
+            failNextCollectFast.set(true)
+            slowCollect = true // a second attempt would wait 5 s, cut at the bound
+            val bound = 1_500L
+            val t0 = System.nanoTime()
+            assertTrue(runCatching { d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofMillis(bound)) }.isFailure)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            assertTrue("ended after $ms ms, within its bound of $bound", ms < bound)
+            assertEquals("one attempt", 1, collectQueries.size)
+            slowCollect = false
+        }
+    }
+
+    /**
+     * (GC #6847, #336's Opus L3; VAULT-MESSAGING §8.6, RELAY-PROTOCOL §7.1) `quota_exceeded` for the token: the entry is
+     * never sent under that token again, nor is a later entry under it; once the vault gives a new standing token both go
+     * under it. The device asks for no fresh token itself.
+     */
+    @Test
+    fun aTokenQuotaWaitsForANewTokenAndIsNeverResentUnderTheSpentOne() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val spent = d.vaultToken!!
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_TOKEN
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            assertEquals(1, refused.get())
+            assertEquals(spent, savedState(store).outbox.single().quotaToken)
+            // A later entry under the spent token waits behind it, unsent; a flush sends nothing.
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c2") }) }.isFailure)
+            d.flushOutbox()
+            d.flushOutbox()
+            assertEquals("never sent again under the spent token", 1, refused.get())
+            assertEquals(listOf(spent, spent), savedState(store).outbox.map { it.quotaToken })
+            assertNull("no refresh asked", deposits.poll(200, TimeUnit.MILLISECONDS))
+            // The vault's new standing token: both go, under it.
+            refuseDeposits = null
+            refuseQuota = null
+            Thread.sleep(1_100) // a later exp than the held token's (whole seconds)
+            val fresh = v.tokenFor(d)
+            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
+            assertEquals(fresh, d.vaultToken)
+            acceptedTokens.clear()
+            d.flushOutbox()
+            val sent = listOf(v.open(nextDeposit().second), v.open(nextDeposit().second)).map { String(it.body) }
+            assertEquals(listOf("""{"call_id":"c1"}""", """{"call_id":"c2"}"""), sent)
+            assertTrue(savedState(store).outbox.isEmpty())
+            assertEquals(listOf(spent), refusedTokens.toList())
+            assertEquals("both under the new token", listOf(fresh, fresh), acceptedTokens.toList())
+            d.stop()
+        }
+    }
+
+    /**
+     * (GC #6847) `quota_exceeded` for the mailbox: the entry stays and is tried again only after a backoff (1 min, then
+     * doubled), never at every flush; a deposit the relay takes ends the backoff. With no `quota` the first refusal is the
+     * token's, and one after the fresh token is the mailbox's (§8.6).
+     */
+    @Test
+    fun aMailboxQuotaBacksOffAndAQuotaWithoutAMemberIsTheTokensThenTheMailboxs() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            assertNull("the mailbox's: no token wait", savedState(store).outbox.single().quotaToken)
+            d.flushOutbox()
+            assertEquals("not again before the backoff", 1, refused.get())
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            d.flushOutbox()
+            assertEquals("again after a minute", 2, refused.get())
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            d.flushOutbox()
+            assertEquals("the backoff doubled", 2, refused.get())
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = null
+            d.flushOutbox()
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertTrue(savedState(store).outbox.isEmpty())
+
+            // No `quota`: the token's at first, then the mailbox's under the fresh token.
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseQuota = null
+            refused.set(0)
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c2") }) }.isFailure)
+            assertEquals(d.vaultToken, savedState(store).outbox.single().quotaToken)
+            Thread.sleep(1_100)
+            val fresh = v.tokenFor(d)
+            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
+            d.flushOutbox()
+            assertEquals("tried once under the fresh token", 2, refused.get())
+            val e = savedState(store).outbox.single()
+            assertEquals(fresh, e.token)
+            assertNull("now the mailbox's", e.quotaToken)
+            d.flushOutbox()
+            assertEquals("backing off", 2, refused.get())
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            d.flushOutbox()
+            assertEquals("from a minute again: the deposit taken earlier ended the old backoff", 3, refused.get())
+            refuseDeposits = null
+            refuseStatus = 403
+            d.stop()
         }
     }
 
@@ -6278,7 +6414,7 @@ class VaultDeviceTest {
     @Test
     fun aRetryableRefusalOrAFullQuotaKeepsTheTime() = runBlocking<Unit> {
         withTimeout(60_000) {
-            for ((code, status) in listOf(RelayException.QUOTA_EXCEEDED to 429, "unavailable" to 503, RelayException.QUOTA_EXCEEDED to 403)) {
+            for ((code, status) in listOf(RelayException.QUOTA_EXCEEDED to 429, "unavailable" to 503)) {
                 clockAheadMs = 0
                 val r = rekeyed(this)
                 ahead(java.time.Duration.ofDays(12).plusSeconds(60))

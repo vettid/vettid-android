@@ -32,16 +32,27 @@ import kotlin.random.Random
  * that is not JSON) is a relay answer, so it is kept in [detail] and never in the message, which logs and crash
  * reports may carry (the owner's rule, 2026-10-23).
  */
-class RelayException(val status: Int, val code: String, message: String, val retryAfterSeconds: Int = 0) :
-    IOException("relay: $status $code") {
+class RelayException(
+    val status: Int,
+    val code: String,
+    message: String,
+    val retryAfterSeconds: Int = 0,
+    /**
+     * (RELAY-PROTOCOL 0.9.2 §7.1) What a `quota_exceeded` used up: `token`, `mailbox`, `mailbox_blobs` or `sender_blobs`;
+     * null without one (a relay before 0.9.2, or any other refusal).
+     */
+    val quota: String? = null,
+) : IOException("relay: $status $code") {
     /** The relay's text ("" without one): never in the exception's message. */
     val detail: String = message
 
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
-     * ([staleSignature]); other client errors never are.
+     * ([staleSignature]); other client errors never are, and neither is `quota_exceeded` (a 429 that is not transient:
+     * §7.1, "a client MUST NOT retry the request unchanged"; GC #6847, #336's Opus L3).
      */
-    val retryable: Boolean get() = status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature
+    val retryable: Boolean
+        get() = code != QUOTA_EXCEEDED && (status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature)
 
     /**
      * `timestamp_stale` or `replay_detected` (§4.1): the request's signature was made too long before it reached the
@@ -70,6 +81,10 @@ class RelayException(val status: Int, val code: String, message: String, val ret
         const val PAYLOAD_TOO_LARGE = "payload_too_large"
         const val QUOTA_EXCEEDED = "quota_exceeded"
         const val RATE_LIMITED = "rate_limited"
+
+        /** [quota] values (§7.1). */
+        const val QUOTA_TOKEN = "token"
+        const val QUOTA_MAILBOX = "mailbox"
     }
 }
 
@@ -212,6 +227,8 @@ class RelayClient(
         val onLostAttempt: (() -> Unit)? = null,
         /** Called when a RETRY attempt of [execute] (not the first) goes out: its send time is a send of its own. */
         val onRetrySent: (() -> Unit)? = null,
+        /** How many attempts [execute] makes instead of the client's own (1: one attempt, bounded by its call timeout alone). */
+        val attempts: Int? = null,
         /**
          * Called each time an attempt actually starts writing the request (OkHttp's `requestHeadersStart`): after any wait
          * for the network, connect and retry inside the transport, every attempt of [execute] and of [TransportRetry]. The
@@ -228,7 +245,7 @@ class RelayClient(
     internal suspend fun <T> execute(c: Call, read: (Response) -> T): T {
         var last: IOException? = null
         val sent = AtomicBoolean()
-        for (i in 0 until maxOf(maxAttempts, 1)) {
+        for (i in 0 until maxOf(c.attempts ?: maxAttempts, 1)) {
             if (i > 0) {
                 val e = last
                 val wait = if (e is RelayException && e.retryAfterSeconds > 0) {
@@ -262,7 +279,7 @@ class RelayClient(
      * relay may have done the first).
      */
     private fun mayRetry(c: Call, e: RelayException, sent: Boolean): Boolean =
-        e.retryable && e.code != RelayException.QUOTA_EXCEEDED && e.retryAfterSeconds <= limits.maxRetryAfterS &&
+        e.retryable && e.retryAfterSeconds <= limits.maxRetryAfterS &&
             (c.resendAfterSent || !sent || e.status < HTTP_SERVER_ERROR && e.code != RelayException.REPLAY_DETECTED)
 
     @Suppress("CyclomaticComplexMethod") // one branch per request shape (signed, token, body, content type, long-poll)
@@ -323,7 +340,8 @@ class RelayClient(
             return RelayException(resp.code, "http_${resp.code}", String(text, Charsets.UTF_8).trim().take(MAX_MESSAGE), headerRetry)
         }
         val retry = (o["retry_after"] as? JsonNumber)?.raw?.toIntOrNull()?.coerceAtLeast(0) ?: headerRetry
-        return RelayException(resp.code, code, (o["message"] as? JsonString)?.value ?: "", retry)
+        val quota = (o["quota"] as? JsonString)?.value?.takeIf { code == RelayException.QUOTA_EXCEEDED }
+        return RelayException(resp.code, code, (o["message"] as? JsonString)?.value ?: "", retry, quota)
     }
 
     private suspend fun json(c: Call): JsonObject? = execute(c) { resp ->
@@ -397,6 +415,7 @@ class RelayClient(
     /**
      * Long-polls this mailbox (§6.3): [wait] ≤ 25 s, [max] ≤ 100. [callTimeout] bounds each attempt, the body read
      * included; none by default ([CallLimits]): a caller that must end sooner passes one (the transfer's settlement window).
+     * [attempts]: how many (default the client's); a caller whose bound covers the whole request passes 1.
      */
     suspend fun collect(
         wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S),
@@ -405,11 +424,12 @@ class RelayClient(
         onRetrySent: (() -> Unit)? = null,
         onSent: (() -> Unit)? = null,
         callTimeout: Duration? = null,
+        attempts: Int? = null,
     ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
         val call = Call(
             "GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent,
-            onSent = onSent, callMs = callTimeout?.toMillis(),
+            onSent = onSent, callMs = callTimeout?.toMillis(), attempts = attempts,
         )
         val o = json(call) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }

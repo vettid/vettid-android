@@ -1506,9 +1506,15 @@ class VaultDevice private constructor(
      * (a `device.paired` behind it) must still be handled. The settlement window's caller bounds it by its wait plus a
      * transport bound, and waits for the collection's round ([awaitCollectorRound]) outside that bound: a message the
      * round leased is invisible to this collect until the round ended. [callTimeout] bounds each attempt, the body read
-     * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4).
+     * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4). [attempts]: the relay client's
+     * attempts (default its own).
      */
-    suspend fun collectOnce(wait: Duration = Duration.ZERO, callTimeout: Duration? = null, max: Int = Int.MAX_VALUE): Int {
+    suspend fun collectOnce(
+        wait: Duration = Duration.ZERO,
+        callTimeout: Duration? = null,
+        max: Int = Int.MAX_VALUE,
+        attempts: Int? = null,
+    ): Int {
         if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
@@ -1520,6 +1526,7 @@ class VaultDevice private constructor(
                 noteSend(wait.toMillis(), at)
             },
             callTimeout = callTimeout,
+            attempts = attempts,
         )
         for (m in msgs) {
             try {
@@ -1534,11 +1541,17 @@ class VaultDevice private constructor(
 
     /**
      * The transfer's settlement window's collect ([collectOnce]): a batch of at most [SETTLE_COLLECT_MAX] (so a backlog on a
-     * slow link still arrives within the bound; the rest is left for the next look), each attempt within its wait +
-     * [transport] (a coroutine timeout cannot cut a blocked body read: #336 review, item 4).
+     * slow link still arrives within the bound; the rest is left for the next look), within its wait + [transport] (a
+     * coroutine timeout cannot cut a blocked body read: #336 review, item 4).
+     *
+     * (GC #6847, #336's Opus L1) One attempt: the call timeout bounds an attempt, so the client's own retries could stretch
+     * one request to about one more bound after a first attempt that failed fast. The window already looks again itself
+     * (`TransferInResume`'s settle loop, with its backoff and its lease accounting), so a single attempt keeps the whole
+     * request within the bound with nothing to budget; a deadline across the client's retries would have to share the
+     * bound between backoff sleeps and attempts for no gain.
      */
     suspend fun settleCollect(wait: Duration, transport: Duration = SETTLE_TRANSPORT): Int =
-        collectOnce(wait, callTimeout = wait.plus(transport), max = SETTLE_COLLECT_MAX)
+        collectOnce(wait, callTimeout = wait.plus(transport), max = SETTLE_COLLECT_MAX, attempts = 1)
 
     @Suppress("TooGenericExceptionCaught") // whatever the ack hits, the batch goes on
     private suspend fun ackBestEffort(msgId: String) {
@@ -1695,8 +1708,10 @@ class VaultDevice private constructor(
      */
     private suspend fun deliver(e: OutboxEntry, onRefused: (RelayException) -> Unit = {}) {
         checkLive()
+        awaitQuota(e)
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
+            quotaBackoff.remove(e.mailbox)
             st.outbox.remove(e)
             // (M1) An entry an earlier app version queued (no exp): sent now, the vault acts on it in its next batch; from
             // here it is settled like a request with an exp of now + 10 minutes, unless it is answered first.
@@ -1706,6 +1721,10 @@ class VaultDevice private constructor(
             if (x.retryable) {
                 e.attempts++
                 save()
+                throw x
+            }
+            if (x.code == RelayException.QUOTA_EXCEEDED) {
+                quotaRefused(e, x)
                 throw x
             }
             countRefusal(x, e.mailbox, e.token)
@@ -1718,6 +1737,61 @@ class VaultDevice private constructor(
             throw x
         }
     }
+
+    /**
+     * (GC #6847; VAULT-MESSAGING 0.88.6 §8.6 `quota_exceeded`, RELAY-PROTOCOL §7.1) An outbox entry refused for a quota is
+     * kept and never sent again unchanged:
+     * - the **token**'s (`quota: token`, or no `quota` the first time): it waits, and so does every entry under that token,
+     *   until the device holds another standing token for the vault (the vault's re-mint: `relay.token.issued`, an unlock
+     *   result), and is then sent once under it. The device asks for no fresh token and reconnects to nothing: §7.2 lets a
+     *   **peer vault** refresh after `quota_exceeded`, a device's standing token carries no quota (§7.1's table), a
+     *   refresh would go under the spent token itself, and a device does not reconnect (its way back is the unlock
+     *   exchange, or pairing again, §7.2);
+     * - the **mailbox**'s (`quota: mailbox`, or no `quota` after a fresh token): retried with backoff (§8.6), from
+     *   [QUOTA_BACKOFF_MIN] doubling to [QUOTA_BACKOFF_MAX], in memory; a deposit the relay takes ends it.
+     */
+    private fun quotaRefused(e: OutboxEntry, x: RelayException) {
+        e.attempts++
+        val token = x.quota == RelayException.QUOTA_TOKEN || x.quota == null && !e.quotaFresh
+        if (token) {
+            e.quotaToken = e.token
+        } else {
+            val prev = quotaBackoff[e.mailbox]?.second ?: 0L
+            val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
+            quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+        }
+        save()
+    }
+
+    /**
+     * Before [deliver]'s deposit: an entry under a token whose quota is spent ([OutboxEntry.quotaToken], its own or an
+     * earlier entry's) waits for another standing token for its mailbox, and is re-addressed to it; a mailbox in its quota
+     * backoff waits. Waiting is [QuotaWait] (an [IOException], kept for the next flush).
+     */
+    private fun awaitQuota(e: OutboxEntry) {
+        if (e.quotaToken == null && st.outbox.any { it.quotaToken != null && it.quotaToken == e.token }) {
+            e.quotaToken = e.token // behind an entry already refused under it: never sent under it either
+            save()
+        }
+        val spent = e.quotaToken
+        if (spent != null) {
+            val v = st.vault
+            val held = v?.token?.takeIf { it.isNotEmpty() && v.mailbox == e.mailbox && v.relayUrl == e.relayUrl }
+            if (held == null || held == spent) throw QuotaWait()
+            e.token = held
+            e.quotaToken = null
+            e.quotaFresh = true
+            save()
+        }
+        val until = quotaBackoff[e.mailbox]?.first
+        if (until != null && cfg.elapsedMs() < until) throw QuotaWait()
+    }
+
+    /** An outbox entry waits for a quota (a fresh token, or the mailbox's backoff): nothing was sent. */
+    internal class QuotaWait : IOException("waiting for a relay quota")
+
+    /** Per mailbox: the elapsed time before which nothing is deposited, and the last backoff (ms), after `quota: mailbox`. */
+    private val quotaBackoff = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Long>>()
 
     /**
      * A deposit to this device's vault under the vault's current token that the relay refused with `token_revoked`
@@ -2925,6 +2999,10 @@ class VaultDevice private constructor(
 
         /** (0.88.1) `hs.confirm` again 12 days after the last one while the current epoch is unconfirmed. Not scaled (§11.10.8). */
         internal val CONFIRM_RESEND: Duration = Duration.ofDays(12)
+
+        /** (GC #6847) The first wait after `quota_exceeded` for the mailbox's quota, doubled at each refusal up to [QUOTA_BACKOFF_MAX]. */
+        internal val QUOTA_BACKOFF_MIN: Duration = Duration.ofMinutes(1)
+        internal val QUOTA_BACKOFF_MAX: Duration = Duration.ofHours(1)
 
         /** A relay answer that trying again will not cure (`quota_exceeded` and a retryable one are kept for a later flush). */
         internal fun isTerminal(x: RelayException): Boolean = !(x.retryable || x.code == RelayException.QUOTA_EXCEEDED)

@@ -252,6 +252,11 @@ class RelayClientTest {
         assertEquals(RelayException.QUOTA_EXCEEDED, e.code)
         assertEquals(1, server.requestCount)
         assertTrue(sleeps.isEmpty())
+        // (GC #6847, #336's Opus L3) Not retryable, so no caller keeps it to resend unchanged; what it used up is read.
+        assertFalse(e.retryable)
+        assertEquals(RelayException.QUOTA_TOKEN, e.quota)
+        assertTrue("an ordinary 429 still is", RelayException(429, RelayException.RATE_LIMITED, "").retryable)
+        assertNull("only a quota refusal carries it", RelayException(429, RelayException.RATE_LIMITED, "").quota)
     }
 
     /**
