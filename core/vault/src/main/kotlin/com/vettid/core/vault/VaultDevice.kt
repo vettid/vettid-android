@@ -1088,7 +1088,7 @@ class VaultDevice private constructor(
         if (!now().isBefore(Instant.ofEpochSecond(q.exp))) throw NotATransferCodeException(expired = true)
         // (0.88.3 §11.14.10 rule 5) The scan is open from its claim fetch: its code is stored first, so that a scan of the
         // same code meanwhile is refused; any failure before its transfer is recorded ends it at once.
-        val code = TransferCodeRecord(q.relay, q.claimId)
+        val code = TransferCodeRecord(q.relay.trimEnd('/'), q.claimId) // stored as compared ([isOpenTransferCodeLocked])
         lock.withLock {
             if (st.deviceId != null) throw VaultStateException("already paired with a vault")
             checkLive()
@@ -1172,19 +1172,31 @@ class VaultDevice private constructor(
                 save() // let go durably: a later start must not delete the key this scan makes
             }
             val unlockSecret = unlockSecretFor(traits)
-            setVault(b.vault)
-            st.vaultId = null
-            sasState.value = null
+            // (The blind reviews of #334, Fable L3) What this scan pins is put back if its hs.init is not sent, so that the
+            // save at the scan's end ([endScan]) writes the device as it was, not a vault with no transfer.
+            val vaultBefore = st.vault
+            val vaultIdBefore = st.vaultId
+            val signerBefore = st.signerSeen
             val at = t.truncatedTo(ChronoUnit.MILLIS)
             val id = Ulid.new(at)
-            val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
-            st.signerSeen = false // a new attestation is a new key (§11.7.1)
-            val profile = JsonBuilder().string("name", st.name).bytes()
-            // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
+            var sent = false
             try {
+                setVault(b.vault)
+                st.vaultId = null
+                sasState.value = null
+                val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
+                st.signerSeen = false // a new attestation is a new key (§11.7.1)
+                val profile = JsonBuilder().string("name", st.name).bytes()
+                // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
                 startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
+                sent = true
             } finally {
                 unlockSecret?.fill(0)
+                if (!sent) {
+                    st.vault = vaultBefore
+                    st.vaultId = vaultIdBefore
+                    st.signerSeen = signerBefore
+                }
             }
             st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
             st.scanCode = null // the code is the transfer's from here on

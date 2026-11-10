@@ -39,26 +39,33 @@ class TransferInSameCodeTest {
         val b = body("private suspend fun sameTransferCode(code: String): String? = guard {")
         assertFalse("no abandon of any kind", b.any { it.contains("abandon") })
         assertFalse("no forget or fresh device", b.any { it.contains("freshDeviceIfUnpaired") || it.contains("dropSession") })
-        val stored = b.indexOfFirst { it.contains("transferInPending?.sas") }
-        val memory = b.indexOfFirst { it.contains("pairingSas.value") }
-        assertTrue("the record's SAS first, then memory's", stored in 0 until memory)
+        assertTrue("the record's SAS first, then memory's", b.any { it.contains("d.transferInPending?.sas ?: d.pairingSas.value") })
         assertTrue("the session is opened, not only read", b.any { it.contains("session().device") })
     }
 
     /**
-     * (The blind reviews of #334, item 2) A new code over an open transfer forgets the device alone first; a failed forget
-     * drops the session without forgetting and stops, before any key is deleted.
+     * (The blind reviews of #334, item 2; the re-checks, Fable N3) Every forget of a device that carries an open transfer
+     * forgets the device alone first, in [VaultManager.dropSession] itself, so every caller gets it ([forgetSetupCode]
+     * too): a failed forget drops the session without forgetting and stops, before any key is deleted.
      */
     @Test
-    fun aNewCodeOverAnOpenTransferForgetsTheDeviceAloneFirst() {
-        val fresh = body("private suspend fun freshDeviceIfUnpaired() {")
-        val first = fresh.indexOfFirst { it.contains("forgetOpenTransferOrStop(d)") }
-        val forget = fresh.indexOfFirst { it.contains("dropSession(forget = true)") }
-        assertTrue("the open transfer's forget first", first in 0 until forget)
-        val stop = body("private suspend fun forgetOpenTransferOrStop(d: VaultDevice) {")
-        assertTrue(stop.any { it == "d.forget()" })
-        assertTrue("a failed forget keeps the file", stop.any { it.contains("dropSession(forget = false)") })
-        assertFalse("never the full forget there", stop.any { it.contains("dropSession(forget = true)") })
+    fun everyForgetOfAnOpenTransferForgetsTheDeviceAloneFirst() {
+        val drop = body("private suspend fun dropSession(forget: Boolean) = mutex.withLock {")
+        val guard = drop.indexOfFirst { it.contains("forget && it.transferInPending != null") }
+        val alone = drop.indexOfFirst { it == "open.forget()" }
+        val keep = drop.indexOfFirst { it.contains("dropSessionLocked(forget = false)") }
+        val stop = drop.indexOfFirst { it.contains("MoveRepository.CODE_TRANSFER_NOT_DROPPED") }
+        val full = drop.indexOfFirst { it == "dropSessionLocked(forget)" }
+        assertTrue("the open transfer's guard", guard >= 0)
+        assertTrue("its forget alone, first", alone in guard + 1 until full)
+        assertTrue("a failed forget keeps the file, then stops", keep in alone + 1 until stop && stop < full)
+        // The body itself never forgets an open transfer unguarded: every key step is in dropSessionLocked, which only
+        // dropSession calls.
+        assertTrue(code.count { it.contains("dropSessionLocked(") } == 3)
+        assertFalse(code.any { it.contains("forgetOpenTransferOrStop") })
+        for (sig in listOf("private suspend fun freshDeviceIfUnpaired() {", "override suspend fun forgetSetupCode() {")) {
+            assertTrue("$sig goes through the guard", body(sig).any { it.contains("dropSession(forget = true)") })
+        }
     }
 
     /** (The blind reviews of #334, item 3) The start-up sweep of an orphaned ("", 1) key only while the phone holds no vault. */

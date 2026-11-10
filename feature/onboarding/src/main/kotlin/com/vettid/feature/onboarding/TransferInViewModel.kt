@@ -241,13 +241,16 @@ class TransferInViewModel @Inject constructor(
         waiter = viewModelScope.launch {
             val deadline = Instant.now(clock).plus(WINDOW)
             val sas = try {
-                withTimeoutOrNull(MoveRepository.HS_RESP_WAIT_MS) { move.transferIn(text) }
+                // The repository's own 60 s decides (from the transfer's stored start, after the claim fetch; a same-code
+                // return waits only for what is left of it): this is a backstop with a margin, so it never cuts that wait
+                // short, and so never abandons a transfer the repository is still waiting for (the re-checks of #334, Opus N2).
+                withTimeoutOrNull(MoveRepository.HS_RESP_WAIT_MS + BACKSTOP_MARGIN_MS) { move.transferIn(text) }
             } catch (e: VaultFailure) {
                 connectFailed(from, e)
                 return@launch
             }
             if (sas == null) {
-                // §6.7.1 step 2: stop waiting for hs.resp after 60 s; the handshake state is dropped.
+                // §6.7.1 step 2: the repository did not answer even past its own 60 s; the handshake state is dropped.
                 state.update { it.copy(step = TransferInStep.NOT_ANSWERED, busy = false) }
                 abandon()
                 return@launch
@@ -377,5 +380,8 @@ class TransferInViewModel @Inject constructor(
     private companion object {
         val WINDOW: Duration = com.vettid.core.data.vault.TransferInWait.VAULT_WINDOW
         const val TICK_MS = 1000L
+
+        /** Over [MoveRepository.HS_RESP_WAIT_MS] for the claim fetch and the hs.init deposit before the repository's wait starts. */
+        const val BACKSTOP_MARGIN_MS = 30_000L
     }
 }

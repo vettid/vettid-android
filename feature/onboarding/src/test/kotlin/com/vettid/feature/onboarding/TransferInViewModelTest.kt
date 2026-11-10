@@ -399,15 +399,18 @@ class TransferInViewModelTest {
         assertFalse(vm.back())
     }
 
-    /** §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; the new phone stops after 60 s. */
+    /**
+     * §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered. The repository's own 60 s decides (below); a repository
+     * that never answers at all is stopped by the screen's backstop, 30 s later (the re-checks of #334, Opus N2).
+     */
     @Test
     fun noHsRespWithin60SecondsSaysWhyAndOffersANewCode() = runTest {
         vault.transferHsResp = CompletableDeferred()
         val vm = TransferInViewModel(vault, vault)
         vm.scan()
         vm.scanned(qr())
-        advanceTimeBy(59_000)
-        assertEquals(TransferInStep.CONNECTING, vm.uiState.value.step)
+        advanceTimeBy(89_000)
+        assertEquals("the repository's wait is never cut short", TransferInStep.CONNECTING, vm.uiState.value.step)
         assertFalse("abandonTransferIn" in vault.calls)
         advanceTimeBy(1_100)
         assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
@@ -421,6 +424,32 @@ class TransferInViewModelTest {
         assertEquals(TransferInStep.NOT_ANSWERED, vm.uiState.value.step)
         vm.again()
         assertEquals(TransferInStep.SCAN, vm.uiState.value.step)
+    }
+
+    /**
+     * (The re-checks of #334, Opus N2) The repository's 60 s start after the claim fetch, so an hs.resp may come more than
+     * 60 s after the scan: the screen shows it, and abandons nothing (a same-code return included).
+     */
+    @Test
+    fun anHsRespAfterSixtySecondsFromTheScanStillShowsTheCode() = runTest {
+        vault.transferHsResp = CompletableDeferred()
+        val vm = TransferInViewModel(vault, vault)
+        val start = Instant.now()
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(70_000)
+        vault.transferHsResp!!.complete("042817")
+        advanceTimeBy(100)
+        assertEquals(TransferInStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+        assertFalse("nothing was abandoned", "abandonTransferIn" in vault.calls)
     }
 
     @Test

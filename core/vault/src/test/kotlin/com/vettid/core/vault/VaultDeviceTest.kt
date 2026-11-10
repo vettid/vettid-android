@@ -1937,6 +1937,34 @@ class VaultDeviceTest {
     }
 
     /**
+     * (The blind reviews of #334, Fable L3) A scan whose hs.init is not sent (here its attestation fails, after the bundle
+     * was opened) leaves the device as it was: no vault pinned in memory or in the file the scan's end saves.
+     */
+    @Test
+    fun aScanWhoseHsInitIsNotSentLeavesNoVaultPinned() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store), secrets)
+            val failing = object : com.vettid.core.altchan.Attester {
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest =
+                    throw java.io.IOException("keystore busy")
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            val link = transferLink(FakeVault(), Ulid.new())
+            assertTrue("the scan fails", runCatching { d.startTransfer(link, failing) }.isFailure)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertFalse("no vault pinned", d.hasVault)
+            assertFalse("no code left behind", d.isOpenTransferCode(link))
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertFalse("nor in the file", reloaded.hasVault)
+            reloaded.stop()
+        }
+    }
+
+    /**
      * The scan of a different code before minute 10, after a restart: the open transfer reloaded from the file is dropped
      * first (its attested key named once), and the new vault gets a secret the first code's vault never saw.
      */
