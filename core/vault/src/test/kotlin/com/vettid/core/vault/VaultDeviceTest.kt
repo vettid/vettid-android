@@ -134,6 +134,9 @@ class VaultDeviceTest {
     @Volatile
     private var dropCollect = false
 
+    /** How many of the next collects (GET) are refused: a 429, then 503s. */
+    private val refuseCollects = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** When set, only the next collect (GET) is refused at once with a 503 (an attempt that fails fast). */
     private val failNextCollectFast = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -248,6 +251,12 @@ class VaultDeviceTest {
                 val path = request.url.encodedPath
                 if (path == "/v1/mailbox" && request.method == "GET") collectQueries.add(request.url.encodedQuery ?: "")
                 return when {
+                    path == "/v1/mailbox" && request.method == "GET" && refuseCollects.getAndUpdate { maxOf(it - 1, 0) } > 0 ->
+                        if (refuseCollects.get() == 1) {
+                            MockResponse.Builder().code(429).body("""{"code":"rate_limited","message":""}""").build()
+                        } else {
+                            MockResponse.Builder().code(503).body("""{"code":"unavailable","message":""}""").build()
+                        }
                     path == "/v1/mailbox" && request.method == "GET" && failNextCollectFast.compareAndSet(true, false) ->
                         MockResponse.Builder().code(503).body("""{"code":"unavailable","message":""}""").build()
                     path == "/v1/mailbox" && request.method == "GET" && slowCollect ->
@@ -1453,7 +1462,7 @@ class VaultDeviceTest {
 
     /**
      * (GC #6847, #336's Opus L1) A first attempt that fails fast does not stretch the window's collect past its bound: the
-     * collect is one attempt, so no second one (here a slow one) follows it inside the same request.
+     * retry (here a slow one) gets only what is left of the whole request's deadline.
      */
     @Test
     fun aFastFailingFirstAttemptDoesNotStretchTheSettlementsCollect() = runBlocking<Unit> {
@@ -1469,9 +1478,29 @@ class VaultDeviceTest {
             val t0 = System.nanoTime()
             assertTrue(runCatching { d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofMillis(bound)) }.isFailure)
             val ms = (System.nanoTime() - t0) / 1_000_000
-            assertTrue("ended after $ms ms, within its bound of $bound", ms < bound)
-            assertEquals("one attempt", 1, collectQueries.size)
+            assertTrue("ended after $ms ms, within its bound of $bound", ms < bound + 300)
+            assertEquals("the retry was made, cut to what was left", 2, collectQueries.size)
             slowCollect = false
+        }
+    }
+
+    /**
+     * (The review of 4de9019c, High 1) Two refusals at the window's final look (`wait=0`), within its bound, are the relay
+     * client's to retry: the look still answers, so the window sees no refusal and drops nothing.
+     */
+    @Test
+    fun twoRefusalsAtTheFinalLookWithinTheBoundStillAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            collectQueries.clear()
+            refuseCollects.set(2) // a 429 and a 503
+            assertEquals(0, d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofSeconds(10)))
+            assertEquals("three attempts, the last answered", 3, collectQueries.size)
+            serveMailbox = false
         }
     }
 
@@ -1499,6 +1528,11 @@ class VaultDeviceTest {
             assertEquals("never sent again under the spent token", 1, refused.get())
             assertEquals(listOf(spent, spent), savedState(store).outbox.map { it.quotaToken })
             assertNull("no refresh asked", deposits.poll(200, TimeUnit.MILLISECONDS))
+            // (Medium 1) The device's own refresh is not held behind the token wait: it goes once (and, refused for the same
+            // token's quota, waits itself).
+            assertTrue(runCatching { d.send("relay.token.refresh") }.isFailure)
+            assertEquals("the refresh was tried", 2, refused.get())
+            assertEquals(3, savedState(store).outbox.size)
             // The vault's new standing token: both go, under it.
             refuseDeposits = null
             refuseQuota = null
@@ -1507,23 +1541,27 @@ class VaultDeviceTest {
             d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
             assertEquals(fresh, d.vaultToken)
             acceptedTokens.clear()
-            d.flushOutbox()
-            val sent = listOf(v.open(nextDeposit().second), v.open(nextDeposit().second)).map { String(it.body) }
-            assertEquals(listOf("""{"call_id":"c1"}""", """{"call_id":"c2"}"""), sent)
+            // (Low 1) A new entry goes after the ones waiting before it, in order.
+            d.send("call.end", buildJsonObject { put("call_id", "c3") })
+            val sent = generateSequence { deposits.poll(2, TimeUnit.SECONDS)?.second }.take(4).map { v.open(it) }.toList()
+            assertEquals(
+                listOf("call.end" to """{"call_id":"c1"}""", "call.end" to """{"call_id":"c2"}""", "relay.token.refresh" to "{}", "call.end" to """{"call_id":"c3"}"""),
+                sent.map { it.type to String(it.body) },
+            )
             assertTrue(savedState(store).outbox.isEmpty())
-            assertEquals(listOf(spent), refusedTokens.toList())
-            assertEquals("both under the new token", listOf(fresh, fresh), acceptedTokens.toList())
+            assertEquals(listOf(spent, spent), refusedTokens.toList())
+            assertEquals("all under the new token", listOf(fresh, fresh, fresh, fresh), acceptedTokens.toList())
             d.stop()
         }
     }
 
     /**
      * (GC #6847) `quota_exceeded` for the mailbox: the entry stays and is tried again only after a backoff (1 min, then
-     * doubled), never at every flush; a deposit the relay takes ends the backoff. With no `quota` the first refusal is the
-     * token's, and one after the fresh token is the mailbox's (§8.6).
+     * doubled), never at every flush; a deposit the relay takes ends the backoff. With no `quota` it is the mailbox's too (a
+     * device's token has none).
      */
     @Test
-    fun aMailboxQuotaBacksOffAndAQuotaWithoutAMemberIsTheTokensThenTheMailboxs() = runBlocking<Unit> {
+    fun aMailboxQuotaBacksOffAndAQuotaWithoutAMemberIsTheMailboxs() = runBlocking<Unit> {
         withTimeout(30_000) {
             val store = InMemoryDeviceStateStore()
             val (d, v) = pairedDevice(this, store)
@@ -1546,25 +1584,22 @@ class VaultDeviceTest {
             assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
             assertTrue(savedState(store).outbox.isEmpty())
 
-            // No `quota`: the token's at first, then the mailbox's under the fresh token.
+            // (The review of 4de9019c, Medium 1) No `quota` (a relay before 0.9.2): for a device, the mailbox's, never a token wait.
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseQuota = null
             refused.set(0)
             assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c2") }) }.isFailure)
-            assertEquals(d.vaultToken, savedState(store).outbox.single().quotaToken)
-            Thread.sleep(1_100)
-            val fresh = v.tokenFor(d)
-            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
+            assertNull("no token wait", savedState(store).outbox.single().quotaToken)
             d.flushOutbox()
-            assertEquals("tried once under the fresh token", 2, refused.get())
-            val e = savedState(store).outbox.single()
-            assertEquals(fresh, e.token)
-            assertNull("now the mailbox's", e.quotaToken)
-            d.flushOutbox()
-            assertEquals("backing off", 2, refused.get())
+            assertEquals("backing off", 1, refused.get())
             elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
             d.flushOutbox()
-            assertEquals("from a minute again: the deposit taken earlier ended the old backoff", 3, refused.get())
+            assertEquals("from a minute again: the deposit taken earlier ended the old backoff", 2, refused.get())
+            // (Low 2) A deposit straight to the vault that the relay takes ends the backoff too.
+            refuseDeposits = null
+            d.sendOnce("call.ringing", buildJsonObject { put("call_id", "x") }, Instant.now().plusSeconds(30))
+            d.flushOutbox()
+            assertTrue("sent at once", savedState(store).outbox.isEmpty())
             refuseDeposits = null
             refuseStatus = 403
             d.stop()

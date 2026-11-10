@@ -164,6 +164,8 @@ class RelayClient(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
     private val limits: CallLimits = CallLimits(),
+    /** A monotonic clock in ms, for a request's whole deadline ([Call.deadlineMs]). */
+    private val elapsedMs: () -> Long = { System.nanoTime() / NANOS_PER_MS },
 ) {
     /**
      * Bounds on how long one request may take, so that a relay (a claim's comes from a scanned code) cannot keep a
@@ -227,8 +229,14 @@ class RelayClient(
         val onLostAttempt: (() -> Unit)? = null,
         /** Called when a RETRY attempt of [execute] (not the first) goes out: its send time is a send of its own. */
         val onRetrySent: (() -> Unit)? = null,
-        /** How many attempts [execute] makes instead of the client's own (1: one attempt, bounded by its call timeout alone). */
-        val attempts: Int? = null,
+        /**
+         * (GC #6847) The whole request's deadline (ms from its start): its attempts, their backoff and `retry_after` waits
+         * together never run past it. Each attempt's call timeout is cut to what is left; a retry whose wait would not
+         * leave more than [minAttemptMs] for the attempt is not made, and the last failure is thrown.
+         */
+        val deadlineMs: Long? = null,
+        /** With [deadlineMs]: the least an attempt needs (a long-poll's wait, so a retry is never cut while parked). */
+        val minAttemptMs: Long = 0,
         /**
          * Called each time an attempt actually starts writing the request (OkHttp's `requestHeadersStart`): after any wait
          * for the network, connect and retry inside the transport, every attempt of [execute] and of [TransportRetry]. The
@@ -242,23 +250,31 @@ class RelayClient(
         return d / 2 + random.nextLong(d / 2)
     }
 
+    /** The wait before attempt [i]: the refusal's `retry_after` (with jitter), else the backoff. */
+    private fun retryWait(e: IOException?, i: Int): Long =
+        if (e is RelayException && e.retryAfterSeconds > 0) {
+            e.retryAfterSeconds * MS_PER_S + random.nextLong(JITTER_MS)
+        } else {
+            backoffMillis(i)
+        }
+
     internal suspend fun <T> execute(c: Call, read: (Response) -> T): T {
         var last: IOException? = null
         val sent = AtomicBoolean()
-        for (i in 0 until maxOf(c.attempts ?: maxAttempts, 1)) {
+        val start = elapsedMs()
+        val left = { c.deadlineMs?.let { it - (elapsedMs() - start) } }
+        for (i in 0 until maxOf(maxAttempts, 1)) {
             if (i > 0) {
-                val e = last
-                val wait = if (e is RelayException && e.retryAfterSeconds > 0) {
-                    e.retryAfterSeconds * MS_PER_S + random.nextLong(JITTER_MS)
-                } else {
-                    backoffMillis(i)
-                }
+                val wait = retryWait(last, i)
+                // Within the deadline: no retry that could not finish before it (the last failure is the answer).
+                val l = left()
+                if (l != null && l - wait <= c.minAttemptMs) throw last ?: IOException("relay: no time left")
                 sleep(wait)
                 c.onRetrySent?.invoke()
             }
             sent.set(false)
             try {
-                return once(c, sent, read)
+                return once(c, sent, left()?.coerceAtLeast(1), read)
             } catch (e: RelayException) {
                 if (e.status >= HTTP_SERVER_ERROR) c.onLostAttempt?.invoke()
                 if (!mayRetry(c, e, sent.get())) throw e
@@ -283,7 +299,7 @@ class RelayClient(
             (c.resendAfterSent || !sent || e.status < HTTP_SERVER_ERROR && e.code != RelayException.REPLAY_DETECTED)
 
     @Suppress("CyclomaticComplexMethod") // one branch per request shape (signed, token, body, content type, long-poll)
-    internal suspend fun <T> once(c: Call, sent: AtomicBoolean? = null, read: (Response) -> T): T {
+    internal suspend fun <T> once(c: Call, sent: AtomicBoolean? = null, capMs: Long? = null, read: (Response) -> T): T {
         val url = baseUrl + c.path + (c.query?.let { "?$it" } ?: "")
         val rb = Request.Builder().url(url)
         if (!c.unsigned) {
@@ -302,7 +318,8 @@ class RelayClient(
         rb.tag(TransportRetry.Policy::class.java, c.transportRetry)
         val client = if (c.longPoll) pollHttp else http
         val call = client.newCall(rb.build())
-        val timeoutMs = c.callMs ?: if (c.longPoll) null else if (c.blob) limits.blobMs else limits.callMs
+        val ownMs = c.callMs ?: if (c.longPoll) null else if (c.blob) limits.blobMs else limits.callMs
+        val timeoutMs = if (capMs == null) ownMs else minOf(ownMs ?: capMs, capMs)
         if (timeoutMs != null) {
             // The whole attempt, the body read by [read] included (it runs before the response is closed).
             call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -415,7 +432,7 @@ class RelayClient(
     /**
      * Long-polls this mailbox (§6.3): [wait] ≤ 25 s, [max] ≤ 100. [callTimeout] bounds each attempt, the body read
      * included; none by default ([CallLimits]): a caller that must end sooner passes one (the transfer's settlement window).
-     * [attempts]: how many (default the client's); a caller whose bound covers the whole request passes 1.
+     * [deadline]: the whole request's bound, its retries and their waits included ([Call.deadlineMs]); none by default.
      */
     suspend fun collect(
         wait: Duration = Duration.ofSeconds(DEFAULT_WAIT_S),
@@ -424,12 +441,13 @@ class RelayClient(
         onRetrySent: (() -> Unit)? = null,
         onSent: (() -> Unit)? = null,
         callTimeout: Duration? = null,
-        attempts: Int? = null,
+        deadline: Duration? = null,
     ): List<RelayMessage> {
         val q = "wait=${wait.seconds.coerceIn(0, MAX_WAIT_S)}&max=${max.coerceIn(1, MAX_COLLECT)}"
         val call = Call(
             "GET", "/v1/mailbox", query = q, longPoll = true, onLostAttempt = onLostAttempt, onRetrySent = onRetrySent,
-            onSent = onSent, callMs = callTimeout?.toMillis(), attempts = attempts,
+            onSent = onSent, callMs = callTimeout?.toMillis(), deadlineMs = deadline?.toMillis(),
+            minAttemptMs = deadline?.let { wait.seconds.coerceIn(0, MAX_WAIT_S) * MS_PER_S } ?: 0,
         )
         val o = json(call) ?: return emptyList()
         return o.array("messages").map { RelayMessage.parse(it.asObject()) }
@@ -532,6 +550,7 @@ class RelayClient(
 
     companion object {
         const val DEFAULT_ATTEMPTS = 3
+        private const val NANOS_PER_MS = 1_000_000L
         const val DEFAULT_WAIT_S = 25L
         const val DEFAULT_MAX = 32
         private const val MAX_WAIT_S = 25L
