@@ -2069,6 +2069,24 @@ class VaultDeviceTest {
         }
     }
 
+    /** (#335, Opus Low-1) A forgotten device's one-off collects (the settlement's, the deadline's) take and ack nothing. */
+    @Test
+    fun aForgottenDevicesCollectsAckNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            serveMailbox = true
+            queued.add(v.transferPaired(d))
+            d.forget()
+            assertEquals(0, d.collectOnce())
+            assertEquals(0, d.pollOnce())
+            assertNull("nothing acked", acked.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals("still waiting on the relay", 1, queued.size)
+        }
+    }
+
     /** (The blind reviews of #335, Fable L1) The guard is decided under the device's lock: nothing open, nothing forgotten. */
     @Test
     fun forgetIfTransferOpenForgetsOnlyAnOpenTransfer() = runBlocking<Unit> {

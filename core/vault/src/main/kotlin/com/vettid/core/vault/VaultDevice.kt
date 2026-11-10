@@ -702,6 +702,7 @@ class VaultDevice private constructor(
 
     /** One long-poll round (tests and the foreground-service path). */
     suspend fun pollOnce(): Int {
+        if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val started = System.nanoTime()
         return MailboxCollector(own, wait = cfg.pollWait, clock = clock).pollOnce { handle(it) }.also { noteReached(started) }
     }
@@ -1447,6 +1448,7 @@ class VaultDevice private constructor(
      * round leased is invisible to this collect until the round ended.
      */
     suspend fun collectOnce(wait: Duration = Duration.ZERO): Int {
+        if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
             wait, Int.MAX_VALUE,
