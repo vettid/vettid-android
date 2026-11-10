@@ -668,7 +668,7 @@ private fun RuleEditDialogs(state: RuleEditUiState, name: String, actions: RuleE
                 own?.let { ruleName(it, state.names) } ?: stringResource(R.string.items_rule_name, state.draft.tags.joinToString(", ")),
                 name,
             ),
-            text = stringResource(R.string.items_agent_rule_delete_body, statusBoundText(state.draft.statusTtl)),
+            text = stringResource(R.string.items_agent_rule_delete_body, statusBoundText(deleteStatusTtl(own, state.draft))),
             confirmLabel = stringResource(R.string.items_agent_rule_delete),
             onConfirm = actions.onDelete,
             onDismiss = { actions.onAskDelete(false) },

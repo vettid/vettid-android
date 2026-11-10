@@ -306,3 +306,10 @@ internal fun AgentPasswordSheet(state: RuleEditUiState, name: String, actions: R
 /** The status lifetime plus one minute, in words (§10.11: a removed rule's last acceptance). */
 @Composable
 internal fun statusBoundText(statusTtl: Int?): String = durationText((statusTtl ?: RuleDraft.DEFAULT_STATUS_TTL) + 60L)
+
+/**
+ * The status lifetime the delete text names (review Low 3): the stored rule's, at its worst ([ShareRule.statusTtlBound]),
+ * when the rule is one the vault holds; else the draft's.
+ */
+internal fun deleteStatusTtl(own: com.vettid.core.data.items.ShareRule?, draft: RuleDraft): Int? =
+    if (own != null) own.statusTtlBound else draft.statusTtl
