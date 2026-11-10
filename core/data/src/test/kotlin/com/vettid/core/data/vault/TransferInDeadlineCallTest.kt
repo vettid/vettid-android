@@ -60,8 +60,11 @@ class TransferInDeadlineCallTest {
      */
     @Test
     fun theSetupLinkPathsAreGuardedAndAStartPastTheDeadlineSettlesOnItsOwn() {
-        val guard = "if (transferPinned(d)) throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)"
-        assertTrue(body("private suspend fun freshDeviceIfUnpaired()").any { it == guard })
+        // (GC #6761) Asked under the device's lock, with the settlement rule, in the same call that forgets.
+        val fresh = body("private suspend fun freshDeviceIfUnpaired()")
+        val ask = "d.forgetIfStaleUnpaired { t, id -> settlements.active || TransferInResume.deadlineDue(t, id, "
+        assertTrue(fresh.any { it.contains(ask) })
+        assertTrue(fresh.any { it == "throw VaultFailure(FailureKind.BUSY, MoveRepository.CODE_TRANSFER_SETTLING)" })
         val forget = "if (session?.device?.let(::transferPinned) == true) throw VaultFailure(FailureKind.BUSY, " +
             "MoveRepository.CODE_TRANSFER_SETTLING)"
         assertTrue(body("override suspend fun forgetSetupCode()").any { it == forget })
