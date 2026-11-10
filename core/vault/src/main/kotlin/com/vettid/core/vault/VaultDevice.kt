@@ -343,6 +343,13 @@ class VaultDevice private constructor(
     private val afterHandle = ArrayList<OutboxEntry>()
 
     /**
+     * The ids of outbox entries queued in memory that no successful [save] has written yet (a handling whose save failed):
+     * never deposited before a save holds them, as everything is written first and sent after (§8.3; [handleRekey]).
+     * Memory only; under [lock].
+     */
+    private val unsaved = HashSet<String>()
+
+    /**
      * When `hs.confirm` was last queued again for a message under the confirmed epoch (VAULT-MESSAGING §6.3.1 "Devices
      * and agents"): at most once a minute. Memory only, as vettid-vault's `client`; under [lock].
      */
@@ -563,6 +570,7 @@ class VaultDevice private constructor(
             }.toMutableList()
         }
         cfg.store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+        unsaved.clear() // every entry in memory is in the file now
     }
 
     /** The persisted rekeys awaiting `hs.fin`; one that does not restore or is past [HANDSHAKE_TTL] is dropped. */
@@ -1651,7 +1659,7 @@ class VaultDevice private constructor(
      * transport failure, 429, 5xx and a stale or replayed signature (`timestamp_stale`, `replay_detected`: the relay
      * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
      */
-    private suspend fun deliver(e: OutboxEntry) {
+    private suspend fun deliver(e: OutboxEntry, onRefused: (RelayException) -> Unit = {}) {
         checkLive()
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
@@ -1671,6 +1679,7 @@ class VaultDevice private constructor(
             // (P3) Only a request no copy of which was ever accepted (an earlier version's, never sent) is dropped here;
             // a tracked one stays until it is answered or past its exp: an earlier copy may have reached the vault.
             if (st.unsettled[e.id] == LEGACY_UNSENT) st.unsettled.remove(e.id)
+            onRefused(x) // in the same write as the removal
             save()
             throw x
         }
@@ -1716,6 +1725,7 @@ class VaultDevice private constructor(
             try {
                 lock.withLock {
                     if (!st.outbox.contains(e)) return@withLock
+                    if (e.id in unsaved) save() // written first, sent after; a failed save leaves it for the next flush
                     if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e) // hs.confirm's time follows a refusal for good
                 }
             } catch (_: IOException) {
@@ -1902,12 +1912,17 @@ class VaultDevice private constructor(
         if (st.seen.containsKey(m.msgId)) return@withLock
         st.seen[m.msgId] = t.toEpochMilli()
         prune(st.seen, t)
-        afterHandle.clear()
         try {
             handleLocked(m, t, open)
+        } catch (e: IOException) {
+            // The save of this handling's effects failed: the message is not acked (the collector acks only a handler that
+            // returned) and is no longer taken for seen, so its redelivery is handled again, until a save of its effects
+            // holds. Without this a redelivered hs.fin would be acked while the file still holds the old epoch.
+            st.seen.remove(m.msgId)
+            throw e
         } finally {
-            // What the handling queued (hs.confirm, device.features) goes now, after the save that stored it; also if that
-            // save failed: the activation stands in memory, as everything this handling changed does (nothing is undone).
+            // What the handling queued (hs.confirm, device.features) goes now, but only once a save holds it: after a failed
+            // save it waits in memory for the next one that succeeds ([unsaved]).
             deliverQueued()
         }
     }
@@ -2186,9 +2201,13 @@ class VaultDevice private constructor(
             }
         }
         if (res.epoch.suite > v.suite) v.suite = res.epoch.suite
-        // A new pairing (enrollment, transfer, recovery) starts with its own epoch confirmed (§6.3.1), as [dropPairing].
+        // A new pairing (enrollment, transfer, recovery) starts with its own epoch confirmed (§6.3.1), as [dropPairing]: a
+        // kept confirmed epoch of the pairing before loses its rk and keeps its receive key 16 days, as any previous epoch.
+        v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
+            ?.let { keyring.release(it, t.plus(Epoch.RECEIVE_KEY_RETENTION)) }
         v.confirmed = null
         v.confirmAtMs = null
+        reconfirmedAt = null
         keyring.activate(res.epoch, t)
         // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
         // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
@@ -2338,6 +2357,8 @@ class VaultDevice private constructor(
         val cur = keyring.current()
         val v = st.vault
         if (cur != null && v != null && cur.id.contentEquals(confirmedId())) {
+            // Always null here (the current epoch is the confirmed one only while none is recorded); kept as vettid-vault's
+            // establishRekey has it.
             if (v.confirmed == null) v.confirmed = cur.ctx
             keyring.activateKeeping(e, t, t.plus(CONFIRMED_KEYS_FOR))
         } else {
@@ -2374,7 +2395,8 @@ class VaultDevice private constructor(
             return
         }
         if (!ep.id.contentEquals(confirmedId()) || confirmQueued()) return
-        reconfirmedAt?.let { if (Duration.between(it, t) < RECONFIRM_EVERY) return }
+        // A time ahead of t (the clock was set back) does not limit.
+        reconfirmedAt?.let { if (!it.isAfter(t) && Duration.between(it, t) < RECONFIRM_EVERY) return }
         // The minute counts from a confirmation actually queued: a failed one (no token) does not hold the next back.
         try {
             afterHandle.add(queueConfirmLocked(t, save = false))
@@ -2395,7 +2417,9 @@ class VaultDevice private constructor(
     private fun tickConfirmLocked(t: Instant, save: Boolean): OutboxEntry? {
         val v = st.vault ?: return null
         if (v.confirmed == null || keyring.current() == null || confirmQueued()) return null
-        if (t.toEpochMilli() - (v.confirmAtMs ?: 0L) < CONFIRM_RESEND.toMillis()) return null
+        // A time ahead of now (a wall clock that was ahead and was set back) does not hold the re-send back: it is due.
+        val last = v.confirmAtMs ?: 0L
+        if (last <= t.toEpochMilli() && t.toEpochMilli() - last < CONFIRM_RESEND.toMillis()) return null
         return try {
             queueConfirmLocked(t, save)
         } catch (_: IOException) {
@@ -2419,27 +2443,27 @@ class VaultDevice private constructor(
      */
     internal suspend fun deliverConfirm(e: OutboxEntry) {
         try {
-            deliver(e)
-        } catch (x: RelayException) {
-            if (!isTerminal(x) || confirmQueued()) return
-            st.vault?.confirmAtMs = now().toEpochMilli() - CONFIRM_RESEND.minus(RECONFIRM_EVERY).toMillis()
-            try {
-                save()
-            } catch (_: IOException) {
-                // kept in memory; the next save stores it
+            // The floor goes into the same write as the entry's removal: a crash between two writes would leave no
+            // hs.confirm and the old time, 12 days away.
+            deliver(e) { x ->
+                if (isTerminal(x) && !confirmQueued()) {
+                    st.vault?.confirmAtMs = now().toEpochMilli() - CONFIRM_RESEND.minus(RECONFIRM_EVERY).toMillis()
+                }
             }
         } catch (_: IOException) {
-            // a transport failure: the entry stays for the next flush
+            // a transport failure or a refusal: a kept entry stays for the next flush
         }
     }
 
     /** Deposits what the handling queued ([afterHandle]) that is still in the outbox; a failure leaves it for the next flush. */
     private suspend fun deliverQueued() {
         if (afterHandle.isEmpty()) return
-        val queued = afterHandle.toList()
+        val queued = afterHandle.filter { st.outbox.contains(it) }
         afterHandle.clear()
-        for (e in queued) {
-            if (!st.outbox.contains(e)) continue
+        // Not written yet: it goes after the next save that succeeds.
+        val (waiting, ready) = queued.partition { it.id in unsaved }
+        afterHandle.addAll(waiting)
+        for (e in ready) {
             if (e.type == HsTypes.CONFIRM) {
                 deliverConfirm(e)
             } else {
@@ -2494,6 +2518,7 @@ class VaultDevice private constructor(
         val env = ep.seal(Inner(id = iid, type = type, ts = t, body = VaultJson.bytes(body), features = DeviceFeatures.ALL))
         val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
         st.outbox.add(entry)
+        unsaved.add(entry.id) // cleared by the save that writes it
         if (save) {
             var saved = false
             try {
