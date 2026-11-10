@@ -60,6 +60,7 @@ class PairViewModelTest {
         vm.pair()
         advanceUntilIdle()
         assertEquals("approve:3600", pairing.calls.last())
+        assertEquals("bound to the comparison the sheet showed (GC #7370)", "p1", pairing.approvedId)
         vm.choose(SessionChoice.NONE)
         vm.pair()
         advanceUntilIdle()

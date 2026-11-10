@@ -100,13 +100,16 @@ class PairViewModel @Inject constructor(
         // From the feed item the pairing is whatever is held; from the button, a new code (an unfinished one is kept).
         if (!held) {
             repo.acknowledge()
-            // A pairing held for the other role is rejected and replaced by the repository in this one call.
-            viewModelScope.launch { repo.start(role) }
+            // A pairing held for the other role is rejected and replaced by the repository in this one call. From here the
+            // pairing is this screen's (GC #7370): an earlier screen cleared late touches none of it.
+            viewModelScope.launch { repo.start(role, this@PairViewModel) }
+        } else {
+            repo.claim(this)
         }
         // The daily check passed: a refused approval may be sent again.
         viewModelScope.launch {
             ownerCheck.checkCleared().collect {
-                if (repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge()
+                if (repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge(this@PairViewModel)
             }
         }
     }
@@ -117,8 +120,8 @@ class PairViewModel @Inject constructor(
         sheetFor.value = null
         sawStage = false
         viewModelScope.launch {
-            repo.acknowledge()
-            repo.start(codeRole())
+            repo.acknowledge(this@PairViewModel)
+            repo.start(codeRole(), this@PairViewModel)
         }
     }
 
@@ -127,7 +130,7 @@ class PairViewModel @Inject constructor(
     /** Cancel on the code screen: the vault is told, nothing is held. */
     fun cancel() {
         closing.value = true
-        repo.leave()
+        repo.leave(this)
     }
 
     fun codesMatch() {
@@ -142,8 +145,10 @@ class PairViewModel @Inject constructor(
 
     fun pair() {
         val s = local.value
+        // Bound to the comparison the sheet showed (GC #7370).
+        val id = sheetFor.value ?: return
         viewModelScope.launch {
-            repo.approve(s.session.seconds)
+            repo.approve(s.session.seconds, id)
         }
     }
 
@@ -156,12 +161,14 @@ class PairViewModel @Inject constructor(
     /** A final stage was read. */
     fun done() {
         closing.value = true
-        repo.acknowledge()
+        repo.acknowledge(this)
     }
 
     override fun onCleared() {
-        // The screen is gone: a code not used or a comparison not answered is rejected (best effort), never kept.
-        repo.leave()
-        repo.acknowledge()
+        // The screen is gone: a code not used or a comparison not answered is rejected (best effort), never kept. Only this
+        // screen's pairing (GC #7370), and nothing when Done or Cancel already ended it.
+        if (closing.value) return
+        repo.leave(this)
+        repo.acknowledge(this)
     }
 }

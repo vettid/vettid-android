@@ -302,6 +302,21 @@ class PairingManagerTest {
         assertTrue(left.isEmpty())
     }
 
+    /** (GC #7370) An approval is bound to the comparison the sheet showed: one for another pairing is refused, nothing sent. */
+    @Test
+    fun anApprovalForAnotherPairingIsRefusedAndNothingSent() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.start()
+        m.onEvent(pending())
+        m.approve(3600, "p0")
+        assertEquals(listOf("create"), ops.calls)
+        val s = m.state.value
+        assertTrue(s.stage is PairingStage.Compare && !s.busy)
+        m.approve(3600, "p1")
+        assertEquals(listOf("create", "approve:p1:3600"), ops.calls)
+    }
+
     @Test
     fun noAccessYetSendsNoSession() = runTest {
         val ops = Ops()
@@ -334,6 +349,100 @@ class PairingManagerTest {
         m.onEvent(pending())
         m.approve(3600)
         assertEquals("agent-9", (m.state.value.stage as PairingStage.Paired).deviceId)
+    }
+
+    /**
+     * (Review Low 1, item 4) An earlier approval's search for its device, still waiting on the list, must not overwrite the
+     * next pairing's Paired state when it ends: every start is a new generation, the same role's too.
+     */
+    @Test
+    fun anEarlierApprovalsLateSearchLeavesTheNextPairingAlone() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val ops = Ops()
+        val m = PairingManager(
+            this, ops = { ops }, now = { clock }, knownDeviceIds = { emptySet() },
+            readDevices = { gate.await(); listOf(agent("a1", "Claude on laptop")) },
+        )
+        m.start()
+        m.onEvent(pending())
+        val first = launch { m.approve(3600) }
+        try {
+            pump { m.state.value.stage is PairingStage.Paired } // the request runs on the vault guard's thread
+            advanceTimeBy(10_500) // past its wait for the feed item: now on the list read, held
+            m.acknowledge()
+            ops.created = obj("""{"pairing_id":"p2","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
+            m.start()
+            m.onEvent(pending(id = "p2", name = "Desk agent"))
+            ops.onApprove = { m.onEvent(paidFeed("a2")) }
+            m.approve(3600)
+            assertEquals(PairingStage.Paired("Desk agent", "a2"), m.state.value.stage)
+        } finally {
+            gate.complete(Unit) // the earlier search runs NonCancellable: never left waiting
+        }
+        first.join()
+        assertEquals("the next pairing's, untouched", PairingStage.Paired("Desk agent", "a2"), m.state.value.stage)
+    }
+
+    /** (iOS #242 `aStartAfterAPairedPairingCutsTheEarlierSearch`) Every start cuts the earlier pairing's id search: it reads nothing. */
+    @Test
+    fun aStartAfterAPairedPairingCutsTheEarlierSearch() = runTest {
+        var reads = 0
+        val ops = Ops()
+        val m = PairingManager(
+            this, ops = { ops }, now = { clock }, knownDeviceIds = { setOf("me") },
+            readDevices = { reads++; emptyList() },
+        )
+        m.start()
+        m.onEvent(pending())
+        val task = launch { m.approve(3600) }
+        pump { m.state.value.stage is PairingStage.Paired }
+        advanceTimeBy(2_000)
+        // The member reads the end and starts again while the search still waits.
+        m.acknowledge()
+        ops.created = obj("""{"pairing_id":"p2","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
+        m.start()
+        advanceTimeBy(15_000)
+        task.join()
+        assertEquals(0, reads)
+        assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
+    }
+
+    /** (iOS #242 `anEarlierApprovalsEndLeavesTheNewerWatchAlone`, review nit 1) An earlier approval's end leaves a newer one's watch. */
+    @Test
+    fun anEarlierApprovalsEndLeavesTheNewerWatchAlone() = runTest {
+        // The earlier search is held on the list read, so that it ends only once the newer approval watches.
+        val reading = CompletableDeferred<Unit>()
+        val ops = Ops()
+        val m = PairingManager(
+            this, ops = { ops }, now = { clock }, knownDeviceIds = { emptySet() },
+            readDevices = { reading.await(); listOf(agent("a1", "Claude on laptop")) },
+        )
+        m.start()
+        m.onEvent(pending())
+        val first = launch { m.approve(3600) }
+        val gate = CompletableDeferred<Unit>()
+        try {
+            pump { m.state.value.stage is PairingStage.Paired }
+            advanceTimeBy(10_500) // on the list read
+            m.clear()
+            // A new pairing, approved while the earlier search is still ending.
+            m.start()
+            m.onEvent(pending())
+            ops.holdApprove = gate
+            ops.onApprove = { m.onEvent(paidFeed("agent-B")) }
+            val second = launch { m.approve(3600) }
+            pump { ops.approveEntered.isCompleted }
+            // The earlier search ends now.
+            reading.complete(Unit)
+            first.join()
+            gate.complete(Unit)
+            advanceTimeBy(11_000)
+            second.join()
+        } finally {
+            reading.complete(Unit)
+            gate.complete(Unit)
+        }
+        assertEquals("agent-B", (m.state.value.stage as PairingStage.Paired).deviceId)
     }
 
     @Test
@@ -848,7 +957,7 @@ class PairingManagerTest {
         ops.created = obj("""{"pairing_id":"p2","link":"${link(exp = clock.plusSeconds(600))}"}""")
         m.acknowledge()
         m.start()
-        runCurrent()
+        pump { "reject:p1" in ops.calls }
         assertEquals("p2", (m.state.value.stage as PairingStage.Code).code.pairingId)
         assertEquals(listOf("create", "create", "reject:p1"), ops.calls.sorted()) // the reject goes in the manager's scope
         // A start straight from the expired stage, or from a code past its end whose timer has not run: the same.
@@ -860,9 +969,10 @@ class PairingManagerTest {
             if (advance) advanceTimeBy(601_000)
             o.created = obj("""{"pairing_id":"p3","link":"${link(exp = clock.plusSeconds(600))}"}""")
             n.start()
+            pump { "reject:p1" in o.calls } // the reject goes in the manager's scope
             runCurrent()
             assertEquals("$advance", "p3", (n.state.value.stage as PairingStage.Code).code.pairingId)
-            assertTrue("$advance", "reject:p1" in o.calls)
+            assertEquals("$advance: once", 1, o.calls.count { it == "reject:p1" })
         }
     }
 

@@ -142,6 +142,7 @@ internal class VaultPairingOps(private val api: VaultApi) : PairingOps {
 }
 
 /** Pairing an agent or a desktop (ANDROID-PLAN 0.1.53 AA2), as the screens use it. Every failure is a [VaultFailure] in the state. */
+@Suppress("TooManyFunctions") // one per screen action, each also by its owner (GC #7370)
 interface PairingRepository {
     val state: StateFlow<PairingState>
 
@@ -150,10 +151,25 @@ interface PairingRepository {
      * one held for the other role is rejected and replaced in this call, and a create of the other role still in flight is
      * superseded (its answer is dropped and rejected).
      */
-    suspend fun start(role: PairRole = PairRole.AGENT)
+    suspend fun start(role: PairRole = PairRole.AGENT) = start(role, null)
+
+    /**
+     * [start] for the screen [owner] (GC #7370, as iOS): from here the pairing is [owner]'s, so that an earlier screen's late
+     * [leave] or [acknowledge] (Navigation may clear a popped screen after the next one started) touches nothing of it.
+     */
+    suspend fun start(role: PairRole, owner: Any?)
+
+    /** A screen opened for the pairing held (from its feed item) takes it as its own: see [start]'s owner. */
+    fun claim(owner: Any) {}
 
     /** Step 3: `device.pair.approve`, with the first access length in seconds (null: no access yet); never any grants. */
-    suspend fun approve(sessionSeconds: Int?)
+    suspend fun approve(sessionSeconds: Int?) = approve(sessionSeconds, null)
+
+    /**
+     * [approve] bound to the comparison the sheet showed (GC #7370): refused, with nothing sent, when the pairing held is not
+     * [pairingId] (null: whatever comparison is held).
+     */
+    suspend fun approve(sessionSeconds: Int?, pairingId: String?)
 
     /** "They don't match": `device.pair.reject`; the stage becomes [PairingStage.Rejected]. */
     suspend fun reject()
@@ -162,10 +178,16 @@ interface PairingRepository {
     suspend fun cancel()
 
     /** The screen left without an answer: the same as [cancel], without waiting for it. */
-    fun leave()
+    fun leave() = leave(null)
+
+    /** [leave] by the screen [owner]: nothing is done when the pairing held is another screen's (null: whatever is held). */
+    fun leave(owner: Any?)
 
     /** A final stage was read (rejected, paired, ended, expired): back to nothing held. */
-    fun acknowledge()
+    fun acknowledge() = acknowledge(null)
+
+    /** [acknowledge] by the screen [owner]: nothing is done when the pairing held is another screen's (null: whatever is held). */
+    fun acknowledge(owner: Any?)
 }
 
 /**
@@ -218,6 +240,19 @@ class PairingManager(
     }
     private var generation = 0
 
+    /**
+     * The screen whose pairing is held (GC #7370): set by its [start] or [claim], dropped by [clear]. A [leave] or [acknowledge]
+     * of another screen does nothing.
+     */
+    private var owner: Any? = null
+
+    /** Whether [by] may act on the pairing held: an unowned call, or the owner's. */
+    private fun mayAct(by: Any?): Boolean = by == null || owner === by
+
+    override fun claim(owner: Any) {
+        synchronized(lock) { this.owner = owner }
+    }
+
     /** What the pairing in hand is for; every state is stamped with it. */
     private var role = PairRole.AGENT
     private var timer: Job? = null
@@ -241,6 +276,7 @@ class PairingManager(
             arrivals = mutableListOf()
             watching = false
             role = PairRole.AGENT
+            owner = null
             flow.value = PairingState()
         }
     }
@@ -285,8 +321,8 @@ class PairingManager(
 
     /** Whether [stage] is the pairing [id] this phone made and still takes the device's answer at [at]. */
     private fun ours(stage: PairingStage, id: String, at: Instant): Boolean = when (stage) {
-        // (iOS #242 review) Up to a minute after the code's end also while the code timer has not run yet: the same late
-        // answer [PairingStage.CodeExpired] takes.
+        // (iOS #242 review) A pending up to [PairingStage.CodeExpired.LATE] after exp, also while the stage is still Code because
+        // the timer has not run (a deep sleep: `delay` stops while the wall clock runs on), as the expired stage takes it.
         is PairingStage.Code -> stage.code.pairingId == id && !at.isAfter(stage.code.exp.plus(PairingStage.CodeExpired.LATE))
         is PairingStage.CodeExpired -> stage.pairingId == id && !at.isAfter(stage.exp.plus(PairingStage.CodeExpired.LATE))
         else -> false
@@ -311,12 +347,14 @@ class PairingManager(
     }
 
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // the guards of a state machine: each is one early exit
-    override suspend fun start(role: PairRole) {
+    override suspend fun start(role: PairRole, owner: Any?) {
         val gen: Int
         val wanted = role
         // A pairing of the other role that this start replaces: the vault is told it is not wanted.
         var replaced: String? = null
         synchronized(lock) {
+            // From here what is held is this screen's, also a pairing kept below (a live code, a comparison) that it shows.
+            if (owner != null) this.owner = owner
             val s = flow.value
             if (s.stage !is PairingStage.Idle && this.role != wanted) {
                 // The other button: the held pairing is rejected and replaced in one step, so no state of it is left behind. An
@@ -335,8 +373,10 @@ class PairingManager(
                 // vault is told it is not wanted, as for the other role.
                 replaced = heldId(s.stage)
             }
-            // Every start is a new generation (iOS #242 review): nothing of an earlier start's request or timer applies.
+            // Every start is a new generation (iOS #242 review): nothing of an earlier start's request, timer or id search applies,
+            // and its arrivals are not this pairing's.
             generation++
+            arrivals = mutableListOf()
             gen = generation
             timer?.cancel()
             this.role = wanted
@@ -411,13 +451,15 @@ class PairingManager(
     }
 
     @Suppress("ReturnCount")
-    override suspend fun approve(sessionSeconds: Int?) {
+    override suspend fun approve(sessionSeconds: Int?, pairingId: String?) {
         val gen: Int
         val p: PendingPairing
         val forRole: PairRole
         synchronized(lock) {
             val s = flow.value
             val c = s.stage as? PairingStage.Compare ?: return
+            // Only the comparison the sheet showed (GC #7370): another pairing held now is not approved by that tap.
+            if (pairingId != null && c.pending.pairingId != pairingId) return
             forRole = role
             // Never an approval of what cannot be compared, nor after this phone's time ran out, nor twice.
             if (s.busy || !c.pending.comparable || !c.pending.ends.isAfter(now())) return
@@ -437,7 +479,8 @@ class PairingManager(
             try {
                 settle(gen, p, forRole, sessionSeconds)
             } finally {
-                synchronized(lock) { watching = false }
+                // Only this approval's watch: a newer pairing's (a later generation) goes on.
+                synchronized(lock) { if (gen == generation) watching = false }
             }
         }
     }
@@ -456,7 +499,7 @@ class PairingManager(
             flow.value = PairingState(PairingStage.Paired(p.name, null))
         }
         runCatching { onPaired() }
-        val id = findDevice(p, forRole)
+        val id = findDevice(p, forRole, gen)
         synchronized(lock) {
             if (gen == generation && flow.value.stage is PairingStage.Paired) flow.value = PairingState(PairingStage.Paired(p.name, id))
         }
@@ -466,10 +509,10 @@ class PairingManager(
     private suspend fun failed(gen: Int, p: PendingPairing, forRole: PairRole, e: VaultFailure) {
         // No answer at all: the vault may have taken the approval. Look for the new device before saying anything.
         val unknown = e.kind == FailureKind.NETWORK || e.kind == FailureKind.NO_RESPONSE
-        val found = if (unknown) findDevice(p, forRole) else null
+        val found = if (unknown) findDevice(p, forRole, gen) else null
         synchronized(lock) {
-            watching = false
             if (gen != generation) return
+            watching = false
             if (found != null) {
                 timer?.cancel()
                 timer = null
@@ -502,14 +545,19 @@ class PairingManager(
      * none or more than one fits: the list opens instead.
      */
     @Suppress("ReturnCount")
-    private suspend fun findDevice(p: PendingPairing, forRole: PairRole): String? {
+    private suspend fun findDevice(p: PendingPairing, forRole: PairRole, gen: Int): String? {
         var waited = 0L
         while (waited < ID_WAIT.toMillis()) {
-            synchronized(lock) { arrivals.singleOrNull()?.let { return it } }
+            synchronized(lock) {
+                // The arrivals are the newest approval's: a pairing started since is not this one's to read.
+                if (gen != generation) return null
+                arrivals.singleOrNull()?.let { return it }
+            }
             delay(POLL_MS)
             waited += POLL_MS
         }
         synchronized(lock) {
+            if (gen != generation) return null
             if (arrivals.size == 1) return arrivals.single()
             if (arrivals.size > 1) return null
         }
@@ -541,9 +589,14 @@ class PairingManager(
         }
     }
 
-    override suspend fun cancel() {
+    override suspend fun cancel() = cancel(null)
+
+    @Suppress("ReturnCount") // the guards of a state machine: each is one early exit
+    private suspend fun cancel(by: Any?) {
         val id: String
         synchronized(lock) {
+            // Also checked here: another screen may have started between the leave and this.
+            if (!mayAct(by)) return
             val s = flow.value
             id = when (val st = s.stage) {
                 is PairingStage.Code -> st.code.pairingId
@@ -572,12 +625,15 @@ class PairingManager(
         sendReject(id)
     }
 
-    override fun leave() {
-        scope.launch { cancel() }
+    override fun leave(owner: Any?) {
+        // Decided now, under the lock: a screen that left after another started takes nothing of the other's.
+        synchronized(lock) { if (!mayAct(owner)) return }
+        scope.launch { cancel(owner) }
     }
 
-    override fun acknowledge() {
+    override fun acknowledge(owner: Any?) {
         synchronized(lock) {
+            if (!mayAct(owner)) return
             val s = flow.value
             if (s.busy) return
             when (val st = s.stage) {
