@@ -4427,6 +4427,7 @@ class VaultManager(
         } catch (@Suppress("TooGenericExceptionCaught") x: Exception) {
             x
         }
+        dropped?.addSuppressed(e) // the timeout kept for the logs
         throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = dropped ?: e)
     }
 

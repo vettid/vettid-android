@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,6 +79,21 @@ class TransferInSameCodeTest {
         // (The re-check of fd8f055d, Low-2) Only the known refusals to open a session go on; any other load failure stops.
         val stops = "if (!sessionRefused(e)) throw VaultFailure(FailureKind.LOCAL_STATE, CODE_DEVICE_NOT_LOADED, cause = e)"
         assertTrue(setup.any { it.startsWith(stops) })
+    }
+
+    /**
+     * (#335's re-check, Opus L2) The 60 s ends "not answered" whatever the abandon's save did: its failure is only the
+     * cause, and a cancel during it is rethrown.
+     */
+    @Test
+    fun theSixtySecondsEndNotAnsweredWhateverTheDropDid() {
+        val w = body("private suspend fun awaitTransferSas(d: com.vettid.core.vault.VaultDevice): String = try {")
+        val abandon = w.indexOfFirst { it == "d.abandonTransfer()" }
+        val cancel = w.indexOfFirst { it == "} catch (c: CancellationException) {" }
+        val answer = w.indexOfFirst { it.contains("FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = dropped ?: e") }
+        assertTrue("the abandon is caught", abandon in 0 until cancel)
+        assertEquals("a cancel is rethrown", "throw c", w[cancel + 1])
+        assertTrue("then not answered, always", answer > cancel)
     }
 
     /** (The blind reviews of #334, item 3) The start-up sweep of an orphaned ("", 1) key only while the phone holds no vault. */
