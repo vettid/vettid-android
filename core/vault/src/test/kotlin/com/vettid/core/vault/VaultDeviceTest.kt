@@ -20,6 +20,7 @@ import com.vettid.core.crypto.invite.InviteQr
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.json.asUint
 import com.vettid.core.crypto.session.Initiator
 import com.vettid.core.crypto.session.InitiatorConfig
 import com.vettid.core.crypto.session.Keyring
@@ -3385,6 +3386,189 @@ class VaultDeviceTest {
     }
 
     private fun ts(t: Instant) = com.vettid.core.crypto.envelope.Timestamps.formatMillis(t)
+
+    // --- calls, form 2 (C2; VAULT-MESSAGING 0.88.16 "Call forms", "Key confirmation") ---
+
+    /** A form 2 answer body from [peer]'s device: signed over m2 with [p], `confirm` from the bound k_call. */
+    private fun form2Answer(
+        peer: CallPeer,
+        callId: String,
+        ek: ByteArray,
+        p: CallWire.Parties,
+        offered: List<Int> = listOf(1),
+        chosen: Int = 1,
+        signedParties: CallWire.Parties = p,
+        confirmParties: CallWire.Parties = p,
+        peerIk: ByteArray = peer.vault.publicKey,
+    ): String {
+        val a = CallWire.answer2(ek, callId, confirmParties)
+        val confirm = CallWire.confirm(CallWire.confirmKey(a.kCall, callId), chosen, offered, callId, confirmParties)
+        val m2 = CallWire.answerMessage2(callId, chosen, offered, signedParties, a.enc)
+        return peer.vouched(
+            JsonBuilder().string("call_id", callId).string("sdp", sdp).base64("enc", a.enc)
+                .raw("suite", chosen.toString()).raw("offered", "[" + offered.joinToString(",") + "]").base64("confirm", confirm),
+            m2, peer.vault, peerIk,
+        ).build()
+    }
+
+    /**
+     * Placing a form 2 call: the start carries form 1 and form 2 (`suites`, `ek_sig2` over m2 naming this vault and
+     * the connection's) and `keepalive`; the answer is used only in form 2's terms, `confirm` checked before any key,
+     * and the keys come from the bound k_call.
+     */
+    @Test
+    fun placingAFormTwoCall() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val api = VaultApi(d)
+            val peer = CallPeer()
+            val starting = async(Dispatchers.IO) { api.callStart("conn-1", sdp, MediaSuite.entries, peerIk = peer.vault.publicKey) }
+            val req = v.open(nextDeposit().second)
+            val b = StrictJson.parseObject(req.body)
+            val callId = b.string("call_id")
+            val ek = b.base64("ek", 1216)
+            val p = CallWire.Parties(v.ik.publicKey, peer.vault.publicKey)
+            assertEquals("form 1 still offers suite 1 only (rule 3)", listOf(1L), b.array("suites").map { it.asUint(1, 65535) })
+            assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.offerMessage2(callId, "audio", listOf(1), p, ek), b.base64("ek_sig2", 64)))
+            assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.shareMessage("offer", callId, "audio", ek), b.base64("ek_sig", 64)))
+            assertEquals(true, b.bool("keepalive"))
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            d.handle(v.seal("call.start", v.ice(JsonBuilder().string("call_id", callId).string("exp", ts(exp)), callId).build(), re = req.id, status = Inner.STATUS_OK))
+            val call = starting.await()
+            assertTrue(call.formTwo)
+
+            val other = CallPeer()
+            val third = Ed25519PrivateKey.generate().publicKey
+            val bad = listOf(
+                // the answering side named another caller or callee (a call passed on)
+                form2Answer(peer, callId, ek, p, signedParties = CallWire.Parties(third, peer.vault.publicKey), confirmParties = CallWire.Parties(third, peer.vault.publicKey)),
+                form2Answer(peer, callId, ek, p, signedParties = CallWire.Parties(v.ik.publicKey, third), confirmParties = CallWire.Parties(v.ik.publicKey, third)),
+                // signed right, but confirm over other parties (a relay that re-signed)
+                form2Answer(peer, callId, ek, p, confirmParties = CallWire.Parties(third, peer.vault.publicKey)),
+                // offered changed (another list than sent), or a suite not offered
+                form2Answer(peer, callId, ek, p, offered = listOf(2, 1)),
+                form2Answer(peer, callId, ek, p, chosen = 2, offered = listOf(1)),
+                // another vault, consistent in itself
+                form2Answer(other, callId, ek, CallWire.Parties(v.ik.publicKey, other.vault.publicKey), peerIk = other.vault.publicKey),
+            )
+            for (x in bad) {
+                d.handle(v.seal("call.answer", x))
+                val ev = d.awaitEvent("call.answer")
+                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev, peer.pinned) }
+            }
+            // Part of form 2, or a confirm that is not 32 bytes: not used either.
+            val good = form2Answer(peer, callId, ek, p)
+            val partials = listOf(
+                good.replace(Regex(""","confirm":"[^"]*""""), ""),
+                good.replace(Regex(""","suite":1"""), ""),
+                good.replace(Regex(""""confirm":"[^"]*""""), "\"confirm\":\"" + com.vettid.core.crypto.Base64s.encodeStd(ByteArray(31)) + "\""),
+            )
+            for (x in partials) {
+                assertTrue(x != good)
+                d.handle(v.seal("call.answer", x))
+                val ev = d.awaitEvent("call.answer")
+                assertThrows(CallMessageException::class.java) { api.callAccept(call, ev, peer.pinned) }
+            }
+            // The connection's key changed after the offer: the details now show the new key, and an answer under it
+            // (signed over the parties as fixed at the offer) names another callee than this device named: refused.
+            val rotated = CallPeer()
+            val fixedA = CallWire.answer2(ek, callId, p)
+            val rotatedBody = JsonBuilder().string("call_id", callId).string("sdp", sdp).base64("enc", fixedA.enc).raw("suite", "1").raw("offered", "[1]")
+                .base64("confirm", CallWire.confirm(CallWire.confirmKey(fixedA.kCall, callId), 1, listOf(1), callId, p))
+            val rm2 = CallWire.answerMessage2(callId, 1, listOf(1), p, fixedA.enc)
+            val rotatedAnswer = rotatedBody.base64("device_ik", rotated.device.publicKey).base64("device_sig", CallWire.signShare(rotated.device, rm2))
+                .base64("vault_sig", rotated.vault.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(rotated.device.publicKey, rm2)))
+                .base64("peer_ik", rotated.vault.publicKey).build()
+            d.handle(v.seal("call.answer", rotatedAnswer))
+            val rev = d.awaitEvent("call.answer")
+            assertThrows(CallMessageException::class.java) { api.callAccept(call, rev, rotated.pinned) }
+            // The right one: the keys are those of the bound k_call.
+            val a = CallWire.answer2(ek, callId, p)
+            val confirm = CallWire.confirm(CallWire.confirmKey(a.kCall, callId), 1, listOf(1), callId, p)
+            val body = peer.vouched(
+                JsonBuilder().string("call_id", callId).string("sdp", sdp).base64("enc", a.enc).raw("suite", "1").raw("offered", "[1]").base64("confirm", confirm),
+                CallWire.answerMessage2(callId, 1, listOf(1), p, a.enc),
+            ).build()
+            d.handle(v.seal("call.answer", body))
+            val accepted = api.callAccept(call, d.awaitEvent("call.answer"), peer.pinned)
+            val n = CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
+            assertTrue(accepted.keys.send().contentEquals(CallMedia.directionKey(a.kCall, n, CallMedia.DIRECTION_CALLER, callId)))
+            assertTrue(accepted.keys.receive().contentEquals(CallMedia.directionKey(a.kCall, n, CallMedia.DIRECTION_CALLEE, callId)))
+            accepted.keys.destroy()
+        }
+    }
+
+    /**
+     * Answering a form 2 offer: every form it carries is checked (part of form 2 refused), the choice is from the signed
+     * list, and the answer is in form 2: `suite`, `offered`, `confirm`, `enc_sig` over m2, no VettID SDP attribute.
+     */
+    @Test
+    fun answeringAFormTwoCall() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val api = VaultApi(d)
+            val peer = CallPeer()
+            val callId = Ulid.new()
+            val offerKey = CallWire.newOfferKey()
+            val ek = offerKey.publicKey.bytes()
+            val p = CallWire.Parties(peer.vault.publicKey, v.ik.publicKey)
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            fun offer(signed: List<Int> = listOf(1), sigParties: CallWire.Parties = p, withSig2: Boolean = true, withV2: Boolean = true): String {
+                val m1 = CallWire.shareMessage("offer", callId, "audio", ek)
+                val m2 = CallWire.offerMessage2(callId, "audio", signed, sigParties, ek)
+                var b = peer.vouched(
+                    v.ice(JsonBuilder().string("call_id", callId).string("connection_id", "conn-1").string("media", "audio")
+                        .string("sdp", CallMedia.sdpWithOffer(sdp, listOf(1))).base64("ek", ek).string("exp", ts(exp)), callId),
+                    m1,
+                ).raw("suites", "[" + signed.joinToString(",") + "]")
+                if (withSig2) b = b.base64("device_sig2", CallWire.signShare(peer.device, m2))
+                if (withV2) b = b.base64("vault_sig2", peer.vault.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(peer.device.publicKey, m2)))
+                return b.build()
+            }
+            val third = Ed25519PrivateKey.generate().publicKey
+            for (x in listOf(
+                offer(withSig2 = false), offer(withV2 = false), // part of form 2
+                offer(sigParties = CallWire.Parties(third, v.ik.publicKey)), // signed as another caller's call
+                offer(sigParties = CallWire.Parties(peer.vault.publicKey, third)), // signed for another callee (passed on)
+            )) {
+                d.handle(v.seal("call.offer", x))
+                val ev = d.awaitEvent("call.offer")
+                assertThrows(CallMessageException::class.java) { api.callIncoming(ev, peer.pinned) }
+            }
+            for (raw in listOf("[0]", "[1,1]", "[\"1\"]", "[1.0]", "null", "[]", "[1e0]")) {
+                val x = offer().replace("\"suites\":[1]", "\"suites\":$raw")
+                d.handle(v.seal("call.offer", x))
+                val ev = d.awaitEvent("call.offer")
+                assertThrows(raw, CallMessageException::class.java) { api.callIncoming(ev, peer.pinned) }
+            }
+            d.handle(v.seal("call.offer", offer()))
+            val call = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned)
+            assertTrue(call.formTwo)
+            assertEquals(sdp, call.sdp)
+
+            val keys = async(Dispatchers.IO) { api.callAnswer(call, sdp, keepalive = true) }
+            val sent = v.open(nextDeposit().second)
+            assertEquals("call.answer", sent.type)
+            val k = keys.await()
+            val b = StrictJson.parseObject(sent.body)
+            assertEquals("no VettID attribute in a form 2 answer's SDP", sdp, b.string("sdp"))
+            assertEquals(1L, b.uint("suite", 1, 65535))
+            assertEquals(listOf(1L), b.array("offered").map { it.asUint(1, 65535) })
+            assertEquals(true, b.bool("keepalive"))
+            val enc = b.base64("enc", 1120)
+            assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.answerMessage2(callId, 1, listOf(1), p, enc), b.base64("enc_sig", 64)))
+            // The caller's side derives the same bound k_call and its confirm verifies.
+            val kCall = CallWire.accept2(offerKey, enc, callId, p)
+            assertTrue(CallWire.verifyConfirm(CallWire.confirmKey(kCall, callId), 1, listOf(1), callId, p, b.base64("confirm", 32)))
+            val n = CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
+            assertTrue(k.send().contentEquals(CallMedia.directionKey(kCall, n, CallMedia.DIRECTION_CALLEE, callId)))
+            k.destroy()
+        }
+    }
 
     /** An outgoing call: `call.start` is deposited once with a signed share, the answer is verified, and both devices hold the same two keys. */
     @Test
