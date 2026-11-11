@@ -5513,6 +5513,33 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (GC #6816 review) A fetched credential (`credential.get`, also the fetch after a lost change decided as applied) names
+     * the key Vault status shows: a different key is emitted, none is emitted as "not known" (null), and the same key says
+     * nothing.
+     */
+    @Test
+    fun aFetchedCredentialEmitsADifferentKeyOrNoneButNotTheSame() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            d.keepCredential("QkxPQg==", 3, "key-one")
+            val seen = collectKeyChanges(d)
+            suspend fun fetch(body: String) {
+                val f = async(Dispatchers.IO) { api.credentialFetch() }
+                answer(d, v, "credential.get", body)
+                answer(d, v, "credential.ack", "{}")
+                f.await()
+            }
+            fetch("""{"credential":"QkxPQjQ=","version":4,"key":"key-one"}""")
+            assertTrue("the same key: nothing, ${seen.toList()}", seen.isEmpty())
+            fetch("""{"credential":"QkxPQjE=","version":1,"key":"key-two"}""")
+            assertEquals(listOf<String?>("key-two"), seen.toList())
+            fetch("""{"credential":"QkxPQjI=","version":2}""")
+            assertEquals(listOf<String?>("key-two", null), seen.toList())
+        }
+    }
+
     @Test
     fun aKeepThatCannotBeSavedEmitsNothing() = runBlocking<Unit> {
         withTimeout(30_000) {

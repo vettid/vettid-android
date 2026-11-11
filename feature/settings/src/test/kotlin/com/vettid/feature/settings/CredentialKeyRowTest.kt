@@ -3,6 +3,8 @@ package com.vettid.feature.settings
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -102,6 +104,47 @@ class CredentialKeyRowTest {
         advanceUntilIdle()
         assertEquals(1, vault.calls.count { it == "credentialKey" })
         assertEquals(CredentialKeyUi.Shown(fp), vm.credentialKey.value)
+    }
+
+    /**
+     * (GC #6816, as vettid-ios #236) Back in front (the app's return, or the screen over it gone) the key is asked again; the
+     * first showing asks nothing more than the opening did, and a screen never hidden asks nothing more.
+     */
+    @Test
+    fun shownAgainAfterBeingHiddenAsksTheKeyAgain() = runTest {
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, fp)
+        val vm = VaultStatusViewModel(vault)
+        vm.setVisible(true) // the first showing
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "credentialKey" })
+        vm.setVisible(true) // shown again without being hidden: nothing changed
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "credentialKey" })
+        vault.credentialKeyAnswer = CredentialKeyAnswer(true, "0000 1111 2222 3333")
+        vm.setVisible(false)
+        vm.setVisible(true)
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "credentialKey" })
+        assertEquals(CredentialKeyUi.Shown("0000 1111 2222 3333"), vm.credentialKey.value)
+    }
+
+    /**
+     * (#343's review, item 1) The app lock takes the screen out of the composition while its own screen is up, so the screen's
+     * stop and start go unseen: leaving the composition counts as hidden and coming back (after the unlock) as shown again.
+     */
+    @Test
+    fun theScreenTakenAwayByTheAppLockIsShownAgainAfterTheUnlock() {
+        val seen = mutableListOf<Boolean>()
+        var inFront by androidx.compose.runtime.mutableStateOf(true)
+        rule.setContent { if (inFront) ShownWhileStarted { seen += it } }
+        rule.waitForIdle()
+        assertEquals(listOf(true), seen)
+        inFront = false // the lock screen drawn in its place
+        rule.waitForIdle()
+        assertEquals(listOf(true, false), seen)
+        inFront = true // unlocked
+        rule.waitForIdle()
+        assertEquals(listOf(true, false, true), seen)
     }
 
     @Test
