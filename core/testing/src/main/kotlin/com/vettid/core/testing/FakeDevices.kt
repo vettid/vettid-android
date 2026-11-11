@@ -32,9 +32,13 @@ class FakeDevices : DevicesRepository {
     /** Runs at each [refresh] that answers: what the vault's list says then (a device gone, say). */
     var onRefresh: (() -> Unit)? = null
 
+    /** When set, [refresh] waits for it before it answers (a read in flight, or one that never answers). */
+    var refreshGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun refresh() {
         try {
             call("refresh")
+            refreshGate?.await()
             onRefresh?.invoke()
             load.value = ListLoad.LOADED
         } catch (e: VaultFailure) {

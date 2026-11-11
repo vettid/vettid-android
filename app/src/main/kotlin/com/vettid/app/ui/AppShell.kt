@@ -35,7 +35,6 @@ import com.vettid.app.BuildConfig
 import com.vettid.app.R
 import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
-import com.vettid.core.data.feed.FeedKinds
 import com.vettid.core.data.feed.FeedTarget
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.data.wallet.ImportWalletRoute
@@ -541,7 +540,7 @@ fun AppShell(
             is NotificationOpenInbox.Open.Connection ->
                 navController.navigate(ConnectionDetailRoute(t.connectionId)) { launchSingleTop = true }
             is NotificationOpenInbox.Open.Item -> {
-                val target = shell.openItem(t.itemId)?.let { FeedKinds.target(it, shell.openAsks()) }
+                val target = shell.openItem(t.itemId)?.let { shell.tapTarget(it) }
                 if (target == null || target == FeedTarget.Sheet) {
                     navController.navigate(NotificationsRoute()) { launchSingleTop = true }
                 } else {
