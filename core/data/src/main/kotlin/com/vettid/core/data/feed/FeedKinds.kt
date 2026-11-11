@@ -551,9 +551,12 @@ object FeedKinds {
 
     private fun things(n: Int) = FeedText(plural = R.plurals.data_feed_things, quantity = n, args = listOf(n))
 
-    /** Where [item] leads, before checking that it still exists (the screen's ViewModel does that). */
+    /**
+     * Where [item] leads, before checking that it still exists (the screen's ViewModel does that). [devices]: the ids of the
+     * device list in memory (empty or null when it was not read), for `device.update_needed`.
+     */
     @Suppress("CyclomaticComplexMethod") // one target per kind
-    fun target(item: FeedItem, open: Collection<Approval>? = null): FeedTarget {
+    fun target(item: FeedItem, open: Collection<Approval>? = null, devices: Collection<String>? = null): FeedTarget {
         val c = item.connectionId
         val ref = item.ref
         FeedAsks.approvalKey(item.kind, item.ref)?.let { return askTarget(item, it, open) }
@@ -577,7 +580,7 @@ object FeedKinds {
             "device.pair.pending" -> FeedTarget.Pairing
             "device.unlinked" -> FeedTarget.DeviceList
             // §10.9 (0.87.0): another of the member's devices needs an update; Devices & agents lists it.
-            "device.update_needed" -> FeedTarget.DeviceList
+            "device.update_needed" -> updateNeededTarget(item, devices)
             // AA5: the agent's page (the Resume banner for a paused agent); the list when the item names no device.
             "leash.agent.suspended", "leash.referrals_limited", "leash.rate_limited" ->
                 item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
@@ -610,6 +613,14 @@ object FeedKinds {
             else -> FeedTarget.Approvals
         }
     }
+
+    /**
+     * (GC #7254, as vettid-ios 7103f64) `device.update_needed` opens the named device's page; the list when that device is not
+     * in the device list in memory (not read yet, or gone).
+     */
+    private fun updateNeededTarget(item: FeedItem, devices: Collection<String>?): FeedTarget =
+        item.deviceId?.takeIf { it.isNotEmpty() && devices?.contains(it) == true }?.let { FeedTarget.Device(it) }
+            ?: FeedTarget.DeviceList
 
     /** `urgent` (the clone alarm, the ten-failure lock): Needs attention while unread, a red badge. */
     fun urgent(item: FeedItem): Boolean = item.priority == FeedManager.PRIORITY_URGENT

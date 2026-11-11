@@ -252,7 +252,9 @@ class NotificationsViewModel @Inject constructor(
     /** A tap: marks the item read (not waiting for the answer) and opens its target, or the sheet. */
     fun open(item: FeedItem) {
         feed.markReadQuietly(item.itemId)
-        val target = FeedKinds.target(item, state.value.names.approvals.values)
+        // The device list's ids for `device.update_needed` (GC #7254): this phone's never (its page would close at once).
+        val listed = devices.devices.value.filterNot { it.thisPhone }.map { it.id }
+        val target = FeedKinds.target(item, state.value.names.approvals.values, listed)
         if (target == FeedTarget.Sheet || !exists(target)) {
             state.update { it.copy(sheet = item, sheetGone = target != FeedTarget.Sheet || FeedKinds.isAsk(item.kind)) }
         } else {
