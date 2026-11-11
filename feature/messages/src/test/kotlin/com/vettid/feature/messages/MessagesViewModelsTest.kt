@@ -348,6 +348,34 @@ class MessagesViewModelsTest {
         assertFalse(vm.uiState.value.callsNotAvailable)
     }
 
+    /** (GC #7718) Some of the vault's calls did not read: the conversation says so, with the rest; and drops it when calls go. */
+    @Test
+    fun theConversationSaysSomeCallsCouldNotBeShown() = runTest {
+        val calls = FakeCalls()
+        calls.entries = listOf(CallHistoryEntry("k1", "c2", false, CallOutcome.MISSED, Instant.parse("2026-10-12T10:00:00Z")))
+        calls.someNotShown = true
+        val vm = conversation(calls)
+        runCurrent() // the first read (a second follows a moment later)
+        assertTrue(vm.uiState.value.callsNotShown)
+        assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
+        calls.someNotShown = false // (review of 0470e984, L3) the second read decides again
+        advanceUntilIdle()
+        assertFalse("the read again finds none skipped", vm.uiState.value.callsNotShown)
+        calls.someNotShown = true
+        calls.availability.value = CallAvailability.UNKNOWN // locked
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.READY // read again: skipped again
+        advanceUntilIdle()
+        assertTrue("skipped again after the unlock", vm.uiState.value.callsNotShown)
+        calls.availability.value = CallAvailability.UNKNOWN // locked
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.callsNotShown)
+        calls.someNotShown = false
+        calls.availability.value = CallAvailability.READY
+        advanceUntilIdle()
+        assertFalse("none skipped: no line", vm.uiState.value.callsNotShown)
+    }
+
     @Test
     fun theConversationListsItsCallsAndReadsThemAgainAfterACall() = runTest {
         val t = Instant.parse("2026-10-12T10:00:00Z")

@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -456,9 +455,63 @@ suspend fun VaultApi.callEnd(callId: String, reason: String) {
  * `unsupported_type`: that answer is how the app learns that the vault has no calls (§11.10.8: no message lists a
  * release's features).
  */
-suspend fun VaultApi.callList(limit: Int = 50): List<CallRecord> {
+suspend fun VaultApi.callList(limit: Int = 50): CallList {
     val o = device.op("call.list", buildJsonObject { put("limit", limit) })
-    return VaultJson.decode(ListSerializer(CallRecord.serializer()), o["calls"] ?: JsonArray(emptyList()))
+    return callListOf(o)
+}
+
+/**
+ * (GC #7718, the lead's decision #7715, as vettid-ios) `call.list`'s answer: an entry that does not read is skipped, never
+ * the whole answer (the member would see no calls at all), and counted in [CallList.skipped]; a `calls` member that is not
+ * an array does not read.
+ */
+internal fun callListOf(o: JsonObject): CallList {
+    val calls = o["calls"] ?: return CallList(emptyList(), emptyList())
+    val entries = calls as? JsonArray ?: throw CallMessageException("calls")
+    val read = mutableListOf<CallRecord>()
+    val skipped = mutableListOf<SkippedCall>()
+    for (e in entries) {
+        val obj = e as? JsonObject
+        val r = obj?.let { runCatching { VaultJson.decode(CallRecord.serializer(), it) }.getOrNull() }?.takeIf { it.reads() }
+        if (r != null) read += r else skipped += SkippedCall.of(obj)
+    }
+    return CallList(read, skipped)
+}
+
+/**
+ * (Review of 0470e984, M1: as vettid-ios's `CallRecord.init`) A record that decodes still does not read with a
+ * `direction` other than `in`/`out`, a `state` other than `ringing`/`active`/`ended`, or a `started_at` (or a present
+ * `answered_at`/`ended_at`) that is not a time: it would be shown as a call with an outcome made up for it.
+ */
+private fun CallRecord.reads(): Boolean =
+    direction in CALL_DIRECTIONS && state in CALL_STATES && isTime(startedAt) &&
+        (answeredAt == null || isTime(answeredAt)) && (endedAt == null || isTime(endedAt))
+
+private val CALL_DIRECTIONS = setOf("in", "out")
+private val CALL_STATES = setOf("ringing", "active", "ended")
+
+private fun isTime(s: String): Boolean = runCatching { java.time.Instant.parse(s) }.isSuccess
+
+/** `call.list` read: the entries that read, newest first, and the ones skipped. Prints its counts only. */
+class CallList(val calls: List<CallRecord>, val skipped: List<SkippedCall>) {
+    override fun toString(): String = "CallList(${calls.size} calls, ${skipped.size} skipped)"
+}
+
+/**
+ * A `call.list` entry that did not read: only its call id (when it reads as one) and its connection id, never anything
+ * else of it. Prints its type name only.
+ */
+class SkippedCall(val callId: String?, val connectionId: String?) {
+    override fun toString(): String = "SkippedCall"
+
+    companion object {
+        internal fun of(o: JsonObject?): SkippedCall = SkippedCall(
+            o?.let { VaultJson.str(it, "call_id") }?.takeIf { Ulid.isValid(it) },
+            o?.let { VaultJson.str(it, "connection_id") }?.takeIf { it.isNotEmpty() && it.length <= MAX_ID },
+        )
+
+        private const val MAX_ID = 128
+    }
 }
 
 /** One call event from the vault, in the order the vault's events arrived. */

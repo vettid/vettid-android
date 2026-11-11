@@ -3658,7 +3658,7 @@ class VaultDeviceTest {
             val req = v.open(nextDeposit().second)
             assertEquals("""{"limit":10}""", String(req.body))
             d.handle(v.seal("call.list", """{"calls":[{"call_id":"$callId","connection_id":"conn-1","direction":"in","media":"audio","state":"ended","reason":"timeout","started_at":"2026-10-12T10:00:00.000Z","ended_at":"2026-10-12T10:00:45.000Z"}]}""", re = req.id, status = Inner.STATUS_OK))
-            assertEquals(listOf(CallRecord(callId, "conn-1", "in", "audio", "ended", "timeout", "2026-10-12T10:00:00.000Z", null, "2026-10-12T10:00:45.000Z")), list.await())
+            assertEquals(listOf(CallRecord(callId, "conn-1", "in", "audio", "ended", "timeout", "2026-10-12T10:00:00.000Z", null, "2026-10-12T10:00:45.000Z")), list.await().calls)
         }
     }
 

@@ -13,7 +13,6 @@ import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallIce
 import com.vettid.core.vault.CallKeys
 import com.vettid.core.vault.CallMessageException
-import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.MadeByCallApi
 import com.vettid.core.vault.OutgoingCall
@@ -86,7 +85,7 @@ class VaultCallSignallingTest {
             asked += "end($callId, $reason)"
         }
 
-        override suspend fun list(limit: Int): List<CallRecord> = emptyList()
+        override suspend fun list(limit: Int): com.vettid.core.vault.CallList = com.vettid.core.vault.CallList(emptyList(), emptyList())
     }
 
     private val gateway = Gateway()

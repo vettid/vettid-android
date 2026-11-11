@@ -465,6 +465,17 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     }
 }
 
+/** (GC #7718) One short line: some of the vault's calls with this connection did not read. */
+@Composable
+private fun CallsNotShownLine() {
+    Text(
+        stringResource(R.string.messages_calls_not_shown),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("calls_not_shown"),
+    )
+}
+
 @Suppress("CyclomaticComplexMethod") // messages, calls and photo bubbles of one list
 @Composable
 private fun MessageList(state: ConversationUiState, name: String, listState: LazyListState, actions: ConversationActions) {
@@ -491,6 +502,7 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
         if (state.olderAvailable) {
             item(key = "older") { OlderRow(state.loadingOlder, actions.onLoadOlder) }
         }
+        if (state.callsNotShown) item(key = "calls_not_shown") { CallsNotShownLine() }
         byDay.forEach { (day, list) ->
             item(key = "day-$day") { DayDivider(Times.dayLabel(day)) }
             items(list, key = { it.key }) { row ->

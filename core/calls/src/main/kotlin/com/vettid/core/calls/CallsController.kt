@@ -2,9 +2,11 @@ package com.vettid.core.calls
 
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.CallOutcome
 import com.vettid.core.vault.CallReason
+import com.vettid.core.vault.CallList
 import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CancellationException
@@ -73,7 +75,10 @@ interface CallVault {
 /** What was held back for the microphone permission: a call to [call], or (null) the answer to the ringing call. */
 data class MicrophoneRequest(val call: String?)
 
-/** What is known beyond one call, for the diagnostics view and the phone tests. Counts only. */
+/**
+ * What is known beyond one call, for the diagnostics view and the phone tests: counts, and the call ids of skipped
+ * `call.list` entries ([listSkippedIds]), cleared at every lock. Prints its counts only.
+ */
 data class CallsDiagnostics(
     /** Offers and answers that failed their checks since the process started. */
     val refused: Int = 0,
@@ -88,7 +93,17 @@ data class CallsDiagnostics(
     val errors: Int = 0,
     /** How often the listening to the vault's call events had to be started again (expected: 0). */
     val listenRestarts: Int = 0,
-)
+    /**
+     * (GC #7718) The `call.list` entries the last read skipped (they did not read), and the call ids of those whose id read
+     * (at most [CallsController.SKIPPED_IDS_KEPT]): kept in memory only, never logged, nothing else of an entry.
+     */
+    val listSkipped: Int = 0,
+    val listSkippedIds: List<String> = emptyList(),
+) {
+    override fun toString(): String =
+        "CallsDiagnostics(refused=$refused, droppedForTime=$droppedForTime, staleEnded=$staleEnded, errors=$errors, " +
+            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size})"
+}
 
 /**
  * Calls in the app: the one [CallMachine] of the process and what goes on around a call (CALLS-PLAN 0.1.1 C1).
@@ -278,10 +293,17 @@ class CallsController(
             }
             supported = true
             publish()
-            endStale(records)
+            noteSkipped(records)
+            endStale(records.calls)
             if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
             return
         }
+    }
+
+    /** A read's skipped entries, in the diagnostics (this phone's own record of them). */
+    private fun noteSkipped(list: CallList) {
+        val ids = list.skipped.mapNotNull { it.callId }.take(SKIPPED_IDS_KEPT)
+        diagnosticsFlow.update { it.copy(listSkipped = list.skipped.size, listSkippedIds = ids) }
     }
 
     /**
@@ -318,6 +340,9 @@ class CallsController(
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
         // included, which nobody can see behind the unlock screen) would show then, long after.
         machine.dismiss()
+        // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
+        // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
+        diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
         publish()
     }
 
@@ -358,8 +383,8 @@ class CallsController(
         }
     }
 
-    override suspend fun history(connectionId: String): List<CallHistoryEntry> {
-        val records = if (supported == true) {
+    override suspend fun history(connectionId: String): CallHistory {
+        val list = if (supported == true) {
             try {
                 vault.gateway.list(HISTORY_LIMIT)
             } catch (e: CancellationException) {
@@ -370,12 +395,26 @@ class CallsController(
         } else {
             null
         }
-        val t = now()
-        return records.orEmpty().filter { it.connectionId == connectionId }.mapNotNull { entry(it, t) }
+        list?.let(::noteSkipped)
+        return historyOf(list, connectionId, now())
     }
 
     companion object {
         const val HISTORY_LIMIT = 200
+
+        /** How many skipped call ids [CallsDiagnostics.listSkippedIds] keeps. */
+        const val SKIPPED_IDS_KEPT = 20
+
+        /**
+         * (GC #7718) The conversation's calls of [list]: the entries that read, and whether some could not be shown (one
+         * skipped for this connection, or whose connection did not read, or one of its own without a readable start).
+         */
+        internal fun historyOf(list: CallList?, connectionId: String, now: Instant): CallHistory {
+            val mine = list?.calls.orEmpty().filter { it.connectionId == connectionId }
+            val entries = mine.mapNotNull { entry(it, now) }
+            val skipped = list?.skipped.orEmpty().any { it.connectionId == null || it.connectionId == connectionId }
+            return CallHistory(entries, someNotShown = skipped || entries.size < mine.size)
+        }
         val MAX_CALL: Duration = Duration.ofHours(12)
 
         /**

@@ -2,6 +2,7 @@ package com.vettid.core.testing
 
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -10,14 +11,17 @@ class FakeCalls(availability: CallAvailability = CallAvailability.READY) : CallA
     override val availability = MutableStateFlow(availability)
     val called = mutableListOf<String>()
     var entries: List<CallHistoryEntry> = emptyList()
+
+    /** Whether [history] says some calls could not be shown. */
+    var someNotShown = false
     var historyReads = 0
 
     override fun call(connectionId: String) {
         called += connectionId
     }
 
-    override suspend fun history(connectionId: String): List<CallHistoryEntry> {
+    override suspend fun history(connectionId: String): CallHistory {
         historyReads++
-        return entries.filter { it.connectionId == connectionId }
+        return CallHistory(entries.filter { it.connectionId == connectionId }, someNotShown)
     }
 }
