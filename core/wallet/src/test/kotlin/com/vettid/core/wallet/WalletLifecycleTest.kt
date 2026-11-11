@@ -31,7 +31,7 @@ class WalletLifecycleTest {
     private fun manager() = WalletsManager(scope, { ops }, FakeChain(), flags, { it == Network.TESTNET4 })
 
     private suspend fun eventually(what: String, f: () -> Boolean) {
-        repeat(100) {
+        repeat(1_000) { // 20 s at most: a ceiling, not a delay (a loaded CI runner can take seconds, #7345)
             if (f()) return
             delay(20)
         }

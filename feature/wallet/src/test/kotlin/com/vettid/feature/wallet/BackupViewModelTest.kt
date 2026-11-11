@@ -32,7 +32,7 @@ class BackupViewModelTest {
     /** The vault calls run on the IO dispatcher: wait for them in real time. */
     private suspend fun eventually(cond: () -> Boolean) {
         withContext(Dispatchers.Default) {
-            withTimeout(5_000) {
+            withTimeout(EVENTUALLY_MS) {
                 while (!cond()) delay(10)
             }
         }
