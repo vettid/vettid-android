@@ -82,11 +82,13 @@ data class PairActions(
     val onNewCode: () -> Unit = {},
     val onCopied: () -> Unit = {},
     val onCancel: () -> Unit = {},
-    val onCodesMatch: () -> Unit = {},
+    /** On the comparison of this pairing id (the one shown). */
+    val onCodesMatch: (String) -> Unit = {},
     val onCloseSheet: () -> Unit = {},
     val onChoose: (SessionChoice) -> Unit = {},
     val onPair: () -> Unit = {},
-    val onReject: () -> Unit = {},
+    /** On the comparison of this pairing id (the one shown). */
+    val onReject: (String) -> Unit = {},
     val onDone: () -> Unit = {},
     /** **Choose what it may use** (AA4): the new agent's share-rule editor; null when its id is not known (the list opens). */
     val onChooseItems: (String?) -> Unit = {},
@@ -327,10 +329,10 @@ private fun CompareStep(p: PendingPairing, state: PairUiState, actions: PairActi
     FormScaffold(
         title = stringResource(R.string.pair_compare_title),
         primaryLabel = stringResource(if (sas != null) R.string.pair_codes_match else R.string.pair_reject),
-        onPrimary = if (sas != null) actions.onCodesMatch else actions.onReject,
+        onPrimary = if (sas != null) ({ actions.onCodesMatch(p.pairingId) }) else ({ actions.onReject(p.pairingId) }),
         destructive = sas == null,
         secondaryLabel = if (sas != null) stringResource(R.string.pair_codes_differ) else null,
-        onSecondary = actions.onReject,
+        onSecondary = { actions.onReject(p.pairingId) },
         // Leaving without an answer rejects (the view model): nothing is approved by leaving.
         onBack = actions.onBack,
         busy = state.pairing.busy,

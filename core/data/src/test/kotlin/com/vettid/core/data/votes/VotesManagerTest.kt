@@ -45,6 +45,9 @@ import org.robolectric.annotation.Config
 import java.time.Duration
 import java.time.Instant
 
+/** The longest a test waits for work on a real dispatcher: a ceiling, not a delay (polling stops at once). A loaded CI runner can take seconds (#7345). */
+private const val EVENTUALLY_MS = 20_000L
+
 private fun obj(s: String): JsonObject = Json.parseToJsonElement(s) as JsonObject
 
 private const val CONN = "conn-1"
@@ -71,7 +74,7 @@ class VotesManagerTest {
     /** The quiet refresh runs on the IO dispatcher: wait for it in real time. */
     private suspend fun eventually(cond: () -> Boolean) {
         withContext(Dispatchers.Default) {
-            withTimeout(5_000) {
+            withTimeout(EVENTUALLY_MS) {
                 while (!cond()) delay(10)
             }
         }

@@ -39,8 +39,8 @@ class PairViewModelTest {
         pairing.calls.clear()
         val held = vm(held = true)
         advanceUntilIdle()
-        // Never a new code from a feed item.
-        assertEquals(emptyList<String>(), pairing.calls)
+        // Never a new code from a feed item: the pairing held is claimed as this screen's (GC #7370).
+        assertEquals(listOf("claim"), pairing.calls)
         assertTrue(held.uiState.value.held)
     }
 
@@ -48,11 +48,11 @@ class PairViewModelTest {
     fun theSheetOpensOnlyOverAComparisonAndPairsWithTheChosenAccess() = runTest {
         val vm = vm()
         advanceUntilIdle()
-        vm.codesMatch()
+        vm.codesMatch("p1")
         assertFalse(vm.uiState.value.sheet)
         pairing.state.value = PairingState(PairingStage.Compare(pending))
         advanceUntilIdle()
-        vm.codesMatch()
+        vm.codesMatch("p1")
         advanceUntilIdle()
         assertTrue(vm.uiState.value.sheet)
         // One hour is preselected (decision 5).
@@ -60,6 +60,7 @@ class PairViewModelTest {
         vm.pair()
         advanceUntilIdle()
         assertEquals("approve:3600", pairing.calls.last())
+        assertEquals("bound to the comparison the sheet showed (GC #7370)", "p1", pairing.approvedId)
         vm.choose(SessionChoice.NONE)
         vm.pair()
         advanceUntilIdle()
@@ -80,7 +81,7 @@ class PairViewModelTest {
         val vm = vm()
         pairing.state.value = PairingState(PairingStage.Compare(pending))
         advanceUntilIdle()
-        vm.codesMatch()
+        vm.codesMatch("p1")
         pairing.state.value = PairingState(PairingStage.Compare(pending), error = FailureKind.OWNER_CHECK_REQUIRED)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.sheet)
@@ -94,7 +95,7 @@ class PairViewModelTest {
         val vm = vm()
         pairing.state.value = PairingState(PairingStage.Compare(pending))
         advanceUntilIdle()
-        vm.reject()
+        vm.reject("p1")
         advanceUntilIdle()
         assertTrue(pairing.calls.contains("reject"))
         pairing.calls.clear()
@@ -148,9 +149,16 @@ class PairViewModelTest {
         val vm = vm()
         pairing.state.value = PairingState(PairingStage.Compare(pending))
         advanceUntilIdle()
-        vm.codesMatch()
+        vm.codesMatch("p1")
         advanceUntilIdle()
         assertTrue(vm.uiState.value.sheet)
+        // A tap on a comparison no longer held opens nothing (GC #7440).
+        vm.closeSheet()
+        vm.codesMatch("p0")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.sheet)
+        vm.codesMatch("p1")
+        advanceUntilIdle()
         // Another pairing's comparison does not open with it.
         pairing.state.value = PairingState(PairingStage.Compare(PendingPairing("p2", "Other", "654321", exp)))
         advanceUntilIdle()
@@ -232,14 +240,14 @@ class PairViewModelTest {
         val vm = vm(desktop = true)
         pairing.state.value = PairingState(PairingStage.Compare(pending), role = PairRole.DESKTOP)
         advanceUntilIdle()
-        vm.codesMatch()
+        vm.codesMatch("p1")
         advanceUntilIdle()
         assertTrue(vm.uiState.value.sheet)
         vm.pair()
         advanceUntilIdle()
         // The repository's approve takes the session and nothing else: no grants exist to send.
         assertEquals("approve:3600", pairing.calls.last())
-        vm.reject()
+        vm.reject("p1")
         advanceUntilIdle()
         assertEquals("reject", pairing.calls.last())
     }
