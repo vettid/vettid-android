@@ -6028,11 +6028,15 @@ class VaultDeviceTest {
     )
 
     /** The vault's rekey of [d] under its epoch [under] (the vault's current one by default), stamped by the phone's clock. */
-    private fun FakeVault.rekeyInit(d: VaultDevice, under: com.vettid.core.crypto.session.Epoch = keyring.current()!!) = Initiator.create(
+    private fun FakeVault.rekeyInit(
+        d: VaultDevice,
+        under: com.vettid.core.crypto.session.Epoch = keyring.current()!!,
+        at: Instant = deviceNow(),
+    ) = Initiator.create(
         InitiatorConfig(
             purpose = Purpose.REKEY, ctx = "", identity = ik, staticKem = kem.publicKey, relay = principal().relay,
             responderIk = d.identityKey, responderEk = null, responderRelayKey = d.relayAddr.pk(), current = under,
-            policy = Policy.VAULT_TO_DEVICE, now = deviceNow(),
+            policy = Policy.VAULT_TO_DEVICE, now = at,
         ),
     )
 
@@ -6868,17 +6872,102 @@ class VaultDeviceTest {
         }
     }
 
+    private fun keptInFile(r: Rekeyed) =
+        Keyring.import(Base64s.decodeStd(savedState(r.store).vault!!.sessions)).find(r.old.id, Instant.EPOCH) != null
+
+    /**
+     * (GC #7175, review M1) 40 days really pass, and the phone's clock reads 50: a message under the kept confirmed epoch
+     * (life 48 days by the phone's count), stamped by the vault's clock, still opens (it is not hidden by the clock alone)
+     * and brings hs.confirm, and handling it destroys nothing.
+     */
+    @Test
+    fun aMessageUnderTheKeptEpochOpensWhileTheClockIsAhead() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            elapsed += java.time.Duration.ofDays(40).toMillis()
+            ahead(java.time.Duration.ofDays(50))
+            val vaultAt = Instant.now().plus(java.time.Duration.ofDays(40))
+            r.d.handle(r.v.msg(r.old.seal(message("day 40", at = vaultAt))))
+            assertEquals(
+                "day 40",
+                VaultJson.str(r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "day 40" }.body, "text"),
+            )
+            take(r.new, "hs.confirm")
+            assertTrue("the kept epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, review M1) After a restart the vault's time is not known yet: a message under the kept epoch that only the
+     * phone's clock (set past the epoch's life) hides is left unacked, never dropped, and opens once the clock is back.
+     */
+    @Test
+    fun aMessageUnderAHiddenEpochIsLeftForRedelivery() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(50))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            val m = r.v.msg(r.old.seal(message("hidden", at = Instant.now())))
+            assertThrows(LeaveUnacked::class.java) { runBlocking { again.handle(m) } }
+            assertNull("not recorded as seen", savedState(r.store).seen[m.msgId])
+            clockAheadMs = 0
+            again.handle(m) // the relay's redelivery
+            assertEquals(
+                "hidden",
+                VaultJson.str(again.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "hidden" }.body, "text"),
+            )
+        }
+    }
+
+    /**
+     * (GC #7175, review M2) With the phone's clock 60 days behind, a message under the current epoch releases the kept one:
+     * its 16 days count from the vault's time, not the phone's, so once the clock is corrected it is not destroyed at once.
+     */
+    @Test
+    fun aReleaseWithTheClockBehindKeepsItsSixteenDays() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            ahead(java.time.Duration.ofDays(-60))
+            runCatching { r.d.handle(r.v.msg(r.new.seal(message("under the new epoch", at = Instant.now())))) }
+            clockAheadMs = 0
+            r.d.tickConfirm()
+            assertTrue("the released epoch keeps its 16 days", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, review nit) After a restart in which 49 days really passed, a message from the vault shows its time, and the
+     * kept epoch past its life is destroyed.
+     */
+    @Test
+    fun anEpochPastItsLifeGoesOnceTheVaultShowsItsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(49))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            again.tickConfirm()
+            assertTrue("nothing destroyed before the vault's time is known", keptInFile(r))
+            again.handle(r.v.msg(r.new.seal(message("now", at = deviceNow()))))
+            assertTrue("destroyed once the vault's time shows its life is over", !keptInFile(r))
+        }
+    }
+
     /** The kept epoch's 48 days (§6.3.1 table): on day 47 a message under it still brings hs.confirm; on day 49 it no longer opens. */
     @Test
     fun theConfirmedEpochKeepsItsKeysFortyEightDays() = runBlocking<Unit> {
         withTimeout(30_000) {
             val r = rekeyed(this)
+            // Real time passes (the monotonic clock too): the vault's time, as this phone counts it, keeps up (GC #7175).
             ahead(java.time.Duration.ofDays(47))
+            elapsed += java.time.Duration.ofDays(47).toMillis()
             r.d.handle(r.v.msg(r.old.seal(message("day 47"))))
             take(r.new, "hs.confirm")
             // It opened (not only the 12-day re-send): its receive key is still kept.
             assertEquals("day 47", VaultJson.str(r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "day 47" }.body, "text"))
             ahead(java.time.Duration.ofDays(2))
+            elapsed += java.time.Duration.ofDays(2).toMillis()
             r.d.handle(r.v.msg(r.old.seal(message("late"))))
             noConfirm(r.new)
             assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {

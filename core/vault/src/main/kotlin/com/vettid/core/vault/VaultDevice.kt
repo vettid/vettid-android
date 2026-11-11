@@ -938,7 +938,7 @@ class VaultDevice private constructor(
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")
         val inner = AltResults.openInner(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId)
         val r = UnlockResult.parse(inner.body).copy(at = inner.ts)
-        noteVaultTime(inner.ts)
+        noteUnlockTime(inner.ts)
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))
@@ -1968,11 +1968,12 @@ class VaultDevice private constructor(
             st.seen.remove(m.msgId)
             save()
             throw LeaveUnacked(e.message ?: "early").apply { initCause(e) }
-        } catch (e: LeftForLater) {
-            // An event during a hold ([holdEvents]): neither seen nor acked, so the relay delivers it again after the hold.
+        } catch (e: ForRedelivery) {
+            // An event during a hold ([holdEvents]), or a message under an epoch the clock alone hides: neither seen nor
+            // acked, so the relay delivers it again.
             st.seen.remove(m.msgId)
             save()
-            throw LeaveUnacked("held").apply { initCause(e) }
+            throw LeaveUnacked(e.why).apply { initCause(e) }
         } catch (_: CryptoException) {
             // dropped (§13.6: a message that does not verify changes nothing)
         } catch (_: AttestationException) {
@@ -2012,16 +2013,22 @@ class VaultDevice private constructor(
         }
         val v = st.vault ?: return
         if (!Ed25519.equalPublic(sender, Base64s.decodeStd(v.relayPk))) return // §6.3: only the vault's relay key sends to a device
+        // (GC #7175, review M1) Opened against the same time keys are destroyed by ([pruneTime]): a wall clock ahead does
+        // not hide a retained epoch the vault's time still keeps. Before the vault's time is known in this process, a
+        // message under a retained epoch hidden by this phone's clock alone is left for redelivery, never dropped.
+        val keyTime = pruneTime(t)
         val opened = try {
-            keyring.open(env, t)
+            keyring.open(env, keyTime ?: t)
         } catch (_: CryptoException) {
             null
         }
+        if (opened == null && keyTime == null && keyring.hiddenAt(env.recipientKid, t)) throw HiddenEpoch()
         if (opened == null) {
             pruneAwaiting(t)
             val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
             // CryptoException.Early: a message of the new epoch ahead of its hs.fin (handle leaves it for redelivery).
             val fr = r.resp.handleFin(raw, sender, t)
+            noteVaultTime(fr.inner.ts) // its ts passed checkTime (GC #7175, review Low 1)
             // §6.3.1 "Responder": activated at the verified hs.fin; hs.confirm and device.features queued in the same write.
             activateRekeyLocked(fr.epoch, t)
             awaiting.remove(r)
@@ -2089,8 +2096,17 @@ class VaultDevice private constructor(
         maintain(t)
     }
 
-    /** An event left on the relay during a hold ([leaveForLater]). */
-    private class LeftForLater : Exception("left for later")
+    /** A message neither seen nor acked: the relay delivers it again ([handleLocked]). */
+    private open class ForRedelivery(val why: String) : Exception(why)
+
+    /** An event left on the relay during a hold ([leaveForLater]): delivered again after the hold. */
+    private class LeftForLater : ForRedelivery("held")
+
+    /**
+     * (GC #7175) A message under a retained epoch that only this phone's clock hides: delivered again, once the clock is back
+     * or the vault's time is known.
+     */
+    private class HiddenEpoch : ForRedelivery("hidden")
 
     /**
      * `device.pair.rejected` (§6.7, 0.10.5): stop waiting, drop the handshake's epoch
@@ -2274,6 +2290,7 @@ class VaultDevice private constructor(
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
         if (keyring.current() !== ep && !isConfirmedLocked(ep)) return
         val pi = PendingInit.openRekey(raw, ep, t)
+        noteVaultTime(pi.inner.ts) // its ts passed checkTime (GC #7175, review Low 1)
         val v = requireVault()
         val (resp, env) = pi.respond(
             ResponderConfig(
@@ -2438,7 +2455,11 @@ class VaultDevice private constructor(
         val v = st.vault ?: return
         if (keyring.current() === ep) {
             val previous = v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
-            if (previous != null && !previous.contentEquals(ep.id)) keyring.release(previous, t.plus(Epoch.RECEIVE_KEY_RETENTION))
+            // (GC #7175, review M2) Counted from the later of this phone's time and the vault's: a clock behind does not
+            // shorten the 16 days (a message under the released epoch may still be in the mailbox).
+            if (previous != null && !previous.contentEquals(ep.id)) {
+                keyring.release(previous, laterOfVault(t).plus(Epoch.RECEIVE_KEY_RETENTION))
+            }
             v.confirmed = null
             return
         }
@@ -2733,6 +2754,14 @@ class VaultDevice private constructor(
         }
     }
 
+    /**
+     * (GC #7175, review Low 3) The unlock result's ts, which no checkTime passed: one more than the allowed skew ahead of
+     * this phone does not move the vault's clock.
+     */
+    private fun noteUnlockTime(ts: Instant) {
+        if (!ts.isAfter(now().plus(PRUNE_SKEW))) noteVaultTime(ts)
+    }
+
     private fun noteVaultTime(ts: Instant) {
         val at = cfg.elapsedMs()
         synchronized(vaultClockLock) {
@@ -2754,6 +2783,11 @@ class VaultDevice private constructor(
      */
     private fun pruneTime(t: Instant): Instant? = synchronized(vaultClockLock) {
         if (vaultTs == null) null else minOf(t, vaultNow().plus(PRUNE_SKEW))
+    }
+
+    /** The later of [t] and the vault's time ([vaultNow]) once it is known in this process; [t] before. */
+    private fun laterOfVault(t: Instant): Instant = synchronized(vaultClockLock) {
+        if (vaultTs == null) t else maxOf(t, vaultNow())
     }
 
     /** Destroys the retained epochs past their life as of [pruneTime]; true when one was. */

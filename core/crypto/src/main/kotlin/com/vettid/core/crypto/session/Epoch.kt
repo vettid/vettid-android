@@ -332,6 +332,14 @@ class Keyring {
         return e.open(env) to e
     }
 
+    /**
+     * Whether a retained epoch for [recipientKid] is still held but past its life as of [now] (hidden by [open], not
+     * destroyed by [prune] yet).
+     */
+    @Synchronized
+    fun hiddenAt(recipientKid: Kid, now: Instant): Boolean =
+        retired.any { now.isAfter(it.until) && it.epoch.recvKid == recipientKid }
+
     @Synchronized
     fun destroy() {
         current?.destroy()
