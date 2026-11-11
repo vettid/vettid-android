@@ -592,10 +592,13 @@ class VaultDevice private constructor(
         unsaved.add(entry.id) // cleared by the save that writes it
     }
 
-    /** The persisted rekeys awaiting `hs.fin`; one that does not restore or is past [HANDSHAKE_TTL] is dropped. */
+    /**
+     * The persisted rekeys awaiting `hs.fin`; one that does not restore is dropped. (GC #7175) None is dropped by age here: the
+     * vault's time is not known at load, and a clock jumped ahead would end them for good; [pruneAwaiting] ends them once
+     * it is ([pruneTime]).
+     */
     private fun restoreAwaiting(): List<Awaiting> {
-        val cutoff = now().minus(HANDSHAKE_TTL).toEpochMilli()
-        return st.vault?.awaiting.orEmpty().filter { it.createdMs >= cutoff }.mapNotNull { a ->
+        return st.vault?.awaiting.orEmpty().mapNotNull { a ->
             try {
                 Awaiting(Responder.import(Base64s.decodeStd(a.state)), a.createdMs)
             } catch (_: CryptoException) {
@@ -606,7 +609,9 @@ class VaultDevice private constructor(
 
     /** Ends the rekeys awaiting `hs.fin` for longer than [HANDSHAKE_TTL], and all but the newest [MAX_AWAITING]. */
     private fun pruneAwaiting(t: Instant) {
-        val cutoff = t.minus(HANDSHAKE_TTL).toEpochMilli()
+        // (GC #7175, Opus L3) Judged by the vault's time too ([pruneTime]): a clock jumped ahead aborts no responder; none
+        // ends by age before the vault's time is known.
+        val cutoff = pruneTime(t)?.minus(HANDSHAKE_TTL)?.toEpochMilli() ?: Long.MIN_VALUE
         val drop = awaiting.filter { it.createdMs < cutoff } + awaiting.sortedByDescending { it.createdMs }.drop(MAX_AWAITING)
         drop.forEach { it.resp.abort() }
         awaiting.removeAll(drop.toSet())
@@ -938,7 +943,7 @@ class VaultDevice private constructor(
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")
         val inner = AltResults.openInner(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId)
         val r = UnlockResult.parse(inner.body).copy(at = inner.ts)
-        noteUnlockTime(inner.ts)
+        noteVaultTime(inner.ts)
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))
@@ -2257,6 +2262,7 @@ class VaultDevice private constructor(
             throw e
         }
         ini = null
+        noteVaultTime(res.inner.ts) // its ts passed checkTime (GC #7175, blind reviews of 4d1e8a0f, Fable N2)
         val v = requireVault()
         res.resp.token?.let { tok ->
             heldFromVault(tok)?.let { exp ->
@@ -2268,11 +2274,11 @@ class VaultDevice private constructor(
         // A new pairing (enrollment, transfer, recovery) starts with its own epoch confirmed (§6.3.1), as [dropPairing]: a
         // kept confirmed epoch of the pairing before loses its rk and keeps its receive key 16 days, as any previous epoch.
         v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
-            ?.let { keyring.release(it, t.plus(Epoch.RECEIVE_KEY_RETENTION)) }
+            ?.let { keyring.release(it, releaseUntil(t, res.inner.ts)) }
         v.confirmed = null
         v.confirmAtMs = null
         reconfirmedAt = null
-        keyring.activate(res.epoch, t, pruneTime(t))
+        keyring.activate(res.epoch, keyBase(t), pruneTime(t))
         // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
         // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
         st.transferIn?.let { tr -> if (res.sas != null) st.transferIn = tr.copy(sas = res.sas) }
@@ -2425,9 +2431,10 @@ class VaultDevice private constructor(
             // Always null here (the current epoch is the confirmed one only while none is recorded); kept as vettid-vault's
             // establishRekey has it.
             if (v.confirmed == null) v.confirmed = cur.ctx
-            keyring.activateKeeping(e, t, t.plus(CONFIRMED_KEYS_FOR), pruneTime(t))
+            val base = keyBase(t)
+            keyring.activateKeeping(e, base, base.plus(CONFIRMED_KEYS_FOR), pruneTime(t))
         } else {
-            keyring.activate(e, t, pruneTime(t))
+            keyring.activate(e, keyBase(t), pruneTime(t))
         }
     }
 
@@ -2459,9 +2466,7 @@ class VaultDevice private constructor(
             // authenticated ts (the vault's stamp, even when no vault time is known yet or the message then fails its
             // checkTime): a clock behind does not shorten the 16 days (a message under the released epoch may still be
             // in the mailbox).
-            if (previous != null && !previous.contentEquals(ep.id)) {
-                keyring.release(previous, maxOf(laterOfVault(t), ts).plus(Epoch.RECEIVE_KEY_RETENTION))
-            }
+            if (previous != null && !previous.contentEquals(ep.id)) keyring.release(previous, releaseUntil(t, ts))
             v.confirmed = null
             return
         }
@@ -2756,14 +2761,6 @@ class VaultDevice private constructor(
         }
     }
 
-    /**
-     * (GC #7175, review Low 3) The unlock result's ts, which no checkTime passed: one more than the allowed skew ahead of
-     * this phone does not move the vault's clock.
-     */
-    private fun noteUnlockTime(ts: Instant) {
-        if (!ts.isAfter(now().plus(PRUNE_SKEW))) noteVaultTime(ts)
-    }
-
     private fun noteVaultTime(ts: Instant) {
         val at = cfg.elapsedMs()
         synchronized(vaultClockLock) {
@@ -2781,10 +2778,31 @@ class VaultDevice private constructor(
      * clock ([vaultNow]) plus [PRUNE_SKEW]; null (nothing destroyed now) while no message from the vault in this process has
      * shown its time. A wall clock set ahead, even briefly, so postpones a destruction and never makes one early: until a
      * key is destroyed, [Keyring.open] still only hides it while the clock says it is past its life, and it is usable again
-     * once the clock is back. The keys' life itself (`until`) is still counted from this phone's clock.
+     * once the clock is back. A vault that sends nothing in this process destroys nothing (by design: keys past their life
+     * stay hidden, not destroyed, until it speaks), and the first message after a restart may be up to 16 days old (the
+     * durable `ts` window), so its time is the vault's of then. The keys' life is counted from [keyBase].
      */
     private fun pruneTime(t: Instant): Instant? = synchronized(vaultClockLock) {
         if (vaultTs == null) null else minOf(t, vaultNow().plus(PRUNE_SKEW))
+    }
+
+    /**
+     * (GC #7175, blind reviews of 4d1e8a0f, Opus L1) The time a key's life is counted from at an activation: the vault's time
+     * once it is known in this process (at a rekey, hs.fin's ts was just noted), so a clock ahead does not lengthen the
+     * kept epoch's 48 days or a receive key's 16; this phone's [t] before.
+     */
+    private fun keyBase(t: Instant): Instant = synchronized(vaultClockLock) { if (vaultTs == null) t else vaultNow() }
+
+    /**
+     * A released epoch's receive key: kept 16 days from the latest of this phone's time, the vault's and the message's own
+     * authenticated [ts] (a clock behind does not shorten them), but never counted from later than the later of this phone's
+     * time and the vault's, plus MAX_DURABLE_AGE + MAX_CLOCK_SKEW_FUTURE (a stamp far in the future does not keep it to that
+     * date). Known limit: before the vault's time is known, a phone more than that far behind has the stamp capped too.
+     */
+    private fun releaseUntil(t: Instant, ts: Instant): Instant {
+        val known = laterOfVault(t)
+        val cap = known.plus(Inner.MAX_DURABLE_AGE).plus(Inner.MAX_CLOCK_SKEW_FUTURE)
+        return minOf(maxOf(known, ts), cap).plus(Epoch.RECEIVE_KEY_RETENTION)
     }
 
     /** The later of [t] and the vault's time ([vaultNow]) once it is known in this process; [t] before. */

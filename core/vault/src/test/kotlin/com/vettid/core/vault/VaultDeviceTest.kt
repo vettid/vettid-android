@@ -6937,7 +6937,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check item 3) After a restart with the clock 60 days behind, the first message (under the current epoch)
+     * (GC #7175, re-check item 3) After a restart with the clock 10 days behind, the first message (under the current epoch)
      * releases the kept one before any vault time is known: its 16 days count from the message's own ts, so once the clock
      * is corrected and the vault's time shows, it is kept.
      */
@@ -6946,11 +6946,12 @@ class VaultDeviceTest {
         withTimeout(30_000) {
             val r = rekeyed(this)
             r.d.stop()
-            ahead(java.time.Duration.ofDays(-60))
+            ahead(java.time.Duration.ofDays(-10)) // within the stamp's cap (16 days + skew past the phone's time)
             val again = VaultDevice.load(config(r.store), r.secrets)!!
             runCatching { again.handle(r.v.msg(r.new.seal(message("first", at = Instant.now())))) }
             clockAheadMs = 0
-            again.handle(r.v.msg(r.new.seal(message("second", at = Instant.now()))))
+            ahead(java.time.Duration.ofDays(10)) // 10 real days pass (a release counted from the phone's time ends at 6)
+            again.handle(r.v.msg(r.new.seal(message("second", at = deviceNow()))))
             assertTrue("the released epoch keeps its 16 days", keptInFile(r))
         }
     }
@@ -7014,6 +7015,80 @@ class VaultDeviceTest {
             val again = VaultDevice.load(config(r.store), r.secrets)!!
             again.handle(r.v.msg(res.fin))
             assertTrue("destroyed at the rekey's hs.fin", !keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, blind reviews of 4d1e8a0f, Opus N1) The plain activation (the current epoch unconfirmed, so no kept one is made
+     * at it): 40 real days pass, the vault rekeys with the clocks in step, the phone's clock jumps 10 days before hs.fin, and the
+     * kept confirmed epoch (life 48 days) the vault's time still keeps is not destroyed.
+     */
+    @Test
+    fun aPlainActivationWithTheClockJumpedAheadDestroysNoKeptEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            elapsed += java.time.Duration.ofDays(40).toMillis()
+            ahead(java.time.Duration.ofDays(40))
+            val at = deviceNow()
+            val ini = r.v.rekeyInit(r.d, under = r.old, at = at) // under the confirmed epoch: it stays kept, nothing confirms the new one
+            r.d.handle(r.v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, r.d.relayAddr.pk(), at)
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            r.d.handle(r.v.msg(res.fin))
+            take(res.epoch, "hs.confirm") // activated
+            assertTrue("the kept epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, blind reviews of 4d1e8a0f, Opus L1) A key's life counts from the vault's time at activation: with the clock 10
+     * days ahead at hs.fin, the kept confirmed epoch still goes once the vault's time passes its 48 days (not 58).
+     */
+    @Test
+    fun theKeptEpochsLifeCountsFromTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val old = v.keyring.current()!!
+            val at = deviceNow()
+            val ini = v.rekeyInit(d, at = at)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), at)
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only, before hs.fin
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            fun kept() = Keyring.import(Base64s.decodeStd(savedState(store).vault!!.sessions)).find(old.id, Instant.EPOCH) != null
+            assertTrue("setup: the confirmed epoch is kept", kept())
+            clockAheadMs = 0
+            elapsed += java.time.Duration.ofDays(49).toMillis()
+            ahead(java.time.Duration.ofDays(49))
+            d.tickConfirm()
+            assertTrue("gone at the vault's 48 days", !kept())
+        }
+    }
+
+    /**
+     * (GC #7175, Opus L3) A clock jumped 20 days ahead aborts no responder awaiting its hs.fin: not at a restart while ahead
+     * (restoreAwaiting), nor when an hs.fin under it arrives meanwhile (pruneAwaiting; that hs.fin, too old by the jumped
+     * clock, is dropped); once the clock is back the vault's hs.fin completes the rekey.
+     */
+    @Test
+    fun aClockJumpAbortsNoAwaitingRekey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.stop()
+            ahead(java.time.Duration.ofDays(20))
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertEquals("restored", 1, savedState(store).vault!!.awaiting.size)
+            runCatching { again.handle(v.msg(res.fin)) }
+            clockAheadMs = 0
+            again.handle(v.msg(res.fin)) // the vault's hs.fin again
+            expectConfirm(res.epoch)
         }
     }
 
