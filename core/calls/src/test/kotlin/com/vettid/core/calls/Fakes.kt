@@ -85,6 +85,13 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         micOff = muted
     }
 
+    /** (C2) Held back until the first decrypted frame (VAULT-MESSAGING "Key confirmation"). */
+    var holding = false
+
+    override fun setHeld(held: Boolean) {
+        holding = held
+    }
+
     var streams = 1
 
     override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1, inboundAudioStreams = streams)
@@ -119,6 +126,10 @@ open class FakeSignalling : CallSignalling {
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }
     var startGate: Channel<Unit>? = null
+
+    /** (C2) As if the vault were C2. */
+    var c2 = false
+    override val formTwo: Boolean get() = c2
     var answerResult: () -> MediaKeys = { MediaKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 }) }
 
     fun deliver(e: SignalEvent) {

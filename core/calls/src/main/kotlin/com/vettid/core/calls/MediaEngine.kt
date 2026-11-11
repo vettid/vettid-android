@@ -106,6 +106,13 @@ interface MediaEngine {
 
     fun setMuted(muted: Boolean)
 
+    /**
+     * (C2, VAULT-MESSAGING "Key confirmation") Holds this device's outgoing track back whatever the member's mute says:
+     * the answering device sends no media until its receiver first decrypts a frame. The track sends only when it is
+     * neither muted nor held.
+     */
+    fun setHeld(held: Boolean) {}
+
     /** A reading of the stack's statistics, or null while there are none. */
     suspend fun diagnostics(): MediaDiagnostics?
 

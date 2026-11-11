@@ -426,6 +426,59 @@ class CallMachineTest {
         assertEquals(CallPhase.CALLING, m.live().phase)
     }
 
+    /**
+     * (C2, VAULT-MESSAGING "Key confirmation") Against a C2 vault the answering device holds its microphone back until
+     * its receiver first decrypts a frame; the member's own mute still applies after. No frame 20 s after the
+     * connection is up: the call ends as not encrypted. Against an S10 vault nothing is held.
+     */
+    @Test
+    fun theAnsweringDeviceSendsNothingBeforeAFrameDecrypts() = runTest {
+        signalling.c2 = true
+        val m = machine()
+        signalling.deliver(offer())
+        runCurrent()
+        m.answer()
+        runCurrent()
+        val engine = engines.last
+        assertTrue("held from the answer on", engine.holding)
+        engine.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        assertTrue("connected is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.SEND, CryptorState.OK))
+        runCurrent()
+        assertTrue("its own sender working is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.RECEIVE, CryptorState.OK))
+        runCurrent()
+        assertFalse(engine.holding)
+        advanceTimeBy(60_000)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        m.hangUp()
+        runCurrent()
+        m.dismiss()
+
+        // No frame decrypts: 20 s after the connection, not encrypted.
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70"))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        advanceTimeBy(19_999)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        advanceTimeBy(2)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertTrue(engines.last.holding)
+
+        // S10: nothing held.
+        m.dismiss()
+        signalling.c2 = false
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T71"))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertFalse(engines.last.holding)
+    }
+
     @Test
     fun noPathBetweenTheTwoDevices() = runTest {
         val m = machine()
@@ -433,7 +486,7 @@ class CallMachineTest {
         engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
         signalling.deliver(answer())
         runCurrent()
-        advanceTimeBy(29_999)
+        advanceTimeBy(59_999)
         assertEquals(CallPhase.CONNECTING, m.live().phase)
         advanceTimeBy(2)
         assertEquals(CallEnd.COULD_NOT_CONNECT, m.ended().reason)

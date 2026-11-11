@@ -89,7 +89,7 @@ internal class CallMachine(
         class Timer(val seq: Int, val kind: TimerKind) : Msg
     }
 
-    private enum class TimerKind { RING_OUT, RING_IN, GATHER, CONNECT, ICE_FLUSH }
+    private enum class TimerKind { RING_OUT, RING_IN, GATHER, CONNECT, DECRYPT, ICE_FLUSH }
 
     /** One call's working state. Touched only by the loop, except [lane], which is a queue. */
     private class Session(
@@ -108,6 +108,9 @@ internal class CallMachine(
         var activeSince: Instant? = null
         var reconnecting = false
         var keysSet = false
+
+        /** (C2) The answering device's outgoing track is held until its receiver first decrypts a frame. */
+        var heldForDecrypt = false
         var remoteApplied = false
         var canSendIce = false
         var gathered = 0
@@ -329,6 +332,12 @@ internal class CallMachine(
             return
         }
         val engine = s.engine ?: return
+        // (C2, VAULT-MESSAGING "Key confirmation") Against a C2 vault the answering device sends no media, microphone
+        // or camera, until its receiver first decrypts a frame: that proves the caller holds the same keys.
+        if (signalling.formTwo) {
+            s.heldForDecrypt = true
+            engine.setHeld(true)
+        }
         // The callee gathers no address before the member answers (CALLS-PLAN §2 step 6).
         s.lane.trySend {
             // The cryptors are made for the suite chosen when the offer was checked, the one the keys will be for.
@@ -463,7 +472,14 @@ internal class CallMachine(
             // alone decides NO_ADDRESS.
             is MediaEvent.GatheringDone -> Unit
             is MediaEvent.Connection -> onConnection(s, e.state)
-            is MediaEvent.Cryptor -> if (cryptorFailed(s, e)) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
+            is MediaEvent.Cryptor -> if (cryptorFailed(s, e)) {
+                finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
+            } else if (e.direction == MediaDirection.RECEIVE && e.state == CryptorState.OK && s.heldForDecrypt) {
+                // The first frame decrypted: the caller holds the same keys. The member's own mute still applies.
+                s.heldForDecrypt = false
+                cancelTimer(s, TimerKind.DECRYPT)
+                s.engine?.setHeld(false)
+            }
             is MediaEvent.Failed -> finish(s, CallEnd.FAILED, CallReason.FAILED)
         }
     }
@@ -484,6 +500,7 @@ internal class CallMachine(
     private fun connected(s: Session) {
         cancelTimer(s, TimerKind.CONNECT)
         cancelTimer(s, TimerKind.GATHER)
+        if (s.heldForDecrypt && TimerKind.DECRYPT !in s.timers) timer(s, TimerKind.DECRYPT, timings.decrypt)
         if (s.activeSince == null) {
             s.activeSince = now()
             s.answeredAtMs?.let { at -> diagnosticsFlow.update { it.copy(answerToMediaMs = elapsedMs() - at) } }
@@ -526,6 +543,7 @@ internal class CallMachine(
             TimerKind.RING_IN -> if (s.phase == CallPhase.INCOMING) finish(s, CallEnd.MISSED, null)
             TimerKind.GATHER -> if (s.gathered == 0) finish(s, CallEnd.NO_ADDRESS, CallReason.FAILED)
             TimerKind.CONNECT -> if (s.phase == CallPhase.CONNECTING) finish(s, CallEnd.COULD_NOT_CONNECT, CallReason.FAILED)
+            TimerKind.DECRYPT -> if (s.heldForDecrypt) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
             TimerKind.ICE_FLUSH -> flush(s)
         }
     }

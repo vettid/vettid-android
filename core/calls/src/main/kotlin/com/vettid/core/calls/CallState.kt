@@ -126,8 +126,16 @@ data class CallDiagnostics(
 data class CallTimings(
     /** No address gathered after this long: the call ends [CallEnd.NO_ADDRESS]. */
     val gather: Duration = Duration.ofSeconds(8),
-    /** No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. */
-    val connect: Duration = Duration.ofSeconds(30),
+    /**
+     * No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. 60 s (owner decision 2026-11-11,
+     * VAULT-MESSAGING 0.88.16): a slow path (TURN, a network allowing only TCP 443) may take a while.
+     */
+    val connect: Duration = Duration.ofSeconds(60),
+    /**
+     * (C2) The answering device, its microphone held back, ends the call as not encrypted when no frame has decrypted
+     * this long after its connection is established (VAULT-MESSAGING "Key confirmation").
+     */
+    val decrypt: Duration = Duration.ofSeconds(20),
     /** The caller rings for the offer's lifetime, kept within these bounds whatever the two clocks say. */
     val minRing: Duration = Duration.ofSeconds(10),
     val maxRing: Duration = Duration.ofSeconds(60),

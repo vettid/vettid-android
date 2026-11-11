@@ -262,7 +262,16 @@ class WebRtcMediaEngine private constructor(
 
     override fun setMuted(muted: Boolean) {
         wantMuted = muted
-        onWorker { track?.setEnabled(!wantMuted) }
+        onWorker { track?.setEnabled(!wantMuted && !held) }
+    }
+
+    /** (C2) The answering device's hold until its first decrypted frame: see [MediaEngine.setHeld]. */
+    @Volatile
+    private var held = false
+
+    override fun setHeld(held: Boolean) {
+        this.held = held
+        onWorker { track?.setEnabled(!wantMuted && !this.held) }
     }
 
     override suspend fun diagnostics(): MediaDiagnostics? {
@@ -314,7 +323,7 @@ class WebRtcMediaEngine private constructor(
         val audioSource = factory.createAudioSource(MediaConstraints())
         source = audioSource
         return factory.createAudioTrack(TRACK_ID, audioSource).also {
-            it.setEnabled(!wantMuted)
+            it.setEnabled(!wantMuted && !held)
             track = it
         }
     }
