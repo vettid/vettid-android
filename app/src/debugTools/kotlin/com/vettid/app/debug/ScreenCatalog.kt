@@ -371,6 +371,15 @@ object ScreenCatalog {
     private fun updateFlow(step: UpdateStep, f: (UpdateProgress) -> UpdateProgress = { it }) =
         ReleaseUpdateFlowUiState(progress = f(UpdateProgress(step, release(4), release(5))))
 
+    private val attestationInfo = AttestationInfo(
+        "staging", true, "STRONG_BOX", true, 400, "Verified", true, "4e8e e8f7 1c2d 3e4f", 12, "0303 0303 0303 0303",
+        appVersion = "1.0.0 (100)", releaseTagPrefix = "release/staging/",
+    )
+    private val attestationRecord = com.vettid.core.attestation.EnclaveRecord(
+        Instant.now().minusSeconds(300), com.vettid.core.attestation.EnclaveRecord.results(9, failed = false), "4353463f85c4012f", 31,
+        "ab".repeat(48), "11".repeat(48), "22".repeat(48), Instant.now().minusSeconds(900), Instant.now().plusSeconds(80_000), 12,
+        com.vettid.core.attestation.manifest.ReleaseStatus.ACTIVE, null,
+    )
     private val canaryView = CanaryManifestView(2, "4353463f85c4012f", "ab".repeat(32), listOf(release(1, "deprecated"), release(2)))
 
     private val onboarding = OnboardingUiState(email = EMAIL)
@@ -1121,8 +1130,26 @@ object ScreenCatalog {
         "settings.transfer_rejected" to { TOut(TransferOutUiState(step = TransferOutStep.REJECTED)) },
         "settings.transfer_moved" to { TOut(TransferOutUiState(step = TransferOutStep.MOVED, pending = transferPending)) },
         "settings.transfer_exists" to { TOut(TransferOutUiState(error = FailureKind.OTHER, errorCode = "exists")) },
+        // ANDROID-PLAN 0.1.124 "Attestation in detail": a pass, a failure at line 4, a refusal after line 9, no record yet.
         "settings.attestation" to {
-            AttestationContent(LoadState(false, AttestationInfo("devStack", true, "STRONG_BOX", true, 400, "SelfSigned", true, "4e8e e8f7 1c2d 3e4f", 3, "0303 0303 0303 0303")), {})
+            AttestationContent(LoadState(false, attestationInfo), {}, record = attestationRecord)
+        },
+        "settings.attestation_failed" to {
+            AttestationContent(
+                LoadState(false, attestationInfo), {},
+                record = attestationRecord.copy(
+                    results = com.vettid.core.attestation.EnclaveRecord.results(3, failed = true), releaseNumber = null, releaseStatus = null,
+                ),
+            )
+        },
+        "settings.attestation_refused" to {
+            AttestationContent(
+                LoadState(false, attestationInfo), {},
+                record = attestationRecord.copy(refusal = com.vettid.core.attestation.EnclaveRefusal.OLDER_RELEASE),
+            )
+        },
+        "settings.attestation_none" to {
+            AttestationContent(LoadState(false, attestationInfo), {})
         },
         "settings.attestation_canary" to {
             AttestationContent(

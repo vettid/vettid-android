@@ -62,6 +62,13 @@ class ReleaseManifest private constructor(
     val releases: List<Release>,
     private val raw: ByteArray,
 ) {
+    /**
+     * The id of the pinned key whose signature verified this manifest (ANDROID-PLAN 0.1.124: shown under the attestation's
+     * line 1); null for a manifest parsed without its signature.
+     */
+    var keyId: String? = null
+        internal set
+
     /** The exact signed bytes. */
     fun bytes(): ByteArray = raw.copyOf()
 
@@ -209,7 +216,7 @@ class ManifestVerifier(private val pinned: List<ManifestKey>) {
             false
         }
         if (!ok) throw AttestationException.Signature("manifest")
-        return ReleaseManifest.parse(m)
+        return ReleaseManifest.parse(m).also { it.keyId = key.keyId }
     }
 
     fun verify(served: ByteArray): ReleaseManifest = verify(ServedManifest.parse(served))

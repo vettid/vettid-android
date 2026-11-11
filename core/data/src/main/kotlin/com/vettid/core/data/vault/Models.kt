@@ -344,6 +344,13 @@ data class AttestationInfo(
     val bootKeyFingerprint: String?,
     val lastRelease: Long,
     val lastReleaseFingerprint: String?,
+    /** (ANDROID-PLAN 0.1.124) This app's version and build, "1.2.3 (45)". */
+    val appVersion: String = "",
+    /**
+     * (ANDROID-PLAN 0.1.124, VAULT-RELEASES) The signed tag's prefix of this build's channel, "release/prod/" or
+     * "release/staging/"; null where no tag names the vault's releases (the dev stack).
+     */
+    val releaseTagPrefix: String? = null,
 )
 
 /** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */

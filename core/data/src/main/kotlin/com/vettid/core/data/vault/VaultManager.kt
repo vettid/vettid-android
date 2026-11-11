@@ -916,6 +916,12 @@ class VaultManager(
     }
 
     /**
+     * (ANDROID-PLAN 0.1.124) The last verification of the enclave the vault runs on, for Settings → Attestation: kept in an
+     * encrypted file in no-backup storage, replaced by the next verification, erased by the wipe with the directory.
+     */
+    val enclaveRecords = EnclaveRecordStore(KeystoreFileStore(File(app.noBackupFilesDir, ENCLAVE_RECORD_FILE), "enclave-record"))
+
+    /**
      * A canary manifest loaded out of band (VAULT-RELEASES §10.1 step 9, W10-READINESS P31/B5): verified under
      * this build's pinned manifest keys and used instead of the published manifest only while it is newer.
      */
@@ -1511,7 +1517,7 @@ class VaultManager(
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
-                val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
+                val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary, records = enclaveRecords)) { lockGuard }
                 // (A6 audit N1) A transfer past its deadline: the collection stays stopped (it could lease a waiting
                 // device.paired before the settlement's collects); the settlement (atTransferDeadline, run by the
                 // transfer-in screen's wait) starts it when it ends. evaluate() publishes the waiting phase meanwhile.
@@ -3171,6 +3177,8 @@ class VaultManager(
         st.recoveryState?.let { RecoveryView(it, st.recoveryAvailableAt ?: "") }
     }
 
+    override val enclaveRecord: StateFlow<com.vettid.core.attestation.EnclaveRecord?> get() = enclaveRecords.record
+
     override suspend fun attestationInfo(): AttestationInfo = io {
         // The key the identity in use signs with (ANDROID-PLAN §4 step 5).
         val key = slots.attestation.current(slots.active)?.let { DeviceAttestationKey(it.alias) }
@@ -3200,8 +3208,20 @@ class VaultManager(
             bootKeyFingerprint = rot?.let { Bytes.hex(it.verifiedBootKey()).take(FINGERPRINT_HEX).chunked(GROUP).joinToString(" ") },
             lastRelease = alt?.releaseNumber ?: 0,
             lastReleaseFingerprint = alt?.release?.takeIf { it.isNotEmpty() }?.take(FINGERPRINT_HEX)?.chunked(GROUP)?.joinToString(" "),
+            appVersion = appVersion(),
+            releaseTagPrefix = when (env.name) {
+                ENV_STAGING -> "release/staging/"
+                ENV_PRODUCTION -> "release/prod/"
+                else -> null
+            },
         )
     }
+
+    /** This app's version name and build number, "1.2.3 (45)"; empty if the package manager cannot say. */
+    private fun appVersion(): String = runCatching {
+        val p = app.packageManager.getPackageInfo(app.packageName, 0)
+        "${p.versionName} (${p.longVersionCode})"
+    }.getOrDefault("")
 
     // --- CredentialRepository ---
 
@@ -4882,6 +4902,7 @@ class VaultManager(
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { canary.removeCanaryManifest() }
+        steps.step { enclaveRecords.forget() }
         openTransferId = null
         alarmFlow.value = null
         windowFlow.value = null
@@ -5090,6 +5111,7 @@ class VaultManager(
         private const val SOCIAL_FILE = "social.bin"
         private const val PENDING_ASKS_FILE = "pending-asks.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
+        private const val ENCLAVE_RECORD_FILE = "enclave-record.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val LOCATION_FILE = "location-shares.bin"
         /** The last attempt at each vote's results (VAULT-MESSAGING 0.86.4 §10.19.6): no choice, row or proof. */
@@ -5116,6 +5138,7 @@ class VaultManager(
         private const val COUNTER_UNAVAILABLE = "unavailable"
         private const val MS_PER_SECOND = 1_000L
         private const val ENV_STAGING = "staging"
+        private const val ENV_PRODUCTION = "production"
         private const val LOCKED_WAIT_MS = 15_000L
         private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L

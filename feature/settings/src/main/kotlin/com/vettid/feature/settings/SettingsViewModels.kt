@@ -293,6 +293,9 @@ class AttestationViewModel @Inject constructor(
     /** The installed canary manifest, or null (then nothing about it is shown). */
     val canary: StateFlow<CanaryManifestView?> = canaryManifests.canaryManifest
 
+    /** (ANDROID-PLAN 0.1.124) The record of this phone's last verification of the vault's enclave, or null. */
+    val record: StateFlow<com.vettid.core.attestation.EnclaveRecord?> = vault.enclaveRecord
+
     /** Stops using the canary manifest: the published one is used again. */
     fun removeCanary() {
         viewModelScope.launch { canaryManifests.removeCanaryManifest() }

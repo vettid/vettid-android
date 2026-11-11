@@ -30,4 +30,12 @@ object NitroRoot {
         val der = Base64.getDecoder().decode(DER_B64)
         CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as X509Certificate
     }
+
+    /**
+     * SHA-256 of the pinned root certificate's DER, lower-case hex, as AWS publishes it (ANDROID-PLAN 0.1.124: shown
+     * under the attestation's line 2). Built into the app, never from the network.
+     */
+    val fingerprint: String get() = fingerprintOf(certificate)
+
+    fun fingerprintOf(c: X509Certificate): String = com.vettid.core.crypto.Bytes.hex(com.vettid.core.crypto.Bytes.sha256(c.encoded))
 }
