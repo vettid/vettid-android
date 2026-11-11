@@ -35,6 +35,9 @@
     <string name="history_kind_connection_removed">Connection removed</string>
     <string name="history_kind_connection_stale">Connection went quiet</string>
     <string name="history_kind_connection_reconnected">Connection reconnected</string>
+    <!-- VAULT-MESSAGING 0.88.7 `connection.active_again`, with the connection's name, else without. Owner-approved 2026-11-10 (GC #7655), both apps. -->
+    <string name="history_kind_connection_active_again">Connection with %1$s works again</string> <!-- Owner-approved 2026-11-10 -->
+    <string name="history_kind_connection_active_again_any">Connection works again</string> <!-- Owner-approved 2026-11-10 -->
     <string name="history_kind_connection_blocked">Connection blocked</string>
     <string name="history_kind_connection_unblocked">Connection unblocked</string>
     <string name="history_kind_connection_request_peer_declined">They declined the connection</string>

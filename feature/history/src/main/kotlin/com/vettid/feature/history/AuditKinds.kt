@@ -434,6 +434,9 @@ object AuditKinds {
             Title.Named(R.string.history_kind_wallet_caps_raised_named, R.string.history_kind_wallet_caps_raised, Who.ITEM),
         "identity.rotate_conflict" to
             Title.Named(R.string.history_kind_rotate_conflict, R.string.history_kind_rotate_conflict_any, Who.CONNECTION),
+        // VAULT-MESSAGING 0.88.7 §3.4.1 "Stale is not final" (owner decisions b and a, GC #7655).
+        "connection.active_again" to
+            Title.Named(R.string.history_kind_connection_active_again, R.string.history_kind_connection_active_again_any, Who.CONNECTION),
         "identity.rotate_resolved" to
             Title.Named(R.string.history_kind_rotate_resolved, R.string.history_kind_rotate_resolved_any, Who.CONNECTION),
         "call.permission_off" to

@@ -60,8 +60,14 @@ class FeedUpdateNeededTextTest {
     fun aKnownKindThatLeadsToDevices() {
         assertTrue(FeedKinds.known("device.update_needed"))
         assertTrue("device.update_needed" in FeedKinds.KNOWN)
+        // (GC #7254, as vettid-ios 7103f64) The named device's page when the device list in memory has it.
+        assertEquals(FeedTarget.Device("d1"), FeedKinds.target(item("d1"), devices = listOf("me", "d1")))
+        // The list when it does not: not read yet (none, or empty), or the device gone; and for an item without a device id.
         assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("d1")))
-        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item(null)))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("d1"), devices = emptyList()))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item("gone"), devices = listOf("me", "d1")))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item(null), devices = listOf("me", "d1")))
+        assertEquals(FeedTarget.DeviceList, FeedKinds.target(item(""), devices = listOf("me", "")))
         assertTrue(!FeedKinds.notAvailable("device.update_needed") && !FeedKinds.historyOnly("device.update_needed"))
     }
 }

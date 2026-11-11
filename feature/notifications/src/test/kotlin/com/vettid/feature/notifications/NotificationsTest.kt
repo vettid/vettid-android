@@ -195,6 +195,29 @@ class NotificationsTest {
         assertEquals(3, devices.calls.count { it == "refresh" })
     }
 
+    /** (GC #7254, as vettid-ios 7103f64) A `device.update_needed` item opens the named device's page while it is listed, else the list. */
+    @Test
+    fun anUpdateNoticeOpensTheListedDevicesPageElseTheList() = runTest {
+        val devices = com.vettid.core.testing.FakeDevices()
+        val update = FeedItem("u1", 1, "device.update_needed", now.toString(), "active", "high", deviceId = "d1")
+        feed.seed(listOf(update))
+        val m = NotificationsViewModel(SavedStateHandle(), feed, social, social, items, devices, com.vettid.core.testing.FakePairing())
+        advanceUntilIdle()
+        m.open(update)
+        assertEquals("not listed (the list not read)", FeedTarget.DeviceList, m.uiState.value.open)
+        m.targetTaken()
+        devices.devices.value = listOf(com.vettid.core.data.devices.DeviceInfo("d1", "desktop", "Laptop", null, null, null, null))
+        advanceUntilIdle()
+        m.open(update)
+        assertEquals(FeedTarget.Device("d1"), m.uiState.value.open)
+        // An item naming this phone: the list (its page would close at once).
+        m.targetTaken()
+        devices.devices.value = listOf(com.vettid.core.data.devices.DeviceInfo("d1", "app", "Pixel", null, null, null, null, thisPhone = true))
+        advanceUntilIdle()
+        m.open(update)
+        assertEquals(FeedTarget.DeviceList, m.uiState.value.open)
+    }
+
     @Test
     fun aTapMarksReadAndOpensTheTargetOrTheSheetWhenItIsGone() = runTest {
         val ask = item("grant.request", "f1", ref = "g1")

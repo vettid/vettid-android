@@ -24,6 +24,9 @@ import com.vettid.core.wallet.WalletTx
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.CoroutineScope
 
+/** The longest a test waits for work on a real dispatcher: a ceiling, not a delay (polling stops at once). A loaded CI runner can take seconds (#7345). */
+internal const val EVENTUALLY_MS = 20_000L
+
 /** Every array is all zeros, and there is at least one (N1: a secret handed down is wiped when the call ends). */
 internal fun List<CharArray>.allWipedAndSome(): Boolean = isNotEmpty() && all { a -> a.all { it == '\u0000' } }
 
@@ -250,7 +253,7 @@ internal class FakeServerSettings(var server: com.vettid.core.chain.ChainServer 
 /** The vault calls run on the IO dispatcher: waits for [cond] in real time. */
 internal suspend fun eventually(cond: () -> Boolean) {
     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-        kotlinx.coroutines.withTimeout(5_000) {
+        kotlinx.coroutines.withTimeout(EVENTUALLY_MS) {
             while (!cond()) kotlinx.coroutines.delay(10)
         }
     }

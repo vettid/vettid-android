@@ -67,6 +67,7 @@ class ShellViewModel @Inject constructor(
     wallet: WalletAccess,
     private val presence: PresenceRepository,
     location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
+    private val devices: com.vettid.core.data.devices.DevicesRepository? = null,
 ) : ViewModel() {
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
@@ -75,6 +76,27 @@ class ShellViewModel @Inject constructor(
 
     /** The asks waiting now: a batch's notification leads to the ones that are still open. */
     fun openAsks() = approvals.approvals.value
+
+    /**
+     * Where a tapped notification's [item] leads, as the Notifications screen opens it: `device.update_needed` opens its
+     * device's page only if the device list has it (GC #7254), this phone never. A tap usually finds the list unread (memory
+     * only, cleared at a lock and a hold): it is read first, for at most [DEVICES_WAIT_MS]; a read that fails or takes longer
+     * opens the list.
+     */
+    suspend fun tapTarget(item: FeedItem): com.vettid.core.data.feed.FeedTarget {
+        val d = devices
+        if (item.kind == KIND_UPDATE_NEEDED && d != null && d.load.value != com.vettid.core.data.items.ListLoad.LOADED) {
+            withTimeoutOrNull(DEVICES_WAIT_MS) {
+                try {
+                    d.refresh()
+                } catch (_: com.vettid.core.data.vault.VaultFailure) {
+                    // the list opens instead
+                }
+            }
+        }
+        val ids = d?.devices?.value.orEmpty().filterNot { it.thisPhone }.map { it.id }
+        return com.vettid.core.data.feed.FeedKinds.target(item, openAsks(), ids)
+    }
 
     /** The tapped item, read (not waiting for the answer); waits a little for the feed after a cold start. */
     suspend fun openItem(itemId: String): FeedItem? {
@@ -177,6 +199,8 @@ class ShellViewModel @Inject constructor(
 
     private companion object {
         const val ITEM_WAIT_MS = 10_000L
+        const val DEVICES_WAIT_MS = 3_000L
+        const val KIND_UPDATE_NEEDED = "device.update_needed"
     }
 }
 
