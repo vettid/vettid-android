@@ -228,9 +228,16 @@ class AltChannelFlow(
             records?.record(v.record)
             throw x
         }
-        if (e.descriptor.instanceId != info.instanceId) throw AltChannelException("descriptor names another instance")
+        // Refused after every check passed: recorded so, so that an earlier pass is not left on the screen.
+        if (e.descriptor.instanceId != info.instanceId) {
+            refusedAfterChecks(v, EnclaveRefusal.OTHER_INSTANCE)
+            throw AltChannelException("descriptor names another instance")
+        }
         // STAGING-TIME-SCALE §4 item 4: a release with a time scale this build does not accept gets nothing.
-        trust.checkTimeScale(e.descriptor.timeScale)
+        if (!trust.acceptsTimeScale(e.descriptor.timeScale)) {
+            refusedAfterChecks(v, EnclaveRefusal.TIME_SCALE)
+            trust.checkTimeScale(e.descriptor.timeScale)
+        }
         return info to v
     }
 

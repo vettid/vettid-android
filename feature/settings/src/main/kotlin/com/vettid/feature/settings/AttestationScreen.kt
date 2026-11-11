@@ -107,10 +107,10 @@ fun AttestationContent(
                 else -> {
                     RecordNotice(record)
                     EnclaveSection(record, a.environment, put)
-                    ChecksSection(record)
+                    ChecksSection(record, a.rootFingerprint)
                     ReleaseSection(record, a.releaseTagPrefix)
                     PhoneSection(a)
-                    CopyAll(AttestationDetail.copyAll(record, a.environment, a.releaseTagPrefix), put)
+                    CopyAll(AttestationDetail.copyAll(record, a.environment, a.releaseTagPrefix, a.rootFingerprint), put)
                     if (canary != null) CanaryManifestSection(canary, onRemoveCanary)
                     Spacer(Modifier.height(Spacing.xxl))
                 }
@@ -139,6 +139,8 @@ private fun RecordNotice(r: EnclaveRecord) {
 private fun refusalText(why: EnclaveRefusal): Int = when (why) {
     EnclaveRefusal.OLDER_RELEASE -> FailureKind.ROLLBACK.messageRes()
     EnclaveRefusal.NOT_ACTIVE -> FailureKind.ENCLAVE.messageRes()
+    EnclaveRefusal.OTHER_INSTANCE -> FailureKind.NO_RESPONSE.messageRes()
+    EnclaveRefusal.TIME_SCALE -> FailureKind.TIME_SCALE.messageRes()
 }
 
 @Composable
@@ -240,7 +242,7 @@ private fun checkLabel(c: EnclaveCheck): String = stringResource(
 )
 
 @Composable
-private fun ChecksSection(r: EnclaveRecord) {
+private fun ChecksSection(r: EnclaveRecord, root: String) {
     SettingsSectionHeader(
         stringResource(R.string.settings_attestation_section_checks) + " · " +
             stringResource(R.string.settings_attestation_as_of, Times.full(r.at)),
@@ -257,7 +259,7 @@ private fun ChecksSection(r: EnclaveRecord) {
             }
             if (c == EnclaveCheck.CHAIN) {
                 SubLine(
-                    stringResource(R.string.settings_attestation_root_fingerprint) + "\n" + AttestationDetail.rootFingerprint,
+                    stringResource(R.string.settings_attestation_root_fingerprint) + "\n" + root,
                     "attestation_root_fingerprint",
                     mono = true,
                 )

@@ -3209,13 +3209,22 @@ class VaultManager(
             lastRelease = alt?.releaseNumber ?: 0,
             lastReleaseFingerprint = alt?.release?.takeIf { it.isNotEmpty() }?.take(FINGERPRINT_HEX)?.chunked(GROUP)?.joinToString(" "),
             appVersion = appVersion(),
-            releaseTagPrefix = when (env.name) {
-                ENV_STAGING -> "release/staging/"
-                ENV_PRODUCTION -> "release/prod/"
-                else -> null
-            },
+            rootFingerprint = rootFingerprint(),
+            releaseTagPrefix = releaseTagPrefix(),
         )
     }
+
+    /** The signed tag prefix of this build's channel (VAULT-RELEASES); null on the dev stack. */
+    private fun releaseTagPrefix(): String? = when (env.name) {
+        ENV_STAGING -> "release/staging/"
+        ENV_PRODUCTION -> "release/prod/"
+        else -> null
+    }
+
+    /** SHA-256 of the Nitro root this build checks against (built in). */
+    private suspend fun rootFingerprint(): String =
+        env.trust(http).nitroRoots.firstOrNull()?.let(com.vettid.core.attestation.nitro.NitroRoot::fingerprintOf)
+            ?: com.vettid.core.attestation.nitro.NitroRoot.fingerprint
 
     /** This app's version name and build number, "1.2.3 (45)"; empty if the package manager cannot say. */
     private fun appVersion(): String = runCatching {

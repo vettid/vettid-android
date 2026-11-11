@@ -351,6 +351,11 @@ data class AttestationInfo(
      * "release/staging/"; null where no tag names the vault's releases (the dev stack).
      */
     val releaseTagPrefix: String? = null,
+    /**
+     * (ANDROID-PLAN 0.1.124) SHA-256 of the Nitro root this build checks the chain against (built in, never from the network):
+     * the AWS root in production and staging, the dev stack's test root there.
+     */
+    val rootFingerprint: String = com.vettid.core.attestation.nitro.NitroRoot.fingerprint,
 )
 
 /** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */

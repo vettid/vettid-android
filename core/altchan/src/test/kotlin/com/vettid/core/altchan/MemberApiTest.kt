@@ -76,7 +76,7 @@ class MemberApiTest {
         return when {
             path == "/api/vault/enclave" -> resp(
                 200,
-                """{"instance_id":"${e.instanceId}","release":"${e.pcr0}","descriptor":"${Base64s.encodeStd(e.descriptor)}","attestation":"AA=="}""",
+                """{"instance_id":"${routedInstance ?: e.instanceId}","release":"${e.pcr0}","descriptor":"${Base64s.encodeStd(e.descriptor)}","attestation":"AA=="}""",
             )
             path == "/api/vault/enroll" || path == "/api/vault/unlock" -> {
                 val o = StrictJson.parseObject(r.body!!.toByteArray())
@@ -290,6 +290,9 @@ class MemberApiTest {
     /** (ANDROID-PLAN 0.1.124) The verification records the flow handed on, in order. */
     private val records = mutableListOf<com.vettid.core.attestation.EnclaveRecord>()
 
+    /** The instance the route names, when not the descriptor's (null: the same). */
+    private var routedInstance: String? = null
+
     /** The next verification fails at this check (null: it passes). */
     private var failAt: com.vettid.core.attestation.EnclaveCheck? = null
 
@@ -423,6 +426,12 @@ class MemberApiTest {
         p.state = older
         assertThrows(AltRefusedException::class.java) { runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertEquals(com.vettid.core.attestation.EnclaveRefusal.OLDER_RELEASE, records.last().refusal)
+        // A verified descriptor that names another instance than the route: refused, and recorded so.
+        routedInstance = "inst-z"
+        assertThrows(AltChannelException::class.java) { runBlocking { f.preflight(p.state.copy(releaseNumber = 0)) } }
+        assertTrue(records.last().allPassed)
+        assertEquals(com.vettid.core.attestation.EnclaveRefusal.OTHER_INSTANCE, records.last().refusal)
+        routedInstance = null
     }
 
     private suspend fun register(): RecoveryResult {
@@ -595,6 +604,9 @@ class MemberApiTest {
         assertThrows(AltRefusedException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertEquals(0, log.count { it == "POST /api/vault/unlock" })
         assertThrows(AltRefusedException::class.java) { runBlocking { flow().preflight(p.state) } }
+        // (ANDROID-PLAN 0.1.124) Each refusal is recorded after every check passed, so no earlier pass stays on the screen.
+        assertEquals(3, records.size)
+        assertTrue(records.all { it.allPassed && it.refusal == com.vettid.core.attestation.EnclaveRefusal.TIME_SCALE })
     }
 
     /**

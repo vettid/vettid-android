@@ -46,6 +46,12 @@ enum class EnclaveRefusal {
 
     /** The release is older than one this phone has unlocked into (§11.10.6). */
     OLDER_RELEASE,
+
+    /** The verified descriptor names another instance than the one the request would go to. */
+    OTHER_INSTANCE,
+
+    /** (STAGING-TIME-SCALE §4 item 4) The release's time scale is one this build does not accept. */
+    TIME_SCALE,
 }
 
 /**

@@ -22,7 +22,7 @@ object AttestationDetail {
     /** The repository the signed release tags are in (VAULT-RELEASES §5.2). Built into the app. */
     const val REPOSITORY = "https://github.com/vettid/vettid-vault"
 
-    /** The root fingerprint shown under line 2: the pinned root's, never one from the network. */
+    /** The root fingerprint shown under line 2 by default: the pinned AWS root's, never one from the network. */
     val rootFingerprint: String get() = NitroRoot.fingerprint
 
     /** The PCRs and "Attested at" rest on the chain and the hardware signature. */
@@ -91,7 +91,7 @@ object AttestationDetail {
      * the phone, and nothing secret.
      */
     @Suppress("CyclomaticComplexMethod") // one line per row
-    fun copyAll(r: EnclaveRecord, environment: String, tagPrefix: String?): String = buildString {
+    fun copyAll(r: EnclaveRecord, environment: String, tagPrefix: String?, root: String = rootFingerprint): String = buildString {
         fun line(s: String) = append(s).append('\n')
         val notVerified = " (Not verified)"
         line("Enclave")
@@ -111,7 +111,7 @@ object AttestationDetail {
         for (c in EnclaveCheck.entries) {
             line("${CHECK_ENGLISH.getValue(c)}: ${resultEnglish(r.result(c))}")
             if (c == EnclaveCheck.MANIFEST && manifestShown(r)) line("  Key ${r.manifestKeyId} · serial ${r.manifestSerial}")
-            if (c == CHAIN) line("  Root fingerprint (SHA-256): $rootFingerprint")
+            if (c == CHAIN) line("  Root fingerprint (SHA-256): $root")
         }
         tag(r, tagPrefix)?.let { t ->
             line("")
