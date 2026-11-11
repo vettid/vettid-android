@@ -244,6 +244,96 @@ class RelayClientTest {
         assertTrue(sleeps.single() < 1000L)
     }
 
+    /**
+     * (GC #6847, the review of 4de9019c, High 1) A request with a whole deadline: its retries and their waits never run past
+     * it. A retry whose wait would leave no time for the attempt is not made, and the last refusal is thrown at once.
+     */
+    @Test
+    fun aDeadlineBoundsTheRetriesAndTheirWaits() = runBlocking<Unit> {
+        var now = 0L
+        val timed = RelayClient(server.url("/").toString(), key, OkHttpClient(), sleep = { sleeps.add(it); now += it }, elapsedMs = { now })
+        // A retry_after of 2 s with 1.5 s left: not waited for.
+        server.enqueue(json(429, """{"code":"rate_limited","message":"","retry_after":2}"""))
+        val e = assertThrows(RelayException::class.java) {
+            runBlocking { timed.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofMillis(1_500)) }
+        }
+        assertEquals(RelayException.RATE_LIMITED, e.code)
+        assertEquals(1, server.requestCount)
+        assertTrue(sleeps.isEmpty())
+        // With room for it: retried, and answered.
+        server.enqueue(json(429, """{"code":"rate_limited","message":"","retry_after":2}"""))
+        server.enqueue(json(200, """{"messages":[]}"""))
+        assertEquals(0, timed.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofSeconds(10)).size)
+        assertEquals(3, server.requestCount)
+        assertEquals(1, sleeps.size)
+        // (The re-check of f97eb7e0, Low 1) A retry left with under 3 s for its attempt is not made: the refusal is the answer.
+        server.enqueue(json(429, """{"code":"rate_limited","message":""}"""))
+        val late = assertThrows(RelayException::class.java) {
+            runBlocking { timed.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofMillis(RelayClient.MIN_ATTEMPT_MS)) }
+        }
+        assertEquals(RelayException.RATE_LIMITED, late.code)
+        assertEquals(4, server.requestCount)
+        assertEquals(1, sleeps.size)
+    }
+
+    /** A client whose clock moves only by its sleeps (plus [overslept] each), and whose jitter is 0. */
+    private fun timedClient(overslept: Long = 0): Pair<RelayClient, () -> Long> {
+        var now = 0L
+        val noJitter = object : kotlin.random.Random() {
+            override fun nextBits(bitCount: Int) = 0
+        }
+        val c = RelayClient(
+            server.url("/").toString(), key, OkHttpClient(), sleep = { sleeps.add(it); now += it + overslept }, random = noJitter,
+            elapsedMs = { now },
+        )
+        return c to { now }
+    }
+
+    private fun refusedOnce(retryAfterS: Int = 1) {
+        server.enqueue(json(429, """{"code":"rate_limited","message":"","retry_after":$retryAfterS}"""))
+    }
+
+    /**
+     * (#345's blind reviews, item 4) The floor's boundary: a retry_after of 1 s leaves the retry max(wait, 3 s) to the
+     * millisecond. One more is enough, exactly the floor is not; a long poll's own wait is the floor when longer.
+     */
+    @Test
+    fun theRetryFloorToTheMillisecond() = runBlocking<Unit> {
+        val (c, _) = timedClient()
+        val floor = RelayClient.MIN_ATTEMPT_MS
+        for ((deadline, retried) in listOf(1_000 + floor + 1 to true, 1_000 + floor to false, 1_000 + floor - 1 to false)) {
+            val before = server.requestCount
+            refusedOnce()
+            if (retried) server.enqueue(json(200, """{"messages":[]}"""))
+            val r = runCatching { c.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofMillis(deadline)) }
+            assertEquals("$deadline", retried, r.isSuccess)
+            assertEquals("$deadline", if (retried) 2 else 1, server.requestCount - before)
+        }
+        // A long poll's wait (5 s, over the floor) is the least its retry needs.
+        val w = 5_000L
+        for ((deadline, retried) in listOf(1_000 + w + 1 to true, 1_000 + w to false)) {
+            val before = server.requestCount
+            refusedOnce()
+            if (retried) server.enqueue(json(200, """{"messages":[]}"""))
+            val r = runCatching { c.collect(java.time.Duration.ofMillis(w), deadline = java.time.Duration.ofMillis(deadline)) }
+            assertEquals("poll $deadline", retried, r.isSuccess)
+            assertEquals("poll $deadline", if (retried) 2 else 1, server.requestCount - before)
+        }
+    }
+
+    /** (#345, item 3) A sleep that ran long (a frozen process): the retry is not made with too little left. */
+    @Test
+    fun anOversleptRetryIsNotMade() = runBlocking<Unit> {
+        val (c, _) = timedClient(overslept = 5_000)
+        refusedOnce()
+        val e = assertThrows(RelayException::class.java) {
+            runBlocking { c.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofSeconds(8)) }
+        }
+        assertEquals(RelayException.RATE_LIMITED, e.code)
+        assertEquals("slept, then saw the time gone", 1, sleeps.size)
+        assertEquals(1, server.requestCount)
+    }
+
     /** (#336 review, item 3; RELAY-PROTOCOL §7.1) A 429 `quota_exceeded` is never retried unchanged. */
     @Test
     fun aQuotaRefusalIsNotRetried() = runBlocking<Unit> {
@@ -252,6 +342,11 @@ class RelayClientTest {
         assertEquals(RelayException.QUOTA_EXCEEDED, e.code)
         assertEquals(1, server.requestCount)
         assertTrue(sleeps.isEmpty())
+        // (GC #6847, #336's Opus L3) Not retryable, so no caller keeps it to resend unchanged; what it used up is read.
+        assertFalse(e.retryable)
+        assertEquals(RelayException.QUOTA_TOKEN, e.quota)
+        assertTrue("an ordinary 429 still is", RelayException(429, RelayException.RATE_LIMITED, "").retryable)
+        assertNull("only a quota refusal carries it", RelayException(429, RelayException.RATE_LIMITED, "").quota)
     }
 
     /**

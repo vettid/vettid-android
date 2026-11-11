@@ -205,9 +205,14 @@ internal data class OutboxEntry(
     val type: String,
     val relayUrl: String,
     val mailbox: String,
-    val token: String,
+    var token: String,
     val envelope: String,
     var attempts: Int = 0,
+    /**
+     * (GC #6847; VAULT-MESSAGING §8.6, RELAY-PROTOCOL §7.1) The token whose quota refused this entry (`quota_exceeded`,
+     * `quota: token`): it is never sent under it again, and waits for another standing token for the vault.
+     */
+    var quotaToken: String? = null,
 )
 
 internal val stateJson = Json {
