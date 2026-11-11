@@ -169,13 +169,13 @@ class VaultDeviceTest {
         }
 
         /** Answers the device's hs.init (purpose app). */
-        fun respond(raw: ByteArray, d: VaultDevice): RelayMessage {
-            val p = PendingInit.open(raw, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
+        fun respond(raw: ByteArray, d: VaultDevice, at: Instant = Instant.now()): RelayMessage {
+            val p = PendingInit.open(raw, { k -> if (k == kem.publicKey.kid) kem else null }, at)
             assertEquals(Purpose.APP, p.body.purpose)
             assertEquals(vaultId, p.body.ctx)
             assertEquals(listOf("hs_confirm"), p.inner.features) // §5.3, §10.8 (0.87.0): every message the device deposits
             val (r, env) = p.respond(
-                ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()),
+                ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk(), now = at),
             )
             responder = r
             return msg(env)
@@ -7139,6 +7139,47 @@ class VaultDeviceTest {
             ahead(java.time.Duration.ofDays(33))
             r.d.handle(r.v.msg(r.new.seal(message("now"))))
             assertTrue("gone at the capped time, not the stamp's", !keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, last re-check of 2d8c4e7e) A new pairing's activation (handleResp) prunes by the keys' clock: 40 real days
+     * pass, the phone starts a new pairing, and its clock jumps 10 days before the vault's hs.resp arrives. The kept confirmed
+     * epoch (life 48 days) the vault's time still keeps is not destroyed.
+     */
+    @Test
+    fun aNewPairingWithTheClockJumpedAheadDestroysNoKeptEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            elapsed += java.time.Duration.ofDays(40).toMillis()
+            ahead(java.time.Duration.ofDays(40))
+            val at = deviceNow()
+            async(Dispatchers.IO) { runCatching { r.d.completeEnrollment(java.time.Duration.ofSeconds(2)) } }
+            val resp = r.v.respond(nextDeposit().second, r.d, at)
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            r.d.handle(resp)
+            nextDeposit() // its hs.fin: the new pairing's epoch is active
+            assertTrue("the kept epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, last re-check of 2d8c4e7e) The hs.resp's verified ts moves the keys' clock: after a restart (nothing of the
+     * vault's time known), with 49 real days past, a new pairing's hs.resp shows the vault's time, and its activation destroys
+     * the kept epoch past its 48 days.
+     */
+    @Test
+    fun aNewPairingsRespShowsTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(49))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            async(Dispatchers.IO) { runCatching { again.completeEnrollment(java.time.Duration.ofSeconds(2)) } }
+            val resp = r.v.respond(nextDeposit().second, again, deviceNow())
+            again.handle(resp)
+            nextDeposit() // its hs.fin
+            assertTrue("destroyed at the new pairing's activation", !keptInFile(r))
         }
     }
 
