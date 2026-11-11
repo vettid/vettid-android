@@ -2033,7 +2033,7 @@ class VaultDevice private constructor(
             val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
             // CryptoException.Early: a message of the new epoch ahead of its hs.fin (handle leaves it for redelivery).
             val fr = r.resp.handleFin(raw, sender, t)
-            noteVaultTime(fr.inner.ts) // its ts passed checkTime (GC #7175, review Low 1)
+            noteKeyTime(fr.inner.ts) // its ts passed checkTime (GC #7175, review Low 1); the keys' clock only
             // §6.3.1 "Responder": activated at the verified hs.fin; hs.confirm and device.features queued in the same write.
             activateRekeyLocked(fr.epoch, t)
             awaiting.remove(r)
@@ -2262,7 +2262,7 @@ class VaultDevice private constructor(
             throw e
         }
         ini = null
-        noteVaultTime(res.inner.ts) // its ts passed checkTime (GC #7175, blind reviews of 4d1e8a0f, Fable N2)
+        noteKeyTime(res.inner.ts) // its ts passed checkTime (GC #7175, blind reviews of 4d1e8a0f, Fable N2); the keys' clock only
         val v = requireVault()
         res.resp.token?.let { tok ->
             heldFromVault(tok)?.let { exp ->
@@ -2296,7 +2296,7 @@ class VaultDevice private constructor(
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
         if (keyring.current() !== ep && !isConfirmedLocked(ep)) return
         val pi = PendingInit.openRekey(raw, ep, t)
-        noteVaultTime(pi.inner.ts) // its ts passed checkTime (GC #7175, review Low 1)
+        noteKeyTime(pi.inner.ts) // its ts passed checkTime (GC #7175, review Low 1); the keys' clock only
         val v = requireVault()
         val (resp, env) = pi.respond(
             ResponderConfig(
@@ -2783,7 +2783,7 @@ class VaultDevice private constructor(
      * durable `ts` window), so its time is the vault's of then. The keys' life is counted from [keyBase].
      */
     private fun pruneTime(t: Instant): Instant? = synchronized(vaultClockLock) {
-        if (vaultTs == null) null else minOf(t, vaultNow().plus(PRUNE_SKEW))
+        keyClock()?.let { minOf(t, it.plus(PRUNE_SKEW)) }
     }
 
     /**
@@ -2791,7 +2791,7 @@ class VaultDevice private constructor(
      * once it is known in this process (at a rekey, hs.fin's ts was just noted), so a clock ahead does not lengthen the
      * kept epoch's 48 days or a receive key's 16; this phone's [t] before.
      */
-    private fun keyBase(t: Instant): Instant = synchronized(vaultClockLock) { if (vaultTs == null) t else vaultNow() }
+    private fun keyBase(t: Instant): Instant = synchronized(vaultClockLock) { keyClock() ?: t }
 
     /**
      * A released epoch's receive key: kept 16 days from the latest of this phone's time, the vault's and the message's own
@@ -2807,11 +2807,48 @@ class VaultDevice private constructor(
 
     /** The later of [t] and the vault's time ([vaultNow]) once it is known in this process; [t] before. */
     private fun laterOfVault(t: Instant): Instant = synchronized(vaultClockLock) {
-        if (vaultTs == null) t else maxOf(t, vaultNow())
+        keyClock()?.let { maxOf(t, it) } ?: t
     }
 
     /** Destroys the retained epochs past their life as of [pruneTime]; true when one was. */
-    private fun pruneKeys(t: Instant): Boolean = pruneTime(t)?.let { keyring.prune(it) } ?: false
+    private fun pruneKeys(t: Instant): Boolean {
+        // (GC #7175, re-check of 1b77af15, Low) The responders awaiting hs.fin too: one whose hs.fin never comes ends at
+        // HANDSHAKE_TTL by the vault's time, not never (restoreAwaiting drops none by age).
+        val before = awaiting.size
+        pruneAwaiting(t)
+        val dropped = pruneTime(t)?.let { keyring.prune(it) } ?: false
+        return dropped || awaiting.size != before
+    }
+
+    /**
+     * (GC #7175, re-check of 1b77af15, item 2) The verified ts of a handshake's hs.init, hs.resp or hs.fin: a second anchor
+     * the keys' clock ([keyClock]) reads, never [vaultNow] (the settlement clock of §11.14.9 stays as it was).
+     */
+    private fun noteKeyTime(ts: Instant) {
+        val at = cfg.elapsedMs()
+        synchronized(vaultClockLock) {
+            val last = keyTs
+            if (last == null || ts.isAfter(last.plusMillis(at - keyTsAtMs))) {
+                keyTs = ts
+                keyTsAtMs = at
+            }
+        }
+    }
+
+    private var keyTs: Instant? = null
+    private var keyTsAtMs = 0L
+
+    /**
+     * The keys' clock: the later of the vault's clock as messages showed it ([vaultNow], when one did in this process) and
+     * the handshakes' stamps ([noteKeyTime]), each carried forward on the monotonic clock; null while neither is known.
+     * Under [vaultClockLock].
+     */
+    private fun keyClock(): Instant? {
+        val e = cfg.elapsedMs()
+        val fromVault = vaultTs?.plusMillis((e - vaultTsAtMs).coerceAtLeast(0))
+        val fromKeys = keyTs?.plusMillis((e - keyTsAtMs).coerceAtLeast(0))
+        return listOfNotNull(fromVault, fromKeys).maxOrNull()
+    }
 
     /**
      * The vault's clock as this phone last saw it (§11.14.9 step 1): the `ts` of the newest message from the vault plus

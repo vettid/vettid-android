@@ -7093,6 +7093,56 @@ class VaultDeviceTest {
     }
 
     /**
+     * (GC #7175, re-check of 1b77af15, Low) A responder whose hs.fin never comes ends at HANDSHAKE_TTL by the vault's time: 17
+     * real days pass and a message from the vault (its time) ends it at the prune after handling.
+     */
+    @Test
+    fun anAwaitingRekeyEndsAtItsTtlByTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            d.handle(v.msg(v.rekeyInit(d).envelope()))
+            nextDeposit() // its hs.resp; no hs.fin ever comes
+            assertEquals("setup: awaiting", 1, savedState(store).vault!!.awaiting.size)
+            elapsed += java.time.Duration.ofDays(17).toMillis()
+            ahead(java.time.Duration.ofDays(17))
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            assertTrue("ended at its 16 days", savedState(store).vault!!.awaiting.isEmpty())
+        }
+    }
+
+    /**
+     * (GC #7175, re-check of 1b77af15, item 2) A handshake's stamp moves the keys' clock only: the settlement clock of §11.14.9
+     * ([VaultDevice.vaultNow]) is as on master, unchanged by a rekey hs.init stamped a day ahead of it.
+     */
+    @Test
+    fun aHandshakeStampDoesNotMoveTheSettlementClock() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val before = d.vaultNow()
+            ahead(java.time.Duration.ofDays(1)) // the wall clock only
+            d.handle(v.msg(v.rekeyInit(d, at = deviceNow()).envelope()))
+            assertEquals("the settlement clock is unchanged", before, d.vaultNow())
+        }
+    }
+
+    /**
+     * (GC #7175, re-check of 1b77af15, Nit 1) A release under a stamp far in the future is capped: its base is never later than
+     * the vault's time + 16 days + skew, so the released epoch goes once real time passes that, not at the stamp's date.
+     */
+    @Test
+    fun aReleaseUnderAFarFutureStampIsCapped() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            runCatching { r.d.handle(r.v.msg(r.new.seal(message("far ahead", at = deviceNow().plus(java.time.Duration.ofDays(100)))))) }
+            elapsed += java.time.Duration.ofDays(33).toMillis()
+            ahead(java.time.Duration.ofDays(33))
+            r.d.handle(r.v.msg(r.new.seal(message("now"))))
+            assertTrue("gone at the capped time, not the stamp's", !keptInFile(r))
+        }
+    }
+
+    /**
      * (GC #7175, review nit) After a restart in which 49 days really passed, a message from the vault shows its time, and the
      * kept epoch past its life is destroyed.
      */
