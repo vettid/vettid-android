@@ -840,9 +840,9 @@ class VaultDeviceTest {
 
     /**
      * (GC #7134, VAULT-MESSAGING §6.5: an `hs.init` answered before is acked and dropped; §6.3: a resend carries the same
-     * bytes) A redelivered rekey `hs.init` makes no second responder: once the relay has accepted its `hs.resp` nothing is
-     * sent; while that deposit may not have arrived (a retryable failure), the same bytes go again, also after a restart;
-     * and once the rekey is done nothing at all.
+     * bytes) A rekey `hs.init` the vault deposits again (a new msg_id) makes no second responder: once the relay has accepted
+     * its `hs.resp` nothing is sent; while that deposit may not have arrived (a retryable failure), the same bytes go again,
+     * also after a restart; and once the rekey is done nothing at all.
      */
     @Test
     fun aRedeliveredRekeyInitMakesNoSecondResponder() = runBlocking<Unit> {
@@ -855,7 +855,7 @@ class VaultDeviceTest {
             val init = ini.envelope()
             d.handle(v.msg(init))
             val first = nextDeposit().second
-            d.handle(v.msg(init)) // the relay's redelivery (a new msg_id: the batch was not acked)
+            d.handle(v.msg(init)) // the vault's re-deposit (a new msg_id, §6.5)
             noHandshakeAnswer(v.keyring.current()!!)
             assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
             assertNull("its bytes are not kept once accepted", savedState(store).vault!!.awaiting.single().resp)
@@ -923,6 +923,41 @@ class VaultDeviceTest {
             assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
             val res = ini.handleResp(resp, d.relayAddr.pk(), deviceNow())
             d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (GC #7134, the blind reviews of 858695c8, M1 and L1) The device re-sends an `hs.resp` whose deposit may not have
+     * arrived by itself, as an outbox does: one attempt, refused 503, makes exactly one request; the collection start then
+     * deposits the same bytes, once; and after a restart the relay's redelivery of the same msg_id (dropped by `seen`) needs
+     * nothing: the collection start sends it.
+     */
+    @Test
+    fun anUnsentRespIsDepositedAgainByTheDeviceItself() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val ini = v.rekeyInit(d)
+            val msg = v.msg(ini.envelope())
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            val before = refused.get()
+            runCatching { d.handle(msg) }
+            assertEquals("one attempt: not sent again by the client after a 5xx", 1, refused.get() - before)
+            refuseDeposits = null
+            refuseStatus = 403
+            d.stop() // a crash after the save, before the deposit got through
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.handle(msg) // the relay's redelivery: the same msg_id, dropped by `seen`
+            noHandshakeAnswer(v.keyring.current()!!)
+            again.tickConfirm() // a collection start: the kept hs.resp goes out by itself
+            val resp = nextDeposit().second
+            again.tickConfirm()
+            noHandshakeAnswer(v.keyring.current()!!) // one hs.resp in all
+            val res = ini.handleResp(resp, again.relayAddr.pk(), deviceNow())
+            again.handle(v.msg(res.fin))
             expectConfirm(res.epoch)
         }
     }

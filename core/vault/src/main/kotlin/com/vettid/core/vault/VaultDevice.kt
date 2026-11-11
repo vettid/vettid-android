@@ -341,6 +341,12 @@ class VaultDevice private constructor(
     private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
 
     /**
+     * Responders added in memory that no successful [save] has written yet (a handling whose save failed): their `hs.resp`
+     * is never deposited before a save holds them (§8.3; [resendRespsLocked], [handleRekey]). Memory only; under [lock].
+     */
+    private val unsavedAwaiting = HashSet<Awaiting>()
+
+    /**
      * Outbox entries a handling queued (`hs.confirm`, `device.features`, §6.3.1, §10.2): stored by the save that ends the
      * handling and deposited after it, under the same lock ([deliverQueued]). Memory only; under [lock].
      */
@@ -590,6 +596,7 @@ class VaultDevice private constructor(
             throw IOException("state save", e)
         }
         unsaved.clear() // every entry in memory is in the file now
+        unsavedAwaiting.clear()
     }
 
     /** Puts [entry] in the outbox in memory: never deposited before a save that holds it has succeeded ([unsaved]). */
@@ -2093,6 +2100,7 @@ class VaultDevice private constructor(
             publish(VaultMessage(inner))
         }
         maintain(t)
+        resendRespsLocked()
     }
 
     /** An event left on the relay during a hold ([leaveForLater]). */
@@ -2277,15 +2285,17 @@ class VaultDevice private constructor(
      * it would leave this device unable to read anything the vault sends from then on.
      */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String, ts: Instant) {
-        // (GC #7134) An hs.init answered before (the relay redelivered it: an unacked batch, a restart). §6.5: acked and
-        // dropped, never a second responder. Only while its hs.resp may not have reached the relay (a retryable failure, a
-        // stop before the deposit) is that hs.resp deposited again, the same bytes (§6.3), and only after a save holds its
-        // responder (§8.3: written first, sent after).
+        // (GC #7134) An hs.init answered before: the vault deposited it again (a new msg_id, §6.5; the relay's own
+        // redelivery of the same msg_id is dropped by `seen`, saved with the responder). §6.5: acked and dropped, never a
+        // second responder. Only while its hs.resp may not have reached the relay is that hs.resp deposited again, the same
+        // bytes (§6.3), and only once a save holds its responder (§8.3). [resendRespsLocked] does the same by itself. The
+        // mark is keyed on the inner id: it is inside the epoch's AEAD, and a vault that deposits the hs.init again sends the
+        // same bytes, so the same inner id (and th1).
         pruneAwaiting(t)
         if (st.seenInner.containsKey(initId)) {
             val a = awaiting.firstOrNull { it.initId == initId } ?: return
             val again = a.respBytes ?: return
-            save()
+            if (a in unsavedAwaiting) save()
             depositResp(requireVault(), a, again, first = false)
             return
         }
@@ -2302,6 +2312,7 @@ class VaultDevice private constructor(
         )
         val a = Awaiting(resp, t.toEpochMilli(), initId, env)
         awaiting.add(a)
+        unsavedAwaiting.add(a)
         pruneAwaiting(t)
         // Answered: written with the responder, before hs.resp goes out, so that a redelivery after a restart is known. Kept
         // from the later of this phone's time and the hs.init's ts, so that it outlives the hs.init's own window.
@@ -2331,6 +2342,40 @@ class VaultDevice private constructor(
         } catch (e: RelayException) {
             if (!e.retryable) respRefused(a, first)
             throw e
+        }
+    }
+
+    /**
+     * (GC #7134, the blind reviews of 858695c8, M1) Re-deposits, by itself, every `hs.resp` whose deposit may not have reached
+     * the relay ([Awaiting.respBytes] kept: a retryable failure or a lost answer, a stop before the deposit), the same bytes,
+     * as an outbox would: at each collection start and after each handled message. Never before a save holds the responder
+     * (§8.3); a failure leaves it for the next time. Under [lock].
+     */
+    private suspend fun resendRespsLocked() {
+        val due = awaiting.filter { it.respBytes != null }
+        if (due.isEmpty()) return
+        val v = st.vault ?: return
+        if (due.any { it in unsavedAwaiting }) {
+            try {
+                save()
+            } catch (_: IOException) {
+                return // not held by a save: nothing goes out
+            }
+        }
+        for (a in due) {
+            val bytes = a.respBytes ?: continue
+            try {
+                depositResp(v, a, bytes, first = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: IOException) {
+                // tried again at the next collection start or handled message
+            }
+        }
+        try {
+            save() // what changed (a deposit accepted, a re-send refused for good)
+        } catch (_: IOException) {
+            // in memory; the next save writes it
         }
     }
 
@@ -2536,6 +2581,7 @@ class VaultDevice private constructor(
                 // pruned in memory; the next save writes it
             }
         }
+        resendRespsLocked()
         tickConfirmLocked(t, save = true)?.let { deliverConfirm(it) }
     }
 
