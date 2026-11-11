@@ -47,6 +47,8 @@ sealed interface SignalEvent {
         val servers: List<CallWire.IceServer>,
         /** The suite this device will answer with, chosen when the offer was checked: the engine is made for it. */
         val suite: MediaSuite,
+        /** (C2) The offer carried form 2, so this device answers in form 2 (and holds its media until a frame decrypts). */
+        val formTwo: Boolean = false,
     ) : SignalEvent {
         /** No SDP (it holds addresses) and no server credentials. */
         override fun toString(): String = "Offer($callId)"

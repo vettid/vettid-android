@@ -332,9 +332,10 @@ internal class CallMachine(
             return
         }
         val engine = s.engine ?: return
-        // (C2, VAULT-MESSAGING "Key confirmation") Against a C2 vault the answering device sends no media, microphone
-        // or camera, until its receiver first decrypts a frame: that proves the caller holds the same keys.
-        if (signalling.formTwo) {
+        // (C2, VAULT-MESSAGING "Key confirmation") A device answering a form 2 offer (it answers in form 2, whatever
+        // the vault probe has found yet) sends no media, microphone or camera, until its receiver first decrypts a
+        // frame: that proves the caller holds the same keys.
+        if (offer.formTwo) {
             s.heldForDecrypt = true
             engine.setHeld(true)
         }
@@ -360,6 +361,7 @@ internal class CallMachine(
 
     private fun onAnswered(s: Session) {
         s.keysSet = true
+        publish(s) // the answer is with the vault: keep-alives may go
         s.canSendIce = true
         timer(s, TimerKind.CONNECT, timings.connect)
         scheduleFlush(s, timings.iceBatch)
@@ -590,7 +592,7 @@ internal class CallMachine(
     }
 
     private fun publish(s: Session) {
-        stateFlow.value = CallState.Live(s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting)
+        stateFlow.value = CallState.Live(s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting, s.keysSet)
     }
 
     /** Ends the call here; [tell] is the `call.end` reason for the vault, or null when nothing is to be sent. */

@@ -53,7 +53,11 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         onRemoteSdp()
     }
 
+    /** How long acceptOffer takes (the real engine's runs on its worker for 100 ms or more). */
+    var acceptOfferMs = 0L
+
     override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
+        if (acceptOfferMs > 0) kotlinx.coroutines.delay(acceptOfferMs)
         check(suite in suites) { "suite ${suite.id}" }
         madeFor = suite
         calls += "acceptOffer"
@@ -110,9 +114,15 @@ class FakeEngines(
     val created = mutableListOf<MediaEngine>()
     var config: MediaConfig? = null
 
+    /** Called with each engine made (a test sets an engine up as it is created). */
+    var onCreate: (MediaEngine) -> Unit = {}
+
     override fun create(config: MediaConfig): MediaEngine {
         this.config = config
-        return make().also { created += it }
+        return make().also {
+            created += it
+            onCreate(it)
+        }
     }
 
     val last: FakeEngine get() = created.last() as FakeEngine

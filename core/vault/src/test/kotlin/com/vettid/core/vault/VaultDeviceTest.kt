@@ -3636,6 +3636,10 @@ class VaultDeviceTest {
                 val ev = d.awaitEvent("call.answer")
                 assertThrows(CallMessageException::class.java) { api.callAccept(call, ev, peer.pinned) }
             }
+            // A form 2 answer to this form 1 offer: refused, however well signed.
+            d.handle(v.seal("call.answer", form2Answer(peer, callId, ek, CallWire.Parties(v.ik.publicKey, peer.vault.publicKey))))
+            val f2ev = d.awaitEvent("call.answer")
+            assertThrows(CallMessageException::class.java) { api.callAccept(call, f2ev, peer.pinned) }
             d.handle(v.seal("call.answer", answer()))
             val accepted = api.callAccept(call, d.awaitEvent("call.answer"), peer.pinned)
             assertEquals("the media stack gets the SDP without VettID's attribute", sdp, accepted.sdp)
@@ -3760,6 +3764,8 @@ class VaultDeviceTest {
             assertEquals(0, savedState(store).outbox.size)
             val b = StrictJson.parseObject(ans.body)
             assertEquals(callId, b.string("call_id"))
+            // Form 1, keepalive not asked for: neither form 2's members nor keepalive.
+            for (k in listOf("keepalive", "suite", "offered", "confirm")) assertFalse(k, String(ans.body).contains("\"$k\""))
             val enc = b.base64("enc", 1120)
             assertTrue(com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.shareMessage("answer", callId, "", enc), b.base64("enc_sig", 64)))
             val n = CallMedia.chosenIn(b.string("sdp"), listOf(1))

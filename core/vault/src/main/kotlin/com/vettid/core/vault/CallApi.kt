@@ -454,13 +454,18 @@ suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String, keepalive: Bool
         if (parties != null) CallWire.answer2(call.ek, call.callId, parties) else CallWire.answer(call.ek, call.callId)
     }
     // (C2) confirm, from k_confirm, before k_call is wiped by the key derivation.
-    val confirm = parties?.let { p ->
-        val kc = checked("key confirmation") { CallWire.confirmKey(a.kCall, call.callId) }
-        try {
-            CallWire.confirm(kc, chosen.chosen.id, chosen.offered, call.callId, p)
-        } finally {
-            Bytes.wipe(kc)
+    val confirm = try {
+        parties?.let { p ->
+            val kc = checked("key confirmation") { CallWire.confirmKey(a.kCall, call.callId) }
+            try {
+                CallWire.confirm(kc, chosen.chosen.id, chosen.offered, call.callId, p)
+            } finally {
+                Bytes.wipe(kc)
+            }
         }
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        Bytes.wipe(a.kCall)
+        throw e
     }
     val keys = CallKeys.derive(a.kCall, chosen, call.callId, caller = false)
     try {

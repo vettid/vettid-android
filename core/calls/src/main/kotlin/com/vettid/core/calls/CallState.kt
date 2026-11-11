@@ -97,6 +97,12 @@ sealed interface CallState {
         val activeSince: Instant? = null,
         /** Active, but the path is interrupted; the media stack is trying to get it back. */
         val reconnecting: Boolean = false,
+        /**
+         * (C2) This device's side of the answer is through: the callee's `call.answer` is with its vault, or the caller
+         * has taken the answer. From then the call is `active` in the vault, and keep-alives may go (VAULT-MESSAGING
+         * "Liveness"); one before it is answered `call.end{unavailable}`.
+         */
+        val answerThrough: Boolean = false,
     ) : CallState
 
     /** The last call, until it is dismissed or another begins. */

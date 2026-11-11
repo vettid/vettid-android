@@ -73,13 +73,19 @@ class CallsControllerTest {
             return IncomingCall(CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216))
         }
 
-        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys =
-            CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        /** Answers and keep-alives, in the order they went out. */
+        val order = mutableListOf<String>()
+
+        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+            synchronized(order) { order += "answer" }
+            return CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        }
 
         val keepalives = mutableListOf<String>()
 
         override suspend fun keepalive(callId: String) {
             synchronized(keepalives) { keepalives += callId }
+            synchronized(order) { order += "keepalive" }
         }
 
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
@@ -368,6 +374,72 @@ class CallsControllerTest {
         runCurrent()
         advanceTimeBy(90_000)
         assertEquals(2, vault.gateway.keepalives.size)
+    }
+
+    /**
+     * The answering device's first keep-alive goes only after its `call.answer` is with the vault: one before it is
+     * answered `call.end{unavailable}` by a vault that still has the call ringing, which would end the call. The
+     * engine takes its time over the offer, as the real one does.
+     */
+    @Test
+    fun theCalleesKeepAlivesFollowItsAnswer() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        engines.onCreate = { (it as FakeEngine).acceptOfferMs = 500 }
+        c.answer()
+        runCurrent()
+        advanceTimeBy(100)
+        assertTrue("nothing before the answer", vault.gateway.keepalives.isEmpty())
+        advanceTimeBy(1_000)
+        assertEquals(listOf("answer", "keepalive"), vault.gateway.order)
+        assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+    }
+
+    /** What the probe found is forgotten at the lock: the next unlock's probe decides again. */
+    @Test
+    fun theVaultsLevelIsForgottenAtLock() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        vault.gateway.version = null
+        vault.gateway.vaultNow = null
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.toString(), vault.gateway.sent.contains("start(conn-1)"))
+    }
+
+    /** The C2 sweep leaves alone a call that is live on this phone, even one the vault lists as this device's. */
+    @Test
+    fun theC2SweepLeavesALiveCallAlone() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        var asks = 0
+        vault.gateway.list = {
+            if (asks++ == 0) emptyList() else listOf(CallRecord(CALL_ID, "conn-1", "out", "audio", "active", null, T0.toString(), deviceId = "dev-me"))
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        c.forgetProbeForTest()
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(2, asks)
+        assertTrue(vault.gateway.sent.none { it.startsWith("end(") })
     }
 
     /** Against an S10 vault: form 1 and no keep-alive (it would answer an unknown type). */

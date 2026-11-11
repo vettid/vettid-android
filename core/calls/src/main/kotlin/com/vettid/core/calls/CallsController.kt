@@ -310,8 +310,8 @@ class CallsController(
                 delay(PROBE_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
-            supported = true
             vaultC2 = records.formTwo
+            supported = true
             publish()
             noteSkipped(records)
             if (records.formTwo) endStaleC2(records) else endStale(records.calls)
@@ -338,11 +338,12 @@ class CallsController(
      */
     /**
      * (C2, VAULT-MESSAGING §10.10 "Liveness") The call's device sends `call.keepalive` to its own vault as soon as the
-     * call is active on it (the callee after its answer, the caller once it accepted the answer: [CallPhase.CONNECTING]
-     * on), then every 30 s until it ends. Only to a C2 vault (an S10 vault answers an unknown type).
+     * call is active on it ([CallState.Live.answerThrough]: the callee once its `call.answer` is with its vault, the
+     * caller once it took the answer; one sent before is answered `call.end{unavailable}`), then every 30 s until it
+     * ends. Only to a C2 vault (an S10 vault answers an unknown type).
      */
     private fun keepAlive(live: CallState.Live?) {
-        val id = live?.callId?.takeIf { vaultC2 && (live.phase == CallPhase.CONNECTING || live.phase == CallPhase.ACTIVE) }
+        val id = live?.callId?.takeIf { vaultC2 && live.answerThrough }
         if (id == keepalive?.first) return
         keepalive?.second?.cancel()
         keepalive = id?.let {

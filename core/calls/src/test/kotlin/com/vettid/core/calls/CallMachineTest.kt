@@ -28,7 +28,7 @@ class CallMachineTest {
 
     private fun CallMachine.ended() = state.value as CallState.Ended
 
-    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1") =
+    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1", formTwo: Boolean = false) =
         SignalEvent.Offer(
             callId,
             connectionId,
@@ -37,6 +37,7 @@ class CallMachineTest {
             Duration.ofSeconds(45),
             emptyList(),
             MediaSuite.AES_128_GCM,
+            formTwo,
         )
 
     private fun answer() =
@@ -433,9 +434,10 @@ class CallMachineTest {
      */
     @Test
     fun theAnsweringDeviceSendsNothingBeforeAFrameDecrypts() = runTest {
-        signalling.c2 = true
+        // Keyed on the offer's form: here the vault probe has not found the vault C2 (yet), and the hold still applies.
+        signalling.c2 = false
         val m = machine()
-        signalling.deliver(offer())
+        signalling.deliver(offer(formTwo = true))
         runCurrent()
         m.answer()
         runCurrent()
@@ -457,7 +459,7 @@ class CallMachineTest {
         m.dismiss()
 
         // No frame decrypts: 20 s after the connection, not encrypted.
-        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70"))
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70", formTwo = true))
         runCurrent()
         m.answer()
         runCurrent()
@@ -469,9 +471,9 @@ class CallMachineTest {
         assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertTrue(engines.last.holding)
 
-        // S10: nothing held.
+        // A form 1 offer (an S10 peer), even on a C2 vault: nothing held.
         m.dismiss()
-        signalling.c2 = false
+        signalling.c2 = true
         signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T71"))
         runCurrent()
         m.answer()
