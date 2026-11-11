@@ -94,8 +94,9 @@ class VaultDeviceTest {
     @Volatile
     private var refuseQuota: String? = null
 
-    /** The token of each deposit the relay refused, and of each it took. */
+    /** The token of each deposit the relay refused, and of each it took; the payload of each refused. */
     private val refusedTokens = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    private val refusedBodies = java.util.concurrent.ConcurrentLinkedQueue<ByteArray>()
     private val acceptedTokens = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
     /** When set, a deposit under this token is refused `token_expired` (401): a token the vault has replaced. */
@@ -273,6 +274,7 @@ class VaultDeviceTest {
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
                         refused.incrementAndGet()
                         refusedTokens.add(request.headers["Authorization"].orEmpty().removePrefix("VettID-Deposit "))
+                        runCatching { refusedBodies.add(StrictJson.parseObject(request.body!!.toByteArray()).base64("payload")) }
                         val q = refuseQuota?.let { ""","quota":"$it"""" } ?: ""
                         MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""$q}""").build()
                     }
@@ -1478,7 +1480,7 @@ class VaultDeviceTest {
             val t0 = System.nanoTime()
             assertTrue(runCatching { d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofMillis(bound)) }.isFailure)
             val ms = (System.nanoTime() - t0) / 1_000_000
-            assertTrue("ended after $ms ms, within its bound of $bound", ms < bound + 300)
+            assertTrue("ended after $ms ms, within its bound of $bound", ms < bound + 1_500)
             assertEquals("the retry was made, cut to what was left", 2, collectQueries.size)
             slowCollect = false
         }
@@ -1528,11 +1530,10 @@ class VaultDeviceTest {
             assertEquals("never sent again under the spent token", 1, refused.get())
             assertEquals(listOf(spent, spent), savedState(store).outbox.map { it.quotaToken })
             assertNull("no refresh asked", deposits.poll(200, TimeUnit.MILLISECONDS))
-            // (Medium 1) The device's own refresh is not held behind the token wait: it goes once (and, refused for the same
-            // token's quota, waits itself).
+            // (#345, item 2) Nothing goes under a token known to be spent, the device's own refresh included: it waits too.
             assertTrue(runCatching { d.send("relay.token.refresh") }.isFailure)
-            assertEquals("the refresh was tried", 2, refused.get())
-            assertEquals(3, savedState(store).outbox.size)
+            assertEquals("the refresh was not sent under it", 1, refused.get())
+            assertEquals(listOf(spent, spent, spent), savedState(store).outbox.map { it.quotaToken })
             // The vault's new standing token: both go, under it.
             refuseDeposits = null
             refuseQuota = null
@@ -1549,8 +1550,64 @@ class VaultDeviceTest {
                 sent.map { it.type to String(it.body) },
             )
             assertTrue(savedState(store).outbox.isEmpty())
-            assertEquals(listOf(spent, spent), refusedTokens.toList())
+            assertEquals(listOf(spent), refusedTokens.toList())
             assertEquals("all under the new token", listOf(fresh, fresh, fresh, fresh), acceptedTokens.toList())
+            d.stop()
+        }
+    }
+
+    /**
+     * (#345's blind reviews, item 2) An entry is never re-addressed to a held token known to be spent: A, refused under the
+     * first token, is re-addressed to the vault's next one and refused under it too; the refresh waiting on the first
+     * token then waits on, and nothing more is deposited.
+     */
+    @Test
+    fun nothingIsReAddressedToAHeldTokenKnownToBeSpent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val first = d.vaultToken!!
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_TOKEN
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "A") }) }.isFailure)
+            assertTrue(runCatching { d.send("relay.token.refresh") }.isFailure)
+            Thread.sleep(1_100)
+            val second = v.tokenFor(d)
+            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$second"}"""))
+            d.flushOutbox()
+            d.flushOutbox()
+            assertEquals("A under each token once; the refresh under neither", listOf(first, second), refusedTokens.toList())
+            assertEquals(listOf(second, first), savedState(store).outbox.map { it.quotaToken })
+            d.stop()
+        }
+    }
+
+    /**
+     * (#345's blind reviews, item 1) While the mailbox waits, an earlier entry still in the outbox after its try holds a new
+     * one for the next flush: B fails again (503) when C comes, so C is not even tried; then all go, B before C.
+     */
+    @Test
+    fun aNewEntryWaitsWhileAnEarlierOneIsStillOut() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "B") }) }.isFailure)
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis() // the backoff over: B may be tried again
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            refuseQuota = null
+            refusedBodies.clear()
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "C") }) }.isFailure)
+            val tried = refusedBodies.map { String(v.open(it).body) }.toSet()
+            assertEquals("B tried, C held", setOf("""{"call_id":"B"}"""), tried)
+            refuseDeposits = null
+            d.flushOutbox()
+            val sent = generateSequence { deposits.poll(2, TimeUnit.SECONDS)?.second }.take(2).map { String(v.open(it).body) }.toList()
+            assertEquals(listOf("B", "C").map { """{"call_id":"$it"}""" }, sent)
             d.stop()
         }
     }

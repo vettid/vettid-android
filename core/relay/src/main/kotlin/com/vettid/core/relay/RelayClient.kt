@@ -49,7 +49,8 @@ class RelayException(
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
      * ([staleSignature]); other client errors never are, and neither is `quota_exceeded` (a 429 that is not transient:
-     * §7.1, "a client MUST NOT retry the request unchanged"; GC #6847, #336's Opus L3).
+     * §7.1, "a client MUST NOT retry the request unchanged"; GC #6847, #336's Opus L3). A change for callers: a
+     * device's `hs.resp` refused `quota_exceeded` now ends its responder, as any refusal that is not retried.
      */
     val retryable: Boolean
         get() = code != QUOTA_EXCEEDED && (status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature)
@@ -250,6 +251,21 @@ class RelayClient(
         return d / 2 + random.nextLong(d / 2)
     }
 
+    /**
+     * The wait before a retry, within [c]'s deadline: no retry that could not finish before it (the last failure [last] is
+     * the answer). (The re-check of f97eb7e0, Low 1) At least [MIN_ATTEMPT_MS] must be left: a retry with only moments
+     * left would be cut, a lost attempt for the caller, where the refusal itself is its answer. (#345, item 3) A sleep that
+     * ran long (a frozen process) is looked at again after it.
+     */
+    private suspend fun pauseWithin(c: Call, left: () -> Long?, wait: Long, last: IOException?) {
+        if (tooLate(c, left(), wait)) throw last ?: IOException("relay: no time left")
+        sleep(wait)
+        if (tooLate(c, left(), 0)) throw last ?: IOException("relay: no time left")
+    }
+
+    /** With [left] ms of a deadline, a wait of [wait] would leave the attempt no more than its floor ([MIN_ATTEMPT_MS]). */
+    private fun tooLate(c: Call, left: Long?, wait: Long): Boolean = left != null && left - wait <= maxOf(c.minAttemptMs, MIN_ATTEMPT_MS)
+
     /** The wait before attempt [i]: the refusal's `retry_after` (with jitter), else the backoff. */
     private fun retryWait(e: IOException?, i: Int): Long =
         if (e is RelayException && e.retryAfterSeconds > 0) {
@@ -265,13 +281,7 @@ class RelayClient(
         val left = { c.deadlineMs?.let { it - (elapsedMs() - start) } }
         for (i in 0 until maxOf(maxAttempts, 1)) {
             if (i > 0) {
-                val wait = retryWait(last, i)
-                // Within the deadline: no retry that could not finish before it (the last failure is the answer).
-                val l = left()
-                // (The re-check of f97eb7e0, Low 1) At least [MIN_ATTEMPT_MS]: a retry with only moments left would be cut, a
-                // lost attempt for the caller, where the refusal itself is its answer.
-                if (l != null && l - wait <= maxOf(c.minAttemptMs, MIN_ATTEMPT_MS)) throw last ?: IOException("relay: no time left")
-                sleep(wait)
+                pauseWithin(c, left, retryWait(last, i), last)
                 c.onRetrySent?.invoke()
             }
             sent.set(false)
