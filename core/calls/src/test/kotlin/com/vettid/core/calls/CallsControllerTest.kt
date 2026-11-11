@@ -644,4 +644,27 @@ class CallsControllerTest {
         assertEquals(listOf("A"), h.entries.map { it.callId })
         assertTrue(h.someNotShown)
     }
+
+    /**
+     * (Review of 0470e984, L1 and L3) History's read updates the diagnostics too, at most [CallsController.SKIPPED_IDS_KEPT]
+     * ids are kept, the diagnostics print no id, and a lock clears them.
+     */
+    @Test
+    fun skippedIdsAreCappedUpdatedByHistoryAndClearedAtLock() = runTest {
+        vault.gateway.list = { listOf(record("A", "ended", reason = "hangup")) }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(0, c.diagnostics.value.listSkipped)
+        val ids = (10..34).map { "01JXBAD00000000000000000$it" }
+        vault.gateway.skipped = ids.map { com.vettid.core.vault.SkippedCall(it, "conn-1") }
+        c.history("conn-1")
+        assertEquals("history's read is noted", 25, c.diagnostics.value.listSkipped)
+        assertEquals("at most 20 ids", ids.take(20), c.diagnostics.value.listSkippedIds)
+        assertFalse("no id printed", c.diagnostics.value.toString().contains("01JXBAD"))
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(0, c.diagnostics.value.listSkipped)
+        assertEquals(emptyList<String>(), c.diagnostics.value.listSkippedIds)
+    }
 }

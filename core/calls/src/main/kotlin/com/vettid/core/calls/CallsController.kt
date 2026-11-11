@@ -75,7 +75,10 @@ interface CallVault {
 /** What was held back for the microphone permission: a call to [call], or (null) the answer to the ringing call. */
 data class MicrophoneRequest(val call: String?)
 
-/** What is known beyond one call, for the diagnostics view and the phone tests. Counts only. */
+/**
+ * What is known beyond one call, for the diagnostics view and the phone tests: counts, and the call ids of skipped
+ * `call.list` entries ([listSkippedIds]), cleared at every lock. Prints its counts only.
+ */
 data class CallsDiagnostics(
     /** Offers and answers that failed their checks since the process started. */
     val refused: Int = 0,
@@ -96,7 +99,11 @@ data class CallsDiagnostics(
      */
     val listSkipped: Int = 0,
     val listSkippedIds: List<String> = emptyList(),
-)
+) {
+    override fun toString(): String =
+        "CallsDiagnostics(refused=$refused, droppedForTime=$droppedForTime, staleEnded=$staleEnded, errors=$errors, " +
+            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size})"
+}
 
 /**
  * Calls in the app: the one [CallMachine] of the process and what goes on around a call (CALLS-PLAN 0.1.1 C1).
@@ -293,6 +300,12 @@ class CallsController(
         }
     }
 
+    /** A read's skipped entries, in the diagnostics (this phone's own record of them). */
+    private fun noteSkipped(list: CallList) {
+        val ids = list.skipped.mapNotNull { it.callId }.take(SKIPPED_IDS_KEPT)
+        diagnosticsFlow.update { it.copy(listSkipped = list.skipped.size, listSkippedIds = ids) }
+    }
+
     /**
      * Calls the vault still holds live while this app has none: left by a run of the app that ended during a call.
      * Ended there, or the vault answers every call `busy` for up to 12 hours (CALLS-PLAN §6.1 V3). A ringing call
@@ -303,12 +316,6 @@ class CallsController(
      * device's. Both are right only while one app is the member's only call device; with the vault's V2 and V3
      * (CALLS-PLAN §6.1) this sweep goes away, or it must use a device id and a vault time from the list.
      */
-    /** A read's skipped entries, in the diagnostics (this phone's own record of them). */
-    private fun noteSkipped(list: CallList) {
-        val ids = list.skipped.mapNotNull { it.callId }.take(SKIPPED_IDS_KEPT)
-        diagnosticsFlow.update { it.copy(listSkipped = list.skipped.size, listSkippedIds = ids) }
-    }
-
     private suspend fun endStale(records: List<CallRecord>) {
         if (machine.state.value is CallState.Live) return
         val t = now()
@@ -333,6 +340,9 @@ class CallsController(
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
         // included, which nobody can see behind the unlock screen) would show then, long after.
         machine.dismiss()
+        // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
+        // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
+        diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
         publish()
     }
 

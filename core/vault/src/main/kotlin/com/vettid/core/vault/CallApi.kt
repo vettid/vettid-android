@@ -472,11 +472,25 @@ internal fun callListOf(o: JsonObject): CallList {
     val skipped = mutableListOf<SkippedCall>()
     for (e in entries) {
         val obj = e as? JsonObject
-        val r = obj?.let { runCatching { VaultJson.decode(CallRecord.serializer(), it) }.getOrNull() }
+        val r = obj?.let { runCatching { VaultJson.decode(CallRecord.serializer(), it) }.getOrNull() }?.takeIf { it.reads() }
         if (r != null) read += r else skipped += SkippedCall.of(obj)
     }
     return CallList(read, skipped)
 }
+
+/**
+ * (Review of 0470e984, M1: as vettid-ios's `CallRecord.init`) A record that decodes still does not read with a
+ * `direction` other than `in`/`out`, a `state` other than `ringing`/`active`/`ended`, or a `started_at` (or a present
+ * `answered_at`/`ended_at`) that is not a time: it would be shown as a call with an outcome made up for it.
+ */
+private fun CallRecord.reads(): Boolean =
+    direction in CALL_DIRECTIONS && state in CALL_STATES && isTime(startedAt) &&
+        (answeredAt == null || isTime(answeredAt)) && (endedAt == null || isTime(endedAt))
+
+private val CALL_DIRECTIONS = setOf("in", "out")
+private val CALL_STATES = setOf("ringing", "active", "ended")
+
+private fun isTime(s: String): Boolean = runCatching { java.time.Instant.parse(s) }.isSuccess
 
 /** `call.list` read: the entries that read, newest first, and the ones skipped. Prints its counts only. */
 class CallList(val calls: List<CallRecord>, val skipped: List<SkippedCall>) {

@@ -49,4 +49,29 @@ class CallListTest {
     fun aCallsMemberThatIsNotAnArrayDoesNotRead() {
         assertThrows(CallMessageException::class.java) { read("""{"a":1}""") }
     }
+
+    /** vettid-ios's `callListSkipsEntriesItCannotRead…`, the same seven entries: two read, five are skipped. */
+    @Test
+    fun anUnknownDirectionOrStateOrATimeThatIsNoneDoesNotRead() {
+        fun entry(id: String, dir: String = "in", state: String = "ended", started: String = "2026-10-12T10:00:00.000Z", extra: String = "") =
+            """{"call_id":"$id","connection_id":"k","direction":"$dir","media":"audio","state":"$state","started_at":"$started"$extra}"""
+        val l = read(
+            listOf(
+                entry("good"), entry("d", dir = "sideways"), entry("s", state = "weird"), entry("t", started = "yesterday"),
+                entry("a", extra = ""","answered_at":"soon""""), entry("e", extra = ""","ended_at":5"""),
+                entry("ok2", dir = "out", state = "active", extra = ""","answered_at":"2026-10-12T10:00:05.000Z""""),
+            ).joinToString(",", "[", "]"),
+        )
+        assertEquals(listOf("good", "ok2"), l.calls.map { it.callId })
+        assertEquals(5, l.skipped.size)
+    }
+
+    @Test
+    fun aConnectionIdIsKeptOnlyWhenItReads() {
+        val id = "01JXBAD0000000000000000000"
+        fun skippedConn(conn: String) = read("""[{"call_id":"$id","connection_id":"$conn"}]""").skipped.single().connectionId
+        assertNull("empty", skippedConn(""))
+        assertNull("over 128", skippedConn("c".repeat(129)))
+        assertEquals("c".repeat(128), skippedConn("c".repeat(128)))
+    }
 }

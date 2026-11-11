@@ -358,8 +358,15 @@ class MessagesViewModelsTest {
         runCurrent() // the first read (a second follows a moment later)
         assertTrue(vm.uiState.value.callsNotShown)
         assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
+        calls.someNotShown = false // (review of 0470e984, L3) the second read decides again
         advanceUntilIdle()
-        assertTrue("and the read again", vm.uiState.value.callsNotShown)
+        assertFalse("the read again finds none skipped", vm.uiState.value.callsNotShown)
+        calls.someNotShown = true
+        calls.availability.value = CallAvailability.UNKNOWN // locked
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.READY // read again: skipped again
+        advanceUntilIdle()
+        assertTrue("skipped again after the unlock", vm.uiState.value.callsNotShown)
         calls.availability.value = CallAvailability.UNKNOWN // locked
         advanceUntilIdle()
         assertFalse(vm.uiState.value.callsNotShown)
