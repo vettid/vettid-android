@@ -63,6 +63,7 @@ import com.vettid.feature.notifications.NotificationsHost
 import com.vettid.feature.notifications.NotificationsRoute
 import com.vettid.feature.notifications.notificationsDestination
 import com.vettid.feature.settings.SettingsRoute
+import com.vettid.feature.settings.AdvancedSecurityRoute
 import com.vettid.feature.settings.VaultStatusRoute
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.rememberProfilePhoto
@@ -647,6 +648,13 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         FeedTarget.Connections -> navigateTopLevel(ConnectionsRoute)
         FeedTarget.History -> navigateTopLevel(HistoryRoute)
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
+        // ANDROID-PLAN 0.1.124: Settings, then Advanced security at the row (Back returns to Settings). One restored with the
+        // Settings tab is replaced, so that the new one opens at this row.
+        is FeedTarget.AdvancedSecurity -> {
+            navigateTopLevel(SettingsRoute)
+            popBackStack<AdvancedSecurityRoute>(inclusive = true)
+            navigate(AdvancedSecurityRoute(t.row))
+        }
         FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)
         FeedTarget.VoteList -> navigateTopLevel(VotesRoute)
         // A wallet's Spending limits exist only in a build with the wallet, and while its entry is shown; else the Notifications list.
