@@ -1795,7 +1795,9 @@ class VaultDevice private constructor(
     private fun awaitQuota(e: OutboxEntry) {
         // (#345's blind reviews, item 2) Never a deposit under a token known to be spent (one an entry waits on): an entry
         // under one waits with it, `relay.token.refresh` included, and one is re-addressed only to a held token not known
-        // to be spent.
+        // to be spent. So a `relay.token.refresh` under a spent token waits for the vault's own re-mint (`relay.token.issued`,
+        // which the vault sends once the held token has under 10 days left). That is fine: a device's vault token has no quota
+        // (VAULT-MESSAGING §7.1), so a device token is never spent by its quota and this wait never holds a device's refresh.
         val spentTokens = st.outbox.mapNotNullTo(HashSet()) { it.quotaToken }
         if (e.quotaToken == null && e.token in spentTokens) {
             e.quotaToken = e.token
