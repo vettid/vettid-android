@@ -385,13 +385,10 @@ class RelayClient(
         DepositTokens.mintOpen(key, audience, Instant.now(clock), ttl, jti)
 
     /**
-     * Deposits [payload] into [mailboxId] with [token] (§6.2) and returns the
-     * relay's msg_id. A retried deposit whose first attempt succeeded leaves
-     * two messages: receivers dedupe at the E2E layer too.
-     */
-    /**
-     * Deposits [payload]. [resendAfterSent] false: an attempt that went out and then failed without the relay's own refusal
-     * is not sent again (see [Call.resendAfterSent]), so a refusal of the one attempt says the relay holds nothing of it.
+     * Deposits [payload] into [mailboxId] with [token] (§6.2) and returns the relay's msg_id. A retried deposit whose first
+     * attempt succeeded leaves two messages: receivers dedupe at the E2E layer too. [resendAfterSent] false: an attempt that
+     * went out and then failed without the relay's own refusal is not sent again (see [Call.resendAfterSent]), so a refusal
+     * comes only after attempts the relay applied nothing of.
      */
     suspend fun deposit(mailboxId: String, token: String, payload: ByteArray, resendAfterSent: Boolean = true): String {
         val body = JsonBuilder().base64("payload", payload).bytes()

@@ -2320,7 +2320,9 @@ class VaultDevice private constructor(
      * Refused for good: on the [first] attempt in this process the vault never sees it, so the responder ends and its
      * `hs.init` may be answered afresh (it is not a second `hs.resp`). On a re-send (the review of fbf0712d) an earlier
      * attempt's outcome was unknown, so the vault may hold that copy: the responder and the mark stay, and only the
-     * re-sending stops (no second, different `hs.resp`; at worst the responder waits out [HANDSHAKE_TTL]).
+     * re-sending stops (no second, different `hs.resp`; at worst the responder waits out [HANDSHAKE_TTL]). A re-send also
+     * covers a first deposit that never happened (a stop between the save and the deposit): its refusal leaves the responder
+     * until [HANDSHAKE_TTL] too, the intended trade-off.
      */
     private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray, first: Boolean) {
         try {

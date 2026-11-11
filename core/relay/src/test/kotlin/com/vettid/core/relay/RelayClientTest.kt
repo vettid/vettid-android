@@ -127,6 +127,20 @@ class RelayClientTest {
         assertTrue(sleeps[0] in 250L..500L)
     }
 
+    /** (GC #7134) A deposit with resendAfterSent = false is not sent again after a 5xx once it went out; a 429 still is. */
+    @Test
+    fun aDepositNotToBeResentStopsAtAFiveHundredButRetriesA429() = runBlocking<Unit> {
+        server.enqueue(json(503, """{"code":"internal","message":"x"}"""))
+        val e = runCatching { client.deposit("m", "t", ByteArray(1), resendAfterSent = false) }.exceptionOrNull()
+        assertTrue("a retryable failure, not resent", e is RelayException && e.retryable)
+        server.takeRequest()
+        assertEquals("one attempt", 0, server.requestCount - 1)
+        server.enqueue(json(429, """{"code":"rate_limited","message":"slow","retry_after":1}"""))
+        server.enqueue(json(201, """{"msg_id":"01M"}"""))
+        assertEquals("01M", client.deposit("m", "t", ByteArray(1), resendAfterSent = false))
+        assertEquals("the 429 retried", 3, server.requestCount)
+    }
+
     @Test
     fun honoursRetryAfter() = runBlocking<Unit> {
         server.enqueue(json(429, """{"code":"rate_limited","message":"slow","retry_after":3}"""))
