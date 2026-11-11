@@ -1517,7 +1517,8 @@ class VaultManager(
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
-                val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary, records = enclaveRecords)) { lockGuard }
+                val flow = AltChannelFlow(member, trust, canary = canary, records = enclaveRecords.sink())
+                val s = Session(device, api, member, flow) { lockGuard }
                 // (A6 audit N1) A transfer past its deadline: the collection stays stopped (it could lease a waiting
                 // device.paired before the settlement's collects); the settlement (atTransferDeadline, run by the
                 // transfer-in screen's wait) starts it when it ends. evaluate() publishes the waiting phase meanwhile.

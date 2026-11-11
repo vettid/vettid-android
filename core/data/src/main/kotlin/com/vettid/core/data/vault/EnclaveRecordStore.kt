@@ -24,17 +24,32 @@ import java.time.Instant
 class EnclaveRecordStore(private val file: DeviceStateStore) : EnclaveRecords {
     private val current = MutableStateFlow(load())
 
+    /** Bumped by [forget]: a verification that began before a wipe never writes after it. */
+    private var generation = 0L
+
     /** The last record, or null. */
     val record: StateFlow<EnclaveRecord?> = current.asStateFlow()
 
-    override fun record(r: EnclaveRecord) {
+    override fun record(r: EnclaveRecord) = recordIn(generation, r)
+
+    /** Where a session's verifications go: the generation it was made in, so that nothing lands after a wipe. */
+    fun sink(): EnclaveRecords {
+        val g = synchronized(this) { generation }
+        return EnclaveRecords { recordIn(g, it) }
+    }
+
+    @Synchronized
+    private fun recordIn(g: Long, r: EnclaveRecord) {
+        if (g != generation) return
         current.value = r
         // Best effort: the screen shows the record in memory either way; a failed write leaves the earlier one on disk.
         runCatching { file.save(json.encodeToString(Stored.serializer(), Stored.of(r)).encodeToByteArray()) }
     }
 
-    /** The wipe: the record goes from memory and from disk. */
+    /** The wipe: the record goes from memory and from disk, and every sink made before it is closed. */
+    @Synchronized
     fun forget() {
+        generation++
         current.value = null
         file.clear()
     }
@@ -86,7 +101,7 @@ class EnclaveRecordStore(private val file: DeviceStateStore) : EnclaveRecords {
                 attestedAt = attestedAtMs?.let(Instant::ofEpochMilli),
                 notAfter = notAfterMs?.let(Instant::ofEpochMilli),
                 releaseNumber = releaseNumber,
-                releaseStatus = releaseStatus?.let { s -> ReleaseStatus.entries.firstOrNull { it.name == s } },
+                releaseStatus = releaseStatus?.let { s -> ReleaseStatus.entries.firstOrNull { it.name == s } ?: return null },
                 releaseEndsAt = releaseEndsAtMs?.let(Instant::ofEpochMilli),
                 refusal = refusal?.let { s -> EnclaveRefusal.entries.firstOrNull { it.name == s } ?: return null },
             )

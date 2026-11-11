@@ -45,7 +45,6 @@ import com.vettid.core.attestation.EnclaveRefusal
 import com.vettid.core.attestation.manifest.ReleaseStatus
 import com.vettid.core.data.vault.AttestationInfo
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.FullScreenProgress
@@ -135,12 +134,12 @@ private fun RecordNotice(r: EnclaveRecord) {
     )
 }
 
-/** The text the unlock shows for that refusal. */
+/** Why the release was refused after every check passed (owner-approved, GC #8641 a). */
 private fun refusalText(why: EnclaveRefusal): Int = when (why) {
-    EnclaveRefusal.OLDER_RELEASE -> FailureKind.ROLLBACK.messageRes()
-    EnclaveRefusal.NOT_ACTIVE -> FailureKind.ENCLAVE.messageRes()
-    EnclaveRefusal.OTHER_INSTANCE -> FailureKind.NO_RESPONSE.messageRes()
-    EnclaveRefusal.TIME_SCALE -> FailureKind.TIME_SCALE.messageRes()
+    EnclaveRefusal.NOT_ACTIVE -> R.string.settings_attestation_refused_not_active
+    EnclaveRefusal.OLDER_RELEASE -> R.string.settings_attestation_refused_older
+    EnclaveRefusal.OTHER_INSTANCE -> R.string.settings_attestation_refused_other_instance
+    EnclaveRefusal.TIME_SCALE -> R.string.settings_attestation_refused_time_scale
 }
 
 @Composable

@@ -203,6 +203,11 @@
     <string name="settings_attestation_failed_title">Verification failed</string>
     <string name="settings_attestation_failed_body">This phone couldn\'t verify your vault\'s enclave, so it sent it nothing. The check that failed is marked below.</string>
     <string name="settings_attestation_refused_body">Every check passed, but this phone refused the release: %s</string>
+    <!-- Owner-approved 2026-11-11 (GC #8641 a): the reason after settings_attestation_refused_body -->
+    <string name="settings_attestation_refused_not_active">it isn\'t offered to new phones.</string>
+    <string name="settings_attestation_refused_older">it\'s older than a release this phone has already used.</string>
+    <string name="settings_attestation_refused_other_instance">your vault\'s address named a different enclave.</string>
+    <string name="settings_attestation_refused_time_scale">its time setting is for test builds, not this app.</string>
     <string name="settings_attestation_ends">, ends %s</string>
     <string name="settings_attestation_status_active">Active</string>
     <string name="settings_attestation_status_deprecated">Deprecated</string>

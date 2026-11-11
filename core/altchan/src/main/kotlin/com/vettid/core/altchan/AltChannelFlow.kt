@@ -170,7 +170,9 @@ class AltChannelFlow(
      * back to the canary (VAULT-MESSAGING §11.10.1): any other failure to fetch the published manifest (another
      * status, a network error) stays an error.
      */
-    suspend fun manifest(seen: Long): ReleaseManifest {
+    suspend fun manifest(seen: Long, record: Boolean = false): ReleaseManifest {
+        // Only the flows that verify the vault's enclave record a refused list (not the update check, ANDROID-PLAN 0.1.124).
+        val sink = records.takeIf { record }
         val canaryDoc = canary?.served()
         val c = canaryDoc?.let { canaryManifest(it) }
         val published = try {
@@ -179,7 +181,7 @@ class AltChannelFlow(
                 manifests.verify(served)
             } catch (e: AttestationException) {
                 // Fetched and refused: line 1 failed, no enclave checked (ANDROID-PLAN 0.1.124).
-                records?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+                sink?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
                 throw e
             }
         } catch (e: MemberApiException) {
@@ -189,7 +191,7 @@ class AltChannelFlow(
         if (canaryDoc != null && c != null && published != null && published.serial >= c.serial) canary?.retire(canaryDoc)
         val m = CanaryManifests.choose(published, c) ?: throw MemberApiException(0, MemberApiException.MANIFEST_UNAVAILABLE)
         if (m.serial < seen) {
-            records?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+            sink?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
             throw AltRefusedException(AltRefusedException.Reason.MANIFEST_OLDER)
         }
         return m
@@ -272,7 +274,7 @@ class AltChannelFlow(
         attester: Attester,
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { null },
     ): EnrollOutcome {
-        var m = manifest(party.manifestSerialSeen())
+        var m = manifest(party.manifestSerialSeen(), record = true)
         var refetched = false
         var attempt = 1
         while (true) {
@@ -302,7 +304,7 @@ class AltChannelFlow(
             val r = party.openEnrollResult(env, req.requestId)
             if (!r.ok && r.code == CODE_MANIFEST && !refetched) {
                 refetched = true
-                m = manifest(party.manifestSerialSeen())
+                m = manifest(party.manifestSerialSeen(), record = true)
                 continue
             }
             return EnrollOutcome(vid, r.ok, r.code, info.instanceId)
@@ -356,7 +358,7 @@ class AltChannelFlow(
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
         val vaultId = party.vaultId() ?: throw AltRefusedException(AltRefusedException.Reason.NOT_PAIRED)
-        var m = manifest(party.manifestSerialSeen())
+        var m = manifest(party.manifestSerialSeen(), record = true)
         var refetched = false
         var attempt = 1
         while (true) {
@@ -404,7 +406,7 @@ class AltChannelFlow(
             val r = party.openUnlockResult(env)
             if (!r.ok && r.code == CODE_MANIFEST && !refetched) {
                 refetched = true
-                m = manifest(party.manifestSerialSeen())
+                m = manifest(party.manifestSerialSeen(), record = true)
                 continue
             }
             return UnlockOutcome(r, info.instanceId, built.releaseChanged)
@@ -421,7 +423,7 @@ class AltChannelFlow(
      * move left is fetched again as for the unlock ([RouteWait]).
      */
     suspend fun preflight(state: AltState, release: String? = null): UnlockPreflight {
-        val m = manifest(state.manifestSerial)
+        val m = manifest(state.manifestSerial, record = true)
         val routed = enclaveRecorded(release, m, enroll = false)
         val (_, v) = if (release == null) {
             RouteWait.awayFrom(state.movedFrom, routed, { it.second.enclave().release }) { enclaveRecorded(null, m, enroll = false) }
@@ -463,7 +465,7 @@ class AltChannelFlow(
         onPosted: suspend () -> Unit = {},
         postFailed: suspend (java.io.IOException) -> Unit = {},
     ): RecoveryResult {
-        val m = manifest(0)
+        val m = manifest(0, record = true)
         var attempt = 1
         while (true) {
             val (info, v) = enclaveRecorded(null, m, enroll = false)
@@ -508,7 +510,7 @@ class AltChannelFlow(
         onSent: suspend () -> Unit = {},
         beforePost: suspend (requestId: String) -> Unit = {},
     ): com.vettid.core.crypto.altchan.RecoveryOpen.Result {
-        val m = manifest(0)
+        val m = manifest(0, record = true)
         val (info, v) = enclaveRecorded(null, m, enroll = false)
         val e = v.enclave()
         used(v)

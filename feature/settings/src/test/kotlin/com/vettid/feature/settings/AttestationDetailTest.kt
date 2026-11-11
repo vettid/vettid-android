@@ -95,7 +95,26 @@ class AttestationDetailTest {
         show(passed.copy(refusal = EnclaveRefusal.OLDER_RELEASE))
         for (c in EnclaveCheck.entries) line(c, "Passed").assertExists()
         rule.onNodeWithText("Every check passed, but this phone refused the release:", substring = true).assertExists()
-        rule.onNodeWithText("older software release than this phone last used", substring = true).assertExists()
+        rule.onNodeWithText(
+            "Every check passed, but this phone refused the release: it's older than a release this phone has already used.",
+        ).assertExists()
+    }
+
+    /** Each refusal's reason, word for word (owner-approved, GC #8641 a). */
+    @Test
+    fun eachRefusalHasItsOwnReason() {
+        var r by androidx.compose.runtime.mutableStateOf(passed)
+        rule.setContent { AttestationContent(LoadState(false, info), onBack = {}, record = r) }
+        for ((why, text) in mapOf(
+            EnclaveRefusal.NOT_ACTIVE to "it isn't offered to new phones.",
+            EnclaveRefusal.OLDER_RELEASE to "it's older than a release this phone has already used.",
+            EnclaveRefusal.OTHER_INSTANCE to "your vault's address named a different enclave.",
+            EnclaveRefusal.TIME_SCALE to "its time setting is for test builds, not this app.",
+        )) {
+            r = passed.copy(refusal = why)
+            rule.waitForIdle()
+            rule.onNodeWithText("Every check passed, but this phone refused the release: $text").assertExists()
+        }
     }
 
     @Test

@@ -228,18 +228,22 @@ class CanaryManifestTest {
     fun aRefusedManifestIsRecordedAndAMissingOneIsNot() = runBlocking<Unit> {
         publishedSerial = 7
         forged = true
-        assertThrows(com.vettid.core.attestation.AttestationException::class.java) { runBlocking { flow(null).manifest(0) } }
+        assertThrows(com.vettid.core.attestation.AttestationException::class.java) { runBlocking { flow(null).manifest(0, record = true) } }
         assertEquals(com.vettid.core.attestation.EnclaveCheck.MANIFEST, records.single().failed)
         forged = false
-        assertThrows(AltRefusedException::class.java) { runBlocking { flow(null).manifest(8) } }
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow(null).manifest(8, record = true) } }
         assertEquals(2, records.size)
         assertEquals(com.vettid.core.attestation.EnclaveCheck.MANIFEST, records.last().failed)
         assertEquals(null, records.last().manifestKeyId)
         publishedSerial = null
-        assertThrows(MemberApiException::class.java) { runBlocking { flow(null).manifest(0) } }
+        assertThrows(MemberApiException::class.java) { runBlocking { flow(null).manifest(0, record = true) } }
         assertEquals("nothing fetched, no record", 2, records.size)
-        assertEquals(7L, run { publishedSerial = 7; flow(null).manifest(0).serial })
+        assertEquals(7L, run { publishedSerial = 7; flow(null).manifest(0, record = true).serial })
         assertEquals("a manifest that verified is no record by itself", 2, records.size)
+        // The update check's manifest is not recorded, refused or not.
+        forged = true
+        assertThrows(com.vettid.core.attestation.AttestationException::class.java) { runBlocking { flow(null).manifest(0) } }
+        assertEquals(2, records.size)
     }
 
     @Test

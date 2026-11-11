@@ -54,8 +54,23 @@ class EnclaveRecordStoreTest {
         assertNull(with(good.replaceFirst("\"MATCH\":\"PASSED\"", "\"MATCH\":\"OK\"")))
         assertNull(with(good.replaceFirst(",\"MATCH\":\"PASSED\"", "")))
         assertNull(with(good.replaceFirst("OLDER_RELEASE", "SOMETHING")))
+        assertNull(with(good.replaceFirst("\"DEPRECATED\"", "\"SOMETHING\"")))
         // Not JSON at all.
         assertNull(with("not json"))
         assertEquals(CheckResult.PASSED, with(good)!!.result(EnclaveCheck.MATCH))
+    }
+
+    /** A verification that ends after the wipe does not write: its sink was made before it. */
+    @Test
+    fun aSinkMadeBeforeTheWipeWritesNothingAfterIt() {
+        val file = InMemoryDeviceStateStore()
+        val s = EnclaveRecordStore(file)
+        val before = s.sink()
+        s.forget()
+        before.record(full)
+        assertNull(s.record.value)
+        assertNull(file.load())
+        s.sink().record(full)
+        assertEquals(full, s.record.value)
     }
 }
