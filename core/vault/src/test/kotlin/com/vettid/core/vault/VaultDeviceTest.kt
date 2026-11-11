@@ -839,41 +839,101 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, VAULT-MESSAGING §6.3: one `hs.resp` per `hs.init`) A redelivered rekey `hs.init` (an unacked batch, a
-     * restart) gets the same `hs.resp` bytes again, never a second responder: also after a restart, and nothing at all once
-     * the rekey is done.
+     * (GC #7134, VAULT-MESSAGING §6.5: an `hs.init` answered before is acked and dropped; §6.3: a resend carries the same
+     * bytes) A redelivered rekey `hs.init` makes no second responder: once the relay has accepted its `hs.resp` nothing is
+     * sent; while that deposit may not have arrived (a retryable failure), the same bytes go again, also after a restart;
+     * and once the rekey is done nothing at all.
      */
     @Test
-    fun aRedeliveredRekeyInitGetsTheSameRespBytes() = runBlocking<Unit> {
-        withTimeout(30_000) {
+    fun aRedeliveredRekeyInitMakesNoSecondResponder() = runBlocking<Unit> {
+        withTimeout(60_000) {
             val store = InMemoryDeviceStateStore()
             val secrets = DeviceSecrets.generate()
             val (d, v) = pairedDevice(this, store, secrets)
+            // Accepted at once: the redelivery is dropped.
             val ini = v.rekeyInit(d)
             val init = ini.envelope()
             d.handle(v.msg(init))
             val first = nextDeposit().second
             d.handle(v.msg(init)) // the relay's redelivery (a new msg_id: the batch was not acked)
-            assertArrayEquals("the same hs.resp bytes", first, nextDeposit().second)
+            noHandshakeAnswer(v.keyring.current()!!)
             assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            assertNull("its bytes are not kept once accepted", savedState(store).vault!!.awaiting.single().resp)
+            // A second rekey whose hs.resp deposit fails retryably: the redelivery sends the same bytes, after a restart too.
+            val ini2 = v.rekeyInit(d)
+            val init2 = ini2.envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init2)) }
+            refuseDeposits = null
+            refuseStatus = 403
+            assertEquals("two responders", 2, savedState(store).vault!!.awaiting.size)
             d.stop()
             val again = VaultDevice.load(config(store), secrets)!!
-            again.handle(v.msg(init)) // after a restart too
-            assertArrayEquals("the same hs.resp bytes after a restart", first, nextDeposit().second)
-            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
-            val res = ini.handleResp(first, again.relayAddr.pk(), deviceNow())
+            again.handle(v.msg(init2))
+            val second = nextDeposit().second
+            again.handle(v.msg(init2))
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("still two responders", 2, savedState(store).vault!!.awaiting.size)
+            // It is the answer to init2: its hs.fin completes that rekey.
+            val res = ini2.handleResp(second, again.relayAddr.pk(), deviceNow())
             again.handle(v.msg(res.fin))
             expectConfirm(res.epoch)
-            val old = v.keyring.current()!!
-            again.handle(v.msg(init)) // once the rekey is done: no answer at all
-            // (It may bring hs.confirm again, a session message under the new epoch: §6.3.1. Never a handshake answer.)
-            while (true) {
-                val raw = deposits.poll(500, TimeUnit.MILLISECONDS)?.second ?: break
-                val session = runCatching { res.epoch.open(Envelope.parse(raw)) }.isSuccess ||
-                    runCatching { old.open(Envelope.parse(raw)) }.isSuccess
-                assertTrue("no hs.resp after the rekey is done", session)
-            }
-            assertTrue(savedState(store).vault!!.awaiting.isEmpty())
+            again.handle(v.msg(init2)) // once the rekey is done: no answer at all
+            noHandshakeAnswer(res.epoch, v.keyring.current()!!)
+        }
+    }
+
+    /** (GC #7134) An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
+    @Test
+    fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = null
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            val res = ini.handleResp(resp, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (GC #7134, the review's M1; §8.3) A redelivered `hs.init` whose responder no save holds (the store failing) sends
+     * nothing: its `hs.resp` goes only once a save has written the responder.
+     */
+    @Test
+    fun aRedeliveredRekeyInitSendsNothingBeforeASaveHoldsIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            store.fail = true
+            runCatching { d.handle(v.msg(init)) }
+            runCatching { d.handle(v.msg(init)) }
+            assertNull("no hs.resp while no save holds its responder", deposits.poll(500, TimeUnit.MILLISECONDS))
+            store.fail = false
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            val res = ini.handleResp(resp, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /** No handshake answer (a sealed `hs.resp`, which opens under no session epoch) among the deposits of the next 500 ms. */
+    private fun noHandshakeAnswer(vararg epochs: com.vettid.core.crypto.session.Epoch) {
+        while (true) {
+            val raw = deposits.poll(500, TimeUnit.MILLISECONDS)?.second ?: return
+            val session = epochs.any { e -> runCatching { e.open(Envelope.parse(raw)) }.isSuccess }
+            assertTrue("no hs.resp", session)
         }
     }
 

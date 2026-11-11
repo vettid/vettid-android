@@ -332,10 +332,11 @@ class VaultDevice private constructor(
     private var ini: Initiator? = null
 
     /**
-     * A vault rekey this device answered (`hs.resp` sent), awaiting its `hs.fin` (§6.5): the `hs.init`'s inner id and the
-     * `hs.resp` bytes, for a redelivered `hs.init` (§6.3, GC #7134); null in a record written before.
+     * A vault rekey this device answered (`hs.resp` sent), awaiting its `hs.fin` (§6.5): the `hs.init`'s inner id, and its
+     * `hs.resp` bytes until the relay has accepted them (null after; GC #7134: a redelivered `hs.init` sends them again only
+     * while unsent, §6.3, and is dropped otherwise, §6.5). Both null in a record written before.
      */
-    private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, val respBytes: ByteArray? = null)
+    private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null)
 
     private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
 
@@ -2039,7 +2040,7 @@ class VaultDevice private constructor(
         // and confirms nothing: the initiator may abandon an epoch right after its hs.fin).
         if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t)
         if (inner.type == TYPE_HS_INIT) {
-            handleRekey(raw, ep, sender, t, inner.id)
+            handleRekey(raw, ep, sender, t, inner.id, inner.ts)
             return
         }
         // Not a request, so never answered; a device starts no rekey, so one from the vault confirms nothing here (§6.3.1).
@@ -2275,13 +2276,17 @@ class VaultDevice private constructor(
      * persists before it deposits, §8.3): the vault switches to the new epoch on `hs.resp`, so a restart that lost
      * it would leave this device unable to read anything the vault sends from then on.
      */
-    private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String) {
-        // (GC #7134, §6.3: one hs.resp per hs.init, a resend carries the same bytes) An hs.init answered before (the relay
-        // redelivered it: an unacked batch, a restart): its stored hs.resp is deposited again while its responder still
-        // waits for hs.fin, and nothing once that handshake is done or expired. Never a second responder.
-        if (st.seenInner.containsKey(initId) || awaiting.any { it.initId == initId }) {
-            val again = awaiting.firstOrNull { it.initId == initId }?.respBytes ?: return
-            depositToVault(requireVault(), again)
+    private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String, ts: Instant) {
+        // (GC #7134) An hs.init answered before (the relay redelivered it: an unacked batch, a restart). §6.5: acked and
+        // dropped, never a second responder. Only while its hs.resp may not have reached the relay (a retryable failure, a
+        // stop before the deposit) is that hs.resp deposited again, the same bytes (§6.3), and only after a save holds its
+        // responder (§8.3: written first, sent after).
+        pruneAwaiting(t)
+        if (st.seenInner.containsKey(initId)) {
+            val a = awaiting.firstOrNull { it.initId == initId } ?: return
+            val again = a.respBytes ?: return
+            save()
+            depositResp(requireVault(), a, again)
             return
         }
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
@@ -2298,20 +2303,29 @@ class VaultDevice private constructor(
         val a = Awaiting(resp, t.toEpochMilli(), initId, env)
         awaiting.add(a)
         pruneAwaiting(t)
-        // Answered: written with the responder, before hs.resp goes out, so that a redelivery after a restart is known.
-        st.seenInner[initId] = t.toEpochMilli()
+        // Answered: written with the responder, before hs.resp goes out, so that a redelivery after a restart is known. Kept
+        // from the later of this phone's time and the hs.init's ts, so that it outlives the hs.init's own window.
+        st.seenInner[initId] = maxOf(t, ts).toEpochMilli()
         prune(st.seenInner, t)
         save()
+        depositResp(v, a, env)
+    }
+
+    /**
+     * Deposits [a]'s `hs.resp` [bytes]. Accepted: the bytes are no longer kept (a later redelivery of its `hs.init` is dropped).
+     * Refused for good: the vault never sees it, so the responder ends and its `hs.init` may be answered afresh (it is not a
+     * second `hs.resp`). Otherwise (a lost answer, a retryable error) it may have arrived: the responder stays for its
+     * `hs.fin`, expires if none comes, and keeps the bytes for a redelivery.
+     */
+    private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray) {
         try {
-            depositToVault(v, env)
+            depositToVault(v, bytes)
+            a.respBytes = null
         } catch (e: RelayException) {
-            // Refused: the vault never sees this hs.resp. Otherwise it may have arrived (a lost answer, a retryable
-            // error): the responder stays for its hs.fin, and expires if none comes.
             if (!e.retryable) {
                 awaiting.remove(a)
-                resp.abort()
-                // Never seen by the vault: a redelivered hs.init may be answered afresh (it is not a second hs.resp).
-                st.seenInner.remove(initId)
+                a.resp.abort()
+                a.initId?.let { st.seenInner.remove(it) }
             }
             throw e
         }
