@@ -5,6 +5,7 @@ import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CredentialKeyFingerprint
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.IkFingerprint
+import com.vettid.core.crypto.Suite
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.Connection
 import com.vettid.core.vault.Message
@@ -252,6 +253,7 @@ object ApprovalParser {
             hasPhoto = p?.hasPhoto ?: false,
             photo = p?.photo,
             keyFingerprint = IkFingerprint.formatB64(c.ik),
+            ik = c.ik.takeIf { k -> runCatching { Base64s.decodeStd(k, Suite.ED25519_PUBLIC_SIZE) }.isSuccess },
             createdAt = instant(c.createdAt),
             lastActiveAt = instant(c.lastActiveAt),
             service = isService(c.peerKind),

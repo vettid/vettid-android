@@ -57,7 +57,16 @@ internal class VaultCallSignalling(
      * vault: it rings only once it does, never over the unlock screen.
      */
     private val mayRing: suspend () -> Boolean = { true },
+    /**
+     * (C2) The connection's identity key as this device's vault gives it (`connection.get`), for a form 2 start: the
+     * callee this device names in `m2`, fixed for the call (VAULT-MESSAGING 0.88.16). Null for no such connection.
+     */
+    private val peerKey: suspend (connectionId: String) -> ByteArray? = { null },
+    /** (C2) Whether the vault is C2, as the `call.list` probe found it. */
+    private val vaultIsC2: () -> Boolean = { false },
 ) : CallSignalling {
+    override val formTwo: Boolean get() = vaultIsC2()
+
     private val lock = Any()
     private val placed = LinkedHashMap<String, OutgoingCall>()
     private val ringing = LinkedHashMap<String, IncomingCall>()
@@ -170,7 +179,10 @@ internal class VaultCallSignalling(
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
         val call = try {
-            gateway.start(connectionId, sdp, suites).also { c ->
+            // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
+            // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
+            val peerIk = if (formTwo) peerKey(connectionId) ?: throw CallSecurityException("no identity key for the connection") else null
+            gateway.start(connectionId, sdp, suites, peerIk).also { c ->
                 synchronized(lock) {
                     placed[c.callId] = c
                     while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
@@ -197,13 +209,15 @@ internal class VaultCallSignalling(
         // The suite was fixed when the offer was checked; an engine that cannot do it must not answer.
         if (call.negotiated.chosen !in suites) throw CallSecurityException("the engine cannot do the negotiated suite")
         return try {
-            handOver(gateway.answer(call, sdp))
+            handOver(gateway.answer(call, sdp, keepalive = formTwo))
         } catch (e: CallMessageException) {
             throw CallSecurityException("call.answer", e)
         }
     }
 
     override suspend fun ringing(callId: String) = gateway.ringing(callId)
+
+    override suspend fun keepalive(callId: String) = gateway.keepalive(callId)
 
     override suspend fun ice(callId: String, candidates: List<CallCandidate>) = gateway.ice(callId, candidates)
 

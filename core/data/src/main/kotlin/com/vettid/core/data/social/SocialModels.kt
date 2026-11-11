@@ -51,6 +51,8 @@ data class ConnectionInfo(
     val photo: String? = null,
     /** The fingerprint of the peer vault's pinned identity key (§10.8: 8 groups of 4 hex digits). */
     val keyFingerprint: String? = null,
+    /** (C2) That key itself, canonical base64 of 32 bytes; null when it does not read. A form 2 call names it. */
+    val ik: String? = null,
     val createdAt: Instant? = null,
     val lastActiveAt: Instant? = null,
     /** Whether the connection's asks are muted or paused (`<connection>.asks`, 0.23.0 §10.4.1); null from an older vault. */

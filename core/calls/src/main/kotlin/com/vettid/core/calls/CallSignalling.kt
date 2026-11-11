@@ -99,4 +99,10 @@ internal interface CallSignalling {
 
     /** `call.end` (durable). */
     suspend fun end(callId: String, reason: String)
+
+    /** (C2) `call.keepalive` for the active call [callId], while the vault is C2 ([formTwo]). */
+    suspend fun keepalive(callId: String) {}
+
+    /** (C2) Whether this device's vault is C2 (`call.list` `v: 2`): form 2, keep-alives. */
+    val formTwo: Boolean get() = false
 }

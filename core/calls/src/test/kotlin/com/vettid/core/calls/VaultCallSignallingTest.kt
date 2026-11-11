@@ -27,6 +27,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,8 +53,8 @@ class VaultCallSignallingTest {
         var startGate: Channel<Unit>? = null
         var answerKeys: CallKeys? = null
 
-        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
-            asked += "start($connectionId, ${suites.map { it.id }})"
+        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+            asked += "start($connectionId, ${suites.map { it.id }})" + (peerIk?.let { " form2 ${it.size}" } ?: "")
             startGate?.receive()
             return start()
         }
@@ -63,8 +64,8 @@ class VaultCallSignallingTest {
             return incoming(event)
         }
 
-        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys {
-            asked += "answer(${call.callId})"
+        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+            asked += "answer(${call.callId})" + (if (keepalive) " keepalive" else "")
             return answerKeys!!
         }
 
@@ -95,7 +96,11 @@ class VaultCallSignallingTest {
     private var refreshes = 0
     private var onRefresh: () -> Unit = {}
 
-    private fun TestScope.signalling(suites: List<MediaSuite> = listOf(s1)): VaultCallSignalling {
+    private fun TestScope.signalling(
+        suites: List<MediaSuite> = listOf(s1),
+        c2: Boolean = false,
+        keys: Map<String, ByteArray> = emptyMap(),
+    ): VaultCallSignalling {
         val s = VaultCallSignalling(
             gateway,
             { identities[it] },
@@ -104,6 +109,8 @@ class VaultCallSignallingTest {
                 refreshes++
                 onRefresh()
             },
+            peerKey = { keys[it] },
+            vaultIsC2 = { c2 },
         )
         backgroundScope.launch { s.events.collect { out += it } }
         runCurrent()
@@ -163,6 +170,32 @@ class VaultCallSignallingTest {
         // And it cannot be answered.
         assertThrows(CallSecurityException::class.java) { kotlinx.coroutines.runBlocking { s.answer(CALL_ID, "v=0", listOf(s1)) } }
         assertTrue(gateway.asked.none { it.startsWith("answer") })
+    }
+
+    /**
+     * (C2) A device that knows its vault to be C2 starts in form 2, naming the connection's key, and answers with
+     * `keepalive`; with no key for the connection it places no call at all (form 1 alone would leave a relay unseen).
+     * Against an S10 vault: form 1, no keep-alive.
+     */
+    @Test
+    fun aC2VaultGetsFormTwoAndKeepAlives() = runTest {
+        val s = signalling(c2 = true, keys = mapOf("conn-1" to ByteArray(32) { 7 }))
+        gateway.start = { outgoingCall() }
+        s.start("conn-1", "v=0", listOf(s1))
+        assertTrue(gateway.asked.toString(), gateway.asked.contains("start(conn-1, [1]) form2 32"))
+        assertThrows(CallSecurityException::class.java) { kotlinx.coroutines.runBlocking { s.start("conn-2", "v=0", listOf(s1)) } }
+        assertFalse(gateway.asked.any { it.startsWith("start(conn-2") })
+        gateway.incoming = { incomingCall() }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        gateway.answerKeys = keys()
+        s.answer(CALL_ID, "v=0", listOf(s1))
+        assertTrue(gateway.asked.contains("answer($CALL_ID) keepalive"))
+
+        val g1 = Gateway().also { it.start = { outgoingCall() } }
+        val s10 = VaultCallSignalling(g1, { identities[it] }, listOf(s1), peerKey = { ByteArray(32) { 7 } }, vaultIsC2 = { false })
+        s10.start("conn-1", "v=0", listOf(s1))
+        assertEquals(listOf("start(conn-1, [1])"), g1.asked)
     }
 
     @Test
