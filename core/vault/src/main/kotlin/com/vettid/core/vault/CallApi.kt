@@ -545,23 +545,24 @@ private fun VaultApi.acceptForm2(call: OutgoingCall, o: JsonObject, sdp: String,
     val suite = MediaSuite.byId(chosen)?.takeIf { chosen in offered } ?: throw CallMessageException("suite")
     val negotiated = checked("media suites") { CallMedia.Negotiated(suite, offered) }
     val kCall = checked("key agreement") { CallWire.accept2(call.key(), enc, call.callId, parties) }
-    val ok = try {
-        val kc = CallWire.confirmKey(kCall, call.callId)
-        try {
-            CallWire.verifyConfirm(kc, chosen, offered, call.callId, parties, confirm)
-        } finally {
-            Bytes.wipe(kc)
+    // k_call is wiped on every path out (derive wipes it too; a second wipe is harmless).
+    try {
+        val ok = try {
+            val kc = CallWire.confirmKey(kCall, call.callId)
+            try {
+                CallWire.verifyConfirm(kc, chosen, offered, call.callId, parties, confirm)
+            } finally {
+                Bytes.wipe(kc)
+            }
+        } catch (e: CryptoException) {
+            throw CallMessageException("key confirmation", e)
         }
-    } catch (e: CryptoException) {
+        if (!ok) throw CallMessageException("key confirmation")
+        call.destroy()
+        return AcceptedCall(call.callId, CallMedia.sdpWithout(sdp), CallKeys.derive(kCall, negotiated, call.callId, caller = true))
+    } finally {
         Bytes.wipe(kCall)
-        throw CallMessageException("key confirmation", e)
     }
-    if (!ok) {
-        Bytes.wipe(kCall)
-        throw CallMessageException("key confirmation")
-    }
-    call.destroy()
-    return AcceptedCall(call.callId, CallMedia.sdpWithout(sdp), CallKeys.derive(kCall, negotiated, call.callId, caller = true))
 }
 
 /**

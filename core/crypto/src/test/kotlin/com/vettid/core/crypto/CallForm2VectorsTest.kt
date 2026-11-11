@@ -1,5 +1,6 @@
 package com.vettid.core.crypto
 
+import com.vettid.core.crypto.call.CallFrames
 import com.vettid.core.crypto.call.CallMedia
 import com.vettid.core.crypto.call.CallWire
 import com.vettid.core.crypto.call.MediaSuite
@@ -149,6 +150,45 @@ class CallForm2VectorsTest {
             CallMedia.directionKey(k2, n11, CallMedia.DIRECTION_CALLEE, callId))
         assertBytes("k_dir caller 2 1/1", Bytes.unhex("157c0c53b1c46a9f90b8497b119546119000c34847440c537ae28cc556d46659"),
             CallMedia.directionKey(k2, CallMedia.Negotiated(s1, listOf(2, 1)), CallMedia.DIRECTION_CALLER, callId))
+        val s2 = MediaSuite.byId(2)!!
+        val kDir2 = CallMedia.directionKey(k2, CallMedia.Negotiated(s2, listOf(2, 1)), CallMedia.DIRECTION_CALLER, callId)
+        assertBytes("k_dir caller 2 1/2", Bytes.unhex("4ac64a47eeb6199469d98039e28131e86927ae28adf6c5a302cffc295d27b542"), kDir2)
+        // The frame keys.
+        assertBytes("frame key caller 1/1", Bytes.unhex("83366919df86b7fc3a43c5c92f8367bd"),
+            CallFrames.frameKey(CallMedia.directionKey(k2, n11, CallMedia.DIRECTION_CALLER, callId), s1))
+        assertBytes("frame key callee 1/1", Bytes.unhex("f48a7399a6eebe7f53324dc50de746f7"),
+            CallFrames.frameKey(CallMedia.directionKey(k2, n11, CallMedia.DIRECTION_CALLEE, callId), s1))
+        assertBytes("frame key caller 2 1/2", Bytes.unhex("576b179f1a55bbb44af932f3b613a258229eee91098b046dc35f8ea8fa6d9447"),
+            CallFrames.frameKey(kDir2, s2))
+    }
+
+    /** §16 (0.88.16): the two confirms that MUST NOT verify, the two keys swapped ("2 1", "1"). */
+    @Test
+    fun swappedPartiesNeverConfirm() {
+        val k2 = CallWire.accept2(offerKey, enc, callId, parties)
+        val kc = CallWire.confirmKey(k2, callId)
+        val swapped = CallWire.Parties(callee.vaultIk, caller.vaultIk)
+        val inHmacOnly = CallWire.confirm(kc, 1, listOf(2, 1), callId, swapped)
+        assertBytes("swapped in the HMAC input only",
+            Bytes.unhex("987cb11aea0528421f48a28898b26e1e1b1d8bf98c9c8dde0b60046eb52f5dec"), inHmacOnly)
+        val kSwapped = CallWire.accept2(offerKey, enc, callId, swapped)
+        val inKCallToo = CallWire.confirm(CallWire.confirmKey(kSwapped, callId), 1, listOf(2, 1), callId, swapped)
+        assertBytes("swapped in k_call too",
+            Bytes.unhex("b5bd80febcdfa5939a6624ae625e502ebb33dfca7ee9902d207da637371ce5a1"), inKCallToo)
+        for (c in listOf(inHmacOnly, inKCallToo)) assertFalse(CallWire.verifyConfirm(kc, 1, listOf(2, 1), callId, parties, c))
+        assertBytes("confirm 2 1/1", Bytes.unhex("5ed63e824d485ef4e2af8ac7d58936fec1eec26a437b5506722692e5db83357c"),
+            CallWire.confirm(kc, 1, listOf(2, 1), callId, parties))
+    }
+
+    /** §16 (0.88.16): the relayed call's k_call and confirm, as printed. */
+    @Test
+    fun theRelayedCallsSpecValues() {
+        val relay = d.b64("relay_vault_ik_b64")
+        assertBytes("relay ik", Bytes.unhex("88df556413538b002015e9619b01bdb5cc48c7215645792563f5460f7307a763"), relay)
+        val kB = CallWire.accept2(offerKey, enc, callId, CallWire.Parties(relay, callee.vaultIk))
+        assertBytes("k_call relayed", Bytes.unhex("658f2ce918bdb72fec26036eea2ad4a8b34e5e813713f301fd70c377639af947"), kB)
+        assertBytes("confirm relayed", Bytes.unhex("50abad6efd920a5dc6eb226a5daf8cff00fcca0bbc261d454637f0faf9641f0e"),
+            CallWire.confirm(CallWire.confirmKey(kB, callId), 1, listOf(2, 1), callId, CallWire.Parties(relay, callee.vaultIk)))
     }
 
     @Test

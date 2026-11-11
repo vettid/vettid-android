@@ -111,6 +111,9 @@ internal class CallMachine(
 
         /** (C2) The answering device's outgoing track is held until its receiver first decrypts a frame. */
         var heldForDecrypt = false
+
+        /** (C2) The call is in form 2: placed in form 2, or answering a form 2 offer. */
+        var formTwo = false
         var remoteApplied = false
         var canSendIce = false
         var gathered = 0
@@ -307,6 +310,7 @@ internal class CallMachine(
         val early = s.early.toList()
         s.early.clear()
         s.callId = m.call.callId
+        s.formTwo = m.call.formTwo
         s.phase = CallPhase.CALLING
         s.canSendIce = true
         diagnosticsFlow.update { it.copy(tapToPlacedMs = m.atMs - s.tappedAtMs) }
@@ -336,6 +340,7 @@ internal class CallMachine(
         // the vault probe has found yet) sends no media, microphone or camera, until its receiver first decrypts a
         // frame: that proves the caller holds the same keys.
         if (offer.formTwo) {
+            s.formTwo = true
             s.heldForDecrypt = true
             engine.setHeld(true)
         }
@@ -452,8 +457,14 @@ internal class CallMachine(
         publish(s)
     }
 
-    /** What the other side's (or this member's other device's) `call.end` means here. */
-    private fun ended(s: Session, reason: String): CallEnd = when (s.phase) {
+    /**
+     * What the other side's (or this member's other device's) `call.end` means here. (C2) The caller's
+     * `call.end{failed}` while this device still holds its track for a first decrypted frame is the caller's wrong
+     * `confirm`: the same text as the 20 s rule's, "couldn't be encrypted" (VAULT-MESSAGING "Key confirmation").
+     */
+    private fun ended(s: Session, reason: String): CallEnd = if (s.heldForDecrypt && reason == CallReason.FAILED) {
+        CallEnd.NOT_ENCRYPTED
+    } else when (s.phase) {
         CallPhase.INCOMING -> RINGING_HERE[reason] ?: CallEnd.MISSED
         CallPhase.STARTING, CallPhase.CALLING, CallPhase.RINGING -> RINGING_THERE[reason] ?: CallEnd.FAILED
         CallPhase.CONNECTING, CallPhase.ACTIVE -> ANSWERED[reason] ?: CallEnd.PEER_HUNG_UP
@@ -592,7 +603,9 @@ internal class CallMachine(
     }
 
     private fun publish(s: Session) {
-        stateFlow.value = CallState.Live(s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting, s.keysSet)
+        stateFlow.value = CallState.Live(
+            s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting, s.keysSet, s.formTwo,
+        )
     }
 
     /** Ends the call here; [tell] is the `call.end` reason for the vault, or null when nothing is to be sent. */

@@ -64,20 +64,28 @@ class CallsControllerTest {
         }
 
         var incoming = false
+
+        /** (C2) The members of a form 2 offer; null: the offer is form 1. */
+        var incomingParties: CallWire.Parties? = null
         var endGate: Channel<Unit>? = null
 
         override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall {
             check(incoming) { "unused" }
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             val n = com.vettid.core.crypto.call.CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
-            return IncomingCall(CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216))
+            return IncomingCall(
+                CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216), incomingParties,
+            )
         }
 
         /** Answers and keep-alives, in the order they went out. */
         val order = mutableListOf<String>()
 
+        val answeredWithKeepalive = mutableListOf<Boolean>()
+
         override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
             synchronized(order) { order += "answer" }
+            answeredWithKeepalive += keepalive
             return CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
         }
 
@@ -400,6 +408,30 @@ class CallsControllerTest {
         advanceTimeBy(1_000)
         assertEquals(listOf("answer", "keepalive"), vault.gateway.order)
         assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+    }
+
+    /**
+     * (C2) An offer in form 2 proves the vault C2 for that call, whatever the probe found (here an S10 answer, as from
+     * a probe that has not read the vault's level yet): the callee answers with `keepalive` and its keep-alives go.
+     */
+    @Test
+    fun aFormTwoOfferStartsKeepAlivesBeforeTheProbeKnows() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.incomingParties = CallWire.Parties(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        c.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        runCurrent()
+        assertTrue(c.state.value.toString(), c.state.value is CallState.Live)
+        advanceTimeBy(30_001)
+        assertEquals(listOf(CALL_ID, CALL_ID), vault.gateway.keepalives)
+        assertEquals(listOf(true), vault.gateway.answeredWithKeepalive)
     }
 
     /** What the probe found is forgotten at the lock: the next unlock's probe decides again. */

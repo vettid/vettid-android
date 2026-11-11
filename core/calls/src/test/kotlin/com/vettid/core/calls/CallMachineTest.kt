@@ -1,6 +1,7 @@
 package com.vettid.core.calls
 
 import com.vettid.core.crypto.call.MediaSuite
+import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -471,6 +473,17 @@ class CallMachineTest {
         assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
         assertTrue(engines.last.holding)
 
+        // The caller's call.end{failed} while this device is held (its wrong confirm): the same text.
+        m.dismiss()
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T72", formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertTrue("a form 2 call says so", m.live().formTwo)
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T72", CallReason.FAILED))
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+
         // A form 1 offer (an S10 peer), even on a C2 vault: nothing held.
         m.dismiss()
         signalling.c2 = true
@@ -479,6 +492,11 @@ class CallMachineTest {
         m.answer()
         runCurrent()
         assertFalse(engines.last.holding)
+        assertFalse(m.live().formTwo)
+        // Not held, the caller's call.end{failed} keeps its usual meaning.
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T71", CallReason.FAILED))
+        runCurrent()
+        assertNotEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
     }
 
     @Test

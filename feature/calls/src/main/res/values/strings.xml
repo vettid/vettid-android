@@ -14,7 +14,7 @@
     <string name="calls_end_owner_check_required">Confirm it\'s you before calling. Your daily check is due.</string>
     <string name="calls_end_not_supported">Calls are not available for your vault yet</string>
     <string name="calls_end_no_address">VettID cannot reach the network for calls. Check that this phone is online and that VettID is allowed to use the network.</string>
-    <string name="calls_end_could_not_connect">Could not connect. For now, both phones need to be on the same network.</string>
+    <string name="calls_end_could_not_connect">Couldn\'t connect the call. Try calling again.</string>
     <string name="calls_end_connection_lost">Connection lost</string>
     <string name="calls_end_not_encrypted">This call could not be encrypted, so it was ended. Nothing was played without encryption.</string>
     <string name="calls_end_locked">Call ended because your vault was locked</string>

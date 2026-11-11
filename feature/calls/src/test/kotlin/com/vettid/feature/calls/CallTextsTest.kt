@@ -43,7 +43,7 @@ class CallTextsTest {
             CallEnd.OWNER_CHECK_REQUIRED to "Confirm it's you before calling. Your daily check is due.",
             CallEnd.NOT_SUPPORTED to "Calls are not available for your vault yet",
             CallEnd.NO_ADDRESS to "VettID cannot reach the network for calls. Check that this phone is online and that VettID is allowed to use the network.",
-            CallEnd.COULD_NOT_CONNECT to "Could not connect. For now, both phones need to be on the same network.",
+            CallEnd.COULD_NOT_CONNECT to "Couldn't connect the call. Try calling again.",
             CallEnd.CONNECTION_LOST to "Connection lost",
             CallEnd.NOT_ENCRYPTED to "This call could not be encrypted, so it was ended. Nothing was played without encryption.",
             CallEnd.LOCKED to "Call ended because your vault was locked",

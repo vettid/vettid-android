@@ -327,29 +327,26 @@ class CallsController(
     }
 
     /**
-     * Calls the vault still holds live while this app has none: left by a run of the app that ended during a call.
-     * Ended there, or the vault answers every call `busy` for up to 12 hours (CALLS-PLAN §6.1 V3). A ringing call
-     * is left alone while it could still be ringing.
-     *
-     * FOR C3 (a second device, the app closed): `call.list` at S10 gives neither the call's device nor its `exp`,
-     * so "stale" is judged by this phone's clock against `started_at`, and a live record is taken to be this
-     * device's. Both are right only while one app is the member's only call device; with the vault's V2 and V3
-     * (CALLS-PLAN §6.1) this sweep goes away, or it must use a device id and a vault time from the list.
-     */
-    /**
      * (C2, VAULT-MESSAGING §10.10 "Liveness") The call's device sends `call.keepalive` to its own vault as soon as the
      * call is active on it ([CallState.Live.answerThrough]: the callee once its `call.answer` is with its vault, the
      * caller once it took the answer; one sent before is answered `call.end{unavailable}`), then every 30 s until it
-     * ends. Only to a C2 vault (an S10 vault answers an unknown type).
+     * ends. Only to a C2 vault (an S10 vault answers an unknown type): one the probe found C2, or a call in form 2,
+     * which proves it for that call even before the probe has answered.
      */
     private fun keepAlive(live: CallState.Live?) {
-        val id = live?.callId?.takeIf { vaultC2 && live.answerThrough }
+        val id = live?.callId?.takeIf { (vaultC2 || live.formTwo) && live.answerThrough }
         if (id == keepalive?.first) return
         keepalive?.second?.cancel()
         keepalive = id?.let {
             it to scope.launch {
                 while (true) {
-                    runCatching { signalling.keepalive(it) }
+                    try {
+                        signalling.keepalive(it)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {
+                        // One lost keep-alive is not an end: the next goes in 30 s, within the vault's window.
+                    }
                     delay(CallLimits.KEEPALIVE_EVERY.toMillis())
                 }
             }
@@ -383,6 +380,16 @@ class CallsController(
         }
     }
 
+    /**
+     * Calls the vault still holds live while this app has none: left by a run of the app that ended during a call.
+     * Ended there, or the vault answers every call `busy` for up to 12 hours (CALLS-PLAN §6.1 V3). A ringing call
+     * is left alone while it could still be ringing.
+     *
+     * FOR C3 (a second device, the app closed): `call.list` at S10 gives neither the call's device nor its `exp`,
+     * so "stale" is judged by this phone's clock against `started_at`, and a live record is taken to be this
+     * device's. Both are right only while one app is the member's only call device; with the vault's V2 and V3
+     * (CALLS-PLAN §6.1) this sweep goes away, or it must use a device id and a vault time from the list.
+     */
     private suspend fun endStale(records: List<CallRecord>) {
         if (machine.state.value is CallState.Live) return
         val t = now()

@@ -23,6 +23,8 @@ data class PlacedCall(
     val exp: Instant,
     /** The servers the vault signed for this call, and the only ones the device may use. */
     val servers: List<CallWire.IceServer>,
+    /** (C2) Placed in form 2. */
+    val formTwo: Boolean = false,
 )
 
 /** The vault refused `call.start` with [code] (`busy`, `not_found`, `owner_check_required`, `unsupported_type`, …). */

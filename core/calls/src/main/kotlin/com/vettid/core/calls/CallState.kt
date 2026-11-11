@@ -67,7 +67,7 @@ enum class CallEnd {
     /** This device found no network address to be reached at (for example a blocked network permission). */
     NO_ADDRESS,
 
-    /** The two devices found no path to each other (today: they are not on the same network). */
+    /** The two devices found no path to each other within 60 s. */
     COULD_NOT_CONNECT,
 
     /** The path was lost during the call. */
@@ -103,6 +103,11 @@ sealed interface CallState {
          * "Liveness"); one before it is answered `call.end{unavailable}`.
          */
         val answerThrough: Boolean = false,
+        /**
+         * (C2) The call is in form 2: placed in form 2, or answering an offer in form 2. That proves the vault C2 for
+         * this call, whatever the `call.list` probe has found yet: keep-alives go on it.
+         */
+        val formTwo: Boolean = false,
     ) : CallState
 
     /** The last call, until it is dismissed or another begins. */
