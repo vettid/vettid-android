@@ -1473,8 +1473,8 @@ class VaultDeviceTest {
             v.answerTransfer(d)
             collectQueries.clear()
             failNextCollectFast.set(true)
-            slowCollect = true // a second attempt would wait 5 s, cut at the bound
-            val bound = 1_500L
+            slowCollect = true // a second attempt waits 5 s: cut at what is left of the bound
+            val bound = 4_500L // above the client's 3 s floor for a retry ([RelayClient.MIN_ATTEMPT_MS])
             val t0 = System.nanoTime()
             assertTrue(runCatching { d.settleCollect(java.time.Duration.ZERO, java.time.Duration.ofMillis(bound)) }.isFailure)
             val ms = (System.nanoTime() - t0) / 1_000_000
@@ -1551,6 +1551,37 @@ class VaultDeviceTest {
             assertTrue(savedState(store).outbox.isEmpty())
             assertEquals(listOf(spent, spent), refusedTokens.toList())
             assertEquals("all under the new token", listOf(fresh, fresh, fresh, fresh), acceptedTokens.toList())
+            d.stop()
+        }
+    }
+
+    /**
+     * (The re-check of f97eb7e0, Low 2) An earlier entry not tried since a transport failure (B, not marked) is not
+     * overtaken by a new one (C) once a fresh token lets the waiting entries go: B, then A (refused for the token's quota),
+     * then C.
+     */
+    @Test
+    fun aNewEntryNeverOvertakesAnUnmarkedEarlierOne() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "B") }) }.isFailure)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_TOKEN
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "A") }) }.isFailure)
+            assertEquals(listOf(null, d.vaultToken), savedState(store).outbox.map { it.quotaToken })
+            refuseDeposits = null
+            refuseQuota = null
+            Thread.sleep(1_100)
+            val fresh = v.tokenFor(d)
+            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
+            d.send("call.end", buildJsonObject { put("call_id", "C") })
+            val sent = generateSequence { deposits.poll(2, TimeUnit.SECONDS)?.second }.take(3).map { String(v.open(it).body) }.toList()
+            assertEquals(listOf("B", "A", "C").map { """{"call_id":"$it"}""" }, sent)
+            assertTrue(savedState(store).outbox.isEmpty())
             d.stop()
         }
     }

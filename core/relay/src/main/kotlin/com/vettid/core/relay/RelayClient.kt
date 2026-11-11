@@ -268,7 +268,9 @@ class RelayClient(
                 val wait = retryWait(last, i)
                 // Within the deadline: no retry that could not finish before it (the last failure is the answer).
                 val l = left()
-                if (l != null && l - wait <= c.minAttemptMs) throw last ?: IOException("relay: no time left")
+                // (The re-check of f97eb7e0, Low 1) At least [MIN_ATTEMPT_MS]: a retry with only moments left would be cut, a
+                // lost attempt for the caller, where the refusal itself is its answer.
+                if (l != null && l - wait <= maxOf(c.minAttemptMs, MIN_ATTEMPT_MS)) throw last ?: IOException("relay: no time left")
                 sleep(wait)
                 c.onRetrySent?.invoke()
             }
@@ -551,6 +553,9 @@ class RelayClient(
     companion object {
         const val DEFAULT_ATTEMPTS = 3
         private const val NANOS_PER_MS = 1_000_000L
+
+        /** With a deadline, the least time a retry must have for its attempt ([Call.minAttemptMs] when longer). */
+        const val MIN_ATTEMPT_MS = 3_000L
         const val DEFAULT_WAIT_S = 25L
         const val DEFAULT_MAX = 32
         private const val MAX_WAIT_S = 25L

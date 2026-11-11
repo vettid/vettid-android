@@ -1685,12 +1685,15 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (The review of 4de9019c, Low 1) [entry], new, after the older entries of its mailbox that wait for a quota: a fresh
-     * token (or the backoff's end) lets them go first, in order, so a new entry never overtakes one queued before it. Those
-     * still waiting stay; [entry]'s own failure is thrown, as [deliver]'s.
+     * (The review of 4de9019c, Low 1; its re-check, Low 2) [entry], new, after every older entry of its mailbox still in the
+     * outbox while any of them waits for a quota: a fresh token (or the backoff's end) lets them go first, in order, so a new
+     * entry never overtakes one queued before it, marked or not (one not tried since a transport failure). Those still
+     * waiting stay; [entry]'s own failure is thrown, as [deliver]'s.
      */
     private suspend fun deliverInOrder(entry: OutboxEntry) {
-        val earlier = st.outbox.takeWhile { it !== entry }.filter { it.mailbox == entry.mailbox && it.quotaToken != null }
+        val mine = st.outbox.takeWhile { it !== entry }.filter { it.mailbox == entry.mailbox }
+        val waiting = mine.any { it.quotaToken != null } || quotaBackoff.containsKey(entry.mailbox)
+        val earlier = if (waiting) mine else emptyList()
         for (e in earlier) {
             try {
                 if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e)

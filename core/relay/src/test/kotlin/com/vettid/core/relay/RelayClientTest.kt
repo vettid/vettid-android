@@ -266,6 +266,14 @@ class RelayClientTest {
         assertEquals(0, timed.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofSeconds(10)).size)
         assertEquals(3, server.requestCount)
         assertEquals(1, sleeps.size)
+        // (The re-check of f97eb7e0, Low 1) A retry left with under 3 s for its attempt is not made: the refusal is the answer.
+        server.enqueue(json(429, """{"code":"rate_limited","message":""}"""))
+        val late = assertThrows(RelayException::class.java) {
+            runBlocking { timed.collect(java.time.Duration.ZERO, deadline = java.time.Duration.ofMillis(RelayClient.MIN_ATTEMPT_MS)) }
+        }
+        assertEquals(RelayException.RATE_LIMITED, late.code)
+        assertEquals(4, server.requestCount)
+        assertEquals(1, sleeps.size)
     }
 
     /** (#336 review, item 3; RELAY-PROTOCOL §7.1) A 429 `quota_exceeded` is never retried unchanged. */
