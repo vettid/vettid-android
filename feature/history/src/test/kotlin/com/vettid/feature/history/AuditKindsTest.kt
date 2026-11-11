@@ -10,7 +10,7 @@ class AuditKindsTest {
     /** Every kind §10.9 lists (the `drop.<reason>` family and `<kind>.summary` aside). */
     private val specKinds = listOf(
         "vault.unlocked", "vault.locked", "device.paired", "device.unlinked", "connection.added", "connection.removed",
-        "connection.stale", "connection.reconnected", "identity.rotated", "credential.created", "credential.rotated",
+        "connection.stale", "connection.reconnected", "connection.active_again", "identity.rotated", "credential.created", "credential.rotated",
         "credential.password_changed", "credential.password_failed", "credential.unlocked", "credential.recovered",
         "credential.clone_detected", "credential.alarm.confirmed", "credential.alarm.resolved", "credential.reset",
         "vault.pin_failed", "owner_check.passed", "owner_check.held", "owner_check.failed", "owner_check.locked",

@@ -107,16 +107,41 @@ class ActiveAgainTest {
         assertEquals(ConnectionState.ACTIVE, m.stateOf("c1"))
     }
 
+    /** As vettid-ios's `aPendingOrOtherConnectionIsLeftAloneAtARekeyOrReconnect`: only a `stale` connection is revived. */
+    @Test
+    fun aPendingOrOtherConnectionIsLeftAloneAtARekeyOrReconnect() = runTest {
+        val states = mapOf("p" to ConnectionState.PENDING, "b" to ConnectionState.BLOCKED, "o" to ConnectionState.OTHER)
+        listed = states.map { (id, st) -> FakeSocial.connection(id, id, state = st) }
+        val m = manager()
+        m.refresh()
+        for ((id, st) in states) {
+            for (what in listOf("rekeyed", "reconnected")) {
+                val read = CompletableDeferred<Unit>()
+                gate = read
+                val job = launch { m.onEvent(event(id, what)) }
+                runCurrent()
+                assertEquals("$id $what: left alone before the read lands", st, m.stateOf(id))
+                read.complete(Unit)
+                job.join()
+                gate = null
+            }
+        }
+    }
+
+    /** The other `connection.event`s change no state before the re-read. */
     @Test
     fun anotherEventChangesNoState() = runTest {
         val m = manager()
         m.refresh()
-        val read = CompletableDeferred<Unit>()
-        gate = read
-        val job = launch { m.onEvent(event("c1", "updated")) }
-        runCurrent()
-        assertEquals(ConnectionState.STALE, m.stateOf("c1"))
-        read.complete(Unit)
-        job.join()
+        for (what in listOf("profile", "added", "stale", "failed", "removed")) {
+            val read = CompletableDeferred<Unit>()
+            gate = read
+            val job = launch { m.onEvent(event("c1", what)) }
+            runCurrent()
+            assertEquals(what, ConnectionState.STALE, m.stateOf("c1"))
+            read.complete(Unit)
+            job.join()
+            gate = null
+        }
     }
 }

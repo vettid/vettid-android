@@ -3,7 +3,6 @@
 
 package com.vettid.core.data.feed
 
-import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.vault.FeedItem
 import org.junit.Assert.assertEquals
@@ -37,6 +36,9 @@ class FeedActiveAgainTextTest {
         val names = FeedNames(connections = mapOf("c1" to FakeSocial.connection("c1", "Sam", last = "Lee")))
         assertEquals("Your connection with ⁨Sam Lee⁩ works again.", title("c1", names))
         assertEquals("a removed connection", "Your connection with Removed connection works again.", title("c9", names))
+        // A connection held but with no name shared yet (as connection.stale).
+        val unnamed = FeedNames(connections = mapOf("c2" to FakeSocial.connection("c2", "", last = "")))
+        assertEquals("Your connection with A connection works again.", title("c2", unnamed))
         assertEquals("no connection", "Your connection with Someone works again.", title(null, names))
         // The same fallbacks as connection.stale.
         for (c in listOf("c1", "c9", null)) {
@@ -51,6 +53,5 @@ class FeedActiveAgainTextTest {
         assertTrue("connection.active_again" in FeedKinds.KNOWN)
         assertEquals(FeedTarget.Connection("c1"), FeedKinds.target(item("c1")))
         assertEquals(FeedTarget.Sheet, FeedKinds.target(item(null)))
-        assertEquals(ConnectionState.ACTIVE, FakeSocial.connection("c1", "Sam").state)
     }
 }

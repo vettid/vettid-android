@@ -721,9 +721,12 @@ class SocialManager internal constructor(
         }
     }
 
-    /** [conn], held as `stale`, is active again (a `connection.event` `rekeyed` or `reconnected`). */
-    private fun activeAgain(conn: String) {
-        val epoch = lockEpoch.get()
+    /**
+     * [conn], held as `stale`, is active again (a `connection.event` `rekeyed` or `reconnected`); a connection in any other
+     * state is left as it is. Written only in the epoch the event was taken in ([currentEpoch]), as every event's write.
+     */
+    private suspend fun activeAgain(conn: String) {
+        val epoch = currentEpoch()
         synchronized(localLock) {
             if (epoch != lockEpoch.get()) return
             connectionsFlow.update { l ->
