@@ -104,6 +104,7 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onRetryPermissions = vm::refreshPermissions,
             onResume = vm::resume,
             onNoticeShown = vm::noticeShown,
+            onRemovedNoticeShown = vm::removedNoticeShown,
         ),
         now = rememberNow(),
     )

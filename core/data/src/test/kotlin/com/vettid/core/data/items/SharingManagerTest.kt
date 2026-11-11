@@ -247,6 +247,34 @@ class SharingManagerTest {
         assertNull(SharingManager.rule(o("""{"version":1}""")))
     }
 
+    /**
+     * An agent rule's `status_ttl` reads as the removal bound does (review Low 3): absent stays the vault's default (null),
+     * one that does not read is the longest, and any is clamped to 60–3,600 s without overflowing an Int.
+     */
+    @Test
+    fun anAgentRulesStatusLifetimeNeverReadsShorter() {
+        fun rule(v: String?) = SharingManager.rule(
+            o("""{"rule_id":"r1","version":1,"subject":{"agent_id":"a1"},"tags":["api"],"per_hour":60,"per_day":1000${v?.let { ""","status_ttl":$it""" } ?: ""}}"""),
+        )!!
+        fun ttl(v: String?) = rule(v).statusTtlBound
+        assertNull(ttl(null))
+        assertEquals(300, ttl("300"))
+        for (bad in listOf("\"x\"", "{}", "[1]", "null", "90.5", "4294967356", "99999")) assertEquals(bad, 3_600, ttl(bad))
+        assertEquals(60, ttl("-5"))
+        assertEquals(60, ttl("10"))
+        // (review Low C) The draft keeps the value as sent: null when it does not read (the member chooses), an
+        // out-of-range one stays out of range (an invalid draft), never wrapped or preselected.
+        fun draft(v: String?) = RuleDraft.of(rule(v)).statusTtl
+        assertNull(draft(null))
+        assertEquals(300, draft("300"))
+        for (bad in listOf("\"x\"", "{}", "[1]", "null", "90.5")) assertNull(bad, draft(bad))
+        assertEquals(99_999, draft("99999"))
+        assertEquals(Int.MAX_VALUE, draft("4294967356"))
+        assertEquals(-5, draft("-5"))
+        assertFalse(RuleDraft.of(rule("99999")).valid(java.time.Instant.now()))
+        assertTrue(RuleDraft.of(rule("300")).valid(java.time.Instant.now()))
+    }
+
     @Test
     fun rulesAreListedPageByPage() = runTest {
         ops.rulePages = ArrayDeque(
