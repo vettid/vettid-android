@@ -361,19 +361,24 @@ class CallsController(
      * `failed`; its own outgoing call still ringing past `exp` ends `timeout`.
      */
     private suspend fun endStaleC2(list: CallList) {
-        if (machine.state.value is CallState.Live) return
-        val me = vault.deviceId() ?: return
-        val vaultNow = list.now ?: return
+        val me = vault.deviceId()
+        val vaultNow = list.now
+        if (machine.state.value is CallState.Live || me == null || vaultNow == null) return
         for (r in list.calls) {
-            if (r.deviceId != me) continue
-            val reason = when {
-                r.state == STATE_ACTIVE -> CallReason.FAILED
-                r.state == STATE_RINGING && r.direction == DIRECTION_OUT &&
-                    (r.exp?.let(::time)?.let { !vaultNow.isBefore(it) } ?: false) -> CallReason.TIMEOUT
-                else -> continue
-            }
+            val reason = staleReasonC2(r, me, vaultNow) ?: continue
             runCatching { vault.gateway.end(r.callId, reason) }
                 .onSuccess { diagnosticsFlow.update { it.copy(staleEnded = it.staleEnded + 1) } }
+        }
+    }
+
+    /** The end of [r] by the C2 rule, or null when it is not this device's or not stale by the vault's [vaultNow]. */
+    private fun staleReasonC2(r: CallRecord, me: String, vaultNow: Instant): String? {
+        val pastExp = r.exp?.let(::time)?.let { !vaultNow.isBefore(it) } ?: false
+        return when {
+            r.deviceId != me -> null
+            r.state == STATE_ACTIVE -> CallReason.FAILED
+            r.state == STATE_RINGING && r.direction == DIRECTION_OUT && pastExp -> CallReason.TIMEOUT
+            else -> null
         }
     }
 

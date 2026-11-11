@@ -27,6 +27,9 @@ import javax.crypto.spec.SecretKeySpec
  * by the device that made it and vouched for by that device's vault; the other device checks both signatures under
  * the connection's identity key before it uses the share.
  */
+// One object for the call's wire crypto, form 1 and form 2 together, as vettid-vault's `vms/callwire` is one package:
+// the two forms share labels, sizes and checks, and splitting them would hide that a form 2 call also carries form 1.
+@Suppress("TooManyFunctions")
 object CallWire {
     const val LABEL_CALL = "vettid/vms/2/call"
     const val LABEL_CALL_KEY = "vettid/vms/2/call-key"
@@ -156,7 +159,10 @@ object CallWire {
         )
     }
 
-    /** (C2) A form 2 offer's signed bytes: `"offer2" || 0 || call_id || 0 || media || 0 || list(offered) || 0 || caller_ik || callee_ik || ek`. */
+    /**
+     * (C2) A form 2 offer's signed bytes:
+     * `"offer2" || 0 || call_id || 0 || media || 0 || list(offered) || 0 || caller_ik || callee_ik || ek`.
+     */
     fun offerMessage2(callId: String, media: String, offered: List<Int>, parties: Parties, ek: ByteArray): ByteArray =
         m2(ROLE_OFFER2, callId, media, suiteList(offered), parties, ek)
 
@@ -188,7 +194,14 @@ object CallWire {
     }
 
     /** (C2) The calling device's check of `confirm`, in constant time, before it sets any key. */
-    fun verifyConfirm(kConfirm: ByteArray, chosen: Int, offered: List<Int>, callId: String, parties: Parties, confirm: ByteArray?): Boolean =
+    fun verifyConfirm(
+        kConfirm: ByteArray,
+        chosen: Int,
+        offered: List<Int>,
+        callId: String,
+        parties: Parties,
+        confirm: ByteArray?,
+    ): Boolean =
         confirm != null && confirm.size == CONFIRM_SIZE &&
             Bytes.constantTimeEquals(confirm(kConfirm, chosen, offered, callId, parties), confirm)
 
