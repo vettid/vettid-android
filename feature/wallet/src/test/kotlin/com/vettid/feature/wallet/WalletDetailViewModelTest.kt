@@ -44,7 +44,7 @@ class WalletDetailViewModelTest {
         if (noteShown) flags.setPrivacyNoteShown(id)
         val m = manager(backgroundScope, ops, flags, chain)
         m.open()
-        return WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        return main.track(WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings))
     }
 
     @Test
@@ -149,7 +149,7 @@ class WalletDetailViewModelTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
         runCatching { m.open() }
-        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        val vm = main.track(WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings))
         eventually { vm.state.value.closed }
     }
 
@@ -304,7 +304,7 @@ class WalletDetailViewModelTest {
         ops.wallet(id)
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile).also { it.setPrivacyNoteShown(id) }, chain)
         m.open()
-        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        val vm = main.track(WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings))
         eventually { vm.state.value.loaded }
         m.clear()
         eventually { vm.state.value.closed }
@@ -350,7 +350,7 @@ class WalletDetailViewModelTest {
         val created = m.create("Savings", Network.TESTNET4, "pw".toCharArray(), com.vettid.core.wallet.WalletCaps(500_000, null))
         assertEquals(newId, created.wallet.id)
         assertTrue(ops.calls.none { it.startsWith("caps.set") })
-        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to newId)), m, settings)
+        val vm = main.track(WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to newId)), m, settings))
         eventually { vm.state.value.loaded && vm.state.value.capsPending }
         assertTrue(ops.calls.none { it.startsWith("caps.set") })
         val before = ops.calls.size
