@@ -144,6 +144,8 @@
     <string name="data_feed_connection_added">You are now connected with %1$s</string>
     <string name="data_feed_connection_removed">%1$s was removed</string>
     <string name="data_feed_connection_stale">%1$s has not been reachable</string>
+    <!-- VAULT-MESSAGING 0.88.7 §10.9 `connection.active_again`: a stale connection works again. Owner-approved 2026-11-10 (GC #7229), both apps. -->
+    <string name="data_feed_connection_active_again">Your connection with %1$s works again.</string> <!-- Owner-approved 2026-11-10 -->
     <string name="data_feed_asks_paused">%1$s’s requests are paused</string>
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
     <!-- Owner-approved 2026-10-29: a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4; as vettid-ios #154. -->

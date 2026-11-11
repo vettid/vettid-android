@@ -162,6 +162,8 @@ object FeedKinds {
     val KNOWN = setOf(
         "connection.request", "connection.request.peer_declined", "connection.added", "connection.removed",
         "connection.stale", "connection.asks_paused", "connection.authenticate.requested",
+        // VAULT-MESSAGING 0.88.7 §3.4.1 "Stale is not final": the peer's rekey or reconnect made a `stale` connection active.
+        "connection.active_again",
         "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused",
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
@@ -319,6 +321,7 @@ object FeedKinds {
             "connection.added" -> FeedText(R.string.data_feed_connection_added, listOf(who))
             "connection.removed" -> FeedText(R.string.data_feed_connection_removed, listOf(who))
             "connection.stale" -> FeedText(R.string.data_feed_connection_stale, listOf(who))
+            "connection.active_again" -> FeedText(R.string.data_feed_connection_active_again, listOf(who))
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
             "connection.authenticate.requested" -> authenticationTitle(item, names)
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
@@ -559,7 +562,8 @@ object FeedKinds {
         FeedAsks.approvalKey(item.kind, item.ref)?.let { return askTarget(item, it, open) }
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
-            "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
+            "connection.added", "connection.stale", "connection.active_again", "connection.asks_paused" ->
+                c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
             "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
                 c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet

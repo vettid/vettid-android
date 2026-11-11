@@ -32,6 +32,7 @@ class NotificationMappingTest {
         ),
         Channels.ACTIVITY to listOf(
             "connection.added", "connection.request.peer_declined", "connection.asks_paused", "connection.stale", "connection.removed",
+            "connection.active_again",
             "grant.shared", "grant.revoked", "share.rate_limited", "item.revealed", "device.paired", "device.unlinked", "credential.rotated",
             "leash.rate_limited", "leash.item.read", "location.shared", "wallet.signed",
             // ANDROID-PLAN 0.1.52 §4 "Event titles": the release R kinds, on Vault activity as every other kind.
