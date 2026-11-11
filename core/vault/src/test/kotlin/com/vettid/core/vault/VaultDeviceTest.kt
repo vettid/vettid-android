@@ -884,6 +884,29 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (GC #7134, the review of fbf0712d) A re-sent `hs.resp` refused for good says nothing of the first attempt, which may
+     * be at the vault: the responder and the mark stay, the re-sending stops, and no second, different `hs.resp` follows.
+     */
+    @Test
+    fun aRefusedResendOfAnUnknownRespMakesNoSecondAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init)) } // the outcome unknown (the relay may have stored it)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            runCatching { d.handle(v.msg(init)) } // the re-send refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init))
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder, kept for the first attempt's hs.fin", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
     /** (GC #7134) An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
     @Test
     fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {

@@ -389,9 +389,14 @@ class RelayClient(
      * relay's msg_id. A retried deposit whose first attempt succeeded leaves
      * two messages: receivers dedupe at the E2E layer too.
      */
-    suspend fun deposit(mailboxId: String, token: String, payload: ByteArray): String {
+    /**
+     * Deposits [payload]. [resendAfterSent] false: an attempt that went out and then failed without the relay's own refusal
+     * is not sent again (see [Call.resendAfterSent]), so a refusal of the one attempt says the relay holds nothing of it.
+     */
+    suspend fun deposit(mailboxId: String, token: String, payload: ByteArray, resendAfterSent: Boolean = true): String {
         val body = JsonBuilder().base64("payload", payload).bytes()
-        return json(Call("POST", "/v1/mailbox/$mailboxId", body = body, token = token))!!.string("msg_id")
+        return json(Call("POST", "/v1/mailbox/$mailboxId", body = body, token = token, resendAfterSent = resendAfterSent))!!
+            .string("msg_id")
     }
 
     /**

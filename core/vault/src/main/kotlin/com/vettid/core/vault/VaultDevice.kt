@@ -1736,10 +1736,10 @@ class VaultDevice private constructor(
     }
 
     /** A deposit straight to the vault (handshake messages, outside the outbox), its refusal counted as [deliver]'s. */
-    private suspend fun depositToVault(v: VaultRecord, payload: ByteArray) {
+    private suspend fun depositToVault(v: VaultRecord, payload: ByteArray, resendAfterSent: Boolean = true) {
         checkLive()
         try {
-            relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload)
+            relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload, resendAfterSent)
         } catch (x: RelayException) {
             countRefusal(x, v.mailbox, v.token)
             throw x
@@ -2286,7 +2286,7 @@ class VaultDevice private constructor(
             val a = awaiting.firstOrNull { it.initId == initId } ?: return
             val again = a.respBytes ?: return
             save()
-            depositResp(requireVault(), a, again)
+            depositResp(requireVault(), a, again, first = false)
             return
         }
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
@@ -2308,27 +2308,39 @@ class VaultDevice private constructor(
         st.seenInner[initId] = maxOf(t, ts).toEpochMilli()
         prune(st.seenInner, t)
         save()
-        depositResp(v, a, env)
+        depositResp(v, a, env, first = true)
     }
 
     /**
-     * Deposits [a]'s `hs.resp` [bytes]. Accepted: the bytes are no longer kept (a later redelivery of its `hs.init` is dropped).
-     * Refused for good: the vault never sees it, so the responder ends and its `hs.init` may be answered afresh (it is not a
-     * second `hs.resp`). Otherwise (a lost answer, a retryable error) it may have arrived: the responder stays for its
-     * `hs.fin`, expires if none comes, and keeps the bytes for a redelivery.
+     * Deposits [a]'s `hs.resp` [bytes], in one attempt the client does not send again after it went out (so a refusal is the
+     * relay's word on that one attempt). Accepted: the bytes are no longer kept (a later redelivery of its `hs.init` is
+     * dropped). Otherwise (a lost answer, a retryable error) it may have arrived: the responder stays for its `hs.fin`,
+     * expires if none comes, and keeps the bytes for a redelivery.
+     *
+     * Refused for good: on the [first] attempt in this process the vault never sees it, so the responder ends and its
+     * `hs.init` may be answered afresh (it is not a second `hs.resp`). On a re-send (the review of fbf0712d) an earlier
+     * attempt's outcome was unknown, so the vault may hold that copy: the responder and the mark stay, and only the
+     * re-sending stops (no second, different `hs.resp`; at worst the responder waits out [HANDSHAKE_TTL]).
      */
-    private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray) {
+    private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray, first: Boolean) {
         try {
-            depositToVault(v, bytes)
+            depositToVault(v, bytes, resendAfterSent = false)
             a.respBytes = null
         } catch (e: RelayException) {
-            if (!e.retryable) {
-                awaiting.remove(a)
-                a.resp.abort()
-                a.initId?.let { st.seenInner.remove(it) }
-            }
+            if (!e.retryable) respRefused(a, first)
             throw e
         }
+    }
+
+    /** [depositResp]'s refusal for good: the first attempt's ends the responder and its mark; a re-send's only stops re-sending. */
+    private fun respRefused(a: Awaiting, first: Boolean) {
+        if (!first) {
+            a.respBytes = null
+            return
+        }
+        awaiting.remove(a)
+        a.resp.abort()
+        a.initId?.let { st.seenInner.remove(it) }
     }
 
     private fun storeVaultToken(o: JsonObject) {
