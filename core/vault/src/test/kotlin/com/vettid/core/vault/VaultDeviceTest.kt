@@ -907,6 +907,90 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (GC #7134, the re-checks of 4a6e92bb, item 1) The device's own re-send is a re-send (`first = false`): a 503 on the
+     * first deposit, `token_revoked` on the collection start's re-send, then the vault's re-deposit of the same `hs.init`:
+     * no `hs.resp`, and the responder kept for the first attempt's `hs.fin`.
+     */
+    @Test
+    fun aRefusedSelfResendMakesNoSecondAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            d.tickConfirm() // the re-send, refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init)) // the vault's re-deposit
+            d.tickConfirm()
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /** (GC #7134, item 2) The device's own re-send waits for a save that holds the responder: none while the store fails. */
+    @Test
+    fun theSelfResendWaitsForASave() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            store.fail = true
+            runCatching { d.handle(v.msg(init)) }
+            runCatching { d.tickConfirm() }
+            assertNull("no hs.resp while no save holds its responder", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** (GC #7134, item 3) The device's own re-send also goes after a handled message, not only at a collection start. */
+    @Test
+    fun theSelfResendGoesAfterAHandledMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (GC #7134, item 4; RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6) After a `quota_exceeded` the device's own re-send
+     * waits (1 minute first), so it is not sent again unchanged at every message; after the wait it goes.
+     */
+    @Test
+    fun theSelfResendWaitsAfterAQuotaRefusal() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            val before = refused.get()
+            d.tickConfirm()
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            assertEquals("nothing tried during the wait", before, refused.get())
+            noHandshakeAnswer(v.keyring.current()!!)
+            elapsed += 61_000
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
     /** (GC #7134) An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
     @Test
     fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {

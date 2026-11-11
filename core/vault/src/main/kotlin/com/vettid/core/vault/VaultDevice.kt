@@ -336,7 +336,14 @@ class VaultDevice private constructor(
      * `hs.resp` bytes until the relay has accepted them (null after; GC #7134: a redelivered `hs.init` sends them again only
      * while unsent, §6.3, and is dropped otherwise, §6.5). Both null in a record written before.
      */
-    private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null)
+    private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null) {
+        /**
+         * (Opus L4 of the re-check of 4a6e92bb; RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6 for a device) After a
+         * `quota_exceeded` its re-send waits: from 1 minute, doubling to 1 hour, on [DeviceConfig.elapsedMs]. Memory only.
+         */
+        var quotaUntilMs = 0L
+        var quotaBackoffMs = 0L
+    }
 
     private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
 
@@ -2340,7 +2347,12 @@ class VaultDevice private constructor(
             depositToVault(v, bytes, resendAfterSent = false)
             a.respBytes = null
         } catch (e: RelayException) {
-            if (!e.retryable) respRefused(a, first)
+            when {
+                // Not a refusal of this hs.resp: the mailbox (a device's token has no quota, §7.1) is full. It waits, then goes
+                // again, the same bytes (never at every message: [quotaHeld]).
+                e.code == RelayException.QUOTA_EXCEEDED -> quotaWait(a)
+                !e.retryable -> respRefused(a, first)
+            }
             throw e
         }
     }
@@ -2352,7 +2364,10 @@ class VaultDevice private constructor(
      * (§8.3); a failure leaves it for the next time. Under [lock].
      */
     private suspend fun resendRespsLocked() {
-        val due = awaiting.filter { it.respBytes != null }
+        // Nothing past HANDSHAKE_TTL goes again. With no inbound traffic and no collection start nothing is re-sent: the
+        // vault then sends nothing either, and its own rekey ends at its bound, as one this device never answered.
+        pruneAwaiting(now())
+        val due = awaiting.filter { it.respBytes != null && !quotaHeld(it) }
         if (due.isEmpty()) return
         val v = st.vault ?: return
         if (due.any { it in unsavedAwaiting }) {
@@ -2362,22 +2377,35 @@ class VaultDevice private constructor(
                 return // not held by a save: nothing goes out
             }
         }
-        for (a in due) {
-            val bytes = a.respBytes ?: continue
-            try {
-                depositResp(v, a, bytes, first = false)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: IOException) {
-                // tried again at the next collection start or handled message
-            }
-        }
+        var changed = false
+        for (a in due) changed = resendOne(v, a) || changed
+        if (!changed) return
         try {
-            save() // what changed (a deposit accepted, a re-send refused for good)
+            save()
         } catch (_: IOException) {
             // in memory; the next save writes it
         }
     }
+
+    /** One re-send for [resendRespsLocked]: true when its state changed (accepted, or refused for good). */
+    private suspend fun resendOne(v: VaultRecord, a: Awaiting): Boolean {
+        val bytes = a.respBytes ?: return false
+        return try {
+            depositResp(v, a, bytes, first = false)
+            true // accepted: its bytes are no longer kept
+        } catch (e: RelayException) {
+            !e.retryable && e.code != RelayException.QUOTA_EXCEEDED // refused for good; else tried again later
+        } catch (_: IOException) {
+            false // tried again at the next collection start or handled message
+        }
+    }
+
+    private fun quotaWait(a: Awaiting) {
+        a.quotaBackoffMs = (a.quotaBackoffMs * 2).coerceIn(QUOTA_BACKOFF_FIRST_MS, QUOTA_BACKOFF_MAX_MS)
+        a.quotaUntilMs = cfg.elapsedMs() + a.quotaBackoffMs
+    }
+
+    private fun quotaHeld(a: Awaiting): Boolean = cfg.elapsedMs() < a.quotaUntilMs
 
     /** [depositResp]'s refusal for good: the first attempt's ends the responder and its mark; a re-send's only stops re-sending. */
     private fun respRefused(a: Awaiting, first: Boolean) {
@@ -3067,6 +3095,10 @@ class VaultDevice private constructor(
 
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
         private val HANDSHAKE_TTL: Duration = Duration.ofDays(16)
+
+        /** An `hs.resp` re-send's wait after a `quota_exceeded` ([quotaWait]): from 1 minute, doubling to 1 hour. */
+        private const val QUOTA_BACKOFF_FIRST_MS = 60_000L
+        private const val QUOTA_BACKOFF_MAX_MS = 3_600_000L
         private const val MAX_AWAITING = 8
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)
