@@ -6937,6 +6937,87 @@ class VaultDeviceTest {
     }
 
     /**
+     * (GC #7175, re-check item 3) After a restart with the clock 60 days behind, the first message (under the current epoch)
+     * releases the kept one before any vault time is known: its 16 days count from the message's own ts, so once the clock
+     * is corrected and the vault's time shows, it is kept.
+     */
+    @Test
+    fun aReleaseBeforeTheVaultsTimeIsKnownCountsFromTheMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(-60))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            runCatching { again.handle(r.v.msg(r.new.seal(message("first", at = Instant.now())))) }
+            clockAheadMs = 0
+            again.handle(r.v.msg(r.new.seal(message("second", at = Instant.now()))))
+            assertTrue("the released epoch keeps its 16 days", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, re-check item 1) The activation's prune: the kept epoch is released (16 days), 10 real days pass, the vault
+     * rekeys with the clocks in step, then the phone's clock jumps 8 days before hs.fin. The activation destroys nothing the
+     * vault's time still keeps.
+     */
+    @Test
+    fun anActivationWithTheClockJumpedAheadDestroysNoKeptEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.handle(r.v.msg(r.new.seal(message("confirms the new epoch"))))
+            elapsed += java.time.Duration.ofDays(10).toMillis()
+            ahead(java.time.Duration.ofDays(10))
+            val at = deviceNow()
+            val ini = r.v.rekeyInit(r.d, under = r.new, at = at)
+            r.d.handle(r.v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, r.d.relayAddr.pk(), at)
+            ahead(java.time.Duration.ofDays(8)) // the wall clock only
+            r.d.handle(r.v.msg(res.fin))
+            assertTrue("the released epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, re-check item 2) A rekey's verified hs.init shows the vault's time: after a restart in which 49 days really
+     * passed, the kept epoch past its life goes at that rekey, with no other message.
+     */
+    @Test
+    fun aRekeyInitShowsTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(49))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            val ini = r.v.rekeyInit(again, under = r.new)
+            again.handle(r.v.msg(ini.envelope()))
+            assertTrue("destroyed at the rekey's hs.init", !keptInFile(r))
+        }
+    }
+
+    /**
+     * (GC #7175, re-check item 2) A rekey's verified hs.fin shows the vault's time: the vault's rekey comes a minute before the
+     * kept epoch's 48 days end, the phone restarts (the hs.init's time is not kept), and its hs.fin, minutes later and past
+     * the 48 days, destroys the kept epoch at the activation.
+     */
+    @Test
+    fun aRekeyFinShowsTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            ahead(java.time.Duration.ofDays(48).minusMinutes(1))
+            val at = deviceNow()
+            val ini = r.v.rekeyInit(r.d, under = r.new, at = at)
+            r.d.handle(r.v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, r.d.relayAddr.pk(), at)
+            assertTrue("setup: still kept before the 48 days end", keptInFile(r))
+            r.d.stop()
+            ahead(java.time.Duration.ofMinutes(3))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            again.handle(r.v.msg(res.fin))
+            assertTrue("destroyed at the rekey's hs.fin", !keptInFile(r))
+        }
+    }
+
+    /**
      * (GC #7175, review nit) After a restart in which 49 days really passed, a message from the vault shows its time, and the
      * kept epoch past its life is destroyed.
      */

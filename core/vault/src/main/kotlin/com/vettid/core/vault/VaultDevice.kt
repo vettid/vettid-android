@@ -2039,7 +2039,7 @@ class VaultDevice private constructor(
         refusalCount.value = 0 // the vault spoke to this device under its session
         // §6.3.1: any message but hs.fin tells which epoch the vault uses (a redelivered hs.fin of an active epoch opens here,
         // and confirms nothing: the initiator may abandon an epoch right after its hs.fin).
-        if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t)
+        if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t, inner.ts)
         if (inner.type == TYPE_HS_INIT) {
             handleRekey(raw, ep, sender, t)
             return
@@ -2451,14 +2451,16 @@ class VaultDevice private constructor(
      * loses its rk and keeps its receive key for 16 days (§6.3.1 table). Under the confirmed epoch while it is not current,
      * `hs.confirm` goes again, at most once a minute and not while one is still in the outbox.
      */
-    private fun noteConfirmedLocked(ep: Epoch, t: Instant) {
+    private fun noteConfirmedLocked(ep: Epoch, t: Instant, ts: Instant) {
         val v = st.vault ?: return
         if (keyring.current() === ep) {
             val previous = v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
-            // (GC #7175, review M2) Counted from the later of this phone's time and the vault's: a clock behind does not
-            // shorten the 16 days (a message under the released epoch may still be in the mailbox).
+            // (GC #7175, review M2) Counted from the latest of this phone's time, the vault's, and this message's own
+            // authenticated ts (the vault's stamp, even when no vault time is known yet or the message then fails its
+            // checkTime): a clock behind does not shorten the 16 days (a message under the released epoch may still be
+            // in the mailbox).
             if (previous != null && !previous.contentEquals(ep.id)) {
-                keyring.release(previous, laterOfVault(t).plus(Epoch.RECEIVE_KEY_RETENTION))
+                keyring.release(previous, maxOf(laterOfVault(t), ts).plus(Epoch.RECEIVE_KEY_RETENTION))
             }
             v.confirmed = null
             return
