@@ -648,11 +648,11 @@ internal fun NavHostController.openFeedTarget(t: FeedTarget, walletShown: Boolea
         FeedTarget.Connections -> navigateTopLevel(ConnectionsRoute)
         FeedTarget.History -> navigateTopLevel(HistoryRoute)
         FeedTarget.Security -> navigateTopLevel(SettingsRoute)
-        // ANDROID-PLAN 0.1.124: Settings, then Advanced security at the row (Back returns to Settings). One restored with the
-        // Settings tab is replaced, so that the new one opens at this row.
+        // ANDROID-PLAN 0.1.124: Settings, then Advanced security at the row, and Back returns to Settings: whatever the Settings
+        // tab's restored stack had over Settings (another Advanced security, Credential, ...) is popped first.
         is FeedTarget.AdvancedSecurity -> {
             navigateTopLevel(SettingsRoute)
-            popBackStack<AdvancedSecurityRoute>(inclusive = true)
+            popBackStack<SettingsRoute>(inclusive = false)
             navigate(AdvancedSecurityRoute(t.row))
         }
         FeedTarget.Approvals -> navigateTopLevel(ApprovalsRoute)

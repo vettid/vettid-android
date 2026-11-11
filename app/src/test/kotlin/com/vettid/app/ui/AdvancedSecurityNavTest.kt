@@ -41,6 +41,7 @@ class AdvancedSecurityNavTest {
                 NavHost(nav, startDestination = SecretsStartRoute) {
                     composable<SecretsStartRoute> { Text("start") }
                     composable<SettingsRoute> { Text("settings") }
+                    composable<SecretsOtherRoute> { Text("other") }
                     composable<AdvancedSecurityRoute> { e -> Text("advanced ${e.toRoute<AdvancedSecurityRoute>().focus}") }
                     composable<PairRoute> { Text("pair") }
                 }
@@ -66,6 +67,36 @@ class AdvancedSecurityNavTest {
         // One Advanced security on the stack, over Settings.
         val routes = nav.currentBackStack.value.mapNotNull { it.destination.route }
         assertEquals(1, routes.count { it.contains("AdvancedSecurityRoute") })
+        act { nav.popBackStack() }
+        assertEquals(true, top().destination.route?.contains("SettingsRoute"))
+    }
+
+    private fun routes() = nav.currentBackStack.value.mapNotNull { it.destination.route?.substringAfterLast('.') }
+        .filter { it.isNotEmpty() && !it.startsWith("ComposeNavGraph") }.map { it.substringBefore('/').substringBefore('?') }
+
+    /** Advanced security left open in the Settings tab, another tab, then the notification: one, at the row, over Settings. */
+    @Test
+    fun aRestoredAdvancedSecurityIsReplaced() {
+        show()
+        act { nav.navigateTopLevel(SettingsRoute) }
+        act { nav.navigate(AdvancedSecurityRoute()) }
+        act { nav.navigateTopLevel(SecretsStartRoute) }
+        act { nav.openFeedTarget(FeedTarget.AdvancedSecurity(AdvancedSecurityRow.INTERVAL)) }
+        assertEquals(AdvancedSecurityRow.INTERVAL, top().toRoute<AdvancedSecurityRoute>().row)
+        assertEquals(listOf("SettingsRoute", "AdvancedSecurityRoute"), routes().takeLast(2))
+        assertEquals(1, routes().count { it == "AdvancedSecurityRoute" })
+    }
+
+    /** Another Settings screen left open in the tab: popped, so that Back from Advanced security is Settings. */
+    @Test
+    fun backFromItIsSettingsWhateverTheTabHadOpen() {
+        show()
+        act { nav.navigateTopLevel(SettingsRoute) }
+        act { nav.navigate(SecretsOtherRoute) }
+        act { nav.navigateTopLevel(SecretsStartRoute) }
+        act { nav.openFeedTarget(FeedTarget.AdvancedSecurity(AdvancedSecurityRow.HOLD)) }
+        assertEquals(listOf("SettingsRoute", "AdvancedSecurityRoute"), routes().takeLast(2))
+        assertEquals(0, routes().count { it == "SecretsOtherRoute" })
         act { nav.popBackStack() }
         assertEquals(true, top().destination.route?.contains("SettingsRoute"))
     }

@@ -2,7 +2,9 @@ package com.vettid.feature.settings
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -14,6 +16,8 @@ import com.vettid.core.data.vault.IdleLockSetting
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.prefs.ThemePreference
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -67,6 +71,14 @@ class AdvancedSecurityTest {
         }
         rule.onNodeWithText("Credential").performScrollTo().assertIsDisplayed()
         for (tag in moved) assertEquals(tag, 0, rule.onAllNodesWithTag(tag).fetchSemanticsNodes().size)
+        // By their texts too (on Settings some of them had no tag).
+        val movedTexts = listOf(
+            "Daily check", "Hold the vault when a check is late", "Lock my vault by itself after", "Lock after", "Attestation",
+            "New phone secret", "Allow screenshots",
+        )
+        for (text in movedTexts) {
+            assertEquals(text, 0, rule.onAllNodesWithText(text).fetchSemanticsNodes().size)
+        }
         // In the plan's order: Credential, Recovery, the app lock, its method, Check now, Move, Advanced security.
         val tops = listOf("recovery", "app_lock", "app_lock_method", "owner_check_now", "transfer", "advanced_security")
             .map { rule.onNodeWithTag(it).fetchSemanticsNode().positionInRoot.y }
@@ -109,6 +121,32 @@ class AdvancedSecurityTest {
         for (tag in listOf("app_lock_timeout", "new_phone_secret_row", "owner_check_interval", "owner_check_hold", "idle_lock")) {
             assertEquals(tag, 0, rule.onAllNodesWithTag(tag).fetchSemanticsNodes().size)
         }
+    }
+
+    /** A short screen, so that the lower rows are out of view until the screen scrolls to one. */
+    private fun showShort(focus: AdvancedSecurityRow?, state: androidx.compose.runtime.State<SettingsUiState>) = rule.setContent {
+        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.height(320.dp)) {
+            AdvancedSecurityContent(state.value, actions, ownerCheck, ownerCheckActions, focus = focus)
+        }
+    }
+
+    private val full = SettingsUiState(phoneSecret = true, appLockOn = true, preferences = prefs)
+
+    @Test
+    fun withoutAFocusTheLowerRowsAreOutOfView() {
+        showShort(null, androidx.compose.runtime.mutableStateOf(full))
+        rule.onNodeWithTag("new_phone_secret_row").assertIsNotDisplayed()
+    }
+
+    /** Opened at a row (a notification): scrolled into view, also when what shows the row arrives after the screen. */
+    @Test
+    fun openedAtARowItIsBroughtIntoViewOnceItIsThere() {
+        val state = androidx.compose.runtime.mutableStateOf(full.copy(phoneSecret = false))
+        showShort(AdvancedSecurityRow.NEW_PHONE_SECRET, state)
+        rule.onNodeWithTag("new_phone_secret_row").assertDoesNotExist()
+        state.value = full
+        rule.waitForIdle()
+        rule.onNodeWithTag("new_phone_secret_row").assertIsDisplayed()
     }
 
     @Test
