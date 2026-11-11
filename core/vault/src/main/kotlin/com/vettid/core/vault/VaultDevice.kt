@@ -1990,8 +1990,8 @@ class VaultDevice private constructor(
         // handled message (and at each collection start, [start]).
         if (!forgotten) tickConfirmLocked(t, save = false)?.let { afterHandle.add(it) }
         // Keys past their life (a kept confirmed epoch after 48 days, a released one after 16) leave memory and the file now,
-        // not at the next rekey: the save below writes the keyring without them.
-        keyring.prune(t)
+        // not at the next rekey: the save below writes the keyring without them. Judged against the vault's time ([pruneTime]).
+        pruneKeys(t)
         // A drop by the message (a rejection, [dropPairing]) is saved as every drop is ([saveDropOrStop]); what it left
         // goes now, under the same lock.
         if (open && st.transferIn == null) saveDropOrStop() else save()
@@ -2256,7 +2256,7 @@ class VaultDevice private constructor(
         v.confirmed = null
         v.confirmAtMs = null
         reconfirmedAt = null
-        keyring.activate(res.epoch, t)
+        keyring.activate(res.epoch, t, pruneTime(t))
         // (A6 audit N1) The SAS of a transfer to this phone is stored with the session before hs.fin goes out: a transfer
         // whose hs.fin may have reached the vault always has it, and is shown again (and resumed) after a restart.
         st.transferIn?.let { tr -> if (res.sas != null) st.transferIn = tr.copy(sas = res.sas) }
@@ -2408,9 +2408,9 @@ class VaultDevice private constructor(
             // Always null here (the current epoch is the confirmed one only while none is recorded); kept as vettid-vault's
             // establishRekey has it.
             if (v.confirmed == null) v.confirmed = cur.ctx
-            keyring.activateKeeping(e, t, t.plus(CONFIRMED_KEYS_FOR))
+            keyring.activateKeeping(e, t, t.plus(CONFIRMED_KEYS_FOR), pruneTime(t))
         } else {
-            keyring.activate(e, t)
+            keyring.activate(e, t, pruneTime(t))
         }
     }
 
@@ -2483,7 +2483,7 @@ class VaultDevice private constructor(
         if (forgotten) return@withLock
         val t = now()
         // Keys past their life go at a collection start too (a phone that hears nothing for weeks).
-        if (keyring.prune(t)) {
+        if (pruneKeys(t)) {
             try {
                 save()
             } catch (_: IOException) {
@@ -2746,6 +2746,20 @@ class VaultDevice private constructor(
     }
 
     /**
+     * (GC #7175) The time the keyring's retained epochs are destroyed by: this phone's [t], but never later than the vault's
+     * clock ([vaultNow]) plus [PRUNE_SKEW]; null (nothing destroyed now) while no message from the vault in this process has
+     * shown its time. A wall clock set ahead, even briefly, so postpones a destruction and never makes one early: until a
+     * key is destroyed, [Keyring.open] still only hides it while the clock says it is past its life, and it is usable again
+     * once the clock is back. The keys' life itself (`until`) is still counted from this phone's clock.
+     */
+    private fun pruneTime(t: Instant): Instant? = synchronized(vaultClockLock) {
+        if (vaultTs == null) null else minOf(t, vaultNow().plus(PRUNE_SKEW))
+    }
+
+    /** Destroys the retained epochs past their life as of [pruneTime]; true when one was. */
+    private fun pruneKeys(t: Instant): Boolean = pruneTime(t)?.let { keyring.prune(it) } ?: false
+
+    /**
      * The vault's clock as this phone last saw it (§11.14.9 step 1): the `ts` of the newest message from the vault plus
      * the time elapsed since on the phone's monotonic clock, or the phone's own clock before any message.
      */
@@ -2975,6 +2989,9 @@ class VaultDevice private constructor(
 
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
         private val HANDSHAKE_TTL: Duration = Duration.ofDays(16)
+
+        /** How far past the vault's clock a key's destruction may be judged ([pruneTime]): the allowed clock skew. */
+        private val PRUNE_SKEW: Duration = Duration.ofMinutes(5)
         private const val MAX_AWAITING = 8
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)

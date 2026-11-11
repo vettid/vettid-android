@@ -6606,7 +6606,9 @@ class VaultDeviceTest {
             // Kept, then past 48 days: gone at a collection start's check.
             val kept = rekeyed(this)
             assertNotNull(saved(kept, kept.old.id))
+            // Real time passes (49 days, the monotonic clock too): the vault's time, as this phone counts it, passes the life.
             ahead(java.time.Duration.ofDays(49))
+            elapsed += java.time.Duration.ofDays(49).toMillis()
             kept.d.tickConfirm()
             assertNull("the kept epoch's rk and receive key are gone", saved(kept, kept.old.id))
             kept.d.stop()
@@ -6817,6 +6819,52 @@ class VaultDeviceTest {
             store.fail = false
             r.d.tickConfirm()
             take(r.new, "hs.confirm")
+        }
+    }
+
+    /**
+     * (GC #7175) A phone clock set 60 days ahead (the wall clock only: no time passed) destroys no key: the kept confirmed
+     * epoch is only hidden while it reads past its 48 days, collection starts prune by the vault's time, and once the clock is
+     * back a message under that epoch opens again and brings hs.confirm.
+     */
+    @Test
+    fun aClockSetFarAheadDestroysNoKeptEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            ahead(java.time.Duration.ofDays(60))
+            r.d.tickConfirm()
+            r.d.tickConfirm()
+            assertNotNull(
+                "the kept epoch is still in the saved keyring",
+                Keyring.import(Base64s.decodeStd(savedState(r.store).vault!!.sessions)).find(r.old.id, Instant.EPOCH),
+            )
+            clockAheadMs = 0
+            // The vault's message under the kept epoch, stamped by the vault's (real) clock.
+            r.d.handle(r.v.msg(r.old.seal(message("after the clock", at = Instant.now()))))
+            assertEquals(
+                "after the clock",
+                VaultJson.str(r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "after the clock" }.body, "text"),
+            )
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /**
+     * (GC #7175) After a restart nothing of the vault's time is known yet: a clock set far ahead destroys no key at a
+     * collection start (nothing is destroyed before a message from the vault shows its time).
+     */
+    @Test
+    fun aClockAheadAtARestartDestroysNoKeptEpoch() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(60))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            again.tickConfirm()
+            assertNotNull(
+                "the kept epoch is still in the saved keyring",
+                Keyring.import(Base64s.decodeStd(savedState(r.store).vault!!.sessions)).find(r.old.id, Instant.EPOCH),
+            )
         }
     }
 

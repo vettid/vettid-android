@@ -244,15 +244,18 @@ class Keyring {
     /** A previous epoch and the end of its receive key's life ([release] may shorten it). */
     private class Retained(val epoch: Epoch, var until: Instant)
 
-    /** Makes [e] current; the previous epoch's send key and rk are deleted at once. */
+    /**
+     * Makes [e] current; the previous epoch's send key and rk are deleted at once. Retained epochs past their life are
+     * destroyed as of [pruneAt] (null: none now; a caller whose wall clock may run ahead postpones it, see [prune]).
+     */
     @Synchronized
-    fun activate(e: Epoch, now: Instant) {
+    fun activate(e: Epoch, now: Instant, pruneAt: Instant? = now) {
         current?.let {
             it.retireSend()
             retired.add(Retained(it, now.plus(Epoch.RECEIVE_KEY_RETENTION)))
         }
         current = e
-        pruneLocked(now)
+        pruneAt?.let { pruneLocked(it) }
     }
 
     /**
@@ -261,13 +264,13 @@ class Keyring {
      * `Keyring.ActivateKeeping(…, KeepRK)`.
      */
     @Synchronized
-    fun activateKeeping(e: Epoch, now: Instant, until: Instant) {
+    fun activateKeeping(e: Epoch, now: Instant, until: Instant, pruneAt: Instant? = now) {
         current?.let {
             it.retireSendOnly()
             retired.add(Retained(it, until))
         }
         current = e
-        pruneLocked(now)
+        pruneAt?.let { pruneLocked(it) }
     }
 
     /**
