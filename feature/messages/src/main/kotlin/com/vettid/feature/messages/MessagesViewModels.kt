@@ -151,6 +151,8 @@ data class ConversationUiState(
     val call: CallAvailability = CallAvailability.NOT_IN_BUILD,
     /** The calls with this connection, as the vault's history has them. */
     val calls: List<CallHistoryEntry> = emptyList(),
+    /** (GC #7718) Some of the vault's calls with this connection did not read: "Some calls couldn't be shown.". */
+    val callsNotShown: Boolean = false,
     /** The member tapped Call where the vault has no calls: say so. */
     val callsNotAvailable: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
@@ -258,18 +260,18 @@ class ConversationViewModel @Inject constructor(
             // (the availability goes from "in a call" back to "ready").
             calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
-                    val entries = calls.history(connectionId)
-                    local.update { it.copy(calls = entries) }
+                    val h = calls.history(connectionId)
+                    local.update { it.copy(calls = h.entries, callsNotShown = h.someNotShown) }
                     // Read at the moment a call ends, the vault may not have taken its `call.end` yet: the call
                     // would stay "in a call" in the list. Once more, a moment later (collectLatest: not if the
                     // availability changed meanwhile).
                     delay(HISTORY_AGAIN_MS)
                     val later = calls.history(connectionId)
-                    local.update { it.copy(calls = later) }
+                    local.update { it.copy(calls = later.entries, callsNotShown = later.someNotShown) }
                 } else if (a != CallAvailability.IN_CALL) {
                     // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
                     // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
-                    local.update { it.copy(calls = emptyList()) }
+                    local.update { it.copy(calls = emptyList(), callsNotShown = false) }
                 }
             }
         }

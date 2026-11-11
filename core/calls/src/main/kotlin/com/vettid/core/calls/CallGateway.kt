@@ -5,7 +5,7 @@ import com.vettid.core.vault.AcceptedCall
 import com.vettid.core.vault.CallCandidate
 import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallKeys
-import com.vettid.core.vault.CallRecord
+import com.vettid.core.vault.CallList
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.OutgoingCall
 import com.vettid.core.vault.VaultApi
@@ -48,7 +48,7 @@ interface CallGateway {
 
     suspend fun end(callId: String, reason: String)
 
-    suspend fun list(limit: Int): List<CallRecord>
+    suspend fun list(limit: Int): CallList
 }
 
 /**
@@ -81,5 +81,5 @@ class VaultCallGateway(
 
     override suspend fun end(callId: String, reason: String) = sendEnd(callId, reason)
 
-    override suspend fun list(limit: Int): List<CallRecord> = api().callList(limit)
+    override suspend fun list(limit: Int): CallList = api().callList(limit)
 }

@@ -38,6 +38,12 @@ data class CallHistoryEntry(
 )
 
 /**
+ * (GC #7718) A conversation's calls: [entries], newest first, and [someNotShown] when the vault's list had entries for it
+ * (or for a connection it could not tell) that did not read: the list then says "Some calls couldn't be shown.".
+ */
+data class CallHistory(val entries: List<CallHistoryEntry> = emptyList(), val someNotShown: Boolean = false)
+
+/**
  * All that the screens of every build know of calls: whether to show a call button, the tap on it, and the calls a
  * conversation lists. Everything else of calls (the media stack, the state machine, the call screens) is in modules
  * that production builds do not have yet (CALLS-PLAN 0.1.1 phase C1); those builds bind [NoCallAccess].
@@ -49,7 +55,7 @@ interface CallAccess {
     fun call(connectionId: String)
 
     /** The calls with [connectionId], newest first; empty when there are none or they cannot be read. */
-    suspend fun history(connectionId: String): List<CallHistoryEntry>
+    suspend fun history(connectionId: String): CallHistory
 }
 
 /** A build without calls. */
@@ -58,5 +64,5 @@ object NoCallAccess : CallAccess {
 
     override fun call(connectionId: String) = Unit
 
-    override suspend fun history(connectionId: String): List<CallHistoryEntry> = emptyList()
+    override suspend fun history(connectionId: String): CallHistory = CallHistory()
 }

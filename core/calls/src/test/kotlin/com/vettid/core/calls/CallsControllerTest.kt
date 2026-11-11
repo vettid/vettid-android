@@ -33,6 +33,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -47,6 +48,9 @@ class CallsControllerTest {
         override val events: Flow<CallEvent> = channel.receiveAsFlow()
         val sent = mutableListOf<String>()
         var list: () -> List<CallRecord> = { emptyList() }
+
+        /** The entries of `call.list` that did not read (GC #7718). */
+        var skipped: List<com.vettid.core.vault.SkippedCall> = emptyList()
         var listGate: suspend () -> Unit = {}
 
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
@@ -80,10 +84,10 @@ class CallsControllerTest {
             sent += "end($callId, $reason)"
         }
 
-        override suspend fun list(limit: Int): List<CallRecord> {
+        override suspend fun list(limit: Int): com.vettid.core.vault.CallList {
             sent += "list($limit)"
             listGate()
-            return list()
+            return com.vettid.core.vault.CallList(list(), skipped)
         }
     }
 
@@ -185,7 +189,7 @@ class CallsControllerTest {
         c.call("conn-1")
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
-        assertTrue(c.history("conn-1").isEmpty())
+        assertTrue(c.history("conn-1").entries.isEmpty())
     }
 
     @Test
@@ -597,5 +601,47 @@ class CallsControllerTest {
         )
         for ((r, want) in expected) assertEquals(r.callId, want, outcome(r).outcome)
         assertNull(CallsController.entry(record("N", "ended").copy(startedAt = "yesterday"), now))
+    }
+
+    /**
+     * (GC #7718) A conversation's calls when `call.list` had entries that did not read: the good ones shown and the line
+     * said (one skipped for this connection, or whose connection did not read, or one of its own without a start); none
+     * skipped, no line.
+     */
+    @Test
+    fun skippedEntriesLeaveTheRestAndSaySomeCouldNotBeShown() {
+        val now = T0.plusSeconds(3600)
+        val good = listOf(record("A", "ended", reason = "hangup"), record("B", "ended", reason = "busy"))
+        fun h(skipped: List<com.vettid.core.vault.SkippedCall>, calls: List<CallRecord> = good) =
+            CallsController.historyOf(com.vettid.core.vault.CallList(calls, skipped), "conn-1", now)
+        val clean = h(emptyList())
+        assertEquals(listOf("A", "B"), clean.entries.map { it.callId })
+        assertFalse("none bad: no line", clean.someNotShown)
+        val one = h(listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000000", "conn-1")))
+        assertEquals("the good ones shown", listOf("A", "B"), one.entries.map { it.callId })
+        assertTrue("the line", one.someNotShown)
+        assertTrue("its connection not read", h(listOf(com.vettid.core.vault.SkippedCall(null, null))).someNotShown)
+        assertFalse("another connection's", h(listOf(com.vettid.core.vault.SkippedCall(null, "conn-2"))).someNotShown)
+        val all = h(listOf(com.vettid.core.vault.SkippedCall(null, "conn-1"), com.vettid.core.vault.SkippedCall(null, "conn-1")), emptyList())
+        assertTrue("every entry bad", all.entries.isEmpty() && all.someNotShown)
+        val noStart = h(emptyList(), good + record("N", "ended").copy(startedAt = "yesterday"))
+        assertEquals(listOf("A", "B"), noStart.entries.map { it.callId })
+        assertTrue("one of its own without a start", noStart.someNotShown)
+    }
+
+    /** (GC #7718) A list with a skipped entry still means calls, and the skipped ids are in the diagnostics only. */
+    @Test
+    fun aListWithASkippedEntryStillMeansCallsAndIsAuditedLocally() = runTest {
+        vault.gateway.list = { listOf(record("A", "ended", reason = "hangup")) }
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000000", "conn-1"), com.vettid.core.vault.SkippedCall(null, null))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        assertEquals(2, c.diagnostics.value.listSkipped)
+        assertEquals(listOf("01JXBAD0000000000000000000"), c.diagnostics.value.listSkippedIds)
+        val h = c.history("conn-1")
+        assertEquals(listOf("A"), h.entries.map { it.callId })
+        assertTrue(h.someNotShown)
     }
 }
