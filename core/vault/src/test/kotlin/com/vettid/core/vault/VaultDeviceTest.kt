@@ -838,6 +838,45 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (GC #7134, VAULT-MESSAGING §6.3: one `hs.resp` per `hs.init`) A redelivered rekey `hs.init` (an unacked batch, a
+     * restart) gets the same `hs.resp` bytes again, never a second responder: also after a restart, and nothing at all once
+     * the rekey is done.
+     */
+    @Test
+    fun aRedeliveredRekeyInitGetsTheSameRespBytes() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            d.handle(v.msg(init))
+            val first = nextDeposit().second
+            d.handle(v.msg(init)) // the relay's redelivery (a new msg_id: the batch was not acked)
+            assertArrayEquals("the same hs.resp bytes", first, nextDeposit().second)
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.handle(v.msg(init)) // after a restart too
+            assertArrayEquals("the same hs.resp bytes after a restart", first, nextDeposit().second)
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            val res = ini.handleResp(first, again.relayAddr.pk(), deviceNow())
+            again.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            val old = v.keyring.current()!!
+            again.handle(v.msg(init)) // once the rekey is done: no answer at all
+            // (It may bring hs.confirm again, a session message under the new epoch: §6.3.1. Never a handshake answer.)
+            while (true) {
+                val raw = deposits.poll(500, TimeUnit.MILLISECONDS)?.second ?: break
+                val session = runCatching { res.epoch.open(Envelope.parse(raw)) }.isSuccess ||
+                    runCatching { old.open(Envelope.parse(raw)) }.isSuccess
+                assertTrue("no hs.resp after the rekey is done", session)
+            }
+            assertTrue(savedState(store).vault!!.awaiting.isEmpty())
+        }
+    }
+
     /** A collection that ended starts again with [VaultDevice.ensureCollecting]; never after stop(). */
     @Test
     fun anEndedCollectionStartsAgain() = runBlocking<Unit> {
