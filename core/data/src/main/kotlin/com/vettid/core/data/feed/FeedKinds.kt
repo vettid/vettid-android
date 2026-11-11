@@ -162,6 +162,8 @@ object FeedKinds {
     val KNOWN = setOf(
         "connection.request", "connection.request.peer_declined", "connection.added", "connection.removed",
         "connection.stale", "connection.asks_paused", "connection.authenticate.requested",
+        // VAULT-MESSAGING 0.88.7 §3.4.1 "Stale is not final": the peer's rekey or reconnect made a `stale` connection active.
+        "connection.active_again",
         "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused",
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
@@ -319,6 +321,7 @@ object FeedKinds {
             "connection.added" -> FeedText(R.string.data_feed_connection_added, listOf(who))
             "connection.removed" -> FeedText(R.string.data_feed_connection_removed, listOf(who))
             "connection.stale" -> FeedText(R.string.data_feed_connection_stale, listOf(who))
+            "connection.active_again" -> FeedText(R.string.data_feed_connection_active_again, listOf(who))
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
             "connection.authenticate.requested" -> authenticationTitle(item, names)
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
@@ -548,15 +551,19 @@ object FeedKinds {
 
     private fun things(n: Int) = FeedText(plural = R.plurals.data_feed_things, quantity = n, args = listOf(n))
 
-    /** Where [item] leads, before checking that it still exists (the screen's ViewModel does that). */
+    /**
+     * Where [item] leads, before checking that it still exists (the screen's ViewModel does that). [devices]: the ids of the
+     * device list in memory (empty or null when it was not read), for `device.update_needed`.
+     */
     @Suppress("CyclomaticComplexMethod") // one target per kind
-    fun target(item: FeedItem, open: Collection<Approval>? = null): FeedTarget {
+    fun target(item: FeedItem, open: Collection<Approval>? = null, devices: Collection<String>? = null): FeedTarget {
         val c = item.connectionId
         val ref = item.ref
         FeedAsks.approvalKey(item.kind, item.ref)?.let { return askTarget(item, it, open) }
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
-            "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
+            "connection.added", "connection.stale", "connection.active_again", "connection.asks_paused" ->
+                c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
             "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
                 c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
@@ -573,7 +580,7 @@ object FeedKinds {
             "device.pair.pending" -> FeedTarget.Pairing
             "device.unlinked" -> FeedTarget.DeviceList
             // §10.9 (0.87.0): another of the member's devices needs an update; Devices & agents lists it.
-            "device.update_needed" -> FeedTarget.DeviceList
+            "device.update_needed" -> updateNeededTarget(item, devices)
             // AA5: the agent's page (the Resume banner for a paused agent); the list when the item names no device.
             "leash.agent.suspended", "leash.referrals_limited", "leash.rate_limited" ->
                 item.deviceId?.takeIf { it.isNotEmpty() }?.let { FeedTarget.Device(it) } ?: FeedTarget.DeviceList
@@ -606,6 +613,14 @@ object FeedKinds {
             else -> FeedTarget.Approvals
         }
     }
+
+    /**
+     * (GC #7254, as vettid-ios 7103f64) `device.update_needed` opens the named device's page; the list when that device is not
+     * in the device list in memory (not read yet, or gone).
+     */
+    private fun updateNeededTarget(item: FeedItem, devices: Collection<String>?): FeedTarget =
+        item.deviceId?.takeIf { it.isNotEmpty() && devices?.contains(it) == true }?.let { FeedTarget.Device(it) }
+            ?: FeedTarget.DeviceList
 
     /** `urgent` (the clone alarm, the ten-failure lock): Needs attention while unread, a red badge. */
     fun urgent(item: FeedItem): Boolean = item.priority == FeedManager.PRIORITY_URGENT
