@@ -247,6 +247,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onOpenVotes = { host.onOpenVotes(state.connectionId) },
                 onRefreshPresence = vm::refreshPresence,
                 onSetPresenceShared = vm::setPresenceShared,
+                onSetCallsAllowed = vm::setCallsAllowed,
                 onShareLocation = share::open,
                 onStopSharingLocation = vm::stopSharingLocation,
                 onOpenPosition = { host.navigate(PositionRoute(state.connectionId)) },

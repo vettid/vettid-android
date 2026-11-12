@@ -5,6 +5,11 @@ import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.CallOutcome
+import com.vettid.core.data.calls.CallPermissions
+import com.vettid.core.data.calls.ConnectionCalls
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.CallReason
 import com.vettid.core.vault.CallLimits
 import com.vettid.core.vault.CallList
@@ -13,6 +18,7 @@ import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -56,6 +62,9 @@ interface CallVault {
 
     /** The name the app shows for [connectionId] on its screens; null if it has none. */
     fun name(connectionId: String): String?
+
+    /** (C2) The connection's first name, for the lines that name it so ("Calls with <First> are off."); null if none. */
+    fun firstName(connectionId: String): String? = null
 
     /**
      * The name for [connectionId] in a notification: [name], or null when the member's notifications show no names
@@ -198,6 +207,27 @@ class CallsController(
     private val availabilityFlow = MutableStateFlow(CallAvailability.UNKNOWN)
     override val availability: StateFlow<CallAvailability> = availabilityFlow.asStateFlow()
 
+    private val permissionsFlow = MutableStateFlow(CallPermissions())
+    override val permissions: StateFlow<CallPermissions> = permissionsFlow.asStateFlow()
+
+    /** Reads of `call.permission.list` asked for, one at a time; asks that come while one runs make one more. */
+    private val permissionReads = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Bumped at every lock: a read or a change begun before it writes nothing after it. The bump with its clear, and each
+     * check with its write, are made under [permissionLock], so no write lands between a lock's bump and its clear.
+     */
+    private var permissionEpoch = 0L
+    private val permissionLock = Any()
+
+    /**
+     * Bumped by each change the member made here ([setAllowed]), under [permissionLock]: a read begun before it holds
+     * the list as it was and is dropped (the read the change asks for follows it), so the switch never flips back.
+     */
+    private var ownChanges = 0L
+
+    private fun permissionEpochNow(): Long = synchronized(permissionLock) { permissionEpoch }
+
     private val diagnosticsFlow = MutableStateFlow(CallsDiagnostics())
     val diagnostics: StateFlow<CallsDiagnostics> = diagnosticsFlow.asStateFlow()
 
@@ -236,6 +266,13 @@ class CallsController(
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
         scope.launch { vault.recheck.collect { if (open && supported == null) opened() } }
+        scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2) permissionReads.trySend(Unit) } }
+        scope.launch {
+            while (true) {
+                permissionReads.receive()
+                readPermissions()
+            }
+        }
         scope.launch {
             vault.droppedForTime.collect { type ->
                 if (type.startsWith("call.")) diagnosticsFlow.update { it.copy(droppedForTime = it.droppedForTime + 1) }
@@ -273,6 +310,9 @@ class CallsController(
 
     /** The connection's name for the call screens. */
     fun screenName(connectionId: String): String? = vault.name(connectionId)
+
+    /** The connection's first name for the call screens' lines that use it. */
+    fun screenFirstName(connectionId: String): String? = vault.firstName(connectionId)
 
     // --- the vault ---
 
@@ -316,6 +356,8 @@ class CallsController(
             vaultC2 = records.formTwo
             supported = true
             publish()
+            // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
+            if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
             noteSkipped(records)
             if (records.formTwo) endStaleC2(records) else endStale(records.calls)
             if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
@@ -410,7 +452,67 @@ class CallsController(
         }
     }
 
+    /**
+     * (C2) Reads `call.permission.list` into [permissions]: what was read before stays while a read fails (it is tried
+     * again a few times); a read begun before a lock writes nothing after it.
+     */
+    @Suppress("ReturnCount") // each way a read ends: locked meanwhile, refused, read
+    private suspend fun readPermissions() {
+        val epoch = permissionEpochNow()
+        val changes = synchronized(permissionLock) { ownChanges }
+        repeat(PROBE_ATTEMPTS) { attempt ->
+            if (!open || !vaultC2 || epoch != permissionEpochNow()) return
+            val list = try {
+                vault.gateway.permissions()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultOpException) {
+                // `unsupported_type` from a vault the probe called C2 cannot happen; any refusal leaves things as they are.
+                if (e.code == UNSUPPORTED) {
+                    synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
+                }
+                return
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                delay(PROBE_RETRY.toMillis() * (attempt + 1))
+                return@repeat
+            }
+            val read = CallPermissions(
+                supported = true,
+                known = true,
+                differing = list.associate { it.connectionId to ConnectionCalls(it.allowed, it.limited) }
+                    .filterValues { it != ConnectionCalls() },
+            )
+            synchronized(permissionLock) {
+                if (epoch == permissionEpoch && changes == ownChanges && open) permissionsFlow.value = read
+            }
+            return
+        }
+    }
+
+    override suspend fun setAllowed(connectionId: String, allowed: Boolean) {
+        val epoch = permissionEpochNow()
+        vaultGuard {
+            if (!open || !vaultC2) throw VaultFailure(FailureKind.OTHER, CODE_NO_PERMISSION)
+            vault.gateway.setPermission(connectionId, allowed)
+        }
+        synchronized(permissionLock) {
+            ownChanges++
+            if (epoch == permissionEpoch) {
+                permissionsFlow.update { p ->
+                    val now = p.of(connectionId).copy(allowed = allowed)
+                    p.copy(differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now))
+                }
+            }
+        }
+        // The vault's own word follows (also its sync.event): turning calls on may not end a limit.
+        permissionReads.trySend(Unit)
+    }
+
     private fun locked() {
+        synchronized(permissionLock) {
+            permissionEpoch++
+            permissionsFlow.value = CallPermissions()
+        }
         supported = null
         vaultC2 = false
         testsAllowedFlow.value = false
@@ -480,6 +582,9 @@ class CallsController(
 
     companion object {
         const val HISTORY_LIMIT = 200
+
+        /** (C2) The calls permission was asked for while the vault is locked or has none. */
+        const val CODE_NO_PERMISSION = "calls_permission_unavailable"
 
         /** How many skipped call ids [CallsDiagnostics.listSkippedIds] keeps. */
         const val SKIPPED_IDS_KEPT = 20

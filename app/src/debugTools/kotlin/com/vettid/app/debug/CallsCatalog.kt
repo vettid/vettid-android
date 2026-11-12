@@ -53,7 +53,7 @@ internal object CallsCatalog {
 
     @Composable
     private fun Call(call: CallState, speaker: Boolean = false, name: String? = NAME) =
-        CallScreen(CallUiState(call, name, speaker, canSpeaker = true), actions, now = { t0.plusSeconds(252) })
+        CallScreen(CallUiState(call, name, firstName = "Ada", speaker = speaker, canSpeaker = true), actions, now = { t0.plusSeconds(252) })
 
     @Composable
     private fun Ended(reason: CallEnd, direction: CallDirection = CallDirection.OUTGOING) =
@@ -110,6 +110,7 @@ internal object CallsCatalog {
         "calls.ended_answered_elsewhere" to { Ended(CallEnd.ANSWERED_ELSEWHERE, CallDirection.INCOMING) },
         "calls.ended_unavailable" to { Ended(CallEnd.UNAVAILABLE) },
         "calls.ended_own_vault_busy" to { Ended(CallEnd.OWN_VAULT_BUSY) },
+        "calls.ended_calls_off" to { Ended(CallEnd.CALLS_OFF) },
         "calls.ended_not_supported" to { Ended(CallEnd.NOT_SUPPORTED) },
         "calls.ended_locked" to { Ended(CallEnd.LOCKED) },
         "calls.microphone_blocked" to {
