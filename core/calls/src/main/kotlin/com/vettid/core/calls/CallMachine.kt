@@ -55,6 +55,11 @@ internal class CallMachine(
     /** Measurements of the current (or last) call. */
     val diagnostics: StateFlow<CallDiagnostics> = diagnosticsFlow.asStateFlow()
 
+    private val pathsFlow = MutableStateFlow(CallPaths())
+
+    /** Each call that connected, counted once when it ends, by the last path the stack reported for it. */
+    val paths: StateFlow<CallPaths> = pathsFlow.asStateFlow()
+
     private val restartsFlow = MutableStateFlow(0)
 
     /** How often the listening to the vault's call events had to be started again (expected: 0). */
@@ -87,6 +92,7 @@ internal class CallMachine(
         class Gathering(val seq: Int) : Msg
         class Failed(val seq: Int, val reason: CallEnd) : Msg
         class Timer(val seq: Int, val kind: TimerKind) : Msg
+        class Path(val seq: Int, val relayed: Boolean) : Msg
     }
 
     private enum class TimerKind { RING_OUT, RING_IN, GATHER, CONNECT, DECRYPT, ICE_FLUSH }
@@ -120,6 +126,9 @@ internal class CallMachine(
         var iceMessages = 0
         var flushScheduled = false
         var answeredAtMs: Long? = null
+
+        /** The last path the stack reported for this call (relayed or direct); null while it has said nothing. */
+        var relayed: Boolean? = null
 
         /** The answer's keys until the engine has them (it wipes them); wiped here if the call ends first. */
         var keys: MediaKeys? = null
@@ -206,6 +215,7 @@ internal class CallMachine(
             is Msg.Gathering -> if (s != null && s.seq == m.seq && s.gathered == 0) timer(s, TimerKind.GATHER, timings.gather)
             is Msg.Failed -> if (s != null && s.seq == m.seq) finish(s, m.reason, CallReason.FAILED)
             is Msg.Timer -> if (s != null && s.seq == m.seq) onTimer(s, m.kind)
+            is Msg.Path -> if (s != null && s.seq == m.seq) s.relayed = m.relayed
         }
     }
 
@@ -595,6 +605,7 @@ internal class CallMachine(
                 delay(timings.diagnosticsEvery.toMillis())
                 val media = runCatching { engine.diagnostics() }.getOrNull() ?: continue
                 diagnosticsFlow.update { it.copy(media = media) }
+                media.relayed?.let { r -> post(Msg.Path(s.seq, r)) }
                 // A second audio stream is RTP on an SSRC nobody announced, in the one section the call has: its
                 // frames go through the same decryption and are dropped, and the call does not go on beside it.
                 if (media.inboundAudioStreams > 1) post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
@@ -628,6 +639,15 @@ internal class CallMachine(
             if (abandoned.size > MAX_ABANDONED) abandoned.remove(abandoned.min())
         }
         val duration = s.activeSince?.let { Duration.between(it, now()) }
+        if (duration != null) {
+            pathsFlow.update {
+                when (s.relayed) {
+                    true -> it.copy(relayed = it.relayed + 1)
+                    false -> it.copy(direct = it.direct + 1)
+                    null -> it.copy(unknown = it.unknown + 1)
+                }
+            }
+        }
         stateFlow.value = CallState.Ended(s.connectionId, s.direction, reason, callId, duration)
     }
 
