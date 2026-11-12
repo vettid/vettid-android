@@ -356,14 +356,14 @@ class WalletCapsScreenTest {
     fun aResetBeforeTheListIsReadStillAsksEveryUncappedWalletAtReceive() = runBlocking {
         val id = "01WALLET000000000000000001"
         flagsFile.bytes = unreadable.encodeToByteArray()
-        // The vault is open but its list has not been read: no wallet is known yet.
+        // The vault holds the wallet; it is open but its list has not been read here: no wallet is known yet.
+        wallet(id)
         ops.listGate = kotlinx.coroutines.CompletableDeferred()
         val m = manager()
         val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
         kotlinx.coroutines.delay(300)
         assertTrue(m.wallets.value.isEmpty())
         assertTrue(m.resetSettings())
-        wallet(id)
         ops.listGate!!.complete(Unit)
         opening.join()
         assertEquals(true, WalletFlags(flagsFile).asksCaps(id))

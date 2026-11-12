@@ -301,6 +301,15 @@ class WalletsManager(
     private var listReads = 0L
     private var listShown = 0L
 
+    /**
+     * The number of the last read begun ([listReads]) when a change was made here before the first list was shown; 0: none. A
+     * first list from a read that began no later than that change may hide it (a wallet created while the list was loading),
+     * so it is not shown: the list is read again first ([refresh]); a read begun after the change needs no second one. Its
+     * resets (in [clear] and when a list is shown) are hygiene: read numbers only grow, so an old value never matches a
+     * later read. Under [lock].
+     */
+    private var changedAt = 0L
+
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
@@ -397,6 +406,7 @@ class WalletsManager(
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
             listRead = false
+            changedAt = 0L
             lookupsFlow.value = emptyMap()
             transactionsFlow.value = emptyMap()
             checked.clear()
@@ -461,7 +471,7 @@ class WalletsManager(
      */
     private fun showLocal(change: (List<VaultWallet>) -> List<VaultWallet>) = synchronized(lock) {
         // Every read begun so far is older than this change (a read is dropped when its number is below listShown).
-        if (listRead) listShown = listReads + 1
+        if (listRead) listShown = listReads + 1 else changedAt = listReads
         walletsFlow.update(change)
     }
 
@@ -480,20 +490,49 @@ class WalletsManager(
             }
             throw e
         }
-        // One check and one write under the lock: no later read can be shown between them.
-        val published = synchronized(lock) {
-            if (g != generation || seq < listShown) return@synchronized false
-            listShown = seq
-            walletsFlow.value = list
-            availabilityFlow.value = WalletAvailability.AVAILABLE
-            listRead = true
-            // A wallet gone (deleted on another device): its look-up goes too.
-            lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-            transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-            true
-        }
+        // The first list, from a read begun before a change made here, would hide that change: it is not shown. The list is
+        // read again and that read is shown; only if it fails is this one (fail secure: the change stays hidden until Try
+        // again or the next event). A change made during the second read makes it stale too, so local changes bound this.
+        var stale = staleFirstList(g, seq)
+        afterStaleCheck()
+        // A change made here between the check above and the show makes the list stale now: it is read again (once more at
+        // most: a stale show is never refused as stale).
+        var shown: Boolean?
+        do {
+            if (stale) attempt { refresh() }
+            shown = showList(g, seq, list, stale)
+            if (shown == null) stale = true
+        } while (shown == null)
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
-        if (published) flags.listed(list.map { it.id }.toSet())
+        if (shown) flags.listed(list.map { it.id }.toSet())
+    }
+
+    /** (Tests) Runs between the stale check of a read and its show: a change made here then must not be hidden. */
+    @androidx.annotation.VisibleForTesting
+    internal var afterStaleCheck: suspend () -> Unit = {}
+
+    /** Read [seq] of generation [g] is a first list begun no later than a change made here ([changedAt]). */
+    private fun staleFirstList(g: Long, seq: Long): Boolean =
+        synchronized(lock) { g == generation && seq >= listShown && !listRead && seq <= changedAt }
+
+    /**
+     * Shows [list], read [seq] of generation [g]: true. False: not shown, the generation moved on or a later read or a
+     * change made here is shown (a list the read after it showed included). Null: not shown, because a change made here
+     * since its stale check makes this first list stale now ([stale] false only). One check and one write under the lock:
+     * no later read can be shown between them.
+     */
+    private fun showList(g: Long, seq: Long, list: List<VaultWallet>, stale: Boolean): Boolean? = synchronized(lock) {
+        if (g != generation || seq < listShown) return@synchronized false
+        if (!stale && !listRead && seq <= changedAt) return@synchronized null
+        changedAt = 0L
+        listShown = seq
+        walletsFlow.value = list
+        availabilityFlow.value = WalletAvailability.AVAILABLE
+        listRead = true
+        // A wallet gone (deleted on another device): its look-up goes too.
+        lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        true
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
