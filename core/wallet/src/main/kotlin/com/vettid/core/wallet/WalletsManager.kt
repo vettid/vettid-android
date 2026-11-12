@@ -493,25 +493,36 @@ class WalletsManager(
         // The first list, from a read begun before a change made here, would hide that change: it is not shown. The list is
         // read again and that read is shown; only if it fails is this one (fail secure: the change stays hidden until Try
         // again or the next event). A change made during the second read makes it stale too, so local changes bound this.
-        val stale = staleFirstList(g, seq)
-        if (stale) attempt { refresh() }
-        val published = showList(g, seq, list, stale)
+        var stale = staleFirstList(g, seq)
+        afterStaleCheck()
+        // A change made here between the check above and the show makes the list stale now: it is read again (once more at
+        // most: a stale show is never refused as stale).
+        var shown: Boolean?
+        do {
+            if (stale) attempt { refresh() }
+            shown = showList(g, seq, list, stale)
+            if (shown == null) stale = true
+        } while (shown == null)
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
-        if (published) flags.listed(list.map { it.id }.toSet())
+        if (shown) flags.listed(list.map { it.id }.toSet())
     }
+
+    /** (Tests) Runs between the stale check of a read and its show: a change made here then must not be hidden. */
+    internal var afterStaleCheck: suspend () -> Unit = {}
 
     /** Read [seq] of generation [g] is a first list begun no later than a change made here ([changedAt]). */
     private fun staleFirstList(g: Long, seq: Long): Boolean =
         synchronized(lock) { g == generation && seq >= listShown && !listRead && seq <= changedAt }
 
     /**
-     * Shows [list], read [seq] of generation [g], unless the generation moved on, a later read or a change made here is
-     * shown, or ([stale]) the read after it already showed a list. One check and one write under the lock: no later read
-     * can be shown between them.
+     * Shows [list], read [seq] of generation [g]: true. False: not shown, the generation moved on or a later read or a
+     * change made here is shown (a list the read after it showed included). Null: not shown, because a change made here
+     * since its stale check makes this first list stale now ([stale] false only). One check and one write under the lock:
+     * no later read can be shown between them.
      */
-    private fun showList(g: Long, seq: Long, list: List<VaultWallet>, stale: Boolean): Boolean = synchronized(lock) {
-        val superseded = g != generation || seq < listShown
-        if (superseded || (stale && listRead)) return@synchronized false
+    private fun showList(g: Long, seq: Long, list: List<VaultWallet>, stale: Boolean): Boolean? = synchronized(lock) {
+        if (g != generation || seq < listShown) return@synchronized false
+        if (!stale && !listRead && seq <= changedAt) return@synchronized null
         changedAt = 0L
         listShown = seq
         walletsFlow.value = list

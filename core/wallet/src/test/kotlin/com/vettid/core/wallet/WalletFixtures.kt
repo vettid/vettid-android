@@ -122,10 +122,12 @@ internal class FakeWalletOps : WalletOps {
             if (slowReadRefuses) refuse("wallet.list", "unsupported_type")
             return asItWas
         }
+        // The wallets as they are when the read begins (as a vault answers), even if a gate holds the answer.
+        val atStart = wallets.values.toList()
         listGate?.await()
         if (unsupported) refuse("wallet.list", "unsupported_type")
         if (listFails) refuse("wallet.list", "internal")
-        return wallets.values.toList()
+        return atStart
     }
 
     var gets = 0

@@ -222,4 +222,22 @@ class WalletReadOrderTest {
         assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
         assertEquals("the first list, as read", listOf(w.id), m.wallets.value.map { it.id })
     }
+
+    /** A wallet created between a first read's stale check and its show is not hidden by that read (it is read again). */
+    @Test
+    fun aChangeBetweenTheStaleCheckAndTheShowIsNotHidden() = runBlocking {
+        wallet()
+        val m = manager()
+        var made: String? = null
+        var once = true
+        m.afterStaleCheck = {
+            if (once) {
+                once = false
+                made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet.id
+            }
+        }
+        m.open()
+        assertTrue("the wallet made between the check and the show", m.wallets.value.any { it.id == made })
+        assertEquals(2, m.wallets.value.size)
+    }
 }
