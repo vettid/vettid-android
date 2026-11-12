@@ -31,6 +31,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.VaultCodes
 import com.vettid.core.data.vault.RecoveryOpenOutcome
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
@@ -421,6 +422,9 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
         "closed" -> OpenAnswerText(R.string.onboarding_open_closed)
         "not_armed" -> OpenAnswerText(R.string.onboarding_open_not_armed)
         "counter_unavailable" -> OpenAnswerText(R.string.onboarding_open_counter_unavailable)
+        // (VAULT-MESSAGING 0.88.17 §11.14.6) The attempt is spent and nothing of the vault changed: its own text, which
+        // asks the member to wait for an update (each try uses an attempt). Not an ended recovery: a later try may open it.
+        VaultCodes.STATE_UNREADABLE -> OpenAnswerText(R.string.onboarding_open_state_unreadable)
         "ok" -> o.used?.let { OpenAnswerText(R.string.onboarding_open_ok, listOf(it)) } ?: OpenAnswerText(R.string.onboarding_open_ok_plain)
         // Refusals before anything is counted (§11.14.6 step 1).
         // After an open that got no answer the recovery may have completed on the way; this phone cannot finish it.

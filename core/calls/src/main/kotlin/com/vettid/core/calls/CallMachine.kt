@@ -797,7 +797,17 @@ internal class CallMachine(
         pendingEndsFlow.update { it + 1 }
         scope.launch {
             try {
-                runCatching { signalling.end(callId, reason) }
+                // A `call.end` is durable (the outbox keeps it until the relay has it): a failure here is not its loss. One
+                // held by a mailbox quota goes when the backoff ends; it is logged as held, with no member text (the other
+                // side's ring timer bounds the wait). Only the failure's type is logged.
+                runCatching { signalling.end(callId, reason) }.onFailure { e ->
+                    if (e is CancellationException) return@onFailure
+                    if (com.vettid.core.vault.VaultDevice.keptInOutbox(e)) {
+                        android.util.Log.i(TAG, "call.end held for the outbox's next flush (${e.javaClass.simpleName})")
+                    } else {
+                        android.util.Log.w(TAG, "call.end not sent (${e.javaClass.simpleName})")
+                    }
+                }
             } finally {
                 pendingEndsFlow.update { it - 1 }
             }
@@ -805,6 +815,7 @@ internal class CallMachine(
     }
 
     private companion object {
+        const val TAG = "CallMachine"
         const val NANOS_PER_MILLI = 1_000_000L
         const val MAX_PENDING_CANDIDATES = 256
         const val MAX_ABANDONED = 8

@@ -316,12 +316,17 @@ private val PASSING_KEYS = setOf(
 /**
  * Calls [letGo] once [gated] has stayed false for [OWNER_CHECK_UNLATCH_MS] while the check is latched ([isLatched]); a `gated` that
  * comes back before restarts the wait. Counted in frames' time (the screen draws while the check is up), so a test clock drives it.
+ * (ANDROID-PLAN 0.1.124) While [holds] (the "Check passed" tick is held, up to 3 s with a screen reader) it waits longer: the check
+ * that passed closes itself through its release.
  */
 @Composable
-private fun LetGoWhenNotGated(gated: Boolean, isLatched: () -> Boolean, letGo: () -> Unit) {
+private fun LetGoWhenNotGated(gated: Boolean, isLatched: () -> Boolean, holds: () -> Boolean, letGo: () -> Unit) {
     LaunchedEffect(gated) {
         if (gated) return@LaunchedEffect
-        if (isLatched()) waitFrames(OWNER_CHECK_UNLATCH_MS)
+        if (isLatched()) {
+            waitFrames(OWNER_CHECK_UNLATCH_MS)
+            while (holds()) withFrameNanos { }
+        }
         letGo()
     }
 }
@@ -363,6 +368,8 @@ internal fun rememberOwnerCheckMode(
     onList: Boolean,
     guard: InputGuard,
     asked: OwnerCheckMode?,
+    /** (ANDROID-PLAN 0.1.124) The check's "Check passed" tick is held: a latched check is not let go meanwhile. */
+    holds: () -> Boolean = { false },
 ): OwnerCheckCover {
     var latched by rememberSaveable { mutableStateOf(false) }
     var settled by remember { mutableStateOf(false) }
@@ -371,7 +378,7 @@ internal fun rememberOwnerCheckMode(
         withFrameNanos { }
         settled = true
     }
-    LetGoWhenNotGated(gate.gated, isLatched = { latched }) {
+    LetGoWhenNotGated(gate.gated, isLatched = { latched }, holds = holds) {
         mark.clear()
         latched = false
     }

@@ -1696,6 +1696,15 @@ class VaultManager(
                 }
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            // (Show held as held) The outbox once a mailbox's quota backoff ends, behind the lock gate; this observer's own
+            // scope, so it ends with the session.
+            val quotaFlush = QuotaFlush(
+                this,
+                admits = { lockGuard.admits() },
+                live = { session === s && !s.device.stopped },
+                flush = { if (lockGuard.admits()) s.device.flushOutbox() }, // the gate again, at the flush itself
+            )
+            launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
                 credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }
@@ -2500,14 +2509,6 @@ class VaultManager(
             if (holderApp && holder.onSealedUnlockResult(r)) return StepOutcome(UnlockAttempt.Failed(FailureKind.OTHER, r.code))
             return StepOutcome(
                 when (r.code) {
-                    "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
-                    "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
-                    "recovery_pending" -> UnlockAttempt.RecoveryPending
-                    // §11.7.1 (0.27.0): sealed, decided before the PIN; not a PIN failure and no backoff.
-                    SignerWire.CODE_SIGNER_REFUSED -> UnlockAttempt.SignerRefused
-                    "state_rollback" -> UnlockAttempt.StateRollback
-                    "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
-                    "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
                     // Release R (§11.4, §11.14): decided before the PIN, not PIN failures. (0.44.0, §11.14.9 step 5) With
                     // a PIN change unresolved, the previous PIN's `device_secret` asks for the new PIN.
                     "device_secret" -> if (newPinStep && pinChangeUndecided()) {
@@ -2515,9 +2516,7 @@ class VaultManager(
                     } else {
                         UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, r.code)
                     }
-                    "transfer_incomplete" -> UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, r.code)
-                    "retry" -> UnlockAttempt.Failed(FailureKind.RETRY, r.code)
-                    else -> UnlockAttempt.Failed(FailureKind.OTHER, r.code)
+                    else -> sealedUnlockRefusal(r.code, r.retryAfterSeconds)
                 },
             )
         }
@@ -5328,6 +5327,24 @@ class VaultManager(
             else -> FailureKind.OTHER
         }
     }
+}
+
+/** A sealed unlock refusal's attempt (§11.4), for every code but `device_secret`, which depends on a PIN change's state. */
+internal fun sealedUnlockRefusal(code: String?, retryAfterSeconds: Long): UnlockAttempt = when (code) {
+    "bad_pin" -> UnlockAttempt.BadPin(retryAfterSeconds)
+    "backoff" -> UnlockAttempt.Backoff(retryAfterSeconds)
+    "recovery_pending" -> UnlockAttempt.RecoveryPending
+    // §11.7.1 (0.27.0): sealed, decided before the PIN; not a PIN failure and no backoff.
+    SignerWire.CODE_SIGNER_REFUSED -> UnlockAttempt.SignerRefused
+    "state_rollback" -> UnlockAttempt.StateRollback
+    "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, code)
+    "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, code)
+    "transfer_incomplete" -> UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, code)
+    // (0.88.17 §11.4) Sealed, after the release decisions: the vault did not open and nothing was written. Not a PIN
+    // failure; "Try again" as for any refusal, and nothing more is sent after it.
+    VaultCodes.STATE_UNREADABLE -> UnlockAttempt.Failed(FailureKind.STATE_UNREADABLE, code)
+    "retry" -> UnlockAttempt.Failed(FailureKind.RETRY, code)
+    else -> UnlockAttempt.Failed(FailureKind.OTHER, code)
 }
 
 /** What [VaultManager.refreshAccount] keeps from an `account.get`. */
