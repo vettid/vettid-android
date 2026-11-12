@@ -54,6 +54,7 @@ class OwnerCheckInputTest {
     private var screen by mutableStateOf(Screen.READ_ONLY)
     private var pin by mutableStateOf("")
     private var callUp by mutableStateOf(false)
+    private var tickShowing by mutableStateOf(false)
 
     private var cover: OwnerCheckCover? = null
 
@@ -76,7 +77,7 @@ class OwnerCheckInputTest {
     @Composable
     private fun Shell() {
         val guard = remember { InputGuard() }
-        val covering = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null)
+        val covering = rememberOwnerCheckMode(gate, onList = screen == Screen.DRAWER, guard = guard, asked = null, holds = { tickShowing })
         cover = covering
         val mode = covering.mode
         Box {
@@ -257,6 +258,27 @@ class OwnerCheckInputTest {
         checkShown()
         assertEquals("", pin)
         rule.onNodeWithTag("dialog_pin").assertDoesNotExist()
+    }
+
+    /** ANDROID-PLAN 0.1.124: the "Check passed" tick (3 s with a screen reader) is not cut off when the vault stops saying due. */
+    @Test
+    fun `while the tick shows the check is not let go, and goes when it ends`() {
+        show()
+        due()
+        rule.waitForIdle()
+        checkShown()
+        rule.mainClock.autoAdvance = false
+        tickShowing = true
+        gate = OwnerCheckGateState()
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeBy(OWNER_CHECK_UNLATCH_MS + 500)
+        checkShown()
+        tickShowing = false
+        Snapshot.sendApplyNotifications()
+        rule.mainClock.advanceTimeBy(100)
+        rule.mainClock.autoAdvance = true
+        rule.waitForIdle()
+        checkNotShown()
     }
 
     @Test

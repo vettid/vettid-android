@@ -928,6 +928,7 @@ val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull =
 val callsMarkers = listOf(
     "vettid/vms/2/call-media", "vettid/vms/2/call-frame", "vettid/vms/2/call-share", "vettid/vms/2/call-vouch", "vettid/vms/2/call-key",
     "vettid-media-suites", "vettid-media-suite", "call.start", "call.ringing", "call.ice", "call.list",
+    "call.permission.set", "call.permission.list",
 )
 
 /**

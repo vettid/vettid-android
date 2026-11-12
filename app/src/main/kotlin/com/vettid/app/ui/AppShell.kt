@@ -246,7 +246,9 @@ fun AppShell(
     }
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
-    val cover = rememberOwnerCheckMode(gate, onList, inputGuard, asked)
+    // (ANDROID-PLAN 0.1.124) The check's "Check passed" tick is held: the check stays in front for it.
+    var tickShowing by remember { mutableStateOf(false) }
+    val cover = rememberOwnerCheckMode(gate, onList, inputGuard, asked, holds = { tickShowing })
     val checkMode = cover.mode
     // Release R: the owner check sent right after an unlock that cancelled a recovery did not pass; the check screen
     // shows its answer at once, so that the member's presence is recorded.
@@ -511,6 +513,7 @@ fun AppShell(
                         },
                         onCancel = { asked = null },
                         backEnabled = !LocalCallScreenShown.current,
+                        onTickShowing = { tickShowing = it },
                     )
                 }
             }

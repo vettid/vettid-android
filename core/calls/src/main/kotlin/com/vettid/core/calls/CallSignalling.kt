@@ -67,7 +67,8 @@ sealed interface SignalEvent {
 
     data class Ice(val callId: String, val candidates: List<CallCandidate>) : SignalEvent
 
-    data class End(val callId: String, val reason: String) : SignalEvent
+    /** [supersededBy] (C2, "Glare"): the call that won over this device's own outgoing call to the same connection. */
+    data class End(val callId: String, val reason: String, val supersededBy: String? = null) : SignalEvent
 }
 
 /**
