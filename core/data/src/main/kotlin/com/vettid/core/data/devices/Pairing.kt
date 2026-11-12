@@ -183,6 +183,13 @@ interface PairingRepository {
 
     /** [acknowledge] by the screen [owner]: nothing is done when the pairing held is another screen's (null: whatever is held). */
     fun acknowledge(owner: Any?)
+
+    /**
+     * (iOS #255) The daily check passed: the refusal of a comparison [owner] holds ([FailureKind.OWNER_CHECK_REQUIRED] on a
+     * kept comparison) is cleared so that it may be approved again. Nothing else: not another screen's, not a failed create
+     * (its failure stays, with Try again), not while busy. Checked and cleared in one step under the lock.
+     */
+    fun acknowledgeRefusal(owner: Any)
 }
 
 /**
@@ -245,9 +252,14 @@ class PairingManager(
     /**
      * (Re-check Low 1) The owner left while its approval was out (a cancel can't stop it): if the vault then keeps the
      * comparison open (the daily check due), it is rejected instead of kept with no screen. The same holds while the member's
-     * own reject is out (busy too): that reject settles it. Reset wherever an owner is set, by every start and by [clear].
+     * own reject is out (busy too): that reject settles it. Reset by a new owner ([claim], a [start] by another screen), by a
+     * start that makes a new code, when the member's rejection of that comparison settles, and by [clear]. A settled
+     * approval does not reset it: it then outlives that comparison until the next new code, [claim] or [clear].
      */
     private var ownerLeft = false
+
+    /** (Tests) The owner-left mark (iOS #255: cleared when a rejection settles). */
+    internal val abandoned: Boolean get() = synchronized(lock) { ownerLeft }
 
     /** Whether [by] may act on the pairing held: an unowned call, or the owner's. */
     private fun mayAct(by: Any?): Boolean = by == null || owner === by
@@ -370,9 +382,10 @@ class PairingManager(
             // From here what is held is this screen's, also a pairing kept below (a live code, a comparison) that it shows. By
             // design before the guards: a screen that is shown a kept pairing (it returns early) owns it as much as a new one.
             if (owner != null) {
+                // (iOS #255) Only a new owner resets the mark: a screen that takes over a pairing kept below (a busy
+                // comparison) is there; the same screen starting again has not come back from leaving.
+                if (this.owner !== owner) ownerLeft = false
                 this.owner = owner
-                // Also for a pairing kept below (a busy comparison taken over): this screen is there.
-                ownerLeft = false
             }
             val s = flow.value
             if (s.stage !is PairingStage.Idle && this.role != wanted) {
@@ -614,6 +627,9 @@ class PairingManager(
         synchronized(lock) {
             val s = flow.value.stage
             if (s is PairingStage.Compare && s.pending.pairingId == p.pairingId) {
+                // (iOS #255) The rejection of this comparison has settled: a leave made while it was out has nothing more to
+                // decide. Only for it: a late rejection of an earlier pairing leaves a later one's mark alone.
+                ownerLeft = false
                 timer?.cancel()
                 timer = null
                 flow.value = PairingState(PairingStage.Rejected(told))
@@ -670,6 +686,15 @@ class PairingManager(
         scope.launch { cancel(owner) }
     }
 
+    override fun acknowledgeRefusal(owner: Any) {
+        synchronized(lock) {
+            val s = flow.value
+            // Busy is a defence only: an approval or a rejection going out clears the error, so no state is busy and refused.
+            if (owner !== this.owner || s.busy) return
+            if (s.stage is PairingStage.Compare && s.error == FailureKind.OWNER_CHECK_REQUIRED) flow.value = PairingState(s.stage)
+        }
+    }
+
     override fun acknowledge(owner: Any?) {
         synchronized(lock) {
             if (!mayAct(owner)) return
@@ -684,8 +709,9 @@ class PairingManager(
                     scope.launch { sendReject(st.pairingId) }
                 }
                 PairingStage.Idle -> if (s.error != null) flow.value = PairingState()
-                // The daily check passed: the refused approval may be sent again for the same comparison.
-                is PairingStage.Compare -> if (s.error != null) flow.value = PairingState(s.stage)
+                // The daily check passed: the refused approval may be sent again for the same comparison. (iOS #255) Only by
+                // that comparison's owner: a screen's start-time acknowledge (no owner) leaves a refusal another screen kept.
+                is PairingStage.Compare -> if (s.error != null && owner != null && owner === this.owner) flow.value = PairingState(s.stage)
                 else -> Unit
             }
         }
