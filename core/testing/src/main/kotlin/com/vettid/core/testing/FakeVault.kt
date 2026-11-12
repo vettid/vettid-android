@@ -805,11 +805,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun refreshOwnerCheck() = call("refreshOwnerCheck")
 
+    /** A test: when set, [check] waits for it (after recording the call), to hold a check with the vault. */
+    var checkGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
         call("check")
         lastPin = pin
         lastPassword = password
         lastHoldOff = holdOff
+        checkGate?.await()
         val r = checkResults.removeFirstOrNull() ?: passed()
         if (r == OwnerCheckOutcome.Passed && holdOff != null) {
             ownerCheck.value = ownerCheck.value?.copy(hold = false, holdOffUntil = holdOff.until)
