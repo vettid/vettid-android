@@ -9,6 +9,7 @@ import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -158,6 +159,21 @@ class OwnerCheckProgressTest {
     }
 
     @Test
+    fun lockVaultDuringTheReReadAfterAnUnansweredCheckDropsItsAnswer() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        vault.checkResults.add(OwnerCheckOutcome.Failed(FailureKind.NETWORK, null, estimatedLeft = 5))
+        vault.probeTakes = 1_000
+        val vm = sendHeld(OwnerCheckMode.GATED, gate)
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue("the re-read runs", vault.calls.contains("probeVault"))
+        vm.lockVault()
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertNull("the answer after the re-read is dropped", vm.uiState.value.message)
+    }
+
+    @Test
     fun theScreenLeavingDropsALateAnswer() = runTest {
         val gate = CompletableDeferred<Unit>()
         val vm = sendHeld(OwnerCheckMode.GATED, gate)
@@ -173,6 +189,8 @@ class OwnerCheckProgressTest {
         val vm = sendHeld(OwnerCheckMode.VOLUNTARY, gate)
         vm.start(OwnerCheckMode.GATED) // the deadline passed while the voluntary check was out
         runCurrent()
+        assertTrue("still checking: no entries, no second check", vm.uiState.value.checking)
+        assertFalse(vm.uiState.value.submitAllowed)
         gate.complete(Unit)
         runCurrent()
         assertTrue(vm.uiState.value.passedTick)

@@ -43,6 +43,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -329,18 +330,16 @@ private const val WARN_LEFT = 3
 /** (ANDROID-PLAN 0.1.124) In place of the entries while the vault verifies: a centered progress indicator and its line. */
 @Composable
 private fun CheckingWithVault() {
+    val text = stringResource(R.string.ownercheck_checking)
+    // A pane title is announced when the block appears (as FormScaffold's for a screen change nobody tapped for): a live
+    // region on a node that is new is not reliably read.
     Column(
-        Modifier.fillMaxWidth().padding(vertical = Spacing.xl).testTag("owner_check_checking"),
+        Modifier.fillMaxWidth().padding(vertical = Spacing.xl).semantics { paneTitle = text }.testTag("owner_check_checking"),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(Spacing.l),
     ) {
         CircularProgressIndicator()
-        Text(
-            stringResource(R.string.ownercheck_checking),
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-        )
+        Text(text, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
     }
 }
 
@@ -356,8 +355,10 @@ private fun PassedTick(title: String) {
         onPrimary = {},
         modifier = Modifier.testTag("owner_check_passed"),
     ) {
+        val text = stringResource(R.string.ownercheck_passed)
+        // Announced as the block appears (a pane title), as "Checking with your vault" is.
         Column(
-            Modifier.fillMaxWidth().padding(vertical = Spacing.xl),
+            Modifier.fillMaxWidth().padding(vertical = Spacing.xl).semantics { paneTitle = text },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(Spacing.l),
         ) {
@@ -368,10 +369,10 @@ private fun PassedTick(title: String) {
                 modifier = Modifier.size(64.dp),
             )
             Text(
-                stringResource(R.string.ownercheck_passed),
+                text,
                 style = MaterialTheme.typography.titleMedium,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("owner_check_passed_text"),
+                modifier = Modifier.testTag("owner_check_passed_text"),
             )
         }
     }

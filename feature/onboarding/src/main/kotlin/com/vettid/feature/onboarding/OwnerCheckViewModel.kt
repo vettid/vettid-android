@@ -245,6 +245,9 @@ class OwnerCheckViewModel @Inject constructor(
         // A fresh outcome always wins over what is retained (a gate that cleared meanwhile, with no cancel).
         if (startedMode == mode && repo.unlockCheckOutcome.value == null) return
         startedMode = mode
+        // (ANDROID-PLAN 0.1.124) A voluntary check still with the vault when it becomes the gated one stays "checking": no
+        // entries and no second check until its answer, which it keeps.
+        val stillOut = state.value.checking
         ticker?.cancel()
         stopReads()
         val after = repo.unlockCheckOutcome.value
@@ -258,6 +261,7 @@ class OwnerCheckViewModel @Inject constructor(
             presenceUnrecorded = repo.presenceUnrecorded.value, timeScale = vault.timeScale.value,
             pin = pin.orEmpty(), pinKept = pin != null, unlockedWrong = wrong,
             unlockedOpen = pin != null && after is OwnerCheckOutcome.Backoff,
+            busy = stillOut,
         )
         if (after is OwnerCheckOutcome.Backoff) startBackoff(after.retryAfterSeconds)
         if (mode == OwnerCheckMode.GATED && after != null) followUp(after)

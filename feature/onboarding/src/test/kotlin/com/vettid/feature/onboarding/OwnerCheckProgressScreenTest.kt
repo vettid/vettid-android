@@ -1,6 +1,5 @@
 package com.vettid.feature.onboarding
 
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -51,15 +50,15 @@ class OwnerCheckProgressScreenTest {
     private val cancelLabel = ctx.getString(R.string.ownercheck_cancel)
     private val submitLabel = ctx.getString(R.string.ownercheck_submit)
     private val holdOffLabel = ctx.getString(R.string.ownercheck_submit_hold_off)
-    private val polite = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
+    private fun pane(text: String) = SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, text)
 
     private fun show(s: OwnerCheckUiState) = rule.setContent { OwnerCheckContent(s, actions, onCancel = {}) }
 
     @Test
     fun aGatedCheckWithTheVaultShowsCheckingAndKeepsLockVaultEnabled() {
         show(OwnerCheckUiState(mode = OwnerCheckMode.GATED, view = view, busy = true))
-        rule.onNodeWithTag("owner_check_checking").assertExists()
-        rule.onNodeWithText(checking).assert(polite)
+        rule.onNodeWithTag("owner_check_checking").assert(pane(checking)) // announced as it appears
+        rule.onNodeWithText(checking).assertExists()
         rule.onNodeWithTag("owner_check_pin").assertDoesNotExist()
         rule.onNodeWithTag("owner_check_password").assertDoesNotExist()
         rule.onNodeWithText(submitLabel).assertDoesNotExist()
@@ -95,7 +94,8 @@ class OwnerCheckProgressScreenTest {
     fun aPassShowsTheTickAndItsTextAnnouncedWithNoActions() {
         show(OwnerCheckUiState(mode = OwnerCheckMode.GATED, view = view, passedTick = true))
         rule.onNodeWithTag("owner_check_passed").assertExists()
-        rule.onNodeWithText(passed).assert(polite)
+        rule.onNodeWithText(passed).assertExists()
+        rule.onNode(pane(passed)).assertExists() // announced as it appears
         rule.onNodeWithText(lockLabel).assertDoesNotExist()
         rule.onNodeWithText(submitLabel).assertDoesNotExist()
         rule.onNodeWithTag("owner_check_pin").assertDoesNotExist()
