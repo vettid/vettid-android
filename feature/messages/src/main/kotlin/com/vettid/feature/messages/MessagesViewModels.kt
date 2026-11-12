@@ -155,6 +155,8 @@ data class ConversationUiState(
     val callsNotShown: Boolean = false,
     /** The member tapped Call where the vault has no calls: say so. */
     val callsNotAvailable: Boolean = false,
+    /** (C2) Calls with this connection are off: the button is disabled, with where to turn them on under it. */
+    val callsOff: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
     /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
@@ -189,8 +191,8 @@ data class ConversationUiState(
         get() = active && !noComposer &&
             (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
 
-    /** Disabled while a call is going on. */
-    val callEnabled: Boolean get() = call != CallAvailability.IN_CALL
+    /** Disabled while a call is going on, and while calls with this connection are off (owner decision 2026-11-12). */
+    val callEnabled: Boolean get() = call != CallAvailability.IN_CALL && !callsOff
 }
 
 /** After a call ended its history is read once more, this much later (the vault takes the hang-up in a moment). */
@@ -230,6 +232,10 @@ class ConversationViewModel @Inject constructor(
                 photosAvailable = photos,
             )
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
+            .combine(calls.permissions) { s, p ->
+                val off = !p.of(connectionId).allowed
+                s.copy(callsOff = off)
+            }
             .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
             .combine(presence.readings) { (s, on), r ->
                 // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.

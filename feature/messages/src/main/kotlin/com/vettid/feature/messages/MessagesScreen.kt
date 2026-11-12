@@ -49,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -397,7 +398,17 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         modifier = modifier.imePadding(),
         actions = {
             if (state.callShown) {
-                IconButton(onClick = actions.onCall, enabled = state.callEnabled, modifier = Modifier.testTag("conversation_call")) {
+                // Calls off: TalkBack reads why on the button itself, as the line under the name says.
+                val off = (AccountNames.isolateOrNull(state.connection?.firstName) ?: name)
+                    .let { stringResource(R.string.messages_calls_off, it) }
+                    .takeIf { state.callsOff }
+                IconButton(
+                    onClick = actions.onCall,
+                    enabled = state.callEnabled,
+                    modifier = Modifier
+                        .testTag("conversation_call")
+                        .semantics { off?.let { stateDescription = it } },
+                ) {
                     Icon(Icons.Outlined.Call, contentDescription = stringResource(R.string.messages_call))
                 }
             }
@@ -418,6 +429,20 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
             CenteredTitle(name)
             // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
             state.presence?.let { ConversationPresenceLine(it) }
+            if (state.callShown && state.callsOff) {
+                // (C2) The call button is disabled: why, and where to turn calls on, under the title, without a tap.
+                val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
+                Text(
+                    stringResource(R.string.messages_calls_off, first),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
+                        .testTag("conversation_calls_off"),
+                )
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
