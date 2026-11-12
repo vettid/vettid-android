@@ -2274,17 +2274,7 @@ class VaultDevice private constructor(
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
-                val tok = mintForVault()
-                // (ANDROID-PLAN §4 "While pending") While the gate holds the answers, only the newest waits: its token is the
-                // latest minted, and the older ones would all go at once when the gate opens. They go only once the new one is
-                // queued (a failure to queue it leaves them); the handling's save writes the removal.
-                val older = if (sendGate.admits(TYPE_TOKEN_REFRESH)) {
-                    emptyList()
-                } else {
-                    st.outbox.filter { it.type == TYPE_TOKEN_REFRESH && it.re != null }
-                }
-                sendLocked(null, inner.type, standing(tok), inner.id, Inner.STATUS_OK, null)
-                if (older.isNotEmpty()) st.outbox.removeAll { e -> older.any { it === e } }
+                answerRefreshLocked(inner)
             } else {
                 storeVaultToken(VaultJson.parseObject(inner.body))
             }
@@ -2301,6 +2291,23 @@ class VaultDevice private constructor(
             publish(VaultMessage(inner))
         }
         maintain(t)
+    }
+
+    /**
+     * Answers the vault's `relay.token.refresh` [inner] with a fresh standing token (§7.2). (ANDROID-PLAN §4 "While pending")
+     * While the gate holds the answers, only the newest waits: its token is the latest minted, and the older ones would all
+     * go at once when the gate opens. They go only once the new one is queued (a failure to queue it leaves them); the
+     * handling's save writes the removal.
+     */
+    private suspend fun answerRefreshLocked(inner: Inner) {
+        val tok = mintForVault()
+        val older = if (sendGate.admits(TYPE_TOKEN_REFRESH)) {
+            emptyList()
+        } else {
+            st.outbox.filter { it.type == TYPE_TOKEN_REFRESH && it.re != null }
+        }
+        sendLocked(null, inner.type, standing(tok), inner.id, Inner.STATUS_OK, null)
+        if (older.isNotEmpty()) st.outbox.removeAll { e -> older.any { it === e } }
     }
 
     /** An event left on the relay during a hold ([leaveForLater]). */
