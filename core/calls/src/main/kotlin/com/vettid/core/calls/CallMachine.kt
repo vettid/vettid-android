@@ -759,21 +759,22 @@ internal class CallMachine(
             if (abandoned.size > MAX_ABANDONED) abandoned.remove(abandoned.min())
         }
         val duration = s.activeSince?.let { Duration.between(it, now()) }
-        if (duration != null) {
-            pathsFlow.update {
-                when (s.relayed) {
-                    true -> it.copy(relayed = it.relayed + 1)
-                    false -> it.copy(direct = it.direct + 1)
-                    null -> it.copy(unknown = it.unknown + 1)
-                }
-            }
-        }
+        if (duration != null) countPath(s)
         stateFlow.value = CallState.Ended(s.connectionId, s.direction, reason, callId, duration)
         // The connection's own call that arrived while this one rang to it is not lost when this one ended another way
         // (the vault, the other side, a refusal of `call.start` such as `busy`, a failure): it rings. Never after this
         // member's own end, a lock's above all: a call rings only while the vault is open on this phone, and a lock
         // would decline it unseen.
         if (held != null && !s.memberEnded && now().isBefore(held.exp)) ring(held)
+    }
+
+    /** A connected call ended: its path is counted, by the last one the stack reported (relayed, direct, or not said). */
+    private fun countPath(s: Session) = pathsFlow.update {
+        when (s.relayed) {
+            true -> it.copy(relayed = it.relayed + 1)
+            false -> it.copy(direct = it.direct + 1)
+            null -> it.copy(unknown = it.unknown + 1)
+        }
     }
 
     /** Lets the call go: its jobs, engine and keys. Publishes nothing and sends nothing. */
