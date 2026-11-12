@@ -1702,7 +1702,7 @@ class VaultManager(
                 this,
                 admits = { lockGuard.admits() },
                 live = { session === s && !s.device.stopped },
-                flush = { s.device.flushOutbox() },
+                flush = { if (lockGuard.admits()) s.device.flushOutbox() }, // the gate again, at the flush itself
             )
             launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->

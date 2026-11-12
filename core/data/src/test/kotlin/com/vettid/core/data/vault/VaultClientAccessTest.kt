@@ -55,10 +55,11 @@ class VaultClientAccessTest {
     fun nothingIsSentThroughTheDeviceDirectly() {
         assertEquals(0, count("""\bdevice\??\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
         assertEquals(0, count("""\bd\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
-        // The outbox is flushed in two places, both only while no lock is pending.
-        assertEquals(2, count("""flushOutbox\(\)"""))
+        // The outbox is flushed in three places, each only while no lock is pending: the foreground return, the unlock, and
+        // (show held as held) once a mailbox's quota backoff has ended (QuotaFlush).
+        assertEquals(3, count("""flushOutbox\(\)"""))
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
         val guarded = code.count { line -> line.contains("flushOutbox()") && checks.any { line.contains(it) } }
-        assertEquals(2, guarded)
+        assertEquals(3, guarded)
     }
 }
