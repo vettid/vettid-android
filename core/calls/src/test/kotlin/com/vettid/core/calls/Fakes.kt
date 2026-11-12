@@ -53,7 +53,11 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         onRemoteSdp()
     }
 
+    /** How long acceptOffer takes (the real engine's runs on its worker for 100 ms or more). */
+    var acceptOfferMs = 0L
+
     override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
+        if (acceptOfferMs > 0) kotlinx.coroutines.delay(acceptOfferMs)
         check(suite in suites) { "suite ${suite.id}" }
         madeFor = suite
         calls += "acceptOffer"
@@ -85,6 +89,13 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         micOff = muted
     }
 
+    /** (C2) Held back until the first decrypted frame (VAULT-MESSAGING "Key confirmation"). */
+    var holding = false
+
+    override fun setHeld(held: Boolean) {
+        holding = held
+    }
+
     var streams = 1
 
     override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1, inboundAudioStreams = streams)
@@ -103,9 +114,15 @@ class FakeEngines(
     val created = mutableListOf<MediaEngine>()
     var config: MediaConfig? = null
 
+    /** Called with each engine made (a test sets an engine up as it is created). */
+    var onCreate: (MediaEngine) -> Unit = {}
+
     override fun create(config: MediaConfig): MediaEngine {
         this.config = config
-        return make().also { created += it }
+        return make().also {
+            created += it
+            onCreate(it)
+        }
     }
 
     val last: FakeEngine get() = created.last() as FakeEngine
@@ -119,6 +136,10 @@ open class FakeSignalling : CallSignalling {
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }
     var startGate: Channel<Unit>? = null
+
+    /** (C2) As if the vault were C2. */
+    var c2 = false
+    override val formTwo: Boolean get() = c2
     var answerResult: () -> MediaKeys = { MediaKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 }) }
 
     fun deliver(e: SignalEvent) {

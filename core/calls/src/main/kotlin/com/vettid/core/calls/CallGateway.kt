@@ -16,6 +16,7 @@ import com.vettid.core.vault.callEnd
 import com.vettid.core.vault.callEventsIn
 import com.vettid.core.vault.callIce
 import com.vettid.core.vault.callIncoming
+import com.vettid.core.vault.callKeepalive
 import com.vettid.core.vault.callList
 import com.vettid.core.vault.callRinging
 import com.vettid.core.vault.callStart
@@ -32,12 +33,17 @@ interface CallGateway {
     /** Every call event, in the vault's order; offers and answers unchecked. */
     val events: Flow<CallEvent>
 
-    suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall
+    /** [peerIk]: (C2) the connection's identity key, for a form 2 start with `keepalive`; null for form 1 only. */
+    suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray? = null): OutgoingCall
 
     /** Verifies an offer against the connection's identity and this device's suites, or throws. */
     suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall
 
-    suspend fun answer(call: IncomingCall, sdp: String): CallKeys
+    /** [keepalive]: (C2) the answer says this device sends `call.keepalive`. */
+    suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean = false): CallKeys
+
+    /** (C2) `call.keepalive` for the active call [callId]. */
+    suspend fun keepalive(callId: String) {}
 
     /** Verifies an answer against the connection's identity, or throws. */
     suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall
@@ -64,13 +70,15 @@ class VaultCallGateway(
 ) : CallGateway {
     override val events: Flow<CallEvent> = events.flatMapLatest { callEventsIn(it) }
 
-    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall =
-        api().callStart(connectionId, sdp, suites)
+    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
+        api().callStart(connectionId, sdp, suites, peerIk = peerIk)
 
     override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall =
         api().callIncoming(event, pinnedFingerprint, suites)
 
-    override suspend fun answer(call: IncomingCall, sdp: String): CallKeys = api().callAnswer(call, sdp)
+    override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys = api().callAnswer(call, sdp, keepalive)
+
+    override suspend fun keepalive(callId: String) = api().callKeepalive(callId)
 
     override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
         api().callAccept(call, event, pinnedFingerprint)

@@ -17,6 +17,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -54,6 +55,9 @@ object CallLimits {
 
     /** How long the app waits for the answer to `call.start` before it gives the call up. */
     val START_TIMEOUT: Duration = Duration.ofSeconds(15)
+
+    /** (C2) `call.keepalive` from the call's device while the call is active (§10.10 "Liveness"). */
+    val KEEPALIVE_EVERY: Duration = Duration.ofSeconds(30)
 }
 
 /** `call.end` reasons (§10.10). */
@@ -133,8 +137,17 @@ class OutgoingCall @MadeByCallApi constructor(
     val ice: CallWire.IceConfig,
     internal val offered: List<Int>,
     private val offerKey: KemPrivateKey,
+    /**
+     * (C2) The call's two members as this device named them in its form 2 offer, fixed when it placed the call: the
+     * answer is checked, and `k_call` derived, with these (an answer naming another callee fails, VAULT-MESSAGING
+     * 0.88.16). Null for a form 1 call.
+     */
+    internal val parties: CallWire.Parties? = null,
 ) {
     internal fun key(): KemPrivateKey = offerKey
+
+    /** (C2) Whether the offer carried form 2. */
+    val formTwo: Boolean get() = parties != null
 
     fun destroy() = offerKey.destroy()
 
@@ -159,7 +172,12 @@ class IncomingCall @MadeByCallApi constructor(
     /** The suite this device will answer with, and the caller's list as sent: fixed before the phone rings. */
     val negotiated: CallMedia.Negotiated,
     internal val ek: ByteArray,
+    /** (C2) The members as this device names them when the offer carried form 2 (it then answers in form 2); else null. */
+    internal val parties: CallWire.Parties? = null,
 ) {
+    /** (C2) Whether this device answers in form 2. */
+    val formTwo: Boolean get() = parties != null
+
     /** The caller's media suites, as sent (numbers this build does not know included). */
     val offered: List<Int> get() = negotiated.offered
 
@@ -199,6 +217,10 @@ data class CallRecord(
     @SerialName("started_at") val startedAt: String,
     @SerialName("answered_at") val answeredAt: String? = null,
     @SerialName("ended_at") val endedAt: String? = null,
+    /** (C2, `v: 2`) The offer's `exp`. */
+    val exp: String? = null,
+    /** (C2, `v: 2`) The call's device; absent while an incoming call rings. */
+    @SerialName("device_id") val deviceId: String? = null,
 )
 
 private fun JsonObject.need(k: String): String = VaultJson.str(this, k) ?: throw CallMessageException("missing $k")
@@ -230,12 +252,8 @@ private fun VaultApi.iceOf(o: JsonObject, callId: String): CallWire.IceConfig = 
  * connection's details show the member (VAULT-MESSAGING §10.8). A call is thereby bound to the identity the member
  * can see, not only to what the event says.
  */
-private fun verifyPeerShare(o: JsonObject, message: ByteArray, pinnedFingerprint: String) = checked("key-exchange share") {
-    val peerIk = o.b64("peer_ik", Suite.ED25519_PUBLIC_SIZE)
-    val shown = IkFingerprint.format(peerIk)
-    if (pinnedFingerprint.isEmpty() || !Bytes.constantTimeEquals(shown.toByteArray(), pinnedFingerprint.toByteArray())) {
-        throw CryptoException.Signature("peer_ik is not the connection's identity key")
-    }
+private fun verifyPeerShare(o: JsonObject, message: ByteArray, pinnedFingerprint: String): ByteArray = checked("key-exchange share") {
+    val peerIk = peerIkOf(o, pinnedFingerprint)
     CallWire.verifyShare(
         vaultIk = peerIk,
         deviceIk = o.b64("device_ik", Suite.ED25519_PUBLIC_SIZE),
@@ -243,6 +261,44 @@ private fun verifyPeerShare(o: JsonObject, message: ByteArray, pinnedFingerprint
         deviceSig = o.b64("device_sig", Suite.ED25519_SIGNATURE_SIZE),
         vaultSig = o.b64("vault_sig", Suite.ED25519_SIGNATURE_SIZE),
     )
+    peerIk
+}
+
+/** `peer_ik`, which must be the key whose fingerprint the connection's details show (rule 6). */
+private fun peerIkOf(o: JsonObject, pinnedFingerprint: String): ByteArray {
+    val peerIk = o.b64("peer_ik", Suite.ED25519_PUBLIC_SIZE)
+    val shown = IkFingerprint.format(peerIk)
+    if (pinnedFingerprint.isEmpty() || !Bytes.constantTimeEquals(shown.toByteArray(), pinnedFingerprint.toByteArray())) {
+        throw CryptoException.Signature("peer_ik is not the connection's identity key")
+    }
+    return peerIk
+}
+
+/**
+ * (C2) A suites or offered list exactly as §10.10 allows it: 1 to 8 integers 1–65,535, none repeated, each a plain
+ * JSON integer (no sign, fraction, exponent or string). Anything else does not read.
+ */
+private fun JsonObject.suiteListOf(k: String): List<Int> {
+    val a = this[k] as? JsonArray ?: throw CallMessageException("malformed $k")
+    if (a.size !in 1..CallMedia.MAX_SUITES) throw CallMessageException("malformed $k")
+    val out = a.map { e ->
+        val p = e as? JsonPrimitive
+        val c = p?.takeUnless { it.isString }?.content
+        if (c == null || !DECIMAL.matches(c) || c.length > 5) throw CallMessageException("malformed $k")
+        c.toInt().also { if (it > MAX_SUITE_ID) throw CallMessageException("malformed $k") }
+    }
+    if (out.distinct().size != out.size) throw CallMessageException("malformed $k")
+    return out
+}
+
+private val DECIMAL = Regex("[1-9][0-9]*")
+private const val MAX_SUITE_ID = 65535
+
+/** (C2) `suite` of an answer: a plain JSON integer 1–65,535. */
+private fun JsonObject.suiteOf(): Int {
+    val c = (this["suite"] as? JsonPrimitive)?.takeUnless { it.isString }?.content
+    if (c == null || !DECIMAL.matches(c) || c.length > 5) throw CallMessageException("malformed suite")
+    return c.toInt().also { if (it > MAX_SUITE_ID) throw CallMessageException("malformed suite") }
 }
 
 private fun sdpOf(o: JsonObject): String = o.need("sdp").also(::checkSdp)
@@ -276,9 +332,17 @@ suspend fun VaultApi.callStart(
     suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
     media: String = CallWire.MEDIA_AUDIO,
     timeout: Duration = CallLimits.START_TIMEOUT,
+    /**
+     * (C2) The connection's identity key as this device's vault gives it (`connection.get`): with it the start also
+     * carries form 2, naming this vault and the connection's (VAULT-MESSAGING 0.88.16), and `keepalive: true`; a
+     * device sends it only when its vault is C2 (`call.list` `v: 2`). Null: form 1 only, as to an S10 vault.
+     */
+    peerIk: ByteArray? = null,
 ): OutgoingCall {
     val callId = device.newId()
     val offered = checked("media suites") { CallMedia.offerOf(MediaSuite.formOne(suites)) }
+    val parties = peerIk?.let { checked("call parties") { CallWire.Parties(device.vaultIdentityKey(), it) } }
+    // Form 1's SDP attribute is kept in a form 2 start too: an S10 peer reads it (VAULT-MESSAGING "Call forms").
     val offer = CallMedia.sdpWithOffer(sdp, offered)
     checkSdp(offer)
     val key = CallWire.newOfferKey()
@@ -286,6 +350,7 @@ suspend fun VaultApi.callStart(
     try {
         val ek = key.publicKey.bytes()
         val share = device.signCallShare(CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))
+        val share2 = parties?.let { device.signCallShare(CallWire.offerMessage2(callId, media, offered, it, ek)) }
         attempted = true
         val o = device.opOnce(
             "call.start",
@@ -296,12 +361,17 @@ suspend fun VaultApi.callStart(
                 put("sdp", offer)
                 put("ek", Base64s.encodeStd(ek))
                 put("ek_sig", Base64s.encodeStd(share))
+                if (share2 != null) {
+                    putJsonArray("suites") { offered.forEach { add(JsonPrimitive(it)) } }
+                    put("ek_sig2", Base64s.encodeStd(share2))
+                    put("keepalive", true)
+                }
             },
             timeout,
         )
         if (o.need("call_id") != callId) throw CallMessageException("call.start answered for another call")
         val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }
-        return OutgoingCall(callId, connectionId, media, exp, iceOf(o, callId), offered, key)
+        return OutgoingCall(callId, connectionId, media, exp, iceOf(o, callId), offered, key, parties)
     } catch (e: VaultOpException) {
         // The vault's own refusal: there is no call.
         key.destroy()
@@ -344,7 +414,26 @@ fun VaultApi.callIncoming(
         throw CallMessageException("offer expired or too far ahead")
     }
     val ice = iceOf(o, callId)
-    verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek), pinnedFingerprint)
+    val peerIk = verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek), pinnedFingerprint)
+    // (C2) Every form an offer carries is checked; one with part of form 2 is not used (VAULT-MESSAGING "Call forms").
+    val form2 = listOf("suites", "device_sig2", "vault_sig2").count { o.containsKey(it) }
+    if (form2 in 1..2) throw CallMessageException("part of form 2")
+    if (form2 == 3) {
+        val signed = o.suiteListOf("suites")
+        val parties = checked("call parties") { CallWire.Parties(peerIk, device.vaultIdentityKey()) }
+        checked("key-exchange share (form 2)") {
+            CallWire.verifyShare(
+                vaultIk = peerIk,
+                deviceIk = o.b64("device_ik", Suite.ED25519_PUBLIC_SIZE),
+                message = CallWire.offerMessage2(callId, media, signed, parties, ek),
+                deviceSig = o.b64("device_sig2", Suite.ED25519_SIGNATURE_SIZE),
+                vaultSig = o.b64("vault_sig2", Suite.ED25519_SIGNATURE_SIZE),
+            )
+        }
+        // In form 2 the choice is from the signed list; the SDP attribute is ignored and removed.
+        val negotiated = checked("media suites") { CallMedia.choose(signed, suites) }
+        return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ringFor, ice, negotiated, ek, parties)
+    }
     val negotiated = checked("media suites") { CallMedia.choose(CallMedia.offeredIn(sdp), MediaSuite.formOne(suites)) }
     return IncomingCall(callId, o.need("connection_id"), media, CallMedia.sdpWithout(sdp), exp, ringFor, ice, negotiated, ek)
 }
@@ -355,20 +444,49 @@ fun VaultApi.callIncoming(
  * Encapsulates to the caller's key, signs the share, deposits once, and returns the call's keys, which never leave
  * this device. The vault does not answer: a call that was no longer ringing comes back as `call.end{unavailable}`.
  */
-suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String): CallKeys {
+suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String, keepalive: Boolean = false): CallKeys {
     val chosen = call.negotiated
-    val answer = CallMedia.sdpWithChoice(sdp, chosen.chosen)
+    val parties = call.parties
+    // (C2) A form 2 answer's SDP carries no VettID attribute: the choice is the signed `suite`.
+    val answer = if (parties != null) sdp else CallMedia.sdpWithChoice(sdp, chosen.chosen)
     checkSdp(answer)
-    val a = checked("key agreement") { CallWire.answer(call.ek, call.callId) }
+    val a = checked("key agreement") {
+        if (parties != null) CallWire.answer2(call.ek, call.callId, parties) else CallWire.answer(call.ek, call.callId)
+    }
+    // (C2) confirm, from k_confirm, before k_call is wiped by the key derivation.
+    val confirm = try {
+        parties?.let { p ->
+            val kc = checked("key confirmation") { CallWire.confirmKey(a.kCall, call.callId) }
+            try {
+                CallWire.confirm(kc, chosen.chosen.id, chosen.offered, call.callId, p)
+            } finally {
+                Bytes.wipe(kc)
+            }
+        }
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        Bytes.wipe(a.kCall)
+        throw e
+    }
     val keys = CallKeys.derive(a.kCall, chosen, call.callId, caller = false)
     try {
+        val m = if (parties != null) {
+            CallWire.answerMessage2(call.callId, chosen.chosen.id, chosen.offered, parties, a.enc)
+        } else {
+            CallWire.shareMessage(CallWire.ROLE_ANSWER, call.callId, "", a.enc)
+        }
         device.sendOnce(
             "call.answer",
             buildJsonObject {
                 put("call_id", call.callId)
                 put("sdp", answer)
                 put("enc", Base64s.encodeStd(a.enc))
-                put("enc_sig", Base64s.encodeStd(device.signCallShare(CallWire.shareMessage(CallWire.ROLE_ANSWER, call.callId, "", a.enc))))
+                put("enc_sig", Base64s.encodeStd(device.signCallShare(m)))
+                if (parties != null && confirm != null) {
+                    put("suite", chosen.chosen.id)
+                    putJsonArray("offered") { chosen.offered.forEach { add(JsonPrimitive(it)) } }
+                    put("confirm", Base64s.encodeStd(confirm))
+                }
+                if (keepalive) put("keepalive", true)
             },
         )
         return keys
@@ -390,11 +508,69 @@ fun VaultApi.callAccept(call: OutgoingCall, event: VaultMessage, pinnedFingerpri
     if (o.callId() != call.callId) throw CallMessageException("answer for another call")
     val sdp = sdpOf(o)
     val enc = o.b64("enc", Suite.ENC_SIZE)
+    val form2 = listOf("suite", "offered", "confirm").count { o.containsKey(it) }
+    if (form2 in 1..2) throw CallMessageException("part of form 2")
+    if (form2 == 3) return acceptForm2(call, o, sdp, enc, pinnedFingerprint)
     verifyPeerShare(o, CallWire.shareMessage(CallWire.ROLE_ANSWER, call.callId, "", enc), pinnedFingerprint)
     val chosen = checked("media suites") { CallMedia.chosenIn(sdp, call.offered) }
     val kCall = checked("key agreement") { CallWire.accept(call.key(), enc, call.callId) }
     call.destroy()
     return AcceptedCall(call.callId, CallMedia.sdpWithout(sdp), CallKeys.derive(kCall, chosen, call.callId, caller = true))
+}
+
+/**
+ * (C2) A form 2 answer (VAULT-MESSAGING 0.88.16 "Call forms", "Key confirmation"): only to an offer that carried form
+ * 2; `peer_ik` must be the callee this device named when it placed the call; the signatures over `m2` with the parties
+ * fixed then; `offered` exactly the list sent and `suite` in it and in the registry; and `confirm`, checked in constant
+ * time **before any key is set** (and before the SDP is used: nothing of the answer leaves here unless it verified).
+ */
+@OptIn(MadeByCallApi::class)
+private fun VaultApi.acceptForm2(call: OutgoingCall, o: JsonObject, sdp: String, enc: ByteArray, pinnedFingerprint: String): AcceptedCall {
+    val parties = call.parties ?: throw CallMessageException("form 2 answer to a form 1 offer")
+    val offered = o.suiteListOf("offered")
+    val chosen = o.suiteOf()
+    val confirm = o.b64("confirm", CallWire.CONFIRM_SIZE)
+    checked("key-exchange share (form 2)") {
+        val peerIk = peerIkOf(o, pinnedFingerprint)
+        if (!Bytes.constantTimeEquals(peerIk, parties.callee)) throw CryptoException.Signature("the answer names another callee")
+        CallWire.verifyShare(
+            vaultIk = peerIk,
+            deviceIk = o.b64("device_ik", Suite.ED25519_PUBLIC_SIZE),
+            message = CallWire.answerMessage2(call.callId, chosen, offered, parties, enc),
+            deviceSig = o.b64("device_sig", Suite.ED25519_SIGNATURE_SIZE),
+            vaultSig = o.b64("vault_sig", Suite.ED25519_SIGNATURE_SIZE),
+        )
+    }
+    if (offered != call.offered) throw CallMessageException("offered is not the list sent")
+    val suite = MediaSuite.byId(chosen)?.takeIf { chosen in offered } ?: throw CallMessageException("suite")
+    val negotiated = checked("media suites") { CallMedia.Negotiated(suite, offered) }
+    val kCall = checked("key agreement") { CallWire.accept2(call.key(), enc, call.callId, parties) }
+    // k_call is wiped on every path out (derive wipes it too; a second wipe is harmless).
+    try {
+        val ok = try {
+            val kc = CallWire.confirmKey(kCall, call.callId)
+            try {
+                CallWire.verifyConfirm(kc, chosen, offered, call.callId, parties, confirm)
+            } finally {
+                Bytes.wipe(kc)
+            }
+        } catch (e: CryptoException) {
+            throw CallMessageException("key confirmation", e)
+        }
+        if (!ok) throw CallMessageException("key confirmation")
+        call.destroy()
+        return AcceptedCall(call.callId, CallMedia.sdpWithout(sdp), CallKeys.derive(kCall, negotiated, call.callId, caller = true))
+    } finally {
+        Bytes.wipe(kCall)
+    }
+}
+
+/**
+ * (C2) `call.keepalive{call_id}` (ephemeral, `exp` now + 30 s) from the call's device to its own vault, the first as
+ * soon as the call is active here, then every [CallLimits.KEEPALIVE_EVERY] (VAULT-MESSAGING §10.10 "Liveness").
+ */
+suspend fun VaultApi.callKeepalive(callId: String) {
+    device.sendOnce("call.keepalive", buildJsonObject { put("call_id", callId) }, device.clockNow().plus(CallLimits.KEEPALIVE_EVERY))
 }
 
 /** `call.ringing` (ephemeral): this device is ringing; the caller hears a ring-back tone. Forwarded once per call. */
@@ -466,7 +642,10 @@ suspend fun VaultApi.callList(limit: Int = 50): CallList {
  * an array does not read.
  */
 internal fun callListOf(o: JsonObject): CallList {
-    val calls = o["calls"] ?: return CallList(emptyList(), emptyList())
+    // (C2) `v: 2` and the vault's `now`: a C2 vault ("Mixed releases"). Read leniently: anything else is "not C2".
+    val v = (o["v"] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toIntOrNull()
+    val now = VaultJson.str(o, "now")?.let { runCatching { Timestamps.parseMillis(it) }.getOrNull() }
+    val calls = o["calls"] ?: return CallList(emptyList(), emptyList(), v, now)
     val entries = calls as? JsonArray ?: throw CallMessageException("calls")
     val read = mutableListOf<CallRecord>()
     val skipped = mutableListOf<SkippedCall>()
@@ -475,7 +654,7 @@ internal fun callListOf(o: JsonObject): CallList {
         val r = obj?.let { runCatching { VaultJson.decode(CallRecord.serializer(), it) }.getOrNull() }?.takeIf { it.reads() }
         if (r != null) read += r else skipped += SkippedCall.of(obj)
     }
-    return CallList(read, skipped)
+    return CallList(read, skipped, v, now)
 }
 
 /**
@@ -485,7 +664,7 @@ internal fun callListOf(o: JsonObject): CallList {
  */
 private fun CallRecord.reads(): Boolean =
     direction in CALL_DIRECTIONS && state in CALL_STATES && isTime(startedAt) &&
-        (answeredAt == null || isTime(answeredAt)) && (endedAt == null || isTime(endedAt))
+        (answeredAt == null || isTime(answeredAt)) && (endedAt == null || isTime(endedAt)) && (exp == null || isTime(exp))
 
 private val CALL_DIRECTIONS = setOf("in", "out")
 private val CALL_STATES = setOf("ringing", "active", "ended")
@@ -493,7 +672,17 @@ private val CALL_STATES = setOf("ringing", "active", "ended")
 private fun isTime(s: String): Boolean = runCatching { java.time.Instant.parse(s) }.isSuccess
 
 /** `call.list` read: the entries that read, newest first, and the ones skipped. Prints its counts only. */
-class CallList(val calls: List<CallRecord>, val skipped: List<SkippedCall>) {
+class CallList(
+    val calls: List<CallRecord>,
+    val skipped: List<SkippedCall>,
+    /** (C2) The vault's `v`: 2 for a C2 vault, null for an S10 one. */
+    val version: Int? = null,
+    /** (C2) The vault's clock when it answered. */
+    val now: Instant? = null,
+) {
+    /** (C2) The vault is C2: form 2, keep-alives, and the stale sweep by `device_id`, `exp` and `now`. */
+    val formTwo: Boolean get() = (version ?: 0) >= 2 && now != null
+
     override fun toString(): String = "CallList(${calls.size} calls, ${skipped.size} skipped)"
 }
 

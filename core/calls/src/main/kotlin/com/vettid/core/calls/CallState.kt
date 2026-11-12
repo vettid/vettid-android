@@ -67,7 +67,7 @@ enum class CallEnd {
     /** This device found no network address to be reached at (for example a blocked network permission). */
     NO_ADDRESS,
 
-    /** The two devices found no path to each other (today: they are not on the same network). */
+    /** The two devices found no path to each other within 60 s. */
     COULD_NOT_CONNECT,
 
     /** The path was lost during the call. */
@@ -97,6 +97,17 @@ sealed interface CallState {
         val activeSince: Instant? = null,
         /** Active, but the path is interrupted; the media stack is trying to get it back. */
         val reconnecting: Boolean = false,
+        /**
+         * (C2) This device's side of the answer is through: the callee's `call.answer` is with its vault, or the caller
+         * has taken the answer. From then the call is `active` in the vault, and keep-alives may go (VAULT-MESSAGING
+         * "Liveness"); one before it is answered `call.end{unavailable}`.
+         */
+        val answerThrough: Boolean = false,
+        /**
+         * (C2) The call is in form 2: placed in form 2, or answering an offer in form 2. That proves the vault C2 for
+         * this call, whatever the `call.list` probe has found yet: keep-alives go on it.
+         */
+        val formTwo: Boolean = false,
     ) : CallState
 
     /** The last call, until it is dismissed or another begins. */
@@ -126,8 +137,16 @@ data class CallDiagnostics(
 data class CallTimings(
     /** No address gathered after this long: the call ends [CallEnd.NO_ADDRESS]. */
     val gather: Duration = Duration.ofSeconds(8),
-    /** No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. */
-    val connect: Duration = Duration.ofSeconds(30),
+    /**
+     * No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. 60 s (owner decision 2026-11-11,
+     * VAULT-MESSAGING 0.88.16): a slow path (TURN, a network allowing only TCP 443) may take a while.
+     */
+    val connect: Duration = Duration.ofSeconds(60),
+    /**
+     * (C2) The answering device, its microphone held back, ends the call as not encrypted when no frame has decrypted
+     * this long after its connection is established (VAULT-MESSAGING "Key confirmation").
+     */
+    val decrypt: Duration = Duration.ofSeconds(20),
     /** The caller rings for the offer's lifetime, kept within these bounds whatever the two clocks say. */
     val minRing: Duration = Duration.ofSeconds(10),
     val maxRing: Duration = Duration.ofSeconds(60),
