@@ -200,8 +200,11 @@ data class CallCandidate(
 /** `call.ice` as received. */
 data class CallIce(val callId: String, val candidates: List<CallCandidate>)
 
-/** `call.end` as received. */
-data class CallEnded(val callId: String, val reason: String)
+/**
+ * `call.end` as received. [supersededBy] (C2, VAULT-MESSAGING §10.10 "Glare"): this device's own outgoing call lost a
+ * glare to the connection's call with that id, which the vault rings next; null when absent or not a call id.
+ */
+data class CallEnded(val callId: String, val reason: String, val supersededBy: String? = null)
 
 /** One entry of `call.list` (the vault keeps the latest 200 calls; no SDP, no keys). */
 @Serializable
@@ -718,7 +721,7 @@ sealed interface CallEvent {
 
     data class Ringing(val callId: String) : CallEvent
 
-    data class Ended(val callId: String, val reason: String) : CallEvent
+    data class Ended(val callId: String, val reason: String, val supersededBy: String? = null) : CallEvent
 
     data class Ice(val ice: CallIce) : CallEvent
 }
@@ -736,7 +739,8 @@ private fun parseIce(m: VaultMessage): CallIce? {
 private fun parseEnd(m: VaultMessage): CallEnded? {
     val id = VaultJson.str(m.body, "call_id")
     val reason = VaultJson.str(m.body, "reason")
-    return if (id == null || reason == null) null else CallEnded(id, reason)
+    val by = VaultJson.str(m.body, "superseded_by")?.takeIf { Ulid.isValid(it) && it != id }
+    return if (id == null || reason == null) null else CallEnded(id, reason, by)
 }
 
 /** Every `call.*` event, one flow, so that their order is the vault's (an answer before the candidates after it). */
@@ -750,7 +754,7 @@ fun callEventsIn(events: Flow<VaultMessage>): Flow<CallEvent> =
             "call.offer" -> CallEvent.Offer(m)
             "call.answer" -> CallEvent.Answer(m)
             "call.ringing" -> VaultJson.str(m.body, "call_id")?.let { CallEvent.Ringing(it) }
-            "call.end" -> parseEnd(m)?.let { CallEvent.Ended(it.callId, it.reason) }
+            "call.end" -> parseEnd(m)?.let { CallEvent.Ended(it.callId, it.reason, it.supersededBy) }
             "call.ice" -> parseIce(m)?.let { CallEvent.Ice(it) }
             else -> null
         }

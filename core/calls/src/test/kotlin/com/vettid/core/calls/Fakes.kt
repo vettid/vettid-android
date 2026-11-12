@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import java.time.Instant
 
 const val CALL_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T50"
+const val GLARE_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4Z"
+const val OTHER_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4Y"
 val T0: Instant = Instant.parse("2026-10-12T10:00:00Z")
 
 fun candidate(n: Int) = CallCandidate("candidate:$n 1 udp 2122260223 192.0.2.$n 50000 typ host", "0", 0)
