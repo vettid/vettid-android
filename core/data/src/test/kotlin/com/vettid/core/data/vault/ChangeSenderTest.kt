@@ -248,12 +248,13 @@ class ChangeSenderTest {
             store(marker)
             throw ChangeUnansweredException(kept(marker), held)
         }
+        // Cancelled first: a check started by mistake would otherwise run on and keep the test from ending.
+        f.scope.cancel()
         val e = r.exceptionOrNull() as VaultFailure
         assertEquals(com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING, e.code)
         assertNull("no marker", f.record.value.unresolvedChange)
         assertNull("nothing kept", f.kept)
         assertNull("no check", f.resolver.check.value)
         assertEquals(3L, f.record.value.phoneEpoch)
-        f.scope.cancel()
     }
 }
