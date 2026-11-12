@@ -436,18 +436,23 @@ internal class CallMachine(
                     s.pendingRemote += e.candidates
                 }
             }
-            is SignalEvent.End -> if (s != null && s.glareOffer?.callId == e.callId) {
-                // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer.
-                s.glareOffer = null
-            } else if (s != null && s.callId == e.callId && s.supersededBy == null) {
-                // (While a lost glare waits for its winner, X's own end came already: a second one changes nothing.)
-                if (superseded(s, e)) {
-                    val by = e.supersededBy
-                    val held = s.glareOffer
-                    if (held != null && held.callId == by && now().isBefore(held.exp)) takeGlare(s, held) else lostGlare(s, by)
-                } else {
-                    finish(s, ended(s, e.reason), null)
-                }
+            is SignalEvent.End -> if (s != null) onEnd(s, e)
+        }
+    }
+
+    /** The vault's `call.end` for the call here, for its held glare offer, or for neither. */
+    private fun onEnd(s: Session, e: SignalEvent.End) {
+        if (s.glareOffer?.callId == e.callId) {
+            // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer.
+            s.glareOffer = null
+        } else if (s.callId == e.callId && s.supersededBy == null) {
+            // (While a lost glare waits for its winner, X's own end came already: a second one changes nothing.)
+            if (superseded(s, e)) {
+                val by = e.supersededBy
+                val held = s.glareOffer
+                if (held != null && held.callId == by && now().isBefore(held.exp)) takeGlare(s, held) else lostGlare(s, by)
+            } else {
+                finish(s, ended(s, e.reason), null)
             }
         }
     }
@@ -629,17 +634,21 @@ internal class CallMachine(
         // A lost glare waits for its winner: only its ring timer still counts (a timer already queued is stale).
         if (s.supersededBy != null && kind != TimerKind.RING_OUT) return
         when (kind) {
-            TimerKind.RING_OUT -> when {
-                // The glare's winner never came: busy, as before C2; the vault already ended this call.
-                s.supersededBy != null -> finish(s, CallEnd.BUSY, null)
-                s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING -> finish(s, CallEnd.NO_ANSWER, CallReason.TIMEOUT)
-            }
+            TimerKind.RING_OUT -> ringOutOver(s)
             // Nothing is sent: the missed call is recorded by this member's vault when the caller's timeout arrives.
             TimerKind.RING_IN -> if (s.phase == CallPhase.INCOMING) finish(s, CallEnd.MISSED, null)
             TimerKind.GATHER -> if (s.gathered == 0) finish(s, CallEnd.NO_ADDRESS, CallReason.FAILED)
             TimerKind.CONNECT -> if (s.phase == CallPhase.CONNECTING) finish(s, CallEnd.COULD_NOT_CONNECT, CallReason.FAILED)
             TimerKind.DECRYPT -> if (s.heldForDecrypt) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
             TimerKind.ICE_FLUSH -> flush(s)
+        }
+    }
+
+    private fun ringOutOver(s: Session) {
+        when {
+            // The glare's winner never came: busy, as before C2; the vault already ended this call.
+            s.supersededBy != null -> finish(s, CallEnd.BUSY, null)
+            s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING -> finish(s, CallEnd.NO_ANSWER, CallReason.TIMEOUT)
         }
     }
 
@@ -707,7 +716,8 @@ internal class CallMachine(
         // The connection's own call that arrived while this one rang to it is not lost when the vault or the other side
         // ended this one (no `call.end` from here). Never after this member's own end, a lock's above all: a call rings
         // only while the vault is open on this phone, and a lock would decline it unseen.
-        if (held != null && tell == null && reason != CallEnd.LOCKED && now().isBefore(held.exp)) ring(held)
+        val endedThere = tell == null && reason != CallEnd.LOCKED
+        if (held != null && endedThere && now().isBefore(held.exp)) ring(held)
     }
 
     /** Lets the call go: its jobs, engine and keys. Publishes nothing and sends nothing. */

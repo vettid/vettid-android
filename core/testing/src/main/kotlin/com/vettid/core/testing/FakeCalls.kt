@@ -38,6 +38,7 @@ class FakeCalls(availability: CallAvailability = CallAvailability.READY) : CallA
         allowedSet += connectionId to allowed
         val p = permissions.value
         val now = p.of(connectionId).copy(allowed = allowed)
-        permissions.value = p.copy(differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now))
+        val differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now)
+        permissions.value = p.copy(differing = differing)
     }
 }

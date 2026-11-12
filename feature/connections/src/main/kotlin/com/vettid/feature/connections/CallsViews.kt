@@ -33,7 +33,11 @@ internal fun CallsCard(allowed: Boolean, limited: Boolean, first: String, enable
                 .toggleable(value = allowed, enabled = enabled, role = Role.Switch, onValueChange = onChange),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.connections_calls_switch, first), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(
+                stringResource(R.string.connections_calls_switch, first),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
             Switch(checked = allowed, onCheckedChange = null, enabled = enabled)
         }
         val note = when {

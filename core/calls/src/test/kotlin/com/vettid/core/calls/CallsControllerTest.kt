@@ -42,6 +42,7 @@ import java.time.Duration
 import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One class: every test shares the fakes and the helpers.
 class CallsControllerTest {
     private class Gateway : CallGateway {
         val channel = Channel<CallEvent>(Channel.UNLIMITED)

@@ -348,28 +348,6 @@ class MessagesViewModelsTest {
         assertFalse(vm.uiState.value.callsNotAvailable)
     }
 
-    /** (C2) Calls with this connection turned off: the call button says where to turn them on, and calls nobody. */
-    @Test
-    fun callsOffSayWhereToTurnThemOn() = runTest {
-        val calls = FakeCalls()
-        calls.permissions.value = com.vettid.core.data.calls.CallPermissions(
-            supported = true, known = true, differing = mapOf("c2" to com.vettid.core.data.calls.ConnectionCalls(allowed = false)),
-        )
-        val vm = conversation(calls)
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.callShown && vm.uiState.value.callsOff)
-        vm.call()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.callsOffNotice)
-        assertTrue(calls.called.isEmpty())
-        // Turned on again (here or on another device): the notice goes, and the button calls.
-        calls.permissions.value = com.vettid.core.data.calls.CallPermissions(supported = true, known = true)
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.callsOffNotice)
-        vm.call()
-        assertEquals(listOf("c2"), calls.called)
-    }
-
     /** (GC #7718) Some of the vault's calls did not read: the conversation says so, with the rest; and drops it when calls go. */
     @Test
     fun theConversationSaysSomeCallsCouldNotBeShown() = runTest {

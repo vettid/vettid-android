@@ -255,7 +255,12 @@ class CallsController(
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
         scope.launch { vault.recheck.collect { if (open && supported == null) opened() } }
         scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2) permissionReads.trySend(Unit) } }
-        scope.launch { for (ask in permissionReads) readPermissions() }
+        scope.launch {
+            while (true) {
+                permissionReads.receive()
+                readPermissions()
+            }
+        }
         scope.launch {
             vault.droppedForTime.collect { type ->
                 if (type.startsWith("call.")) diagnosticsFlow.update { it.copy(droppedForTime = it.droppedForTime + 1) }
@@ -436,6 +441,7 @@ class CallsController(
      * (C2) Reads `call.permission.list` into [permissions]: what was read before stays while a read fails (it is tried
      * again a few times); a read begun before a lock writes nothing after it.
      */
+    @Suppress("ReturnCount") // each way a read ends: locked meanwhile, refused, read
     private suspend fun readPermissions() {
         val epoch = permissionEpochNow()
         repeat(PROBE_ATTEMPTS) { attempt ->
@@ -446,7 +452,9 @@ class CallsController(
                 throw e
             } catch (e: VaultOpException) {
                 // `unsupported_type` from a vault the probe called C2 cannot happen; any refusal leaves things as they are.
-                if (e.code == UNSUPPORTED) synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
+                if (e.code == UNSUPPORTED) {
+                    synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
+                }
                 return
             } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
                 delay(PROBE_RETRY.toMillis() * (attempt + 1))

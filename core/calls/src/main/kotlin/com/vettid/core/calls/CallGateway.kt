@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.mapNotNull
  * vault. [VaultCallGateway] is the only implementation outside tests and adds nothing: every check is in `CallApi`
  * ([callIncoming], [callAccept]), and which checks are asked for is decided in [VaultCallSignalling].
  */
+@Suppress("TooManyFunctions") // one function per call message type of §10.10
 interface CallGateway {
     /** Every call event, in the vault's order; offers and answers unchecked. */
     val events: Flow<CallEvent>
@@ -78,6 +79,7 @@ interface CallGateway {
  * ends); [events] are the vault device's events (a new flow after the device was set up again).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("TooManyFunctions") // one function per call message type of §10.10
 class VaultCallGateway(
     private val api: suspend () -> VaultApi,
     events: Flow<Flow<VaultMessage>>,

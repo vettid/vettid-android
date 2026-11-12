@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.core.vault
 
 import com.vettid.core.crypto.envelope.Inner

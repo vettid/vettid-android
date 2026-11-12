@@ -234,7 +234,10 @@ class ConversationViewModel @Inject constructor(
                 photosAvailable = photos,
             )
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
-            .combine(calls.permissions) { s, p -> s.copy(callsOff = !p.of(connectionId).allowed, callsOffNotice = s.callsOffNotice && !p.of(connectionId).allowed) }
+            .combine(calls.permissions) { s, p ->
+                val off = !p.of(connectionId).allowed
+                s.copy(callsOff = off, callsOffNotice = s.callsOffNotice && off)
+            }
             .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
             .combine(presence.readings) { (s, on), r ->
                 // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
