@@ -78,13 +78,38 @@ class WalletsManagerTest {
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         ops.slowRead = gate
         val older = CoroutineScope(Dispatchers.Default).launch { m.refresh() }
-        while (ops.slowRead != null) kotlinx.coroutines.delay(5) // the older read has begun
-        ops.wallets[w.id] = w.copy(name = "Renamed elsewhere")
-        m.refresh()
-        assertEquals("Renamed elsewhere", m.wallets.value.single().name)
-        gate.complete(Unit)
+        try {
+            ops.slowReadStarted.await() // the older read has taken its list
+            ops.wallets[w.id] = w.copy(name = "Renamed elsewhere")
+            m.refresh()
+            assertEquals("Renamed elsewhere", m.wallets.value.single().name)
+        } finally {
+            gate.complete(Unit)
+        }
         older.join()
         assertEquals("the older read's list was dropped", "Renamed elsewhere", m.wallets.value.single().name)
+    }
+
+    /** A change this phone made while a list read was in flight is not undone when that read ends with the older list. */
+    @Test
+    fun aReadInFlightDoesNotUndoAChangeMadeHere() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        val before = m.wallets.value.single().addressType
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val older = CoroutineScope(Dispatchers.Default).launch { m.refresh() }
+        try {
+            ops.slowReadStarted.await()
+            m.setAddressType(w.id, "p2wpkh")
+            assertEquals("p2wpkh", m.wallets.value.single().addressType)
+        } finally {
+            gate.complete(Unit)
+        }
+        older.join()
+        assertTrue("the setup had another type", before != "p2wpkh")
+        assertEquals("the read begun before the change was dropped", "p2wpkh", m.wallets.value.single().addressType)
     }
 
     @Test
