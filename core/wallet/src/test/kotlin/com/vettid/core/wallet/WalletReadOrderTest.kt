@@ -159,4 +159,67 @@ class WalletReadOrderTest {
         assertEquals("one read, no second", before + 1, ops.calls.count { it == "list" })
         assertTrue(m.wallets.value.any { it.id == made })
     }
+
+    /**
+     * The first read held while a wallet is created, the second read held while that wallet's limit is lowered: the
+     * created wallet is shown at the end (the second change makes the second read stale too, and one more read follows).
+     */
+    @Test
+    fun aChangeDuringTheSecondReadDoesNotHideTheWalletCreatedDuringTheFirst() = runBlocking {
+        val other = wallet()
+        val m = manager()
+        val first = CompletableDeferred<Unit>()
+        ops.slowRead = first
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        ops.slowReadStarted.await()
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet.id
+        val second = CompletableDeferred<Unit>()
+        ops.listGate = second
+        first.complete(Unit)
+        // The second read waits at the gate; a change made here meanwhile.
+        // Bounded: without the second read (the rule broken) this fails rather than hangs.
+        kotlinx.coroutines.withTimeout(5_000) { while (ops.calls.count { it == "list" } < 2) kotlinx.coroutines.delay(5) }
+        m.lowerCaps(made, 100_000, null)
+        ops.listGate = null
+        second.complete(Unit)
+        opening.join()
+        assertTrue("the wallet made during the first read is shown", m.wallets.value.any { it.id == made })
+        assertTrue(m.wallets.value.any { it.id == other.id })
+        assertEquals(100_000L, m.wallets.value.single { it.id == made }.perTxSats)
+    }
+
+    /** The stale first list is not shown: from its creation on, the new wallet never leaves the list. */
+    @Test
+    fun noFlickerOfTheWalletCreatedWhileTheFirstListLoads() = runBlocking {
+        wallet()
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        ops.slowReadStarted.await()
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet.id
+        val shown = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+        val watcher = CoroutineScope(Dispatchers.Unconfined).launch { m.wallets.collect { l -> shown += l.map { it.id } } }
+        gate.complete(Unit)
+        opening.join()
+        watcher.cancel()
+        assertTrue("every list shown after the creation has the new wallet", shown.all { made in it })
+    }
+
+    /** The second read fails: the first list is shown after all (the new wallet hidden until Try again, fail secure). */
+    @Test
+    fun aFailedSecondReadShowsTheFirstList() = runBlocking {
+        val w = wallet()
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        ops.slowReadStarted.await()
+        m.create("New", Network.TESTNET4, "pw".toCharArray(), null)
+        ops.listFails = true
+        gate.complete(Unit)
+        opening.join()
+        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertEquals("the first list, as read", listOf(w.id), m.wallets.value.map { it.id })
+    }
 }

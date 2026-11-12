@@ -304,7 +304,9 @@ class WalletsManager(
     /**
      * The number of the last read begun ([listReads]) when a change was made here before the first list was shown; 0: none. A
      * first list from a read that began no later than that change may hide it (a wallet created while the list was loading),
-     * so the list is read once more right after; a read begun after the change needs no second one. Under [lock].
+     * so it is not shown: the list is read again first ([refresh]); a read begun after the change needs no second one. Its
+     * resets (in [clear] and when a list is shown) are hygiene: read numbers only grow, so an old value never matches a
+     * later read. Under [lock].
      */
     private var changedAt = 0L
 
@@ -488,27 +490,37 @@ class WalletsManager(
             }
             throw e
         }
-        // One check and one write under the lock: no later read can be shown between them.
-        var readAgain = false
-        val published = synchronized(lock) {
-            if (g != generation || seq < listShown) return@synchronized false
-            // The first list, from a read begun before a change made here: it is read once more (below).
-            readAgain = !listRead && seq <= changedAt
-            changedAt = 0L
-            listShown = seq
-            walletsFlow.value = list
-            availabilityFlow.value = WalletAvailability.AVAILABLE
-            listRead = true
-            // A wallet gone (deleted on another device): its look-up goes too.
-            lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-            transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-            true
-        }
+        // The first list, from a read begun before a change made here, would hide that change: it is not shown. The list is
+        // read again and that read is shown; only if it fails is this one (fail secure: the change stays hidden until Try
+        // again or the next event). A change made during the second read makes it stale too, so local changes bound this.
+        val stale = staleFirstList(g, seq)
+        if (stale) attempt { refresh() }
+        val published = showList(g, seq, list, stale)
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
         if (published) flags.listed(list.map { it.id }.toSet())
-        // The second read's failure is not this read's: the first list is shown, and what follows (open()'s pending limits)
-        // goes on; the list is read again at the next event or Try again.
-        if (readAgain) attempt { refresh() }
+    }
+
+    /** Read [seq] of generation [g] is a first list begun no later than a change made here ([changedAt]). */
+    private fun staleFirstList(g: Long, seq: Long): Boolean =
+        synchronized(lock) { g == generation && seq >= listShown && !listRead && seq <= changedAt }
+
+    /**
+     * Shows [list], read [seq] of generation [g], unless the generation moved on, a later read or a change made here is
+     * shown, or ([stale]) the read after it already showed a list. One check and one write under the lock: no later read
+     * can be shown between them.
+     */
+    private fun showList(g: Long, seq: Long, list: List<VaultWallet>, stale: Boolean): Boolean = synchronized(lock) {
+        val superseded = g != generation || seq < listShown
+        if (superseded || (stale && listRead)) return@synchronized false
+        changedAt = 0L
+        listShown = seq
+        walletsFlow.value = list
+        availabilityFlow.value = WalletAvailability.AVAILABLE
+        listRead = true
+        // A wallet gone (deleted on another device): its look-up goes too.
+        lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        true
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
