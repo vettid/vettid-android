@@ -90,7 +90,7 @@ class UnlockCheckInTest {
         held.submit()
         advanceUntilIdle()
         assertEquals("40281795", vault.lastPin)
-        assertTrue(held.uiState.value.passed)
+        assertTrue(held.uiState.value.passedTick) // the password-only retry is an owner check: it shows the tick
         assertEquals("", held.uiState.value.pin)
     }
 
@@ -318,7 +318,7 @@ class UnlockCheckInTest {
         held.submit()
         advanceUntilIdle()
         assertEquals("55512345", vault.lastPin)
-        assertTrue(held.uiState.value.passed)
+        assertTrue(held.uiState.value.passedTick)
     }
 
     /** A lock that fails leaves the ordinary check: the kept PIN, its line and the hidden PIN field all go. */

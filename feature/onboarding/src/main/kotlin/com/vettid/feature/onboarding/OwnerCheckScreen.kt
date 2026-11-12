@@ -3,7 +3,17 @@ package com.vettid.feature.onboarding
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.view.HapticFeedbackConstants
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextAlign
+import com.vettid.core.ui.theme.VettIdTheme
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -72,11 +82,17 @@ fun OwnerCheckRoute(
     onCancel: () -> Unit,
     /** False while a call screen is over the shell: Back is the call screen's then. */
     backEnabled: Boolean = true,
+    /**
+     * (ANDROID-PLAN 0.1.124) True while the "Check passed" tick is held: the shell keeps the check in front for it, even once the
+     * vault no longer says the check is due.
+     */
+    onTickShowing: (Boolean) -> Unit = {},
     viewModel: OwnerCheckViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(mode) { viewModel.start(mode) }
     // The screen leaving for good (not a rotation) forgets what it shows, so that the next one starts afresh.
-    val activity = LocalContext.current.findActivity()
+    val context = LocalContext.current
+    val activity = context.findActivity()
     DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) viewModel.cancel() } }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(state.passed) {
@@ -85,12 +101,23 @@ fun OwnerCheckRoute(
             onDone()
         }
     }
+    // (ANDROID-PLAN 0.1.124) A pass: a light success haptic, the tick held 1 s (3 s with a screen reader), then the screen closes.
+    val view = LocalView.current
+    LaunchedEffect(state.passedTick) {
+        onTickShowing(state.passedTick)
+        if (!state.passedTick) return@LaunchedEffect
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        delay(passedTickMillis(context.screenReaderOn()))
+        viewModel.tickShown()
+    }
+    DisposableEffect(Unit) { onDispose { onTickShowing(false) } }
     val cancel = {
         viewModel.cancel()
         onCancel()
     }
-    // Back leaves a voluntary check; past the deadline it does nothing (the check is never dismissible).
-    BackHandler(enabled = backEnabled) { if (mode != OwnerCheckMode.GATED) cancel() }
+    // Back leaves a voluntary check; past the deadline it does nothing (the check is never dismissible). (ANDROID-PLAN 0.1.124)
+    // While a check is with the vault, or its tick shows, Back is ignored: the request cannot be taken back.
+    BackHandler(enabled = backEnabled) { if (backLeaves(mode, state)) cancel() }
     OwnerCheckContent(state.copy(mode = mode), viewModel, onCancel = cancel)
 }
 
@@ -111,25 +138,40 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         PresenceAfterCheck(title, actions)
         return
     }
+    if (state.passedTick) {
+        PassedTick(title)
+        return
+    }
     val lockOffered = lockOffered(state.mode, state.watch)
     val cancelBesideLock = cancelBesideLock(state.mode, state.watch)
+    // (ANDROID-PLAN 0.1.124) While the vault verifies: no Check and no Cancel; Lock vault, where it is offered (a gated check),
+    // stays enabled throughout.
+    val checking = state.checking
     FormScaffold(
         title = title,
         body = body,
-        primaryLabel = stringResource(
-            when {
-                state.watch == LockWatch.SILENT -> R.string.ownercheck_check_again
-                state.pinKept -> R.string.unlock_check_in
-                state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
-                else -> R.string.ownercheck_submit
-            },
-        ),
+        primaryLabel = if (checking) {
+            null
+        } else {
+            stringResource(
+                when {
+                    state.watch == LockWatch.SILENT -> R.string.ownercheck_check_again
+                    state.pinKept -> R.string.unlock_check_in
+                    state.mode == OwnerCheckMode.HOLD_OFF -> R.string.ownercheck_submit_hold_off
+                    else -> R.string.ownercheck_submit
+                },
+            )
+        },
         onPrimary = if (state.watch == LockWatch.SILENT) actions::checkAgain else actions::submit,
         primaryEnabled = state.submitAllowed || (state.watch == LockWatch.SILENT && !state.locking),
-        busy = state.busy || state.locking,
+        busy = if (checking) state.locking else state.busy || state.locking,
         // While the vault is probably locked "Lock vault" stays offered in every mode (VAULT-MESSAGING 0.73.0); it takes the
         // place of Cancel there, which comes back when the reads end.
-        secondaryLabel = stringResource(if (lockOffered) R.string.ownercheck_lock else R.string.ownercheck_cancel),
+        secondaryLabel = when {
+            lockOffered -> stringResource(R.string.ownercheck_lock)
+            checking -> null
+            else -> stringResource(R.string.ownercheck_cancel)
+        },
         onSecondary = if (lockOffered) actions::lockVault else onCancel,
         modifier = Modifier.testTag("owner_check"),
         // Cancel stays beside Lock vault while the vault is probably locked (a voluntary check or the hold-off can be left).
@@ -149,6 +191,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
             )
         },
     ) {
+        if (checking) {
+            CheckingWithVault()
+            return@FormScaffold
+        }
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             if (state.timeScale.stagingNote) StagingTimeNote()
             if (state.presenceUnrecorded) PresenceNotice()
@@ -279,6 +325,76 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 private const val WARN_LEFT = 3
+
+/** (ANDROID-PLAN 0.1.124) In place of the entries while the vault verifies: a centered progress indicator and its line. */
+@Composable
+private fun CheckingWithVault() {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = Spacing.xl).testTag("owner_check_checking"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.l),
+    ) {
+        CircularProgressIndicator()
+        Text(
+            stringResource(R.string.ownercheck_checking),
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+}
+
+/**
+ * (ANDROID-PLAN 0.1.124) A pass: the green tick and "Check passed", no actions. The tick says nothing by itself (its meaning is
+ * the text, not its color); the route holds it and then closes the screen.
+ */
+@Composable
+private fun PassedTick(title: String) {
+    FormScaffold(
+        title = title,
+        primaryLabel = null,
+        onPrimary = {},
+        modifier = Modifier.testTag("owner_check_passed"),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = Spacing.xl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.l),
+        ) {
+            Icon(
+                Icons.Outlined.CheckCircle,
+                contentDescription = null,
+                tint = VettIdTheme.colors.success,
+                modifier = Modifier.size(64.dp),
+            )
+            Text(
+                stringResource(R.string.ownercheck_passed),
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }.testTag("owner_check_passed_text"),
+            )
+        }
+    }
+}
+
+/** How long the "Check passed" tick is held: 1 s, 3 s while a screen reader is on (ANDROID-PLAN 0.1.124; no wait on the announcement). */
+fun passedTickMillis(screenReaderOn: Boolean): Long = if (screenReaderOn) PASSED_TICK_READER_MS else PASSED_TICK_MS
+
+internal const val PASSED_TICK_MS = 1_000L
+internal const val PASSED_TICK_READER_MS = 3_000L
+
+/** Whether a screen reader (touch exploration: TalkBack and the like) is on. */
+private fun Context.screenReaderOn(): Boolean {
+    val am = getSystemService(AccessibilityManager::class.java) ?: return false
+    return am.isEnabled && am.isTouchExplorationEnabled
+}
+
+/**
+ * Whether Back leaves the check: only one that can be left (not gated), and (ANDROID-PLAN 0.1.124) not while its check is with
+ * the vault or its tick shows. Otherwise Back is taken and ignored.
+ */
+fun backLeaves(mode: OwnerCheckMode, state: OwnerCheckUiState): Boolean =
+    mode != OwnerCheckMode.GATED && !state.checking && !state.passedTick
 
 /** "Lock vault" is the secondary action when gated, and in every mode while the vault is probably locked (0.73.0). */
 fun lockOffered(mode: OwnerCheckMode, watch: LockWatch): Boolean = mode == OwnerCheckMode.GATED || watch != LockWatch.NONE

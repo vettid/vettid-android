@@ -93,6 +93,11 @@ data class OwnerCheckUiState(
     val waitSeconds: Long = 0,
     /** The check passed: the screen closes. */
     val passed: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.124 §4 "The owner check's progress") The check passed with the presence recorded: the green tick and
+     * "Check passed" are held (1 s, 3 s while a screen reader is on), then [OwnerCheckActions.tickShown] closes the screen.
+     */
+    val passedTick: Boolean = false,
     val locking: Boolean = false,
     /**
      * (Release R, §11.14.5) The vault could not record that the member was here (`present_recorded: false`): the
@@ -121,9 +126,17 @@ data class OwnerCheckUiState(
 ) {
     val submitAllowed: Boolean
         get() = !busy && !locking && !locked && watch == LockWatch.NONE && waitSeconds == 0L && pin.length >= MIN_PIN &&
-            password.isNotEmpty()
+            password.isNotEmpty() && !passedTick
 
-    override fun toString(): String = "OwnerCheckUiState(mode=$mode, busy=$busy, message=$message, wait=$waitSeconds, passed=$passed)"
+    /**
+     * (ANDROID-PLAN 0.1.124) A check is with the vault: "Checking with your vault…" in place of the entries, and the back gesture
+     * is ignored (the request cannot be taken back).
+     */
+    val checking: Boolean
+        get() = busy && !locked && watch == LockWatch.NONE
+
+    override fun toString(): String =
+        "OwnerCheckUiState(mode=$mode, busy=$busy, message=$message, wait=$waitSeconds, passed=$passed, tick=$passedTick)"
 
     companion object {
         /** A vault PIN is 6–32 digits (§3.6.1: `bad_request` otherwise). */
@@ -145,6 +158,9 @@ interface OwnerCheckActions {
 
     /** After a check that passed with the presence notice: the member read it; the screen closes. */
     fun acknowledgePresence() {}
+
+    /** (ANDROID-PLAN 0.1.124) The "Check passed" tick was held for its time: the screen closes. */
+    fun tickShown() {}
 }
 
 /**
@@ -176,6 +192,14 @@ class OwnerCheckViewModel @Inject constructor(
 
     /** The mode [start] opened and [cancel] has not closed. */
     private var startedMode: OwnerCheckMode? = null
+
+    /**
+     * (ANDROID-PLAN 0.1.124) Counts what ends the screen's interest in a check sent: the member's Lock vault and the screen
+     * leaving ([cancel]). A check's answer is applied only while the count is the one taken when the check was sent (on the
+     * main thread, as the view model's work is). A new [start] does not count: a voluntary check that becomes the gated one
+     * while it is out still takes its answer, as before.
+     */
+    private var checkSeq = 0L
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
@@ -243,6 +267,7 @@ class OwnerCheckViewModel @Inject constructor(
     /** Leaves the screen without a check (not while gated): forgets what was entered. */
     fun cancel() {
         startedMode = null
+        checkSeq++
         ticker?.cancel()
         stopReads()
         state.update {
@@ -251,6 +276,8 @@ class OwnerCheckViewModel @Inject constructor(
     }
 
     override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }
+
+    override fun tickShown() = state.update { if (it.passedTick) it.copy(passed = true) else it }
 
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
@@ -271,12 +298,16 @@ class OwnerCheckViewModel @Inject constructor(
         state.update { it.copy(busy = true, message = null) }
         // The app leaving and coming back while the request runs keeps no PIN (the generation counts the departures).
         val generation = repo.foregroundGeneration
+        val seq = checkSeq
         viewModelScope.launch {
             val r = try {
                 repo.check(s.pin, s.password, holdOff)
             } catch (e: VaultFailure) {
                 OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
             }
+            // (ANDROID-PLAN 0.1.124) The member locked the vault (or the screen started again) while the check was out: its
+            // answer is dropped, and nothing that follows from it runs.
+            if (seq != checkSeq) return@launch
             // (ANDROID-PLAN 0.1.95) A check with no answer, tries still estimated to be left: one re-read of the vault's state.
             val probe = if (needsReread(r)) {
                 // §3.6.5: nothing entered is kept past the check's answer, so before the re-read, not after it.
@@ -285,6 +316,7 @@ class OwnerCheckViewModel @Inject constructor(
             } else {
                 null
             }
+            if (seq != checkSeq) return@launch
             // §3.6.5: neither entry is kept beyond the answer. §11.14.5: a check that passed without the presence recorded
             // keeps the screen, with the notice, until the member goes on.
             val passed = r == OwnerCheckOutcome.Passed
@@ -412,8 +444,10 @@ class OwnerCheckViewModel @Inject constructor(
     ): OwnerCheckUiState {
         val keep = pinKept && sameFront && keepsPin(r)
         val left = (r as? OwnerCheckOutcome.BadPassword)?.checksLeft?.takeIf { keep && it > 0 }
+        // (ANDROID-PLAN 0.1.124) A pass shows the tick first; [OwnerCheckActions.tickShown] then closes the screen. A pass that
+        // still needs presence recorded keeps today's screen, with no tick.
         return copy(
-            busy = false, pin = if (keep) pin else "", password = "", passed = passed && !unrecorded, passedUnrecorded = unrecorded,
+            busy = false, pin = if (keep) pin else "", password = "", passedTick = passed && !unrecorded, passedUnrecorded = unrecorded,
             presenceUnrecorded = if (passed) repo.presenceUnrecorded.value else presenceUnrecorded,
             message = if (left != null) null else messageAfter(r, probe),
             pinKept = keep, unlockedWrong = left, unlockedOpen = keep && r is OwnerCheckOutcome.Backoff,
@@ -434,10 +468,13 @@ class OwnerCheckViewModel @Inject constructor(
     }
 
     override fun lockVault() {
-        if (state.value.locking) return
+        if (state.value.locking || state.value.passedTick) return
+        // (ANDROID-PLAN 0.1.124) Lock vault stays enabled while a gated check is with the vault: that check's answer, when it
+        // comes, is dropped (the member chose to lock).
+        checkSeq++
         // The kept PIN goes with the fields: a lock that fails leaves the ordinary check (both fields), not a hidden PIN field.
         state.update {
-            it.copy(locking = true, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
+            it.copy(locking = true, busy = false, pin = "", password = "", pinKept = false, unlockedWrong = null, unlockedOpen = false)
         }
         // The member's lock ends the reads: a result that came after it must not say the vault locked for another reason.
         stopReads()

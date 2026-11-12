@@ -921,6 +921,12 @@ object ScreenCatalog {
         },
         "owner_check.voluntary" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.VOLUNTARY, okView), NoOwnerCheck) {} },
         "owner_check.hold_off" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.HOLD_OFF, okView), NoOwnerCheck) {} },
+        // ANDROID-PLAN 0.1.124: while the vault verifies (gated: Lock vault stays), and the "Check passed" tick.
+        "owner_check.checking" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView, busy = true), NoOwnerCheck) {} },
+        "owner_check.checking_voluntary" to {
+            OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.VOLUNTARY, okView, busy = true), NoOwnerCheck) {}
+        },
+        "owner_check.passed" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView, passedTick = true), NoOwnerCheck) {} },
         // The phase could not be read (A6 audit N4/N5, N6, P4): the connection, the clock, "no vault" and unreadable keys.
         "root.unreachable" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, false, {}, {}) },
         "root.unreachable_retrying" to { com.vettid.app.ui.UnreachableScreen(FailureKind.NETWORK, true, {}, {}) },
