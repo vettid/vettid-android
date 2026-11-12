@@ -112,4 +112,51 @@ class WalletReadOrderTest {
         duringAnOlderRead(m) { m.refresh() }
         assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
     }
+
+    /** The first list read again after a change fails: the first list stays shown and open() still sends a pending limit. */
+    @Test
+    fun aFailedSecondReadStillLetsOpenSendThePendingLimit() = runBlocking {
+        val w = wallet()
+        flagsFile.bytes = """{"version":1,"backed_up":["${w.id}"],"testnet":{},"note_shown":[],"pending_caps":{"${w.id}":{"per_tx_sats":100000}}}"""
+            .encodeToByteArray()
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val opening = CoroutineScope(Dispatchers.Default).launch { m.open() }
+        try {
+            ops.slowReadStarted.await()
+            m.create("New", Network.TESTNET4, "pw".toCharArray(), null)
+            ops.listFails = true // the second read is refused
+        } finally {
+            gate.complete(Unit)
+        }
+        opening.join()
+        assertEquals("both reads were made", 2, ops.calls.count { it == "list" })
+        assertTrue("the pending limit was sent", ops.calls.any { it.startsWith("caps.set:100000") })
+        assertTrue(m.wallets.value.any { it.id == w.id })
+    }
+
+    /** No change made here: the first list is read once. */
+    @Test
+    fun withNoChangeTheFirstListIsReadOnce() = runBlocking {
+        wallet()
+        val m = manager()
+        m.open()
+        assertEquals(1, ops.calls.count { it == "list" })
+    }
+
+    /** A change after a first read that failed: the read begun after it shows it, and is not read again. */
+    @Test
+    fun aReadBegunAfterTheChangeIsNotReadAgain() = runBlocking {
+        wallet()
+        val m = manager()
+        ops.listFails = true
+        runCatching { m.open() }
+        ops.listFails = false
+        val made = m.create("New", Network.TESTNET4, "pw".toCharArray(), null).wallet.id
+        val before = ops.calls.count { it == "list" }
+        m.refresh()
+        assertEquals("one read, no second", before + 1, ops.calls.count { it == "list" })
+        assertTrue(m.wallets.value.any { it.id == made })
+    }
 }

@@ -302,10 +302,11 @@ class WalletsManager(
     private var listShown = 0L
 
     /**
-     * A change was made here before the first list was shown: that list may be from a read begun before it (a wallet
-     * created while the list was loading would be hidden by it), so the list is read once more right after. Under [lock].
+     * The number of the last read begun ([listReads]) when a change was made here before the first list was shown; 0: none. A
+     * first list from a read that began no later than that change may hide it (a wallet created while the list was loading),
+     * so the list is read once more right after; a read begun after the change needs no second one. Under [lock].
      */
-    private var changedBeforeList = false
+    private var changedAt = 0L
 
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
@@ -403,7 +404,7 @@ class WalletsManager(
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
             listRead = false
-            changedBeforeList = false
+            changedAt = 0L
             lookupsFlow.value = emptyMap()
             transactionsFlow.value = emptyMap()
             checked.clear()
@@ -468,7 +469,7 @@ class WalletsManager(
      */
     private fun showLocal(change: (List<VaultWallet>) -> List<VaultWallet>) = synchronized(lock) {
         // Every read begun so far is older than this change (a read is dropped when its number is below listShown).
-        if (listRead) listShown = listReads + 1 else changedBeforeList = true
+        if (listRead) listShown = listReads + 1 else changedAt = listReads
         walletsFlow.update(change)
     }
 
@@ -491,9 +492,9 @@ class WalletsManager(
         var readAgain = false
         val published = synchronized(lock) {
             if (g != generation || seq < listShown) return@synchronized false
-            // The first list, with a change made here while it loaded: it is read once more (below).
-            readAgain = !listRead && changedBeforeList
-            changedBeforeList = false
+            // The first list, from a read begun before a change made here: it is read once more (below).
+            readAgain = !listRead && seq <= changedAt
+            changedAt = 0L
             listShown = seq
             walletsFlow.value = list
             availabilityFlow.value = WalletAvailability.AVAILABLE
@@ -505,7 +506,9 @@ class WalletsManager(
         }
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
         if (published) flags.listed(list.map { it.id }.toSet())
-        if (readAgain) refresh()
+        // The second read's failure is not this read's: the first list is shown, and what follows (open()'s pending limits)
+        // goes on; the list is read again at the next event or Try again.
+        if (readAgain) attempt { refresh() }
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
