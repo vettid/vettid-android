@@ -23,6 +23,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.calls.CallDiagnostics
+import com.vettid.core.calls.CallPaths
 import com.vettid.core.calls.CallState
 import com.vettid.core.calls.CallsController
 import com.vettid.core.calls.CallsDiagnostics
@@ -84,6 +85,7 @@ object CallTest {
         call: CallState,
         d: CallDiagnostics,
         all: CallsDiagnostics,
+        paths: CallPaths = CallPaths(),
     ): List<Pair<String, String>> {
         val m = d.media
         val state = when (call) {
@@ -121,9 +123,9 @@ object CallTest {
             "refused" to all.refused.toString(),
             "errors" to all.errors.toString(),
             "listenRestarts" to all.listenRestarts.toString(),
-            "callsDirect" to all.callsDirect.toString(),
-            "callsRelayed" to all.callsRelayed.toString(),
-            "callsPathUnknown" to all.callsPathUnknown.toString(),
+            "callsDirect" to paths.direct.toString(),
+            "callsRelayed" to paths.relayed.toString(),
+            "callsPathUnknown" to paths.unknown.toString(),
         )
     }
 }
@@ -140,9 +142,15 @@ class CallTestViewModel @Inject constructor(private val calls: CallsController) 
     private val changed = MutableStateFlow(0)
 
     val uiState: StateFlow<CallTestUiState> =
-        combine(calls.testsAllowed, calls.state, calls.callDiagnostics, calls.diagnostics, changed) { allowed, call, d, all, _ ->
+        combine(
+            calls.testsAllowed,
+            calls.state,
+            calls.callDiagnostics,
+            combine(calls.diagnostics, calls.callPaths, ::Pair),
+            changed,
+        ) { allowed, call, d, (all, paths), _ ->
             val config = calls.mediaConfig
-            CallTestUiState(allowed, config, CallTest.lines(allowed, config, call, d, all))
+            CallTestUiState(allowed, config, CallTest.lines(allowed, config, call, d, all, paths))
         }.stateIn(viewModelScope, SharingStarted.Eagerly, CallTestUiState())
 
     /** Flips one switch for the next call. Refused by the controller unless the tests are allowed. */

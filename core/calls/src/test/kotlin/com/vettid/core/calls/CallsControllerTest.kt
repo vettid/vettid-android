@@ -522,10 +522,25 @@ class CallsControllerTest {
         runCurrent()
         c.hangUp()
         runCurrent()
-        val d = c.diagnostics.value
-        assertEquals(1, d.callsRelayed)
-        assertEquals(1, d.callsDirect)
-        assertEquals(1, d.callsPathUnknown)
+        assertEquals(CallPaths(direct = 1, relayed = 1, unknown = 1), c.callPaths.value)
+
+        // A call the vault's lock ends (its hang-up and the dismiss handled back to back) is counted too, and by the
+        // last path the stack reported even if the last report said nothing.
+        c.call("conn-1")
+        runCurrent()
+        engines.last.relayed = true
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        advanceTimeBy(1_500)
+        engines.last.relayed = null
+        advanceTimeBy(1_000)
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(CallPaths(direct = 1, relayed = 2, unknown = 1), c.callPaths.value)
     }
 
     @Test

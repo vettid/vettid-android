@@ -132,6 +132,13 @@ data class CallDiagnostics(
     val media: MediaDiagnostics? = null,
 )
 
+/**
+ * (C2; CALLS-PLAN §7 C5: "the app records direct or relayed per call, locally") How the calls that connected since the
+ * process started went: directly between the two phones, through a relay, or not known (the stack never said). Counts
+ * only, in memory: no call id, address or time.
+ */
+data class CallPaths(val direct: Int = 0, val relayed: Int = 0, val unknown: Int = 0)
+
 /** The times the state machine keeps. Defaults are the plan's; tests shorten nothing (virtual time). */
 @Suppress("MagicNumber")
 data class CallTimings(
