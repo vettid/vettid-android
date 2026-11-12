@@ -372,6 +372,15 @@ class VaultDevice private constructor(
      */
     val vaultRefusals: StateFlow<Int> = refusalCount.asStateFlow()
 
+    /**
+     * (Show held as held, Android) A mailbox's quota backoff was set: its length in milliseconds. Whoever owns this device
+     * flushes the outbox when it ends ([flushOutbox]), behind its own lock gate, so a held entry (a `call.end`) goes as soon
+     * as the relay allows rather than at some later, unrelated flush. Nothing is shown to the member for it: messages and
+     * actions are requests, never outbox entries (a refusal is the caller's and is shown), and the outbox's only
+     * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds.
+     */
+    val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
+
     private val ownerCheckRefusals =
         MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -390,6 +399,9 @@ class VaultDevice private constructor(
     /** The scope of the last [start], until [stop]: where [ensureCollecting] starts the collection again. */
     private var collectScope: CoroutineScope? = null
     private val collectorEnd = MutableStateFlow<String?>(null)
+    // replay = 1: the session's observer subscribes after the collection started, whose first flush may already have
+    // been refused for a quota; the last backoff then still reaches it (a stale one only makes one gated flush).
+    private val quotaBackoffs = MutableSharedFlow<Long>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
@@ -1783,6 +1795,7 @@ class VaultDevice private constructor(
             val prev = quotaBackoff[e.mailbox]?.second ?: 0L
             val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
             quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+            quotaBackoffs.tryEmit(next)
         }
         save()
     }
@@ -3043,6 +3056,18 @@ class VaultDevice private constructor(
 
         /** (GC #6847) The first wait after `quota_exceeded` for the mailbox's quota, doubled at each refusal up to [QUOTA_BACKOFF_MAX]. */
         internal val QUOTA_BACKOFF_MIN: Duration = Duration.ofMinutes(1)
+
+        /**
+         * Whether [e], thrown by a durable [send], left its entry in the outbox for a later flush: a quota wait or refusal, a
+         * relay error that keeps it (429, 5xx, a stale signature), or a transport failure. Not a terminal refusal (the entry
+         * was removed) nor a state failure from before anything was queued.
+         */
+        fun keptInOutbox(e: Throwable): Boolean = when (e) {
+            is QuotaWait -> true
+            is RelayException -> e.retryable || e.code == RelayException.QUOTA_EXCEEDED
+            is VaultStateException -> false
+            else -> e is java.io.IOException
+        }
         internal val QUOTA_BACKOFF_MAX: Duration = Duration.ofHours(1)
 
         /** A relay answer that trying again will not cure (`quota_exceeded` and a retryable one are kept for a later flush). */
