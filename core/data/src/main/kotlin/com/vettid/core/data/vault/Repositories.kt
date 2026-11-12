@@ -436,6 +436,13 @@ interface VaultRepository {
 
     suspend fun attestationInfo(): AttestationInfo
 
+    /**
+     * (ANDROID-PLAN 0.1.124) The record of this phone's last verification of the enclave its vault runs on, or null when
+     * there is none yet.
+     */
+    val enclaveRecord: kotlinx.coroutines.flow.StateFlow<com.vettid.core.attestation.EnclaveRecord?>
+        get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+
     companion object {
         /**
          * (A6 audit N3, review F1) [enroll] found a request outstanding that this process did not post with that PIN (a

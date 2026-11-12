@@ -95,7 +95,7 @@ private fun formatDate(s: String?): String? = s?.let {
 }
 
 @Composable
-private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: String? = null) {
+internal fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: String? = null) {
     Column(Modifier.padding(Spacing.gutter)) {
         NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_title), failureText(error.messageRes(), error.vaultCode(shownCode)))
         if (retry != null) {
@@ -106,7 +106,7 @@ private fun LoadFailure(error: FailureKind, retry: (() -> Unit)?, shownCode: Str
 }
 
 @Composable
-private fun yesNo(b: Boolean?): String = when (b) {
+internal fun yesNo(b: Boolean?): String = when (b) {
     true -> stringResource(R.string.settings_yes)
     false -> stringResource(R.string.settings_no)
     null -> stringResource(R.string.settings_unknown)
@@ -578,100 +578,12 @@ fun RecoveryContent(
     }
 }
 
-/** Attestation details (stateless); [canary]: the installed canary manifest, shown only when there is one. */
-@Composable
-fun AttestationContent(
-    state: LoadState<AttestationInfo>,
-    onBack: () -> Unit,
-    canary: CanaryManifestView? = null,
-    onRemoveCanary: () -> Unit = {},
-) {
-    DetailScaffold(onBackClick = onBack, background = VettIdTheme.colors.groupedBackground) {
-        Column(Modifier.verticalScroll(rememberScrollState())) {
-            LargeTitle(stringResource(R.string.settings_attestation_title))
-            Text(
-                stringResource(R.string.settings_attestation_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = Spacing.gutter + Spacing.xs),
-            )
-            val a = state.value
-            when {
-                state.loading -> FullScreenProgress(stringResource(R.string.settings_loading))
-                a == null -> LoadFailure(state.error ?: FailureKind.OTHER, null, state.errorCode)
-                else -> {
-                    SettingsSectionHeader(stringResource(R.string.settings_attestation_device))
-                    SettingsGroup {
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_key),
-                            if (a.keyPresent) a.keyLevel ?: stringResource(R.string.settings_unknown)
-                                else stringResource(R.string.settings_attestation_key_none),
-                            icon = Icons.Outlined.Key,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_strongbox),
-                            yesNo(a.strongBoxAvailable),
-                            icon = Icons.Outlined.Fingerprint,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_version),
-                            a.attestationVersion?.toString() ?: "-",
-                            icon = Icons.Outlined.Tag,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_boot),
-                            a.verifiedBoot ?: "-",
-                            icon = Icons.Outlined.VerifiedUser,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_locked),
-                            yesNo(a.deviceLocked),
-                            icon = Icons.Outlined.Lock,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_boot_key),
-                            a.bootKeyFingerprint ?: "-",
-                            icon = Icons.Outlined.Key,
-                        )
-                    }
-                    SettingsSectionHeader(stringResource(R.string.settings_attestation_enclave))
-                    SettingsGroup {
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_release),
-                            if (a.lastRelease > 0) {
-                                val fp = a.lastReleaseFingerprint ?: "-"
-                                stringResource(R.string.settings_attestation_release_value, a.lastRelease.toInt(), fp)
-                            } else {
-                                "-"
-                            },
-                            icon = Icons.Outlined.Update,
-                        )
-                        SettingsDivider()
-                        SettingsInfoRow(
-                            stringResource(R.string.settings_attestation_environment),
-                            a.environment,
-                            icon = Icons.Outlined.Storage,
-                        )
-                    }
-                    if (canary != null) CanaryManifestSection(canary, onRemoveCanary)
-                    Spacer(Modifier.height(Spacing.xxl))
-                }
-            }
-        }
-    }
-}
-
 /**
  * The canary manifest installed on this phone (VAULT-RELEASES §10.1 step 9): its serial and key, the releases
  * it lists, and "Stop using it" (after a confirmation; the published manifest is used again).
  */
 @Composable
-private fun CanaryManifestSection(canary: CanaryManifestView, onRemove: () -> Unit) {
+internal fun CanaryManifestSection(canary: CanaryManifestView, onRemove: () -> Unit) {
     var confirm by rememberSaveable { mutableStateOf(false) }
     SettingsSectionHeader(stringResource(R.string.settings_canary_title))
     SettingsGroup {

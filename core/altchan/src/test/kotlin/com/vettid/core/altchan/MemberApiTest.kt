@@ -76,7 +76,7 @@ class MemberApiTest {
         return when {
             path == "/api/vault/enclave" -> resp(
                 200,
-                """{"instance_id":"${e.instanceId}","release":"${e.pcr0}","descriptor":"${Base64s.encodeStd(e.descriptor)}","attestation":"AA=="}""",
+                """{"instance_id":"${routedInstance ?: e.instanceId}","release":"${e.pcr0}","descriptor":"${Base64s.encodeStd(e.descriptor)}","attestation":"AA=="}""",
             )
             path == "/api/vault/enroll" || path == "/api/vault/unlock" -> {
                 val o = StrictJson.parseObject(r.body!!.toByteArray())
@@ -238,7 +238,10 @@ class MemberApiTest {
         private val relayKey = Ed25519PrivateKey.generate()
         val app = AppIdentity(ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone")
 
-        override fun manifestSerialSeen() = state.manifestSerial
+        /** What the flow is told this phone has seen, when it is not the state's (the state is read again as the request is built). */
+        var seen: Long? = null
+
+        override fun manifestSerialSeen() = seen ?: state.manifestSerial
 
         override fun vaultId() = vaultId
 
@@ -287,17 +290,40 @@ class MemberApiTest {
         }
     }
 
+    /** (ANDROID-PLAN 0.1.124) The verification records the flow handed on, in order. */
+    private val records = mutableListOf<com.vettid.core.attestation.EnclaveRecord>()
+
+    /** The instance the route names, when not the descriptor's (null: the same). */
+    private var routedInstance: String? = null
+
+    /** The next verification fails at this check (null: it passes). */
+    private var failAt: com.vettid.core.attestation.EnclaveCheck? = null
+
     private fun flow(
         api: MemberApiClient = api(),
         timeScales: (Long) -> Boolean = AltTrust.PRODUCTION_SCALES,
-    ) = AltChannelFlow(api,
+    ) = AltChannelFlow(
+        api,
         AltTrust(emptyList(), listOf(TestSupport.manifestKey), timeScales),
-    ) { d, _, m, enroll, _ ->
-        val e = enclaves.first()
-        assertTrue(d.contentEquals(e.descriptor))
-        if (enroll) assertNotNullRelease(m)
-        e.verified(m)
-    }
+        verifyEnclave = { d, _, m, enroll, now ->
+            val e = enclaves.first()
+            assertTrue(d.contentEquals(e.descriptor))
+            if (enroll) assertNotNullRelease(m)
+            val at = failAt
+            if (at == null) {
+                val v = e.verified(m)
+                val rec = com.vettid.core.attestation.EnclaveRecord(
+                    now, com.vettid.core.attestation.EnclaveRecord.results(9, failed = false), m.keyId, m.serial,
+                    releaseNumber = v.release.number,
+                )
+                com.vettid.core.attestation.EnclaveVerification(v, null, rec)
+            } else {
+                val rec = com.vettid.core.attestation.EnclaveRecord(now, com.vettid.core.attestation.EnclaveRecord.results(at.ordinal, failed = true))
+                com.vettid.core.attestation.EnclaveVerification(null, com.vettid.core.attestation.AttestationException.Chain(), rec)
+            }
+        },
+        records = { records += it },
+    )
 
     private fun assertNotNullRelease(m: ReleaseManifest) = assertTrue(m.byPcr0(TestSupport.pcr0) != null)
 
@@ -368,6 +394,55 @@ class MemberApiTest {
         assertTrue(f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester(), beforePost = { checks++ }).ok)
         assertEquals("before the build and before the post", 2, checks)
         assertEquals(1, log.count { it == "POST /api/vault/unlock" })
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.124) The flow hands on the record of each verification of the enclave a request goes to: a pass, a
+     * failure (recorded although nothing is sent), and a release older than this phone has used (every check passed, refused).
+     */
+    @Test
+    fun eachVerificationOfTheVaultsEnclaveIsRecorded() = runBlocking<Unit> {
+        val p = Party()
+        val f = flow()
+        val out = f.enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
+        assertTrue(records.single().allPassed)
+        assertEquals(TestSupport.manifestKey.keyId, records.single().manifestKeyId)
+        p.vaultId = out.vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        val pre = f.preflight(p.state)
+        assertFalse(pre.rollback)
+        assertTrue(records.last().allPassed && records.last().refusal == null)
+        // A failure: recorded at the check that failed, and nothing is posted.
+        failAt = com.vettid.core.attestation.EnclaveCheck.SIGNATURE
+        val posted = log.count { it == "POST /api/vault/unlock" }
+        assertThrows(com.vettid.core.attestation.AttestationException::class.java) {
+            runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) }
+        }
+        assertEquals(com.vettid.core.attestation.EnclaveCheck.SIGNATURE, records.last().failed)
+        assertEquals(posted, log.count { it == "POST /api/vault/unlock" })
+        failAt = null
+        // An older release than this phone has unlocked into: every check passed, then refused.
+        val older = p.state.copy(releaseNumber = 99)
+        assertTrue(f.preflight(older).rollback)
+        assertTrue(records.last().allPassed)
+        assertEquals(com.vettid.core.attestation.EnclaveRefusal.OLDER_RELEASE, records.last().refusal)
+        p.state = older
+        assertThrows(AltRefusedException::class.java) { runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertEquals(com.vettid.core.attestation.EnclaveRefusal.OLDER_RELEASE, records.last().refusal)
+        // A verified descriptor that names another instance than the route: refused, and recorded so.
+        routedInstance = "inst-z"
+        assertThrows(AltChannelException::class.java) { runBlocking { f.preflight(p.state.copy(releaseNumber = 0)) } }
+        assertTrue(records.last().allPassed)
+        assertEquals(com.vettid.core.attestation.EnclaveRefusal.OTHER_INSTANCE, records.last().refusal)
+        routedInstance = null
+        // A list older than one this phone has used, found only as the request is built (after the pass was recorded):
+        // line 1 failed, and the pass does not stay.
+        p.state = p.state.copy(releaseNumber = 0, manifestSerial = Long.MAX_VALUE)
+        p.seen = 0
+        val e = assertThrows(AltRefusedException::class.java) { runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertEquals(AltRefusedException.Reason.MANIFEST_OLDER, e.reason)
+        assertEquals(com.vettid.core.attestation.EnclaveCheck.entries.first(), records.last().failed)
+        assertTrue(records[records.size - 2].allPassed)
     }
 
     private suspend fun register(): RecoveryResult {
@@ -540,6 +615,9 @@ class MemberApiTest {
         assertThrows(AltRefusedException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertEquals(0, log.count { it == "POST /api/vault/unlock" })
         assertThrows(AltRefusedException::class.java) { runBlocking { flow().preflight(p.state) } }
+        // (ANDROID-PLAN 0.1.124) Each refusal is recorded after every check passed, so no earlier pass stays on the screen.
+        assertEquals(3, records.size)
+        assertTrue(records.all { it.allPassed && it.refusal == com.vettid.core.attestation.EnclaveRefusal.TIME_SCALE })
     }
 
     /**
@@ -950,7 +1028,7 @@ class MemberApiTest {
             { AttestationException.Pcr("manifest") },
         )
         for (refusal in refusals) {
-            val unverified = AltChannelFlow(api(), AltTrust(emptyList(), listOf(TestSupport.manifestKey))) { _, _, _, _, _ -> throw refusal() }
+            val unverified = AltChannelFlow(api(), AltTrust(emptyList(), listOf(TestSupport.manifestKey)), verifyEnclave = { _, _, _, _, _ -> throw refusal() })
             p.pending = null
             val before = synchronized(log) { log.size }
             val atPreflight = assertThrows(AttestationException::class.java) { runBlocking { unverified.preflight(p.state) } }
