@@ -1696,6 +1696,15 @@ class VaultManager(
                 }
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            // (Show held as held) The outbox once a mailbox's quota backoff ends, behind the lock gate; this observer's own
+            // scope, so it ends with the session.
+            val quotaFlush = QuotaFlush(
+                this,
+                admits = { lockGuard.admits() },
+                live = { session === s && !s.device.stopped },
+                flush = { s.device.flushOutbox() },
+            )
+            launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
                 credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }

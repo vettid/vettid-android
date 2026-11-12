@@ -372,6 +372,15 @@ class VaultDevice private constructor(
      */
     val vaultRefusals: StateFlow<Int> = refusalCount.asStateFlow()
 
+    /**
+     * (Show held as held, Android) A mailbox's quota backoff was set: its length in milliseconds. Whoever owns this device
+     * flushes the outbox when it ends ([flushOutbox]), behind its own lock gate, so a held entry (a `call.end`) goes as soon
+     * as the relay allows rather than at some later, unrelated flush. Nothing is shown to the member for it: messages and
+     * actions are requests, never outbox entries (a refusal is the caller's and is shown), and the outbox's only
+     * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds.
+     */
+    val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
+
     private val ownerCheckRefusals =
         MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -390,6 +399,7 @@ class VaultDevice private constructor(
     /** The scope of the last [start], until [stop]: where [ensureCollecting] starts the collection again. */
     private var collectScope: CoroutineScope? = null
     private val collectorEnd = MutableStateFlow<String?>(null)
+    private val quotaBackoffs = MutableSharedFlow<Long>(extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
@@ -1783,6 +1793,7 @@ class VaultDevice private constructor(
             val prev = quotaBackoff[e.mailbox]?.second ?: 0L
             val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
             quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+            quotaBackoffs.tryEmit(next)
         }
         save()
     }
