@@ -245,7 +245,8 @@ class PairingManager(
     /**
      * (Re-check Low 1) The owner left while its approval was out (a cancel can't stop it): if the vault then keeps the
      * comparison open (the daily check due), it is rejected instead of kept with no screen. The same holds while the member's
-     * own reject is out (busy too): that reject settles it. Reset wherever an owner is set, by every start and by [clear].
+     * own reject is out (busy too): that reject settles it. Reset by a new owner ([claim], a [start] by another screen), by a
+     * start that makes a new code, when the member's rejection of that comparison settles, and by [clear].
      */
     private var ownerLeft = false
 
@@ -616,10 +617,11 @@ class PairingManager(
         }
         val told = sendReject(p.pairingId)
         synchronized(lock) {
-            // (iOS #255) The rejection has settled: a leave made while it was out has nothing more to decide.
-            ownerLeft = false
             val s = flow.value.stage
             if (s is PairingStage.Compare && s.pending.pairingId == p.pairingId) {
+                // (iOS #255) The rejection of this comparison has settled: a leave made while it was out has nothing more to
+                // decide. Only for it: a late rejection of an earlier pairing leaves a later one's mark alone.
+                ownerLeft = false
                 timer?.cancel()
                 timer = null
                 flow.value = PairingState(PairingStage.Rejected(told))

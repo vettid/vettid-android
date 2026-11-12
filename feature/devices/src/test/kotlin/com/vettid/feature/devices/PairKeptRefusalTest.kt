@@ -13,13 +13,13 @@ import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -80,23 +80,24 @@ class PairKeptRefusalTest {
     private fun view(state: OwnerCheckState) =
         OwnerCheckView(state, Instant.now().plusSeconds(3_600), 86_400, 0, hold = true, holdOffUntil = null)
 
-    /** A first screen whose approval was refused for the daily check: the comparison is kept with the refusal. */
-    private fun TestScope.keptRefusal(m: PairingManager, vault: FakeVault): PairViewModel {
-        val a = PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to false)), m, vault)
+    /**
+     * A comparison whose approval was refused for the daily check, kept for another try, made with the manager directly: no
+     * screen's collector is still listening for the check to pass (it would clear the refusal itself and prove nothing).
+     */
+    private fun TestScope.keptRefusal(m: PairingManager) {
+        backgroundScope.launch { m.start(PairRole.AGENT, Any()) }
         waitFor { m.state.value.stage is PairingStage.Code }
         m.onEvent(pending())
-        a.codesMatch("p1")
-        a.pair()
+        backgroundScope.launch { m.approve(3600, "p1") }
         waitFor { m.state.value.error == FailureKind.OWNER_CHECK_REQUIRED }
         assertTrue(m.state.value.stage is PairingStage.Compare)
-        return a
     }
 
     @Test
     fun aNewScreenClearsAKeptRefusalAfterItsStartWhenTheCheckPassed() = runTest {
         val vault = FakeVault().also { it.ownerCheck.value = view(OwnerCheckState.HELD) }
         val m = PairingManager(backgroundScope, ops = { Ops() }, now = { clock })
-        keptRefusal(m, vault)
+        keptRefusal(m)
         vault.ownerCheck.value = view(OwnerCheckState.OK)
         PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to false)), m, vault)
         waitFor { m.state.value.error == null }
@@ -107,7 +108,7 @@ class PairKeptRefusalTest {
     fun aNewScreenLeavesAKeptRefusalWhileTheCheckIsStillDue() = runTest {
         val vault = FakeVault().also { it.ownerCheck.value = view(OwnerCheckState.HELD) }
         val m = PairingManager(backgroundScope, ops = { Ops() }, now = { clock })
-        keptRefusal(m, vault)
+        keptRefusal(m)
         PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to false)), m, vault)
         repeat(20) { runCurrent(); Thread.sleep(5) }
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
@@ -122,6 +123,5 @@ class PairKeptRefusalTest {
         assertEquals(false, checkPassed(vault))
         vault.ownerCheck.value = view(OwnerCheckState.OK)
         assertEquals(true, checkPassed(vault))
-        assertNull(null)
     }
 }
