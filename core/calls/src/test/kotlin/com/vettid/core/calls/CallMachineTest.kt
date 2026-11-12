@@ -808,7 +808,7 @@ class CallMachineTest {
     }
 
     /**
-     * Review H1: a lock never rings the connection's held offer (a call rings only while the vault is open here), and so
+     * A lock never rings the connection's held offer (a call rings only while the vault is open here), and so
      * never declines it unseen; nor does the member's own hang-up.
      */
     @Test
@@ -832,7 +832,7 @@ class CallMachineTest {
         }
     }
 
-    /** Review M1: a held offer whose caller hung up, or one held while the call was answered, is not rung afterwards. */
+    /** A held offer whose caller hung up, or one held while the call was answered, is not rung afterwards. */
     @Test
     fun aHeldOfferThatEndedOrAnAnsweredCallRingsNothingAfter() = runTest {
         val m = machine()
@@ -856,7 +856,7 @@ class CallMachineTest {
         assertEquals(CallEnd.PEER_HUNG_UP, m2.ended().reason)
     }
 
-    /** Review L2: X's end delivered twice while the lost glare waits changes nothing; the winner is still answered. */
+    /** X's end delivered twice while the lost glare waits changes nothing; the winner is still answered. */
     @Test
     fun aSecondEndOfTheLostCallChangesNothing() = runTest {
         val m = machine()

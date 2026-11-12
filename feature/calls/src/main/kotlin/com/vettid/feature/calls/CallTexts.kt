@@ -5,7 +5,7 @@ import com.vettid.core.calls.CallEnd
 import com.vettid.core.calls.CallPhase
 
 /**
- * The member-facing texts of a call (approved 2026-10-12; `calls_end_calls_off` approved 2026-11-12, GC #8722 a). Every
+ * The member-facing texts of a call (approved 2026-10-12; `calls_end_calls_off` approved 2026-11-12). Every
  * ending has one line; none is shared.
  */
 object CallTexts {

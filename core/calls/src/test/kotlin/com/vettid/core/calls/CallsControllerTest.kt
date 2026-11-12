@@ -419,7 +419,7 @@ class CallsControllerTest {
         assertEquals("nothing written after the lock", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
     }
 
-    /** Review M2: a read in flight across a lock and an unlock writes nothing: the read after the unlock does. */
+    /** A read in flight across a lock and an unlock writes nothing: the read after the unlock does. */
     @Test
     fun aReadBegunBeforeALockWritesNothingAfterIt() = runTest {
         vault.gateway.version = 2
