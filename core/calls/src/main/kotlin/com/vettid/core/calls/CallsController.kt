@@ -6,6 +6,7 @@ import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.CallOutcome
 import com.vettid.core.vault.CallReason
+import com.vettid.core.vault.CallLimits
 import com.vettid.core.vault.CallList
 import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.VaultOpException
@@ -43,6 +44,15 @@ interface CallVault {
 
     /** The fingerprint of [connectionId]'s pinned identity key, as the connection's details show it; null if unknown. */
     suspend fun fingerprint(connectionId: String): String?
+
+    /** (C2) This device's id in the vault (its own `device.list` entry): the stale sweep's own calls. */
+    suspend fun deviceId(): String? = null
+
+    /**
+     * (C2) [connectionId]'s pinned identity key itself (32 bytes), the key [fingerprint] is of; null if unknown. A form 2
+     * call names it (VAULT-MESSAGING 0.88.16).
+     */
+    suspend fun identityKey(connectionId: String): ByteArray? = null
 
     /** The name the app shows for [connectionId] on its screens; null if it has none. */
     fun name(connectionId: String): String?
@@ -172,6 +182,8 @@ class CallsController(
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing; none comes: it does not ring.
         mayRing = { !vault.updateShowing && (open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null) },
+        peerKey = vault::identityKey,
+        vaultIsC2 = { vaultC2 },
     )
     private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig })
 
@@ -194,6 +206,13 @@ class CallsController(
     /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
     @Volatile
     private var supported: Boolean? = null
+
+    /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
+    @Volatile
+    private var vaultC2 = false
+
+    /** (C2) The keep-alives of the active call, one loop per call id. */
+    private var keepalive: Pair<String, Job>? = null
 
     @Volatile
     private var open = false
@@ -291,10 +310,11 @@ class CallsController(
                 delay(PROBE_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
+            vaultC2 = records.formTwo
             supported = true
             publish()
             noteSkipped(records)
-            endStale(records.calls)
+            if (records.formTwo) endStaleC2(records) else endStale(records.calls)
             if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
             return
         }
@@ -304,6 +324,60 @@ class CallsController(
     private fun noteSkipped(list: CallList) {
         val ids = list.skipped.mapNotNull { it.callId }.take(SKIPPED_IDS_KEPT)
         diagnosticsFlow.update { it.copy(listSkipped = list.skipped.size, listSkippedIds = ids) }
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Liveness") The call's device sends `call.keepalive` to its own vault as soon as the
+     * call is active on it ([CallState.Live.answerThrough]: the callee once its `call.answer` is with its vault, the
+     * caller once it took the answer; one sent before is answered `call.end{unavailable}`), then every 30 s until it
+     * ends. Only to a C2 vault (an S10 vault answers an unknown type): one the probe found C2, or a call in form 2,
+     * which proves it for that call even before the probe has answered.
+     */
+    private fun keepAlive(live: CallState.Live?) {
+        val id = live?.callId?.takeIf { (vaultC2 || live.formTwo) && live.answerThrough }
+        if (id == keepalive?.first) return
+        keepalive?.second?.cancel()
+        keepalive = id?.let {
+            it to scope.launch {
+                while (true) {
+                    try {
+                        signalling.keepalive(it)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {
+                        // One lost keep-alive is not an end: the next goes in 30 s, within the vault's window.
+                    }
+                    delay(CallLimits.KEEPALIVE_EVERY.toMillis())
+                }
+            }
+        }
+    }
+
+    /**
+     * (C2) The stale sweep against a C2 vault: by `device_id`, `exp` and the vault's `now`, never this phone's clock,
+     * and only this device's own calls (other devices' are left alone). A live active call of this device ends
+     * `failed`; its own outgoing call still ringing past `exp` ends `timeout`.
+     */
+    private suspend fun endStaleC2(list: CallList) {
+        val me = vault.deviceId()
+        val vaultNow = list.now
+        if (machine.state.value is CallState.Live || me == null || vaultNow == null) return
+        for (r in list.calls) {
+            val reason = staleReasonC2(r, me, vaultNow) ?: continue
+            runCatching { vault.gateway.end(r.callId, reason) }
+                .onSuccess { diagnosticsFlow.update { it.copy(staleEnded = it.staleEnded + 1) } }
+        }
+    }
+
+    /** The end of [r] by the C2 rule, or null when it is not this device's or not stale by the vault's [vaultNow]. */
+    private fun staleReasonC2(r: CallRecord, me: String, vaultNow: Instant): String? {
+        val pastExp = r.exp?.let(::time)?.let { !vaultNow.isBefore(it) } ?: false
+        return when {
+            r.deviceId != me -> null
+            r.state == STATE_ACTIVE -> CallReason.FAILED
+            r.state == STATE_RINGING && r.direction == DIRECTION_OUT && pastExp -> CallReason.TIMEOUT
+            else -> null
+        }
     }
 
     /**
@@ -335,6 +409,7 @@ class CallsController(
 
     private fun locked() {
         supported = null
+        vaultC2 = false
         testsAllowedFlow.value = false
         machine.vaultLocking()
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
@@ -368,6 +443,7 @@ class CallsController(
         } else {
             audio.stop()
         }
+        keepAlive(live)
         if (live?.phase == CallPhase.ACTIVE) {
             if (longCall == null) {
                 // The vault stops counting a call as live 12 hours after its answer; the frame cipher's nonce must

@@ -26,7 +26,7 @@ class AllowScreenshotsScreenTest {
     private val asked = mutableListOf<Boolean>()
 
     private fun show(state: SettingsUiState) = rule.setContent {
-        SettingsContent(state, SettingsActions(setScreenshotsAllowed = { asked += it }))
+        AdvancedSecurityContent(state, SettingsActions(setScreenshotsAllowed = { asked += it }))
     }
 
     @Test

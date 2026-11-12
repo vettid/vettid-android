@@ -15,6 +15,10 @@
     <string name="settings_security_transfer">Move to a new phone</string>
     <string name="settings_security_transfer_body">Direct transfer: no waiting, with your PIN and password</string>
     <string name="settings_security_attestation">Attestation</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Advanced security" (texts for the owner's approval; shared with the iPhone app) -->
+    <string name="settings_security_advanced">Advanced security</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Advanced security" -->
+    <string name="settings_security_advanced_body">Check interval, idle lock, attestation and more</string>
     <string name="settings_security_app_lock">App lock</string>
     <string name="settings_security_app_lock_body">Ask for a fingerprint, face or screen lock when opening VettID</string>
     <string name="settings_security_app_lock_body_screen_lock">Ask for the phone\'s PIN, pattern or password when opening VettID</string>

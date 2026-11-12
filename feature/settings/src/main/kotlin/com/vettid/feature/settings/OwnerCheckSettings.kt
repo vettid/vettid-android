@@ -17,6 +17,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.feed.AdvancedSecurityRow
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.IdleLockSetting
 import com.vettid.core.data.vault.OwnerCheckRepository
@@ -154,9 +155,34 @@ class OwnerCheckSettingsViewModel @Inject constructor(
     }
 }
 
-/** The owner-check rows for the Security group of Settings. */
+/**
+ * The owner check's **Check now** (VAULT-MESSAGING §3.6.5), on Settings → Security (ANDROID-PLAN 0.1.124: the rows used
+ * often stay there). Nothing for a vault that has not reported its owner check.
+ */
 @Composable
-fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheckSettingsActions) {
+fun OwnerCheckNowRow(state: OwnerCheckSettingsUiState, actions: OwnerCheckSettingsActions, modifier: Modifier = Modifier) {
+    if (state.view == null) return
+    SettingsRow(
+        stringResource(R.string.settings_owner_check_now),
+        actions.checkNow,
+        icon = Icons.Outlined.VerifiedUser,
+        supporting = stringResource(R.string.settings_owner_check_now_body),
+        showChevron = false,
+        modifier = modifier.testTag("owner_check_now"),
+    )
+}
+
+/**
+ * The owner check's settings on Settings → Security → Advanced security (ANDROID-PLAN 0.1.124), in the plan's order: the
+ * interval (VAULT-MESSAGING §3.6.2), the hold switch (§3.6.7) and (Release L) the idle lock, each as before, with dividers
+ * between them and none before the first. [rowModifier] marks the row a notification opened the screen at.
+ */
+@Composable
+fun OwnerCheckAdvancedRows(
+    state: OwnerCheckSettingsUiState,
+    actions: OwnerCheckSettingsActions,
+    rowModifier: (AdvancedSecurityRow) -> Modifier = { Modifier },
+) {
     val v = state.view ?: return
     var picker by rememberSaveable { mutableStateOf(false) }
     val hours = (v.intervalSeconds / OwnerCheckSettingsViewModel.SECONDS_PER_HOUR).toInt().coerceAtLeast(1)
@@ -168,26 +194,14 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
         t.scaled,
         t.scaledSeconds(v.intervalSeconds),
     )
-    SettingsDivider()
     SettingsRow(
         stringResource(R.string.settings_owner_check),
         { picker = true },
         icon = Icons.Outlined.Schedule,
         supporting = listOfNotNull(every, next).joinToString(" · "),
-        modifier = Modifier.testTag("owner_check_interval"),
+        modifier = rowModifier(AdvancedSecurityRow.INTERVAL).testTag("owner_check_interval"),
     )
     if (t.stagingNote) StagingTimeNote(Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs))
-    // (Release L) Beside the interval: the idle lock, for a vault that has it.
-    state.idleLock?.let { IdleLockRow(it, state, actions) }
-    SettingsDivider()
-    SettingsRow(
-        stringResource(R.string.settings_owner_check_now),
-        actions.checkNow,
-        icon = Icons.Outlined.VerifiedUser,
-        supporting = stringResource(R.string.settings_owner_check_now_body),
-        showChevron = false,
-        modifier = Modifier.testTag("owner_check_now"),
-    )
     SettingsDivider()
     val off = v.holdOff(Instant.now())
     val until = v.holdOffUntil
@@ -201,8 +215,10 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
         checked = !off,
         onCheckedChange = { on -> if (!state.busy) actions.setHold(on) },
         icon = Icons.Outlined.PauseCircleOutline,
-        modifier = Modifier.testTag("owner_check_hold"),
+        modifier = rowModifier(AdvancedSecurityRow.HOLD).testTag("owner_check_hold"),
     )
+    // (Release L) The idle lock, for a vault that has it.
+    state.idleLock?.let { IdleLockRow(it, state, actions, rowModifier(AdvancedSecurityRow.IDLE_LOCK)) }
     if (picker) {
         ChoiceDialog(
             title = stringResource(R.string.settings_owner_check),
@@ -250,7 +266,12 @@ fun OwnerCheckSettingsRows(state: OwnerCheckSettingsUiState, actions: OwnerCheck
  * beside the check's interval: 1 hour to 30 days, no "never"; in real units, and as it runs on a staging vault.
  */
 @Composable
-private fun IdleLockRow(idle: IdleLockSetting, state: OwnerCheckSettingsUiState, actions: OwnerCheckSettingsActions) {
+private fun IdleLockRow(
+    idle: IdleLockSetting,
+    state: OwnerCheckSettingsUiState,
+    actions: OwnerCheckSettingsActions,
+    modifier: Modifier = Modifier,
+) {
     var picker by rememberSaveable { mutableStateOf(false) }
     val t = state.timeScale
     val value = scaledSettingText(idleLockText(idle.seconds), t.scaled, t.scaledSeconds(idle.seconds))
@@ -265,7 +286,7 @@ private fun IdleLockRow(idle: IdleLockSetting, state: OwnerCheckSettingsUiState,
         { picker = true },
         icon = Icons.Outlined.LockClock,
         supporting = lines.joinToString("\n"),
-        modifier = Modifier.testTag("idle_lock"),
+        modifier = modifier.testTag("idle_lock"),
     )
     if (picker) {
         ChoiceDialog(
