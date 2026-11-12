@@ -807,6 +807,70 @@ class CallMachineTest {
         assertEquals(GLARE_ID, m.live().callId)
     }
 
+    /**
+     * Review H1: a lock never rings the connection's held offer (a call rings only while the vault is open here), and so
+     * never declines it unseen; nor does the member's own hang-up.
+     */
+    @Test
+    fun aLockNeverRingsTheHeldOffer() = runTest {
+        for (lock in listOf(true, false)) {
+            val s = FakeSignalling()
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            s.deliver(offer(GLARE_ID))
+            runCurrent()
+            if (lock) m.vaultLocking() else m.hangUp()
+            runCurrent()
+            assertTrue("lock $lock: ${m.state.value}", m.state.value is CallState.Ended)
+            assertTrue(s.sent.none { it.startsWith("ringing(") || it.startsWith("end($GLARE_ID") })
+            if (lock) {
+                m.vaultLocking()
+                runCurrent()
+                assertTrue(s.sent.none { it.startsWith("end($GLARE_ID") })
+            }
+        }
+    }
+
+    /** Review M1: a held offer whose caller hung up, or one held while the call was answered, is not rung afterwards. */
+    @Test
+    fun aHeldOfferThatEndedOrAnAnsweredCallRingsNothingAfter() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(offer(GLARE_ID))
+        s2.deliver(answer())
+        runCurrent()
+        assertEquals(CallPhase.CONNECTING, m2.live().phase)
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.HANGUP))
+        runCurrent()
+        assertEquals(CallEnd.PEER_HUNG_UP, m2.ended().reason)
+    }
+
+    /** Review L2: X's end delivered twice while the lost glare waits changes nothing; the winner is still answered. */
+    @Test
+    fun aSecondEndOfTheLostCallChangesNothing() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m.live().direction)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(GLARE_ID, m.live().callId)
+        assertEquals(CallPhase.CONNECTING, m.live().phase)
+    }
+
     @Test
     fun anAnswerThatDoesNotVerifyEndsTheCall() = runTest {
         val m = machine()

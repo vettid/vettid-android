@@ -121,8 +121,11 @@ class CallsControllerTest {
         val changes = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
         override val permissionChanges: Flow<String> = changes
 
+        var permissionGate: suspend () -> Unit = {}
+
         override suspend fun permissions(): List<com.vettid.core.vault.CallPermission> {
             permissionReads++
+            permissionGate()
             permissionFailure?.let { throw it }
             return permissionList
         }
@@ -414,6 +417,25 @@ class CallsControllerTest {
         advanceTimeBy(60_000)
         runCurrent()
         assertEquals("nothing written after the lock", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** Review M2: a read in flight across a lock and an unlock writes nothing: the read after the unlock does. */
+    @Test
+    fun aReadBegunBeforeALockWritesNothingAfterIt() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { gate.await() }
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(1, vault.gateway.permissionReads)
+        vault.unlocked.value = false
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("the read from before the lock wrote nothing", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
     }
 
     @Test

@@ -436,11 +436,15 @@ internal class CallMachine(
                     s.pendingRemote += e.candidates
                 }
             }
-            is SignalEvent.End -> if (s != null && s.callId == e.callId) {
+            is SignalEvent.End -> if (s != null && s.glareOffer?.callId == e.callId) {
+                // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer.
+                s.glareOffer = null
+            } else if (s != null && s.callId == e.callId && s.supersededBy == null) {
+                // (While a lost glare waits for its winner, X's own end came already: a second one changes nothing.)
                 if (superseded(s, e)) {
                     val by = e.supersededBy
                     val held = s.glareOffer
-                    if (held != null && held.callId == by) takeGlare(s, held) else lostGlare(s, by)
+                    if (held != null && held.callId == by && now().isBefore(held.exp)) takeGlare(s, held) else lostGlare(s, by)
                 } else {
                     finish(s, ended(s, e.reason), null)
                 }
@@ -470,6 +474,8 @@ internal class CallMachine(
         s.canSendIce = false
         s.pendingLocal.clear()
         s.pendingRemote.clear()
+        // The lost call's queued engine work is dropped, not run on a closed engine.
+        s.lane.cancel()
         s.engine?.close()
         s.engine = null
     }
@@ -477,7 +483,10 @@ internal class CallMachine(
     /**
      * (D21 a) The member asked for this call seconds ago: the winning call [offer] from the same connection is answered
      * here without asking, as soon as this device's own lost call is let go (nothing is sent for it). Calls are audio
-     * only (C1-C3), so the answer never carries more media than the lost call did (VAULT-MESSAGING 0.88.14).
+     * only (C1-C3), so the answer never carries more media than the lost call did (VAULT-MESSAGING 0.88.14). A video
+     * offer does not reach the machine at all (`callIncoming` refuses anything but one audio section), so a video
+     * winner is not answered: the lost call shows busy at its ring timer. The table's audio-only answer to a video
+     * winner comes with video (C4).
      */
     private fun takeGlare(s: Session, offer: SignalEvent.Offer) {
         release(s)
@@ -509,6 +518,8 @@ internal class CallMachine(
             return
         }
         cancelTimer(s, TimerKind.RING_OUT)
+        // Answered: an offer from the connection now is no glare, and is not rung after this call either.
+        s.glareOffer = null
         s.phase = CallPhase.CONNECTING
         s.answeredAtMs = elapsedMs()
         s.keysSet = true
@@ -615,6 +626,8 @@ internal class CallMachine(
     }
 
     private fun onTimer(s: Session, kind: TimerKind) {
+        // A lost glare waits for its winner: only its ring timer still counts (a timer already queued is stale).
+        if (s.supersededBy != null && kind != TimerKind.RING_OUT) return
         when (kind) {
             TimerKind.RING_OUT -> when {
                 // The glare's winner never came: busy, as before C2; the vault already ended this call.
@@ -691,8 +704,10 @@ internal class CallMachine(
         }
         val duration = s.activeSince?.let { Duration.between(it, now()) }
         stateFlow.value = CallState.Ended(s.connectionId, s.direction, reason, callId, duration)
-        // The connection's own call that arrived while this one rang to it is not lost when this one ends otherwise.
-        if (held != null && now().isBefore(held.exp)) ring(held)
+        // The connection's own call that arrived while this one rang to it is not lost when the vault or the other side
+        // ended this one (no `call.end` from here). Never after this member's own end, a lock's above all: a call rings
+        // only while the vault is open on this phone, and a lock would decline it unseen.
+        if (held != null && tell == null && reason != CallEnd.LOCKED && now().isBefore(held.exp)) ring(held)
     }
 
     /** Lets the call go: its jobs, engine and keys. Publishes nothing and sends nothing. */

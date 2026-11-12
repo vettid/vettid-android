@@ -207,9 +207,14 @@ class CallsController(
     /** Reads of `call.permission.list` asked for, one at a time; asks that come while one runs make one more. */
     private val permissionReads = Channel<Unit>(Channel.CONFLATED)
 
-    /** Bumped at every lock: a read or a change begun before it writes nothing after it. */
-    @Volatile
+    /**
+     * Bumped at every lock: a read or a change begun before it writes nothing after it. The bump with its clear, and each
+     * check with its write, are made under [permissionLock], so no write lands between a lock's bump and its clear.
+     */
     private var permissionEpoch = 0L
+    private val permissionLock = Any()
+
+    private fun permissionEpochNow(): Long = synchronized(permissionLock) { permissionEpoch }
 
     private val diagnosticsFlow = MutableStateFlow(CallsDiagnostics())
     val diagnostics: StateFlow<CallsDiagnostics> = diagnosticsFlow.asStateFlow()
@@ -432,42 +437,44 @@ class CallsController(
      * again a few times); a read begun before a lock writes nothing after it.
      */
     private suspend fun readPermissions() {
-        val epoch = permissionEpoch
+        val epoch = permissionEpochNow()
         repeat(PROBE_ATTEMPTS) { attempt ->
-            if (!open || !vaultC2 || epoch != permissionEpoch) return
+            if (!open || !vaultC2 || epoch != permissionEpochNow()) return
             val list = try {
                 vault.gateway.permissions()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: VaultOpException) {
                 // `unsupported_type` from a vault the probe called C2 cannot happen; any refusal leaves things as they are.
-                if (e.code == UNSUPPORTED && epoch == permissionEpoch) permissionsFlow.value = CallPermissions()
+                if (e.code == UNSUPPORTED) synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
                 return
             } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
                 delay(PROBE_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
-            if (epoch != permissionEpoch || !open) return
-            permissionsFlow.value = CallPermissions(
+            val read = CallPermissions(
                 supported = true,
                 known = true,
                 differing = list.associate { it.connectionId to ConnectionCalls(it.allowed, it.limited) }
                     .filterValues { it != ConnectionCalls() },
             )
+            synchronized(permissionLock) { if (epoch == permissionEpoch && open) permissionsFlow.value = read }
             return
         }
     }
 
     override suspend fun setAllowed(connectionId: String, allowed: Boolean) {
-        val epoch = permissionEpoch
+        val epoch = permissionEpochNow()
         vaultGuard {
             if (!open || !vaultC2) throw VaultFailure(FailureKind.OTHER, CODE_NO_PERMISSION)
             vault.gateway.setPermission(connectionId, allowed)
         }
-        if (epoch == permissionEpoch) {
-            permissionsFlow.update { p ->
-                val now = p.of(connectionId).copy(allowed = allowed)
-                p.copy(differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now))
+        synchronized(permissionLock) {
+            if (epoch == permissionEpoch) {
+                permissionsFlow.update { p ->
+                    val now = p.of(connectionId).copy(allowed = allowed)
+                    p.copy(differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now))
+                }
             }
         }
         // The vault's own word follows (also its sync.event): turning calls on may not end a limit.
@@ -475,8 +482,10 @@ class CallsController(
     }
 
     private fun locked() {
-        permissionEpoch++
-        permissionsFlow.value = CallPermissions()
+        synchronized(permissionLock) {
+            permissionEpoch++
+            permissionsFlow.value = CallPermissions()
+        }
         supported = null
         vaultC2 = false
         testsAllowedFlow.value = false
