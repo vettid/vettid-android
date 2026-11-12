@@ -51,7 +51,7 @@ class OwnerCheckViewModelTest {
         assertEquals("pw", vault.lastPassword)
         assertNull(vault.lastHoldOff)
         val s = vm.uiState.value
-        assertTrue(s.passed)
+        assertTrue(s.passedTick) // ANDROID-PLAN 0.1.124: the tick first
         assertEquals("", s.pin)
         assertEquals("", s.password)
     }
@@ -167,7 +167,11 @@ class OwnerCheckViewModelTest {
         vm.setPassword("pw")
         vm.submit()
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.passed)
+        // ANDROID-PLAN 0.1.124: the tick is shown, then the screen closes.
+        assertTrue(vm.uiState.value.passedTick)
+        assertFalse(vm.uiState.value.passed)
         assertFalse(vm.uiState.value.passedUnrecorded)
+        vm.tickShown()
+        assertTrue(vm.uiState.value.passed)
     }
 }
