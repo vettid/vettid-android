@@ -57,6 +57,7 @@ object CallTest {
         "sendUnencrypted" to { c -> c.faults.sendUnencrypted },
         "wrongSendKey" to { c -> c.faults.wrongSendKey },
         "dtlsPqcTrial" to { c -> c.dtlsPqcTrial },
+        "relayOnly" to { c -> c.relayOnly },
     )
 
     fun toggled(c: MediaConfig, label: String): MediaConfig {
@@ -67,6 +68,7 @@ object CallTest {
             "sendUnencrypted" -> c.copy(faults = f.copy(sendUnencrypted = !f.sendUnencrypted))
             "wrongSendKey" -> c.copy(faults = f.copy(wrongSendKey = !f.wrongSendKey))
             "dtlsPqcTrial" -> c.copy(dtlsPqcTrial = !c.dtlsPqcTrial)
+            "relayOnly" -> c.copy(relayOnly = !c.relayOnly)
             else -> c
         }
     }
@@ -119,6 +121,9 @@ object CallTest {
             "refused" to all.refused.toString(),
             "errors" to all.errors.toString(),
             "listenRestarts" to all.listenRestarts.toString(),
+            "callsDirect" to all.callsDirect.toString(),
+            "callsRelayed" to all.callsRelayed.toString(),
+            "callsPathUnknown" to all.callsPathUnknown.toString(),
         )
     }
 }

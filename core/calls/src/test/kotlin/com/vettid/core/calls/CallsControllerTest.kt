@@ -42,6 +42,7 @@ import java.time.Duration
 import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One class: every test shares the fakes and the helpers.
 class CallsControllerTest {
     private class Gateway : CallGateway {
         val channel = Channel<CallEvent>(Channel.UNLIMITED)
@@ -491,6 +492,42 @@ class CallsControllerTest {
         assertTrue(vault.gateway.keepalives.isEmpty())
     }
 
+    /** (C5) Each call that connected is counted once, direct or relayed by the stack's last report; one that never did is not. */
+    @Test
+    fun eachConnectedCallIsCountedDirectOrRelayed() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        suspend fun connectedCall(relayed: Boolean?) {
+            c.call("conn-1")
+            runCurrent()
+            engines.last.relayed = relayed
+            engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+            val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+            vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+            runCurrent()
+            engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+            runCurrent()
+            advanceTimeBy(1_500) // a diagnostics round
+            c.hangUp()
+            runCurrent()
+            c.dismiss()
+            runCurrent()
+        }
+        connectedCall(relayed = true)
+        connectedCall(relayed = false)
+        connectedCall(relayed = null)
+        // A call that never connected is not counted.
+        c.call("conn-1")
+        runCurrent()
+        c.hangUp()
+        runCurrent()
+        val d = c.diagnostics.value
+        assertEquals(1, d.callsRelayed)
+        assertEquals(1, d.callsDirect)
+        assertEquals(1, d.callsPathUnknown)
+    }
+
     @Test
     fun aCallEndsTwelveHoursAfterItWasAnswered() = runTest {
         val c = controller()
@@ -539,6 +576,9 @@ class CallsControllerTest {
         assertTrue(!test.testsAllowed.value)
         assertEquals(MediaConfig(), test.mediaConfig)
         assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        // (C5) Relay only is a test option too.
+        assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(relayOnly = true)) }
+        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(relayOnly = true), testBuild = true) }
         test.setMediaConfig(MediaConfig()) // the plain configuration can always be set
     }
 

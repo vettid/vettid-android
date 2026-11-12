@@ -35,4 +35,18 @@ class RtcConfigurationTest {
         assertEquals("secret", c.iceServers[1].password)
         assertEquals("", c.iceServers[0].username)
     }
+
+    /** (C5 test switch) Relay only: no host or reflexive candidate, so the call connects through the TURN server or not at all. */
+    @Test
+    fun relayOnlyUsesRelayedCandidatesAlone() {
+        assertEquals(PeerConnection.IceTransportsType.ALL, WebRtcMediaEngine.configuration(servers).iceTransportsType)
+        assertEquals(PeerConnection.IceTransportsType.RELAY, WebRtcMediaEngine.configuration(servers, relayOnly = true).iceTransportsType)
+    }
+
+    /** Relay only is a test option: not plain, so only a test build with the development signer may set it. */
+    @Test
+    fun relayOnlyIsATestOption() {
+        assertEquals(true, MediaConfig().plain)
+        assertEquals(false, MediaConfig(relayOnly = true).plain)
+    }
 }

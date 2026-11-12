@@ -118,6 +118,8 @@ class WebRtcMediaEngine private constructor(
     private val faults: MediaFaults,
     /** True for the process-wide stack ([SharedStack]): shared by every call, so a call never disposes it. */
     private val sharedStack: Boolean = false,
+    /** Test builds only: [MediaConfig.relayOnly]. */
+    private val relayOnly: Boolean = false,
 ) : MediaEngine {
     private val worker: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "vettid-call-media") }
     private val closed = AtomicBoolean(false)
@@ -180,7 +182,7 @@ class WebRtcMediaEngine private constructor(
         on {
             val pc = checkNotNull(connection) { "no offer" }
             val offer = checkNotNull(pendingOffer) { "no offer" }
-            if (servers.isNotEmpty()) check(pc.setConfiguration(configuration(servers))) { "servers refused" }
+            if (servers.isNotEmpty()) check(pc.setConfiguration(configuration(servers, relayOnly))) { "servers refused" }
             val set = CompletableDeferred<Unit>()
             pc.setLocalDescription(Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }), offer)
             set
@@ -314,7 +316,7 @@ class WebRtcMediaEngine private constructor(
 
     private fun open(servers: List<CallWire.IceServer>): PeerConnection {
         check(connection == null) { "this engine already has a call" }
-        val pc = checkNotNull(factory.createPeerConnection(configuration(servers), Events())) { "no peer connection" }
+        val pc = checkNotNull(factory.createPeerConnection(configuration(servers, relayOnly), Events())) { "no peer connection" }
         connection = pc
         return pc
     }
@@ -540,7 +542,7 @@ class WebRtcMediaEngine private constructor(
          * relay allocation on a network is ready, the lower-priority ones on that network (one per TURN URL) are
          * released instead of being kept for the whole call, since the TURN server reserves capacity for each.
          */
-        internal fun configuration(servers: List<CallWire.IceServer>) = PeerConnection.RTCConfiguration(
+        internal fun configuration(servers: List<CallWire.IceServer>, relayOnly: Boolean = false) = PeerConnection.RTCConfiguration(
             servers.map { s ->
                 PeerConnection.IceServer.builder(s.urls).apply {
                     if (s.username != null && s.credential != null) setUsername(s.username).setPassword(s.credential)
@@ -557,6 +559,8 @@ class WebRtcMediaEngine private constructor(
             // ICE over TCP between two phones is of no use; relayed candidates (TURN over TCP or TLS) are not affected.
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
             turnPortPrunePolicy = PeerConnection.PortPrunePolicy.PRUNE_BASED_ON_PRIORITY
+            // Test builds only: no host or server-reflexive candidate is gathered, so only a relayed path can connect.
+            if (relayOnly) iceTransportsType = PeerConnection.IceTransportsType.RELAY
         }
 
         /**
@@ -574,12 +578,14 @@ class WebRtcMediaEngine private constructor(
             override fun create(config: MediaConfig): MediaEngine {
                 // The check next to the dangerous code: whatever asked, a build that was not made for the phone
                 // tests makes no engine that breaks a rule on purpose or uses the experimental DTLS trial.
-                val plain = !config.faults.any && !config.dtlsPqcTrial
+                val plain = config.plain
                 check(testBuild || plain) { "a test configuration in a build that is not a test build" }
                 val app = context.applicationContext
                 val pqc = WebRtcRuntime.start(app, config)
                 val stack = SharedStack.get(app)
-                return WebRtcMediaEngine(stack.factory, stack.audioDevice, pqc, config.faults, sharedStack = true)
+                return WebRtcMediaEngine(
+                    stack.factory, stack.audioDevice, pqc, config.faults, sharedStack = true, relayOnly = config.relayOnly,
+                )
             }
         }
     }

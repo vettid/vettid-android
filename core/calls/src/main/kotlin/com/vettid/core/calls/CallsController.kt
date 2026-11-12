@@ -109,10 +109,19 @@ data class CallsDiagnostics(
      */
     val listSkipped: Int = 0,
     val listSkippedIds: List<String> = emptyList(),
+    /**
+     * (C2; CALLS-PLAN §7 C5: "the app records direct or relayed per call, locally") How each call that connected since the
+     * process started went: directly between the two phones, through a relay, or not known (the stack had not said yet).
+     * Counts only, in memory: no call id, address or time.
+     */
+    val callsDirect: Int = 0,
+    val callsRelayed: Int = 0,
+    val callsPathUnknown: Int = 0,
 ) {
     override fun toString(): String =
         "CallsDiagnostics(refused=$refused, droppedForTime=$droppedForTime, staleEnded=$staleEnded, errors=$errors, " +
-            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size})"
+            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size}, " +
+            "callsDirect=$callsDirect, callsRelayed=$callsRelayed, callsPathUnknown=$callsPathUnknown)"
 }
 
 /**
@@ -149,7 +158,7 @@ class CallsController(
 ) : CallAccess, CallServiceHost {
     init {
         // What the app starts with is never a test configuration: those are switched on by hand, after the checks.
-        check(!config.dtlsPqcTrial && !config.faults.any) { "no test configuration by default" }
+        check(config.plain) { "no test configuration by default" }
     }
 
     @Volatile
@@ -170,7 +179,7 @@ class CallsController(
 
     /** Changes how the next call's engine is set up. Throws unless [testsAllowed] (or [c] is the plain configuration). */
     fun setMediaConfig(c: MediaConfig) {
-        val plain = !c.dtlsPqcTrial && !c.faults.any
+        val plain = c.plain
         check(plain || testsAllowedFlow.value) { "the post-quantum DTLS trial and the test faults are for the phone tests only" }
         mediaConfigValue = c
     }
@@ -432,8 +441,26 @@ class CallsController(
 
     // --- around a call ---
 
+    /** The call whose path was last counted: each call is counted once, when it ends. */
+    private var pathCounted: CallState.Ended? = null
+
+    /** A call that connected ([CallState.Ended.duration]) is counted direct or relayed, by the stack's last report. */
+    private fun countPath(s: CallState.Ended) {
+        if (s.duration == null || s === pathCounted) return
+        pathCounted = s
+        val relayed = machine.diagnostics.value.media?.relayed
+        diagnosticsFlow.update {
+            when (relayed) {
+                true -> it.copy(callsRelayed = it.callsRelayed + 1)
+                false -> it.copy(callsDirect = it.callsDirect + 1)
+                null -> it.copy(callsPathUnknown = it.callsPathUnknown + 1)
+            }
+        }
+    }
+
     private fun around(s: CallState) {
         publish()
+        if (s is CallState.Ended) countPath(s)
         val live = s as? CallState.Live
         tones.ringtone(live?.phase == CallPhase.INCOMING)
         tones.ringBack(live?.phase == CallPhase.RINGING)
