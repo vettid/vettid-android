@@ -110,6 +110,8 @@ data class DetailActions(
     val onAskNote: (String) -> Unit = {},
     val onSendAsk: () -> Unit = {},
     val onCloseAsk: () -> Unit = {},
+    /** (C2) The "Calls with <First>" switch. */
+    val onSetCallsAllowed: (Boolean) -> Unit = {},
 )
 
 /**
@@ -256,6 +258,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             // Without the first name the switch and its note would have to say "this connection": not offered until it arrives.
             if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
         }
+        state.calls?.let { CallsCard(it.allowed, it.limited, firstOf(c, name), !state.callsChanging, actions.onSetCallsAllowed) }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
         if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
             LocationCard(

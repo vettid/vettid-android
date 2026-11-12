@@ -307,6 +307,7 @@ internal class CallMachine(
 
     private fun refusal(code: String): CallEnd = when (code) {
         "busy" -> CallEnd.OWN_VAULT_BUSY
+        "calls_off" -> CallEnd.CALLS_OFF
         "not_found", "connection_unavailable" -> CallEnd.UNAVAILABLE
         "owner_check_required" -> CallEnd.OWNER_CHECK_REQUIRED
         "unsupported_type" -> CallEnd.NOT_SUPPORTED

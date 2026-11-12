@@ -602,6 +602,9 @@ class ScanViewModel @Inject constructor() : ViewModel() {
     fun consumed() = state.update { ScanUiState() }
 }
 
+/** (C2) Calls with this connection: [allowed] (both ways), and [limited] while the vault does not ring for its calls. */
+data class DetailCalls(val allowed: Boolean, val limited: Boolean)
+
 /** Immutable UI state of a connection's detail screen. */
 data class ConnectionDetailUiState(
     val connectionId: String,
@@ -618,8 +621,18 @@ data class ConnectionDetailUiState(
     val errorCode: String? = null,
     /** Both directions of sharing with this connection (VAULT-ITEMS §6, VAULT-MESSAGING §10.12). */
     val sharing: DetailSharing = DetailSharing(),
-    /** This build and this vault have calls and none is going on: the pill has "Call". */
+    /**
+     * This build and this vault have calls, none is going on and calls with this connection are not off: the pill has
+     * "Call".
+     */
     val canCall: Boolean = false,
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Permission and limits") The "Calls with <First>" switch: only for a person who is
+     * connected, on a vault with the permission once it has been read; null otherwise.
+     */
+    val calls: DetailCalls? = null,
+    /** A change of the switch is with the vault. */
+    val callsChanging: Boolean = false,
     /** A share rule the member asked to delete, waiting for the confirmation. */
     val deleteRule: ShareRule? = null,
     /** This connection's votes (ANDROID-PLAN 0.1.102 "Votes"); nothing where the vault has none. */
@@ -801,9 +814,9 @@ class ConnectionDetailViewModel @Inject constructor(
             local,
             repo.connections,
             repo.authentication,
-            combine(calls.availability, ownVotes()) { c, v -> c to v },
+            combine(calls.availability, calls.permissions, ownVotes()) { c, p, v -> Triple(c, p, v) },
             combine(ownPresence(), ownLocation(), location.availability, location.incoming, units, ::Extras),
-        ) { s, cs, auth, (call, v), extras ->
+        ) { s, cs, auth, (call, perms, v), extras ->
             val p = extras.presence
             val shared = extras.location
             val offered = extras.availability
@@ -812,7 +825,11 @@ class ConnectionDetailViewModel @Inject constructor(
             s.copy(
                 connection = c,
                 auth = auth[id],
-                canCall = call == CallAvailability.READY,
+                canCall = call == CallAvailability.READY && perms.of(id).allowed,
+                calls = perms.takeIf {
+                    it.supported && it.known && c?.state == ConnectionState.ACTIVE && !c.service &&
+                        (call == CallAvailability.READY || call == CallAvailability.IN_CALL)
+                }?.of(id)?.let { DetailCalls(it.allowed, it.limited) },
                 votes = v,
                 presence = p?.takeIf { c?.askable == true && it.reading != PresenceReading.Closed }?.let {
                     // Not asked yet is "Checking…" (it is being asked); closed shows no line at all.
@@ -945,6 +962,21 @@ class ConnectionDetailViewModel @Inject constructor(
             reconnect = r.any { it.connectionId == id },
             available = a == VotesAvailability.AVAILABLE,
         )
+    }
+
+    /** (C2) "Calls with <First>": on or off, both ways. A failure is said as any other; the switch shows the vault's word. */
+    fun setCallsAllowed(allowed: Boolean) {
+        if (uiState.value.callsChanging || uiState.value.calls == null) return
+        local.update { it.copy(callsChanging = true, error = null) }
+        viewModelScope.launch {
+            try {
+                calls.setAllowed(id, allowed)
+            } catch (e: VaultFailure) {
+                local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
+            } finally {
+                local.update { it.copy(callsChanging = false) }
+            }
+        }
     }
 
     /** The pill's "Call": the call screen follows from the call's state. */

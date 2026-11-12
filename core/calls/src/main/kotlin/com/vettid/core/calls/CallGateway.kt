@@ -6,6 +6,7 @@ import com.vettid.core.vault.CallCandidate
 import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallKeys
 import com.vettid.core.vault.CallList
+import com.vettid.core.vault.CallPermission
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.OutgoingCall
 import com.vettid.core.vault.VaultApi
@@ -18,11 +19,16 @@ import com.vettid.core.vault.callIce
 import com.vettid.core.vault.callIncoming
 import com.vettid.core.vault.callKeepalive
 import com.vettid.core.vault.callList
+import com.vettid.core.vault.callPermissionChange
+import com.vettid.core.vault.callPermissionList
+import com.vettid.core.vault.callPermissionSet
 import com.vettid.core.vault.callRinging
 import com.vettid.core.vault.callStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.mapNotNull
 
 /**
  * `CallApi` as an interface, one function for one function, so that [VaultCallSignalling] can be tested without a
@@ -55,6 +61,15 @@ interface CallGateway {
     suspend fun end(callId: String, reason: String)
 
     suspend fun list(limit: Int): CallList
+
+    /** (C2) `call.permission.set`. */
+    suspend fun setPermission(connectionId: String, allowed: Boolean) {}
+
+    /** (C2) `call.permission.list`: the connections that differ from the default. */
+    suspend fun permissions(): List<CallPermission> = emptyList()
+
+    /** (C2) The connections a `sync.event{kind: "call.permission"}` names, as they come. */
+    val permissionChanges: Flow<String> get() = emptyFlow()
 }
 
 /**
@@ -69,6 +84,8 @@ class VaultCallGateway(
     private val sendEnd: suspend (callId: String, reason: String) -> Unit = { id, reason -> api().callEnd(id, reason) },
 ) : CallGateway {
     override val events: Flow<CallEvent> = events.flatMapLatest { callEventsIn(it) }
+
+    override val permissionChanges: Flow<String> = events.flatMapLatest { f -> f.mapNotNull { callPermissionChange(it) } }
 
     override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
         api().callStart(connectionId, sdp, suites, peerIk = peerIk)
@@ -90,4 +107,8 @@ class VaultCallGateway(
     override suspend fun end(callId: String, reason: String) = sendEnd(callId, reason)
 
     override suspend fun list(limit: Int): CallList = api().callList(limit)
+
+    override suspend fun setPermission(connectionId: String, allowed: Boolean) = api().callPermissionSet(connectionId, allowed)
+
+    override suspend fun permissions(): List<CallPermission> = api().callPermissionList()
 }

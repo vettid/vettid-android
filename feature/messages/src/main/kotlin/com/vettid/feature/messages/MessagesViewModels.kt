@@ -155,6 +155,10 @@ data class ConversationUiState(
     val callsNotShown: Boolean = false,
     /** The member tapped Call where the vault has no calls: say so. */
     val callsNotAvailable: Boolean = false,
+    /** (C2) The member turned calls with this connection off (both ways): the call button says so instead of calling. */
+    val callsOff: Boolean = false,
+    /** The member tapped Call while [callsOff]: say where to turn them on. */
+    val callsOffNotice: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
     /** Older messages remain in the vault (VAULT-MESSAGING 0.32.0 §10.5.2): scrolling to the top loads them. */
@@ -230,6 +234,7 @@ class ConversationViewModel @Inject constructor(
                 photosAvailable = photos,
             )
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
+            .combine(calls.permissions) { s, p -> s.copy(callsOff = !p.of(connectionId).allowed, callsOffNotice = s.callsOffNotice && !p.of(connectionId).allowed) }
             .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
             .combine(presence.readings) { (s, on), r ->
                 // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
@@ -399,11 +404,12 @@ class ConversationViewModel @Inject constructor(
         when {
             !s.callShown || !s.callEnabled -> Unit
             s.call == CallAvailability.NOT_IN_VAULT -> local.update { it.copy(callsNotAvailable = true) }
+            s.callsOff -> local.update { it.copy(callsOffNotice = true) }
             else -> calls.call(connectionId)
         }
     }
 
-    fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false) }
+    fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false, callsOffNotice = false) }
 
     // --- photos (ANDROID-PLAN 0.1.39) ---
 

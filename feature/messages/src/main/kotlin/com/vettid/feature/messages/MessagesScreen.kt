@@ -429,6 +429,17 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                     else -> MessageList(state, name, listState, actions)
                 }
             }
+            if (state.callsOffNotice) {
+                // (C2) Calls with this connection are off, both ways: where to turn them on.
+                val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
+                NoticeCard(
+                    kind = NoticeKind.INFO,
+                    title = stringResource(R.string.messages_call),
+                    body = stringResource(R.string.messages_calls_off, first),
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_calls_off"),
+                    actions = { TextButton(onClick = actions.onDismissCallNotice) { Text(stringResource(R.string.messages_ok)) } },
+                )
+            }
             if (state.callsNotAvailable) {
                 NoticeCard(
                     kind = NoticeKind.INFO,

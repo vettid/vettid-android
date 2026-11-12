@@ -53,6 +53,8 @@
     <!-- Calls (texts approved 2026-10-12). The button, and a call's line in the conversation. -->
     <string name="messages_call">Call</string>
     <string name="messages_call_not_in_vault">Calls are not available for your vault yet</string>
+    <!-- Owner-approved 2026-11-12 (GC #8722 a, text 4): Call tapped while calls with the connection are off (C2). -->
+    <string name="messages_calls_off">Calls with %1$s are off. You can turn them on in %1$s\'s details.</string>
     <string name="messages_call_talked">Call, %1$s</string>
     <string name="messages_call_declined">Call declined</string>
     <string name="messages_call_declined_here">Call you declined</string>

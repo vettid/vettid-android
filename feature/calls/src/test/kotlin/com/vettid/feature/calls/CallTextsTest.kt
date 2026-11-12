@@ -48,6 +48,8 @@ class CallTextsTest {
             CallEnd.NOT_ENCRYPTED to "This call couldn't be encrypted, so it was ended. Try calling again.",
             CallEnd.LOCKED to "Call ended because your vault was locked",
             CallEnd.FAILED to "The call failed. Try again.",
+            // Approved 2026-11-12 (GC #8722 a, text 5).
+            CallEnd.CALLS_OFF to "Calls with Ada Lovelace are off.",
         )
         assertEquals(CallEnd.entries.toSet(), approved.keys)
         for ((reason, text) in approved) assertEquals(reason.name, text, ended(reason))

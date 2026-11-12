@@ -640,6 +640,48 @@ suspend fun VaultApi.callList(limit: Int = 50): CallList {
 }
 
 /**
+ * (C2, VAULT-MESSAGING §10.10 "Permission and limits") A connection whose calls differ from the default: [allowed] false
+ * (the member turned them off, both ways), or [limited] (too many unanswered calls from it lately: its calls ring no
+ * device for a while). A connection not listed is allowed and not limited.
+ */
+data class CallPermission(val connectionId: String, val allowed: Boolean, val limited: Boolean)
+
+/**
+ * `call.permission.set{connection_id, allowed}` (C2): calls with [connectionId] allowed, or off both ways. Throws
+ * [VaultOpException] (`not_found` for a connection the vault does not have, `unsupported_type` before C2, …).
+ */
+suspend fun VaultApi.callPermissionSet(connectionId: String, allowed: Boolean) {
+    require(connectionId.isNotEmpty()) { "connection_id" }
+    device.op("call.permission.set", buildJsonObject {
+        put("connection_id", connectionId)
+        put("allowed", allowed)
+    })
+}
+
+/** `call.permission.list` (C2): the connections that differ from the default. */
+suspend fun VaultApi.callPermissionList(): List<CallPermission> = callPermissionsOf(device.op("call.permission.list", buildJsonObject {}))
+
+/**
+ * `call.permission.list`'s answer, read strictly: an entry that does not read makes the whole answer unreadable
+ * ([CallMessageException]), since a missing "off" would show calls as allowed.
+ */
+internal fun callPermissionsOf(o: JsonObject): List<CallPermission> {
+    val list = o["connections"] as? JsonArray ?: throw CallMessageException("connections")
+    return list.map { e ->
+        val obj = e as? JsonObject ?: throw CallMessageException("connections")
+        val id = VaultJson.str(obj, "connection_id")?.takeIf { it.isNotEmpty() } ?: throw CallMessageException("connection_id")
+        CallPermission(id, obj.bool("allowed"), obj.bool("limited"))
+    }
+}
+
+private fun JsonObject.bool(name: String): Boolean =
+    (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toBooleanStrictOrNull() ?: throw CallMessageException(name)
+
+/** The connection a `sync.event{kind: "call.permission"}` names, or null for any other message. */
+fun callPermissionChange(m: VaultMessage): String? =
+    if (m.type == "sync.event" && VaultJson.str(m.body, "kind") == "call.permission") VaultJson.str(m.body, "connection_id") else null
+
+/**
  * (GC #7718, the lead's decision #7715, as vettid-ios) `call.list`'s answer: an entry that does not read is skipped, never
  * the whole answer (the member would see no calls at all), and counted in [CallList.skipped]; a `calls` member that is not
  * an array does not read.

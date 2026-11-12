@@ -4,7 +4,10 @@ import androidx.annotation.StringRes
 import com.vettid.core.calls.CallEnd
 import com.vettid.core.calls.CallPhase
 
-/** The member-facing texts of a call (approved 2026-10-12). Every ending has one line; none is shared. */
+/**
+ * The member-facing texts of a call (approved 2026-10-12; `calls_end_calls_off` approved 2026-11-12, GC #8722 a). Every
+ * ending has one line; none is shared.
+ */
 object CallTexts {
     /** The line of an ended call. Texts with `%1$s` take the connection's name. */
     @StringRes
@@ -21,6 +24,7 @@ object CallTexts {
         CallEnd.ANSWERED_ELSEWHERE to R.string.calls_end_answered_elsewhere,
         CallEnd.UNAVAILABLE to R.string.calls_end_unavailable,
         CallEnd.OWN_VAULT_BUSY to R.string.calls_end_own_vault_busy,
+        CallEnd.CALLS_OFF to R.string.calls_end_calls_off,
         CallEnd.OWNER_CHECK_REQUIRED to R.string.calls_end_owner_check_required,
         CallEnd.NOT_SUPPORTED to R.string.calls_end_not_supported,
         CallEnd.NO_ADDRESS to R.string.calls_end_no_address,
@@ -39,7 +43,7 @@ object CallTexts {
 
     private val STAYS_OPEN = setOf(
         CallEnd.OWNER_CHECK_REQUIRED, CallEnd.NOT_SUPPORTED, CallEnd.NO_ADDRESS, CallEnd.COULD_NOT_CONNECT, CallEnd.NOT_ENCRYPTED,
-        CallEnd.FAILED, CallEnd.OWN_VAULT_BUSY,
+        CallEnd.FAILED, CallEnd.OWN_VAULT_BUSY, CallEnd.CALLS_OFF,
     )
 
     /** The state line of a live call before media flows; null once it does (the screen then shows the time). */

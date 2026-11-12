@@ -113,6 +113,24 @@ class CallsControllerTest {
             listGate()
             return com.vettid.core.vault.CallList(list(), skipped, version, vaultNow)
         }
+        /** (C2) What `call.permission.list` answers; [permissionFailure] is thrown instead when set. */
+        var permissionList: List<com.vettid.core.vault.CallPermission> = emptyList()
+        var permissionFailure: Exception? = null
+        var permissionReads = 0
+        val permissionSets = mutableListOf<Pair<String, Boolean>>()
+        val changes = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
+        override val permissionChanges: Flow<String> = changes
+
+        override suspend fun permissions(): List<com.vettid.core.vault.CallPermission> {
+            permissionReads++
+            permissionFailure?.let { throw it }
+            return permissionList
+        }
+
+        override suspend fun setPermission(connectionId: String, allowed: Boolean) {
+            permissionFailure?.let { throw it }
+            permissionSets += connectionId to allowed
+        }
     }
 
     private class Vault : CallVault {
@@ -357,6 +375,80 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(listOf("list(200)", "end(A, failed)", "end(B, timeout)"), vault.gateway.sent)
         assertEquals(2, c.diagnostics.value.staleEnded)
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Permission and limits") A C2 vault's `call.permission.list` is read after the unlock and
+     * again on each `sync.event{call.permission}`; an older vault has none (no switch); a lock forgets it.
+     */
+    @Test
+    fun thePermissionIsReadAfterTheUnlockAndOnEachChange() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(1, vault.gateway.permissionReads)
+        assertTrue(c.permissions.value.supported && c.permissions.value.known)
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(allowed = false), c.permissions.value.of("conn-1"))
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(), c.permissions.value.of("conn-2"))
+
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-2", allowed = true, limited = true))
+        vault.gateway.changes.emit("conn-2")
+        runCurrent()
+        assertEquals(2, vault.gateway.permissionReads)
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(), c.permissions.value.of("conn-1"))
+        assertTrue(c.permissions.value.of("conn-2").limited)
+
+        // A read that fails keeps what was read.
+        vault.gateway.permissionFailure = java.io.IOException("relay")
+        vault.gateway.changes.emit("conn-2")
+        runCurrent()
+        assertTrue(c.permissions.value.of("conn-2").limited)
+        vault.gateway.permissionFailure = null
+
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("nothing written after the lock", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    @Test
+    fun aVaultBeforeC2HasNoPermission() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        assertEquals(0, vault.gateway.permissionReads)
+        assertFalse(c.permissions.value.supported)
+        vault.gateway.changes.emit("conn-1")
+        runCurrent()
+        assertEquals(0, vault.gateway.permissionReads)
+        assertThrows(com.vettid.core.data.vault.VaultFailure::class.java) { kotlinx.coroutines.runBlocking { c.setAllowed("conn-1", false) } }
+        assertTrue(vault.gateway.permissionSets.isEmpty())
+    }
+
+    /** Turning calls off is sent, shown at once, and read again from the vault; a refusal is a VaultFailure and changes nothing. */
+    @Test
+    fun turningCallsOffIsSentAndShown() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.setAllowed("conn-1", false)
+        assertEquals(listOf("conn-1" to false), vault.gateway.permissionSets)
+        assertFalse(c.permissions.value.of("conn-1").allowed)
+        runCurrent()
+        assertEquals("read again", 2, vault.gateway.permissionReads)
+
+        vault.gateway.permissionFailure = com.vettid.core.vault.VaultOpException("call.permission.set", "not_found")
+        val e = runCatching { c.setAllowed("conn-2", false) }.exceptionOrNull()
+        assertTrue(e is com.vettid.core.data.vault.VaultFailure)
+        assertTrue(c.permissions.value.of("conn-2").allowed)
     }
 
     /** (C2) The call's device sends `call.keepalive` once the answer is in, then every 30 s, and stops with the call. */

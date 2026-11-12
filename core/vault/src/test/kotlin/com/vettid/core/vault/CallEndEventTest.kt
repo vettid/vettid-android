@@ -27,3 +27,39 @@ class CallEndEventTest {
         assertEquals(listOf(CallEvent.Ended(x, "busy")), ended("""{"call_id":"$x","reason":"busy","superseded_by":7}"""))
     }
 }
+
+/** `call.permission.list` (C2), read strictly: an entry that does not read makes the whole answer unreadable. */
+class CallPermissionListTest {
+    private fun read(json: String) = callPermissionsOf(kotlinx.serialization.json.Json.parseToJsonElement(json) as kotlinx.serialization.json.JsonObject)
+
+    @Test
+    fun theDifferingConnectionsAreRead() {
+        assertEquals(
+            listOf(CallPermission("c1", allowed = false, limited = false), CallPermission("c2", allowed = true, limited = true)),
+            read("""{"connections":[{"connection_id":"c1","allowed":false,"limited":false},{"connection_id":"c2","allowed":true,"limited":true}]}"""),
+        )
+        assertEquals(emptyList<CallPermission>(), read("""{"connections":[]}"""))
+    }
+
+    @Test
+    fun anEntryThatDoesNotReadMakesItUnreadable() {
+        for (bad in listOf(
+            """{}""",
+            """{"connections":{}}""",
+            """{"connections":[{"connection_id":"c1","allowed":"false","limited":false}]}""",
+            """{"connections":[{"connection_id":"c1","limited":false}]}""",
+            """{"connections":[{"connection_id":"","allowed":false,"limited":false}]}""",
+            """{"connections":[7]}""",
+        )) {
+            org.junit.Assert.assertThrows(bad, CallMessageException::class.java) { read(bad) }
+        }
+    }
+
+    @Test
+    fun aChangeNamesItsConnection() {
+        fun msg(type: String, body: String) = VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T63", type = type, ts = java.time.Instant.parse("2026-11-12T00:00:00Z"), body = body.toByteArray()))
+        assertEquals("c1", callPermissionChange(msg("sync.event", """{"kind":"call.permission","connection_id":"c1"}""")))
+        assertEquals(null, callPermissionChange(msg("sync.event", """{"kind":"presence.changed"}""")))
+        assertEquals(null, callPermissionChange(msg("call.end", """{"kind":"call.permission","connection_id":"c1"}""")))
+    }
+}
