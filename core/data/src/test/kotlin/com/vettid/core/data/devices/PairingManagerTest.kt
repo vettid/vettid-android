@@ -94,8 +94,17 @@ class PairingManagerTest {
             refuse["approve"]?.let { throw VaultOpException("device.pair.approve", it) }
         }
 
+        /** Holds the next rejection (once) until completed; [rejectEntered] says it got there. */
+        var holdReject: CompletableDeferred<Unit>? = null
+        val rejectEntered = CompletableDeferred<Unit>()
+
         override suspend fun reject(pairingId: String) {
             calls += "reject:$pairingId"
+            holdReject?.let {
+                holdReject = null
+                rejectEntered.complete(Unit)
+                it.await()
+            }
             refuse["reject"]?.let { throw VaultOpException("device.pair.reject", it) }
         }
     }
@@ -710,13 +719,18 @@ class PairingManagerTest {
     fun aDueDailyCheckKeepsTheComparisonForAnotherTry() = runTest {
         val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
         val m = manager(ops)
-        m.start()
+        val owner = Any()
+        m.start(PairRole.AGENT, owner)
         m.onEvent(pending())
         m.approve(3600)
         assertTrue(m.state.value.stage is PairingStage.Compare)
         assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
         ops.refuse.clear()
         m.acknowledge()
+        assertEquals("(iOS #255) a start-time acknowledge with no owner leaves it", FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        m.acknowledge(Any())
+        assertEquals("nor another screen's", FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        m.acknowledge(owner) // its owner, once the check passed
         assertNull(m.state.value.error)
         m.approve(3600)
         assertTrue(m.state.value.stage is PairingStage.Paired)
@@ -1186,5 +1200,56 @@ class PairingManagerTest {
         assertEquals(PairRole.AGENT, m.state.value.role)
         // The late search wrote nothing: the agent's code is still the one held.
         assertEquals("pa", held(m))
+    }
+
+    /** (iOS #255) A leave while the member's rejection is out leaves no mark once the rejection has settled. */
+    @Test
+    fun aSettledRejectionClearsTheLeaveMark() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val owner = Any()
+        m.start(PairRole.AGENT, owner)
+        m.onEvent(pending())
+        val gate = CompletableDeferred<Unit>()
+        ops.holdReject = gate
+        val rejecting = launch { m.reject("p1") }
+        pump { ops.rejectEntered.isCompleted }
+        m.leave(owner)
+        pump { m.abandoned }
+        gate.complete(Unit)
+        rejecting.join()
+        assertTrue(m.state.value.stage is PairingStage.Rejected)
+        assertFalse(m.abandoned)
+    }
+
+    /**
+     * (iOS #255) The same screen starting again does not undo its own leave: its approval, still out and then refused for the
+     * daily check, is rejected rather than kept with no screen for it.
+     */
+    @Test
+    fun theSameOwnersStartDoesNotResetItsLeave() = runTest {
+        val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
+        val m = manager(ops)
+        val owner = Any()
+        m.start(PairRole.AGENT, owner)
+        m.onEvent(pending())
+        val gate = CompletableDeferred<Unit>()
+        ops.holdApprove = gate
+        val approving = launch { m.approve(3600) }
+        pump { ops.approveEntered.isCompleted }
+        m.leave(owner)
+        pump { m.abandoned }
+        try {
+            m.start(PairRole.AGENT, owner) // returns early (the comparison is busy); the same owner: the mark stays
+            assertTrue(m.abandoned)
+            gate.complete(Unit)
+            approving.join()
+            runCurrent()
+            assertEquals("rejected, not kept with no screen", PairingState(), m.state.value)
+            pump { "reject:p1" in ops.calls } // the reject goes on a request thread
+        } finally {
+            gate.complete(Unit)
+            m.clear() // nothing of a kept comparison (its timer) outlives a failed run
+        }
     }
 }

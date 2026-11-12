@@ -102,10 +102,17 @@ class PairViewModel @Inject constructor(
     init {
         // From the feed item the pairing is whatever is held; from the button, a new code (an unfinished one is kept).
         if (!held) {
+            // An earlier final stage or failure is cleared; (iOS #255) a refused approval another screen kept is not: only
+            // its owner clears it.
             repo.acknowledge()
             // A pairing held for the other role is rejected and replaced by the repository in this one call. From here the
             // pairing is this screen's (GC #7370): an earlier screen cleared late touches none of it.
-            viewModelScope.launch { repo.start(role, token) }
+            viewModelScope.launch {
+                repo.start(role, token)
+                // (iOS #255) Now this screen owns a kept comparison: its refusal for the daily check goes once the check is
+                // known to have passed (not known: it stays, and the collector below clears it when the check passes).
+                if (checkPassed(ownerCheck) && repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge(token)
+            }
         } else {
             repo.claim(token)
         }
@@ -179,3 +186,7 @@ class PairViewModel @Inject constructor(
         repo.acknowledge(token)
     }
 }
+
+/** (iOS #255) The daily check is known to be clear now: not due or held. Not known (no view yet): false. */
+internal fun checkPassed(ownerCheck: OwnerCheckRepository, now: java.time.Instant = java.time.Instant.now()): Boolean =
+    ownerCheck.ownerCheck.value?.let { !it.gated(now) } ?: false
