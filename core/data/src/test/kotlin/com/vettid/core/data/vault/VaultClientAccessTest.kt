@@ -59,17 +59,20 @@ class VaultClientAccessTest {
         // flush, its own collection start's included; the manager installs it on every session's device.
         val gate = Regex("""device\.sendGate\s*=.*UNGATED_TYPES.*lockGuard\.admits\(\)""")
         assertTrue(code.any { gate.containsMatchIn(it) })
-        // The outbox is flushed in two places, each with the stop count taken where the flush is asked for (before its
-        // launch), so that a stop after the ask wins. The unlock's flush waits for no lock pending; the foreground's is left to
-        // the device's gate, which decides by type, so that a pending `call.end` goes on the return to the foreground.
-        assertEquals(2, count("""flushOutbox\("""))
+        // The outbox is flushed in three places. The foreground return and the unlock take the stop count where the flush is
+        // asked for (before its launch), so that a stop after the ask wins; the unlock's flush waits for no lock pending, and the
+        // foreground's is left to the device's gate, which decides by type, so that a pending `call.end` goes on the return to
+        // the foreground. (Show held as held) The third runs once a mailbox's quota backoff has ended (QuotaFlush), behind the
+        // lock gate, with the stop count of that moment.
+        assertEquals(3, count("""flushOutbox\("""))
         assertEquals(2, count("""flushOutbox\((seq|flushSeq)\)"""))
+        assertTrue(code.any { it.contains("flush = { if (lockGuard.admits()) s.device.flushOutbox() }") })
         val foreground = "d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }"
         assertTrue(code.any { it == foreground })
         assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
         val guarded = code.count { line -> line.contains("flushOutbox(") && checks.any { line.contains(it) } }
-        assertEquals("the unlock's only", 1, guarded)
+        assertEquals("the unlock's and the quota flush's", 2, guarded)
     }
 
     /** A send the device's gate held (`lock_pending`) is not a lost answer: a recovered phone does not unlock after it. */

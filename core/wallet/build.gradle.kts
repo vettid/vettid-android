@@ -13,6 +13,7 @@ dependencies {
     implementation(projects.core.vault)
     implementation(projects.core.chain)
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.androidx.annotation)
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotlinx.coroutines.test)

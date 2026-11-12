@@ -45,4 +45,8 @@ class FakePairing : PairingRepository {
     override fun acknowledge(owner: Any?) {
         calls += "acknowledge"
     }
+
+    override fun acknowledgeRefusal(owner: Any) {
+        calls += "acknowledgeRefusal"
+    }
 }

@@ -1695,6 +1695,48 @@ class VaultDeviceTest {
         }
     }
 
+    /** (Show held as held) Which failures of a durable send leave the entry in the outbox (and so are "held", not lost). */
+    @Test
+    fun whichFailuresKeepTheEntryInTheOutbox() {
+        assertTrue(VaultDevice.keptInOutbox(VaultDevice.QuotaWait()))
+        assertTrue(VaultDevice.keptInOutbox(RelayException(429, RelayException.QUOTA_EXCEEDED, "")))
+        assertTrue(VaultDevice.keptInOutbox(RelayException(503, "unavailable", "")))
+        assertTrue(VaultDevice.keptInOutbox(java.io.IOException("connection reset")))
+        assertFalse("a terminal refusal removed it", VaultDevice.keptInOutbox(RelayException(403, "token_revoked", "")))
+        assertFalse("nothing was queued", VaultDevice.keptInOutbox(VaultStateException("no session with the vault")))
+        assertFalse(VaultDevice.keptInOutbox(IllegalStateException("x")))
+    }
+
+    /**
+     * (Show held as held) A mailbox quota's backoff is announced with its length, each time it is set (a minute, then
+     * doubled), so the app can flush when it ends; a token's quota (a wait for a fresh token) announces nothing.
+     */
+    @Test
+    fun aMailboxQuotaBackoffIsAnnouncedWithItsLength() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, _) = pairedDevice(this, store)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            d.flushOutbox()
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(listOf(min, min * 2), seen.toList())
+            refuseQuota = RelayException.QUOTA_TOKEN
+            elapsed += min * 2
+            d.flushOutbox()
+            assertEquals("a token's quota is no backoff", 2, seen.size)
+            watcher.cancel()
+            refuseDeposits = null
+            refuseStatus = 403
+            d.stop()
+        }
+    }
+
     /**
      * (A6 audit N1) The device's own wait ending drops nothing (the dropping is the 11-minute deadline's, after its
      * collect, in the app): an approval that comes later still completes the transfer.
