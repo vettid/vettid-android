@@ -183,6 +183,13 @@ interface PairingRepository {
 
     /** [acknowledge] by the screen [owner]: nothing is done when the pairing held is another screen's (null: whatever is held). */
     fun acknowledge(owner: Any?)
+
+    /**
+     * (iOS #255) The daily check passed: the refusal of a comparison [owner] holds ([FailureKind.OWNER_CHECK_REQUIRED] on a
+     * kept comparison) is cleared so that it may be approved again. Nothing else: not another screen's, not a failed create
+     * (its failure stays, with Try again), not while busy. Checked and cleared in one step under the lock.
+     */
+    fun acknowledgeRefusal(owner: Any)
 }
 
 /**
@@ -677,6 +684,14 @@ class PairingManager(
         // Decided now, under the lock: a screen that left after another started takes nothing of the other's.
         synchronized(lock) { if (!mayAct(owner)) return }
         scope.launch { cancel(owner) }
+    }
+
+    override fun acknowledgeRefusal(owner: Any) {
+        synchronized(lock) {
+            val s = flow.value
+            if (owner !== this.owner || s.busy) return
+            if (s.stage is PairingStage.Compare && s.error == FailureKind.OWNER_CHECK_REQUIRED) flow.value = PairingState(s.stage)
+        }
     }
 
     override fun acknowledge(owner: Any?) {

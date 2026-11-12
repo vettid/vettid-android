@@ -43,11 +43,12 @@ class PairKeptRefusalTest {
         clock.plusSeconds(600).epochSecond,
     ).link()
 
-    private inner class Ops : PairingOps {
+    private inner class Ops(private val createRefused: Boolean = false) : PairingOps {
         val calls: MutableList<String> = CopyOnWriteArrayList()
 
         override suspend fun create(role: PairRole): JsonObject {
             calls += "create"
+            if (createRefused) throw VaultOpException("device.pair.create", "owner_check_required")
             return Json.parseToJsonElement("""{"pairing_id":"p1","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""") as JsonObject
         }
 
@@ -125,5 +126,31 @@ class PairKeptRefusalTest {
         assertEquals(true, checkPassed(vault))
         vault.ownerCheck.value = view(OwnerCheckState.OK).copy(deadline = Instant.now().minusSeconds(60))
         assertEquals("OK but past its deadline: due", false, checkPassed(vault))
+    }
+
+    /** A create refused for the daily check keeps its failure (and Try again) at the start, though the view says passed. */
+    @Test
+    fun aFailedCreateIsNotClearedAtTheStart() = runTest {
+        val vault = FakeVault().also { it.ownerCheck.value = view(OwnerCheckState.OK) } // stale: the vault said due
+        val m = PairingManager(backgroundScope, ops = { Ops(createRefused = true) }, now = { clock })
+        val vm = PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to false)), m, vault)
+        waitFor { m.state.value.error == FailureKind.OWNER_CHECK_REQUIRED }
+        repeat(20) { runCurrent(); Thread.sleep(5) }
+        assertTrue(m.state.value.stage is PairingStage.Idle)
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        assertEquals(false, vm.uiState.value.interrupted)
+    }
+
+    /** The same failed create, then the check passes while the screen is open: the failure stays, not "interrupted". */
+    @Test
+    fun aFailedCreateIsNotClearedWhenTheCheckPasses() = runTest {
+        val vault = FakeVault().also { it.ownerCheck.value = view(OwnerCheckState.HELD) }
+        val m = PairingManager(backgroundScope, ops = { Ops(createRefused = true) }, now = { clock })
+        val vm = PairViewModel(SavedStateHandle(mapOf(PairRoute.HELD to false)), m, vault)
+        waitFor { m.state.value.error == FailureKind.OWNER_CHECK_REQUIRED }
+        vault.ownerCheck.value = view(OwnerCheckState.OK) // checkCleared fires
+        repeat(20) { runCurrent(); Thread.sleep(5) }
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        assertEquals(false, vm.uiState.value.interrupted)
     }
 }

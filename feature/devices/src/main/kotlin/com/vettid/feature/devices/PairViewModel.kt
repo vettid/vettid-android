@@ -112,20 +112,17 @@ class PairViewModel @Inject constructor(
                 // (iOS #255) Now this screen owns a kept comparison: its refusal for the daily check goes once the check is
                 // known to have passed. Not known: it stays, and the collector below clears it when the check passes later; a
                 // view that only goes from unknown to passed fires no `checkCleared`, so the refusal's notice then stays until
-                // the next approval (which ignores it). Only a comparison's refusal: a create that failed stays as it is.
-                val s = repo.state.value
-                if (checkPassed(ownerCheck) && s.stage is PairingStage.Compare && s.error == FailureKind.OWNER_CHECK_REQUIRED) {
-                    repo.acknowledge(token)
-                }
+                // the next approval (which ignores it). Only a comparison's refusal (acknowledgeRefusal): a create that failed
+                // stays as it is.
+                if (checkPassed(ownerCheck)) repo.acknowledgeRefusal(token)
             }
         } else {
             repo.claim(token)
         }
-        // The daily check passed: a refused approval may be sent again.
+        // The daily check passed: a refused approval may be sent again. Only a comparison's refusal: a create that failed for
+        // the daily check keeps its failure and Try again (not "interrupted").
         viewModelScope.launch {
-            ownerCheck.checkCleared().collect {
-                if (repo.state.value.error == FailureKind.OWNER_CHECK_REQUIRED) repo.acknowledge(token)
-            }
+            ownerCheck.checkCleared().collect { repo.acknowledgeRefusal(token) }
         }
     }
 
