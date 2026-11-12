@@ -490,6 +490,13 @@ enum class FailureKind {
     TRANSFER_INCOMPLETE,
 
     /**
+     * (VAULT-MESSAGING 0.88.17 §3.3, §11.4) `state_unreadable`: the part of a feature others call directly does not read,
+     * so the vault did not open. Nothing was written or lost, and it is not a PIN failure; the member is never told to set
+     * the vault up again. A later try (or a release that reads the part) opens it.
+     */
+    STATE_UNREADABLE,
+
+    /**
      * (VAULT-MESSAGING 0.83.11 §11.14.10) `transfer_incomplete` to one of [VaultCodes.MOVE_GATED]: the move to this phone
      * is not finished ("Finish the move" is still to do). Not [TRANSFER_INCOMPLETE], which is the unlock's.
      */

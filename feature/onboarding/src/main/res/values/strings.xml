@@ -438,6 +438,8 @@
     <string name="onboarding_open_closed">The PIN or the password of this vault was changed, or its recovery was turned off, after this recovery began. This recovery cannot continue.</string>
     <string name="onboarding_open_not_armed">Recovery was not set up for this vault.</string>
     <string name="onboarding_open_counter_unavailable">We cannot check the attempt record now. Nothing was used. Try again later.</string>
+    <!-- VAULT-MESSAGING 0.88.17 §11.14.6 state_unreadable at a recovery's open (approved by the owner 2026-11-11). -->
+    <string name="onboarding_open_state_unreadable">Your vault can\'t be opened right now. Nothing in it has been changed. Wait for a VettID update before you try again: each try uses one of your recovery attempts.</string>
     <string name="onboarding_open_right_incomplete">The last attempt was right but could not be completed. %1$d of 10 left. You can try again on %2$s.</string>
     <string name="onboarding_open_other">The vault answered %1$s.</string>
     <string name="onboarding_open_ok_plain">The vault is recovered. The attempts you used do not come back. Change your PIN or your password now to get 10 new ones.</string>

@@ -375,7 +375,7 @@ class VaultCallSignallingTest {
         gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
         runCurrent()
         assertEquals(2, s.errors.value)
-        assertEquals(listOf("Offer($CALL_ID)", "End(callId=$CALL_ID, reason=hangup)"), out.map { it.toString() })
+        assertEquals(listOf("Offer($CALL_ID)", "End(callId=$CALL_ID, reason=hangup, supersededBy=null)"), out.map { it.toString() })
 
         // The same under an answer: the call is over, the listening is not.
         gateway.start = { outgoingCall() }

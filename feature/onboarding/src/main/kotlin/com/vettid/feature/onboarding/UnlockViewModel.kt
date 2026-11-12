@@ -50,11 +50,20 @@ private val TRANSIENT_FAILURES = setOf(
 )
 
 /**
+ * (VAULT-MESSAGING 0.88.17 §3.3, §11.4) Failures the vault gives only after this phone's keys opened the state: never "the
+ * move back failed"; their own text is shown.
+ */
+private val KEYS_OPENED = setOf(FailureKind.STATE_UNREADABLE)
+
+/** Failures that say nothing against this phone's keys: the temporary ones, and those given after the keys opened the state. */
+private val NOT_AGAINST_THE_KEYS = TRANSIENT_FAILURES + KEYS_OPENED
+
+/**
  * The message of a failed unlock: on an old phone that keeps its keys after approving a transfer ([keptTransfer]) any
  * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
  */
 internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
-    if (keptTransfer && r.kind !in TRANSIENT_FAILURES && !openedThenLocked(r.kind, r.code)) {
+    if (keptTransfer && r.kind !in NOT_AGAINST_THE_KEYS && !openedThenLocked(r.kind, r.code)) {
         UnlockMessage.MoveBackFailed
     } else {
         UnlockMessage.Failed(r.kind, r.code)

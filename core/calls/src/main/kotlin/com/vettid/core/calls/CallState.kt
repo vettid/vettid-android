@@ -58,6 +58,9 @@ enum class CallEnd {
     /** This member's vault is already in a call. */
     OWN_VAULT_BUSY,
 
+    /** (C2) The member turned calls with this connection off (perhaps on another device a moment before): `calls_off`. */
+    CALLS_OFF,
+
     /** The daily owner check is due: no calls until it is done. */
     OWNER_CHECK_REQUIRED,
 

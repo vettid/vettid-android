@@ -102,6 +102,8 @@ object CallsModule {
 
         override fun name(connectionId: String): String? = connection(connectionId)?.let(::callName)
 
+        override fun firstName(connectionId: String): String? = connection(connectionId)?.let { AccountNames.cleaned(it.firstName) }
+
         override fun notificationName(connectionId: String): String? = if (showNames.value) name(connectionId) else null
 
         /** This app's signer as its own entry in the vault's device list says (the "Installed from" line). */

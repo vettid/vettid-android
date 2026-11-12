@@ -200,8 +200,11 @@ data class CallCandidate(
 /** `call.ice` as received. */
 data class CallIce(val callId: String, val candidates: List<CallCandidate>)
 
-/** `call.end` as received. */
-data class CallEnded(val callId: String, val reason: String)
+/**
+ * `call.end` as received. [supersededBy] (C2, VAULT-MESSAGING §10.10 "Glare"): this device's own outgoing call lost a
+ * glare to the connection's call with that id, which the vault rings next; null when absent or not a call id.
+ */
+data class CallEnded(val callId: String, val reason: String, val supersededBy: String? = null)
 
 /** One entry of `call.list` (the vault keeps the latest 200 calls; no SDP, no keys). */
 @Serializable
@@ -637,6 +640,51 @@ suspend fun VaultApi.callList(limit: Int = 50): CallList {
 }
 
 /**
+ * (C2, VAULT-MESSAGING §10.10 "Permission and limits") A connection whose calls differ from the default: [allowed] false
+ * (the member turned them off, both ways), or [limited] (too many unanswered calls from it lately: its calls ring no
+ * device for a while). A connection not listed is allowed and not limited.
+ */
+data class CallPermission(val connectionId: String, val allowed: Boolean, val limited: Boolean)
+
+/**
+ * `call.permission.set{connection_id, allowed}` (C2): calls with [connectionId] allowed, or off both ways. Throws
+ * [VaultOpException] (`not_found` for a connection the vault does not have, `unsupported_type` before C2, …).
+ */
+suspend fun VaultApi.callPermissionSet(connectionId: String, allowed: Boolean) {
+    require(connectionId.isNotEmpty()) { "connection_id" }
+    device.op("call.permission.set", buildJsonObject {
+        put("connection_id", connectionId)
+        put("allowed", allowed)
+    })
+}
+
+/** `call.permission.list` (C2): the connections that differ from the default. */
+suspend fun VaultApi.callPermissionList(): List<CallPermission> = callPermissionsOf(device.op("call.permission.list", buildJsonObject {}))
+
+/**
+ * `call.permission.list`'s answer, read strictly: an entry that does not read makes the whole answer unreadable
+ * ([CallMessageException]), since a missing "off" would show calls as allowed.
+ */
+internal fun callPermissionsOf(o: JsonObject): List<CallPermission> {
+    val list = o["connections"] as? JsonArray ?: throw CallMessageException("connections")
+    val read = list.map { e ->
+        val obj = e as? JsonObject ?: throw CallMessageException("connections")
+        val id = VaultJson.str(obj, "connection_id")?.takeIf { it.isNotEmpty() } ?: throw CallMessageException("connection_id")
+        CallPermission(id, obj.bool("allowed"), obj.bool("limited"))
+    }
+    // A connection named twice is not a list the app can trust: one of the two could be an "off" that the other hides.
+    if (read.map { it.connectionId }.toSet().size != read.size) throw CallMessageException("connection_id repeated")
+    return read
+}
+
+private fun JsonObject.bool(name: String): Boolean =
+    (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toBooleanStrictOrNull() ?: throw CallMessageException(name)
+
+/** The connection a `sync.event{kind: "call.permission"}` names, or null for any other message. */
+fun callPermissionChange(m: VaultMessage): String? =
+    if (m.type == "sync.event" && VaultJson.str(m.body, "kind") == "call.permission") VaultJson.str(m.body, "connection_id") else null
+
+/**
  * (GC #7718, the lead's decision #7715, as vettid-ios) `call.list`'s answer: an entry that does not read is skipped, never
  * the whole answer (the member would see no calls at all), and counted in [CallList.skipped]; a `calls` member that is not
  * an array does not read.
@@ -718,7 +766,7 @@ sealed interface CallEvent {
 
     data class Ringing(val callId: String) : CallEvent
 
-    data class Ended(val callId: String, val reason: String) : CallEvent
+    data class Ended(val callId: String, val reason: String, val supersededBy: String? = null) : CallEvent
 
     data class Ice(val ice: CallIce) : CallEvent
 }
@@ -736,7 +784,8 @@ private fun parseIce(m: VaultMessage): CallIce? {
 private fun parseEnd(m: VaultMessage): CallEnded? {
     val id = VaultJson.str(m.body, "call_id")
     val reason = VaultJson.str(m.body, "reason")
-    return if (id == null || reason == null) null else CallEnded(id, reason)
+    val by = VaultJson.str(m.body, "superseded_by")?.takeIf { Ulid.isValid(it) && it != id }
+    return if (id == null || reason == null) null else CallEnded(id, reason, by)
 }
 
 /** Every `call.*` event, one flow, so that their order is the vault's (an answer before the candidates after it). */
@@ -750,7 +799,7 @@ fun callEventsIn(events: Flow<VaultMessage>): Flow<CallEvent> =
             "call.offer" -> CallEvent.Offer(m)
             "call.answer" -> CallEvent.Answer(m)
             "call.ringing" -> VaultJson.str(m.body, "call_id")?.let { CallEvent.Ringing(it) }
-            "call.end" -> parseEnd(m)?.let { CallEvent.Ended(it.callId, it.reason) }
+            "call.end" -> parseEnd(m)?.let { CallEvent.Ended(it.callId, it.reason, it.supersededBy) }
             "call.ice" -> parseIce(m)?.let { CallEvent.Ice(it) }
             else -> null
         }

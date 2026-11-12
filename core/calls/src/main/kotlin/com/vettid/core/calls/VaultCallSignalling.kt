@@ -95,7 +95,7 @@ internal class VaultCallSignalling(
                 is CallEvent.Ice -> SignalEvent.Ice(e.ice.callId, e.ice.candidates)
                 is CallEvent.Ended -> {
                     forget(e.callId)
-                    SignalEvent.End(e.callId, e.reason)
+                    SignalEvent.End(e.callId, e.reason, e.supersededBy)
                 }
             }
         },

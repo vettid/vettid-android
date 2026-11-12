@@ -22,6 +22,8 @@ data class CallUiState(
     val call: CallState = CallState.Idle,
     /** The connection's name as the app shows it; null when it has none to show. */
     val name: String? = null,
+    /** (C2) The connection's first name, for the endings that name it so; null when it has none. */
+    val firstName: String? = null,
     val speaker: Boolean = false,
     /** Whether this phone can switch to its speaker right now. */
     val canSpeaker: Boolean = false,
@@ -43,6 +45,7 @@ class CallViewModel @Inject constructor(private val calls: CallsController) : Vi
             call = call,
             // The name as it is known for the screen: never hidden here by the notification setting.
             name = connectionId?.let(calls::screenName),
+            firstName = connectionId?.let(calls::screenFirstName),
             speaker = audio.route == AudioRoute.SPEAKER,
             canSpeaker = AudioRoute.SPEAKER in audio.available,
             microphone = mic,

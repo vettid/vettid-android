@@ -30,6 +30,9 @@ object VaultCodes {
 
     const val TRANSFER_INCOMPLETE = "transfer_incomplete"
 
+    /** (VAULT-MESSAGING 0.88.17 §3.3) The unlock's and a recovery's open refusal when a part others call does not read. */
+    const val STATE_UNREADABLE = "state_unreadable"
+
     private val SHOWN = Regex("[a-z0-9_]{1,40}")
 
     /** [code] as `error_vault_code` shows it: the code itself when it matches `[a-z0-9_]{1,40}`, otherwise `unknown`. */
