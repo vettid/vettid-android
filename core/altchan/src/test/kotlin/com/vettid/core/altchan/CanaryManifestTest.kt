@@ -43,7 +43,13 @@ class CanaryManifestTest {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val s = publishedSerial ?: return MockResponse.Builder().code(404).body("not found").build()
-                return MockResponse.Builder().code(200).body(String(served(s))).build()
+                val body = if (forged) {
+                    val other = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+                    TestSupport.served(TestSupport.manifestBytes(s), other)
+                } else {
+                    served(s)
+                }
+                return MockResponse.Builder().code(200).body(String(body)).build()
             }
         }
         server.start()
@@ -63,10 +69,16 @@ class CanaryManifestTest {
         }
     }
 
+    /** (ANDROID-PLAN 0.1.124) The records the flow handed on. */
+    private val records = mutableListOf<com.vettid.core.attestation.EnclaveRecord>()
+
+    /** The published manifest is signed by another key than the pinned one. */
+    private var forged = false
+
     private fun flow(src: Source?): AltChannelFlow {
         val manifestUrl = server.url(MemberApiClient.MANIFEST_PATH).toString()
         val api = MemberApiClient(server.url("/").toString(), manifestUrl, OkHttpClient(), MemberAuth.Bearer("g"))
-        return AltChannelFlow(api, trust, verifyEnclave = { _, _, _, _, _ -> error("not used") }, canary = src)
+        return AltChannelFlow(api, trust, verifyEnclave = { _, _, _, _, _ -> error("not used") }, canary = src, records = { records += it })
     }
 
     // --- installation checks ---
@@ -206,6 +218,32 @@ class CanaryManifestTest {
             assertNull(src.doc)
             assertArrayEquals(doc, src.retired.single())
         }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.124) A manifest refused (its signature, or its serial going back) is recorded: line 1 failed, nothing
+     * else checked. One that could not be fetched (nothing published, no canary) makes no record.
+     */
+    @Test
+    fun aRefusedManifestIsRecordedAndAMissingOneIsNot() = runBlocking<Unit> {
+        publishedSerial = 7
+        forged = true
+        assertThrows(com.vettid.core.attestation.AttestationException::class.java) { runBlocking { flow(null).manifest(0, record = true) } }
+        assertEquals(com.vettid.core.attestation.EnclaveCheck.MANIFEST, records.single().failed)
+        forged = false
+        assertThrows(AltRefusedException::class.java) { runBlocking { flow(null).manifest(8, record = true) } }
+        assertEquals(2, records.size)
+        assertEquals(com.vettid.core.attestation.EnclaveCheck.MANIFEST, records.last().failed)
+        assertEquals(null, records.last().manifestKeyId)
+        publishedSerial = null
+        assertThrows(MemberApiException::class.java) { runBlocking { flow(null).manifest(0, record = true) } }
+        assertEquals("nothing fetched, no record", 2, records.size)
+        assertEquals(7L, run { publishedSerial = 7; flow(null).manifest(0, record = true).serial })
+        assertEquals("a manifest that verified is no record by itself", 2, records.size)
+        // The update check's manifest is not recorded, refused or not.
+        forged = true
+        assertThrows(com.vettid.core.attestation.AttestationException::class.java) { runBlocking { flow(null).manifest(0) } }
+        assertEquals(2, records.size)
     }
 
     @Test

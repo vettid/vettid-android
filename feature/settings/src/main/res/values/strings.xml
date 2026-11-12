@@ -15,6 +15,10 @@
     <string name="settings_security_transfer">Move to a new phone</string>
     <string name="settings_security_transfer_body">Direct transfer: no waiting, with your PIN and password</string>
     <string name="settings_security_attestation">Attestation</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Advanced security" (texts for the owner's approval; shared with the iPhone app) -->
+    <string name="settings_security_advanced">Advanced security</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Advanced security" -->
+    <string name="settings_security_advanced_body">Check interval, idle lock, attestation and more</string>
     <string name="settings_security_app_lock">App lock</string>
     <string name="settings_security_app_lock_body">Ask for a fingerprint, face or screen lock when opening VettID</string>
     <string name="settings_security_app_lock_body_screen_lock">Ask for the phone\'s PIN, pattern or password when opening VettID</string>
@@ -190,14 +194,60 @@
     <string name="settings_attestation_key">Device attestation key</string>
     <string name="settings_attestation_key_none">Not created yet</string>
     <string name="settings_attestation_strongbox">StrongBox available</string>
-    <string name="settings_attestation_version">Attestation version</string>
     <string name="settings_attestation_boot">Verified boot</string>
     <string name="settings_attestation_locked">Bootloader locked</string>
     <string name="settings_attestation_boot_key">Boot key</string>
     <string name="settings_attestation_enclave">Vault enclave</string>
-    <string name="settings_attestation_release">Last verified release</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Attestation in detail" (texts for the owner's approval; shared with the iPhone app) -->
+    <string name="settings_attestation_release">Release</string>
     <string name="settings_attestation_release_value">Release %1$d · %2$s</string>
     <string name="settings_attestation_environment">Environment</string>
+    <!-- DRAFT: ANDROID-PLAN 0.1.124 §4 "Attestation in detail" (texts for the owner's approval; shared with the iPhone app) -->
+    <string name="settings_attestation_none">This phone hasn\'t verified your vault\'s enclave yet. It does at the next unlock.</string>
+    <string name="settings_attestation_failed_title">Verification failed</string>
+    <string name="settings_attestation_failed_body">This phone couldn\'t verify your vault\'s enclave, so it sent it nothing. The check that failed is marked below.</string>
+    <string name="settings_attestation_refused_body">Every check passed, but this phone refused the release: %s</string>
+    <!-- Owner-approved 2026-11-11 (GC #8641 a): the reason after settings_attestation_refused_body -->
+    <string name="settings_attestation_refused_not_active">it isn\'t offered to new phones.</string>
+    <string name="settings_attestation_refused_older">it\'s older than a release this phone has already used.</string>
+    <string name="settings_attestation_refused_other_instance">your vault\'s address named a different enclave.</string>
+    <string name="settings_attestation_refused_time_scale">its time setting is for test builds, not this app.</string>
+    <string name="settings_attestation_ends">, ends %s</string>
+    <string name="settings_attestation_status_active">Active</string>
+    <string name="settings_attestation_status_deprecated">Deprecated</string>
+    <string name="settings_attestation_status_retired">Retired</string>
+    <string name="settings_attestation_status_removed">Removed</string>
+    <string name="settings_attestation_attested_at">Attested at</string>
+    <string name="settings_attestation_valid_until">Valid until</string>
+    <string name="settings_attestation_not_verified">Not verified</string>
+    <string name="settings_attestation_copy">Copy</string>
+    <string name="settings_attestation_copied">Copied</string>
+    <string name="settings_attestation_copy_all">Copy all</string>
+    <string name="settings_attestation_section_checks">Checks</string>
+    <string name="settings_attestation_as_of">as of %s</string>
+    <string name="settings_attestation_check_passed">Passed</string>
+    <string name="settings_attestation_check_failed">Failed</string>
+    <string name="settings_attestation_check_not_run">Not checked</string>
+    <string name="settings_attestation_check_manifest">Release list signed by VettID</string>
+    <string name="settings_attestation_check_chain">Certificate chain to the AWS Nitro root</string>
+    <string name="settings_attestation_check_signature">Signed by AWS Nitro hardware</string>
+    <string name="settings_attestation_check_key">Covers the key this phone encrypts to</string>
+    <string name="settings_attestation_check_recent">Recent</string>
+    <string name="settings_attestation_check_not_debug">Not a debug enclave</string>
+    <string name="settings_attestation_check_own_release">Names its own release</string>
+    <string name="settings_attestation_check_validity">Within its validity</string>
+    <string name="settings_attestation_check_match">Measurements match a signed release</string>
+    <string name="settings_attestation_root_fingerprint">Root fingerprint (SHA-256)</string>
+    <string name="settings_attestation_section_release">Release</string>
+    <string name="settings_attestation_source">Source</string>
+    <string name="settings_attestation_reproducible">Reproducible build</string>
+    <string name="settings_attestation_rebuild_body">Anyone can rebuild this release from its tag and compare the measurements.</string>
+    <string name="settings_attestation_rebuild">How to rebuild it</string>
+    <string name="settings_attestation_app_version">App version</string>
+    <!-- NEW: not in the plan's table (the plan: "under it, once this line passed, the key id and the manifest's serial") -->
+    <string name="settings_attestation_manifest_key">Key %1$s · serial %2$d</string>
+    <!-- NEW: the screen reader's line, "<line>: <state>" (ANDROID-PLAN 0.1.124) -->
+    <string name="settings_attestation_check_spoken">%1$s: %2$s</string>
 
     <!-- Delete vault -->
     <string name="settings_delete_title">Delete your vault</string>
