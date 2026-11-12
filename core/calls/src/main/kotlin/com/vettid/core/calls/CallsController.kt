@@ -149,7 +149,7 @@ class CallsController(
 ) : CallAccess, CallServiceHost {
     init {
         // What the app starts with is never a test configuration: those are switched on by hand, after the checks.
-        check(!config.dtlsPqcTrial && !config.faults.any) { "no test configuration by default" }
+        check(config.plain) { "no test configuration by default" }
     }
 
     @Volatile
@@ -170,8 +170,8 @@ class CallsController(
 
     /** Changes how the next call's engine is set up. Throws unless [testsAllowed] (or [c] is the plain configuration). */
     fun setMediaConfig(c: MediaConfig) {
-        val plain = !c.dtlsPqcTrial && !c.faults.any
-        check(plain || testsAllowedFlow.value) { "the post-quantum DTLS trial and the test faults are for the phone tests only" }
+        val plain = c.plain
+        check(plain || testsAllowedFlow.value) { "the DTLS trial, the test faults and relay only are for the phone tests only" }
         mediaConfigValue = c
     }
 
@@ -190,6 +190,9 @@ class CallsController(
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
     val callDiagnostics: StateFlow<CallDiagnostics> = machine.diagnostics
+
+    /** (C5) Direct or relayed, per call that connected since the process started. */
+    val callPaths: StateFlow<CallPaths> = machine.paths
     val audioState: StateFlow<AudioState> = audio.state
 
     private val availabilityFlow = MutableStateFlow(CallAvailability.UNKNOWN)
