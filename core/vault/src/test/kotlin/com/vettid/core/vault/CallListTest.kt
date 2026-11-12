@@ -6,8 +6,10 @@ package com.vettid.core.vault
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** (GC #7718, the lead's decision #7715, as vettid-ios) `call.list`: an entry that does not read is skipped, never the whole answer. */
@@ -73,5 +75,16 @@ class CallListTest {
         assertNull("empty", skippedConn(""))
         assertNull("over 128", skippedConn("c".repeat(129)))
         assertEquals("c".repeat(128), skippedConn("c".repeat(128)))
+    }
+
+    /** (C2) A vault is C2 for the app only with `v: 2` and its `now`: either alone is not enough. */
+    @Test
+    fun formTwoNeedsTheVersionAndTheVaultsClock() {
+        fun of(j: String) = callListOf(Json.parseToJsonElement(j).jsonObject)
+        assertTrue(of("""{"v":2,"now":"2026-11-11T12:00:00.000Z","calls":[]}""").formTwo)
+        assertFalse(of("""{"v":2,"calls":[]}""").formTwo)
+        assertFalse(of("""{"now":"2026-11-11T12:00:00.000Z","calls":[]}""").formTwo)
+        assertFalse(of("""{"v":"2","now":"2026-11-11T12:00:00.000Z","calls":[]}""").formTwo)
+        assertFalse(of("""{"v":2,"now":"yesterday","calls":[]}""").formTwo)
     }
 }

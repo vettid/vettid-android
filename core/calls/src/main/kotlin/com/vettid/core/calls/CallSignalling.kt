@@ -23,6 +23,8 @@ data class PlacedCall(
     val exp: Instant,
     /** The servers the vault signed for this call, and the only ones the device may use. */
     val servers: List<CallWire.IceServer>,
+    /** (C2) Placed in form 2. */
+    val formTwo: Boolean = false,
 )
 
 /** The vault refused `call.start` with [code] (`busy`, `not_found`, `owner_check_required`, `unsupported_type`, …). */
@@ -47,6 +49,8 @@ sealed interface SignalEvent {
         val servers: List<CallWire.IceServer>,
         /** The suite this device will answer with, chosen when the offer was checked: the engine is made for it. */
         val suite: MediaSuite,
+        /** (C2) The offer carried form 2, so this device answers in form 2 (and holds its media until a frame decrypts). */
+        val formTwo: Boolean = false,
     ) : SignalEvent {
         /** No SDP (it holds addresses) and no server credentials. */
         override fun toString(): String = "Offer($callId)"
@@ -99,4 +103,10 @@ internal interface CallSignalling {
 
     /** `call.end` (durable). */
     suspend fun end(callId: String, reason: String)
+
+    /** (C2) `call.keepalive` for the active call [callId], while the vault is C2 ([formTwo]). */
+    suspend fun keepalive(callId: String) {}
+
+    /** (C2) Whether this device's vault is C2 (`call.list` `v: 2`): form 2, keep-alives. */
+    val formTwo: Boolean get() = false
 }
