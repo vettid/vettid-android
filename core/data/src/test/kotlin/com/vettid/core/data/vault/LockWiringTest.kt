@@ -147,7 +147,9 @@ class LockWiringTest {
         val ports = Ports()
         val guard = LockGuard(ports, { t0 }) { attempt -> LockWiring.keeper(backgroundScope, Store(), attempt, {}) {} }
         val k = guard.keeper
-        val gate = com.vettid.core.vault.VaultDevice.SendGate { type -> type in com.vettid.core.vault.VaultDevice.UNGATED_TYPES || guard.admits() }
+        val gate = com.vettid.core.vault.VaultDevice.SendGate { type ->
+            type in com.vettid.core.vault.VaultDevice.UNGATED_TYPES || guard.admits()
+        }
         k.ask(k.begin(dead)) // stale: opened again, held
         assertEquals(LockNotice.OpenedAgain, k.notice.value)
         assertFalse("held", gate.admits("vault.status"))

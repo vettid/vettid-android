@@ -2278,7 +2278,11 @@ class VaultDevice private constructor(
                 // (ANDROID-PLAN §4 "While pending") While the gate holds the answers, only the newest waits: its token is the
                 // latest minted, and the older ones would all go at once when the gate opens. They go only once the new one is
                 // queued (a failure to queue it leaves them); the handling's save writes the removal.
-                val older = if (sendGate.admits(TYPE_TOKEN_REFRESH)) emptyList() else st.outbox.filter { it.type == TYPE_TOKEN_REFRESH && it.re != null }
+                val older = if (sendGate.admits(TYPE_TOKEN_REFRESH)) {
+                    emptyList()
+                } else {
+                    st.outbox.filter { it.type == TYPE_TOKEN_REFRESH && it.re != null }
+                }
                 sendLocked(null, inner.type, standing(tok), inner.id, Inner.STATUS_OK, null)
                 if (older.isNotEmpty()) st.outbox.removeAll { e -> older.any { it === e } }
             } else {
