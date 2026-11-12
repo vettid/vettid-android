@@ -27,7 +27,7 @@ class StagingTimeScaleSettingsTest {
     private val view = OwnerCheckView(OwnerCheckState.OK, Instant.now().plusSeconds(1_800), 86_400, 0, hold = true, holdOffUntil = null)
 
     private fun show(t: TimeScaleView) = rule.setContent {
-        Column { OwnerCheckSettingsRows(OwnerCheckSettingsUiState(view = view, timeScale = t), OwnerCheckSettingsActions()) }
+        Column { OwnerCheckAdvancedRows(OwnerCheckSettingsUiState(view = view, timeScale = t), OwnerCheckSettingsActions()) }
     }
 
     @Test

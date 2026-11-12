@@ -148,7 +148,15 @@ data class MediaConfig(
     val dtlsPqcTrial: Boolean = false,
     /** Test builds only: [MediaFaults]. */
     val faults: MediaFaults = MediaFaults(),
-)
+    /**
+     * Test builds only (CALLS-PLAN §3.1, C5: "a debug-only forced-relay switch to test the fallback"): gather and use
+     * relayed candidates alone, so the call goes through the vault's TURN server or not at all.
+     */
+    val relayOnly: Boolean = false,
+) {
+    /** No test option on: the only configuration a build members use may make. */
+    val plain: Boolean get() = !dtlsPqcTrial && !faults.any && !relayOnly
+}
 
 interface MediaEngineFactory {
     /**

@@ -101,8 +101,23 @@ internal class FakeWalletOps : WalletOps {
     var capsSetFails: String? = null
     var capsRaiseFails: String? = null
 
+    /**
+     * One read only: it takes the wallets as they are when it begins, says so on [slowReadStarted], and answers with them once
+     * this gate opens.
+     */
+    @Volatile
+    var slowRead: CompletableDeferred<Unit>? = null
+    val slowReadStarted = CompletableDeferred<Unit>()
+
     override suspend fun list(): List<VaultWallet> {
         calls += "list"
+        slowRead?.let { gate ->
+            val asItWas = wallets.values.toList()
+            slowRead = null
+            slowReadStarted.complete(Unit)
+            gate.await()
+            return asItWas
+        }
         listGate?.await()
         if (unsupported) refuse("wallet.list", "unsupported_type")
         if (listFails) refuse("wallet.list", "internal")

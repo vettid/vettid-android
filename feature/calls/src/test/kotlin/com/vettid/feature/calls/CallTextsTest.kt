@@ -127,6 +127,19 @@ class CallTextsTest {
         for (r in CallEnd.entries - CallEnd.CALLS_OFF) assertEquals("$r", "Ada Lovelace", endedName(ended(r), state, "Ada Lovelace"))
     }
 
+    /** (C5) The test screen's relay-only switch and the three counts of the calls' paths. */
+    @Test
+    fun theTestScreenHasRelayOnlyAndThePathCounts() {
+        val on = CallTest.toggled(MediaConfig(), "relayOnly")
+        assertTrue(on.relayOnly)
+        assertFalse(CallTest.toggled(on, "relayOnly").relayOnly)
+        val map = CallTest.lines(true, on, CallState.Idle, CallDiagnostics(), CallsDiagnostics(), com.vettid.core.calls.CallPaths(direct = 3, relayed = 2, unknown = 1)).toMap()
+        assertEquals("relayOnly", map["faults"])
+        assertEquals("3", map["callsDirect"])
+        assertEquals("2", map["callsRelayed"])
+        assertEquals("1", map["callsPathUnknown"])
+    }
+
     /** Review P2 of #128: the microphone prompt for answering goes when the call it was for is no longer ringing. */
     @Test
     fun aMicrophonePromptForAnAnswerEndsWithTheRinging() {

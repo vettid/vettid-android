@@ -100,7 +100,15 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
 
     var streams = 1
 
-    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1, inboundAudioStreams = streams)
+    /** The candidate pair the stack reports: relayed, direct, or none yet (null). */
+    var relayed: Boolean? = null
+
+    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(
+        packetsSent = 1,
+        inboundAudioStreams = streams,
+        local = relayed?.let { CandidateInfo(if (it) "relay" else "host", "udp", "wifi") },
+        remote = relayed?.let { CandidateInfo("host", "udp", "") },
+    )
 
     override fun close() {
         closed = true

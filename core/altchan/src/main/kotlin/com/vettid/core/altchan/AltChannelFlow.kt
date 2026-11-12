@@ -1,6 +1,10 @@
 package com.vettid.core.altchan
 
 import com.vettid.core.attestation.AttestationException
+import com.vettid.core.attestation.EnclaveRecord
+import com.vettid.core.attestation.EnclaveRecords
+import com.vettid.core.attestation.EnclaveRefusal
+import com.vettid.core.attestation.EnclaveVerification
 import com.vettid.core.attestation.EnclaveVerifier
 import com.vettid.core.attestation.VerifiedEnclave
 import com.vettid.core.attestation.manifest.ManifestKey
@@ -147,8 +151,14 @@ class AltChannelFlow(
     private val clock: Clock = Clock.systemUTC(),
     /** A canary manifest installed out of band (VAULT-RELEASES §10.1 step 9), or null. */
     private val canary: CanaryManifestSource? = null,
-    private val verifyEnclave: (ByteArray, ByteArray, ReleaseManifest, Boolean, Instant) -> VerifiedEnclave =
-        EnclaveVerifier(NitroVerifier(trust.nitroRoots))::verifyEnclave,
+    private val verifyEnclave: (ByteArray, ByteArray, ReleaseManifest, Boolean, Instant) -> EnclaveVerification =
+        EnclaveVerifier(NitroVerifier(trust.nitroRoots))::verify,
+    /**
+     * (ANDROID-PLAN 0.1.124) Hears the record of each verification of the enclave the vault runs on (the one a request is
+     * sealed to, after any route wait), and of a manifest refused before any enclave was checked. A verification that could
+     * not be made (nothing fetched) makes none.
+     */
+    private val records: EnclaveRecords? = null,
 ) {
     private val manifests = ManifestVerifier(trust.manifestKeys)
 
@@ -160,18 +170,30 @@ class AltChannelFlow(
      * back to the canary (VAULT-MESSAGING §11.10.1): any other failure to fetch the published manifest (another
      * status, a network error) stays an error.
      */
-    suspend fun manifest(seen: Long): ReleaseManifest {
+    suspend fun manifest(seen: Long, record: Boolean = false): ReleaseManifest {
+        // Only the flows that verify the vault's enclave record a refused list (not the update check, ANDROID-PLAN 0.1.124).
+        val sink = records.takeIf { record }
         val canaryDoc = canary?.served()
         val c = canaryDoc?.let { canaryManifest(it) }
         val published = try {
-            manifests.verify(api.manifest())
+            val served = api.manifest()
+            try {
+                manifests.verify(served)
+            } catch (e: AttestationException) {
+                // Fetched and refused: line 1 failed, no enclave checked (ANDROID-PLAN 0.1.124).
+                sink?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+                throw e
+            }
         } catch (e: MemberApiException) {
             if (c == null || e.code != MemberApiException.MANIFEST_UNAVAILABLE || e.status != HTTP_NOT_FOUND) throw e
             null
         }
         if (canaryDoc != null && c != null && published != null && published.serial >= c.serial) canary?.retire(canaryDoc)
         val m = CanaryManifests.choose(published, c) ?: throw MemberApiException(0, MemberApiException.MANIFEST_UNAVAILABLE)
-        if (m.serial < seen) throw AltRefusedException(AltRefusedException.Reason.MANIFEST_OLDER)
+        if (m.serial < seen) {
+            sink?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+            throw AltRefusedException(AltRefusedException.Reason.MANIFEST_OLDER)
+        }
         return m
     }
 
@@ -189,18 +211,46 @@ class AltChannelFlow(
      */
     fun acceptsTimeScale(scale: Long): Boolean = trust.acceptsTimeScale(scale)
 
-    private suspend fun enclaveFor(
+    /**
+     * The routed enclave (for [release], a PCR0, or the vault's route), verified, with its verification's record, kept only
+     * for the instance a request goes to: a failure is recorded at once, a pass by the caller once any route wait chose it
+     * ([used]).
+     */
+    private suspend fun enclaveRecorded(
         release: String?,
         m: ReleaseManifest,
         enroll: Boolean,
         onStarting: ((Long) -> Unit)? = null,
-    ): Pair<EnclaveInfo, VerifiedEnclave> {
+    ): Pair<EnclaveInfo, EnclaveVerification> {
         val info = api.enclaveWait(release, onStarting)
-        val e = verifyEnclave(info.descriptor(), info.attestation(), m, enroll, Instant.now(clock))
-        if (e.descriptor.instanceId != info.instanceId) throw AltChannelException("descriptor names another instance")
+        val v = verifyEnclave(info.descriptor(), info.attestation(), m, enroll, Instant.now(clock))
+        val e = try {
+            v.enclave()
+        } catch (x: AttestationException) {
+            records?.record(v.record)
+            throw x
+        }
+        // Refused after every check passed: recorded so, so that an earlier pass is not left on the screen.
+        if (e.descriptor.instanceId != info.instanceId) {
+            refusedAfterChecks(v, EnclaveRefusal.OTHER_INSTANCE)
+            throw AltChannelException("descriptor names another instance")
+        }
         // STAGING-TIME-SCALE §4 item 4: a release with a time scale this build does not accept gets nothing.
-        trust.checkTimeScale(e.descriptor.timeScale)
-        return info to e
+        if (!trust.acceptsTimeScale(e.descriptor.timeScale)) {
+            refusedAfterChecks(v, EnclaveRefusal.TIME_SCALE)
+            trust.checkTimeScale(e.descriptor.timeScale)
+        }
+        return info to v
+    }
+
+    /** Records the verification of the instance a request goes to (after any route wait). */
+    private fun used(v: EnclaveVerification) {
+        records?.record(v.record)
+    }
+
+    /** That verification refused after its checks: every line passed (ANDROID-PLAN 0.1.124 "Every check passed, but…"). */
+    private fun refusedAfterChecks(v: EnclaveVerification, why: EnclaveRefusal) {
+        records?.record(v.record.copy(refusal = why))
     }
 
     private fun retryable(e: Exception?, s: Slot?): Boolean =
@@ -224,11 +274,13 @@ class AltChannelFlow(
         attester: Attester,
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { null },
     ): EnrollOutcome {
-        var m = manifest(party.manifestSerialSeen())
+        var m = manifest(party.manifestSerialSeen(), record = true)
         var refetched = false
         var attempt = 1
         while (true) {
-            val (info, e) = enclaveFor(null, m, enroll = true)
+            val (info, v) = enclaveRecorded(null, m, enroll = true)
+            val e = v.enclave()
+            used(v)
             val secret = unlockSecretFor(e.descriptor.traits)
             val req = try {
                 party.prepareEnroll(userGuid, pin, e, m, attester, secret)
@@ -252,7 +304,7 @@ class AltChannelFlow(
             val r = party.openEnrollResult(env, req.requestId)
             if (!r.ok && r.code == CODE_MANIFEST && !refetched) {
                 refetched = true
-                m = manifest(party.manifestSerialSeen())
+                m = manifest(party.manifestSerialSeen(), record = true)
                 continue
             }
             return EnrollOutcome(vid, r.ok, r.code, info.instanceId)
@@ -306,7 +358,7 @@ class AltChannelFlow(
         unlockSecretFor: suspend (traits: ReleaseTraits) -> ByteArray? = { options.unlockSecret?.copyOf() },
     ): UnlockOutcome {
         val vaultId = party.vaultId() ?: throw AltRefusedException(AltRefusedException.Reason.NOT_PAIRED)
-        var m = manifest(party.manifestSerialSeen())
+        var m = manifest(party.manifestSerialSeen(), record = true)
         var refetched = false
         var attempt = 1
         while (true) {
@@ -314,15 +366,28 @@ class AltChannelFlow(
             beforePost()
             // ANDROID-PLAN 0.1.54 point 6: a route still naming the release the vault moved from gets no PIN; it is fetched
             // again for about a minute. Not for the way back, which asks for that release by its PCR0.
-            val routed = enclaveFor(release, m, enroll = false, onStarting)
-            val (info, e) = if (release == null && !options.abandon) {
-                RouteWait.awayFrom(party.movedFrom(), routed, { it.second.release }) { enclaveFor(null, m, enroll = false, onStarting) }
+            val routed = enclaveRecorded(release, m, enroll = false, onStarting)
+            val (info, v) = if (release == null && !options.abandon) {
+                RouteWait.awayFrom(party.movedFrom(), routed, { it.second.enclave().release }) {
+                    enclaveRecorded(null, m, enroll = false, onStarting)
+                }
             } else {
                 routed
             }
+            val e = v.enclave()
+            used(v)
             val secret = unlockSecretFor(e.descriptor.traits)
             val built = try {
                 party.prepareUnlock(userGuid, pin, e, m, attester, options.copy(unlockSecret = secret))
+            } catch (x: AltRefusedException) {
+                when (x.reason) {
+                    AltRefusedException.Reason.ROLLBACK_RELEASE -> refusedAfterChecks(v, EnclaveRefusal.OLDER_RELEASE)
+                    // The list is older than one this phone has used (checked again as the request is built): line 1 failed,
+                    // so the pass just recorded does not stay on the screen.
+                    AltRefusedException.Reason.MANIFEST_OLDER -> records?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+                    else -> Unit
+                }
+                throw x
             } finally {
                 secret?.fill(0)
             }
@@ -347,7 +412,7 @@ class AltChannelFlow(
             val r = party.openUnlockResult(env)
             if (!r.ok && r.code == CODE_MANIFEST && !refetched) {
                 refetched = true
-                m = manifest(party.manifestSerialSeen())
+                m = manifest(party.manifestSerialSeen(), record = true)
                 continue
             }
             return UnlockOutcome(r, info.instanceId, built.releaseChanged)
@@ -364,14 +429,18 @@ class AltChannelFlow(
      * move left is fetched again as for the unlock ([RouteWait]).
      */
     suspend fun preflight(state: AltState, release: String? = null): UnlockPreflight {
-        val m = manifest(state.manifestSerial)
-        val routed = enclaveFor(release, m, enroll = false)
-        val (_, e) = if (release == null) {
-            RouteWait.awayFrom(state.movedFrom, routed, { it.second.release }) { enclaveFor(null, m, enroll = false) }
+        val m = manifest(state.manifestSerial, record = true)
+        val routed = enclaveRecorded(release, m, enroll = false)
+        val (_, v) = if (release == null) {
+            RouteWait.awayFrom(state.movedFrom, routed, { it.second.enclave().release }) { enclaveRecorded(null, m, enroll = false) }
         } else {
             routed
         }
-        return UnlockPreflight.of(state, e.release, m)
+        val p = UnlockPreflight.of(state, v.enclave().release, m)
+        // An older release than this phone has unlocked into gets no PIN (§11.10.6); the way back of an unconfirmed move
+        // ([release]) is allowed to be older.
+        if (release == null && p.rollback) refusedAfterChecks(v, EnclaveRefusal.OLDER_RELEASE) else used(v)
+        return p
     }
 
     /**
@@ -402,10 +471,12 @@ class AltChannelFlow(
         onPosted: suspend () -> Unit = {},
         postFailed: suspend (java.io.IOException) -> Unit = {},
     ): RecoveryResult {
-        val m = manifest(0)
+        val m = manifest(0, record = true)
         var attempt = 1
         while (true) {
-            val (info, e) = enclaveFor(null, m, enroll = false)
+            val (info, v) = enclaveRecorded(null, m, enroll = false)
+            val e = v.enclave()
+            used(v)
             val req = build(e)
             var err: MemberApiException? = null
             var slot: Slot? = null
@@ -445,8 +516,10 @@ class AltChannelFlow(
         onSent: suspend () -> Unit = {},
         beforePost: suspend (requestId: String) -> Unit = {},
     ): com.vettid.core.crypto.altchan.RecoveryOpen.Result {
-        val m = manifest(0)
-        val (info, e) = enclaveFor(null, m, enroll = false)
+        val m = manifest(0, record = true)
+        val (info, v) = enclaveRecorded(null, m, enroll = false)
+        val e = v.enclave()
+        used(v)
         val req = build(e, m)
         // The open's history entry is saved durably first; a save that fails throws here and the open is not posted.
         beforePost(req.requestId)
