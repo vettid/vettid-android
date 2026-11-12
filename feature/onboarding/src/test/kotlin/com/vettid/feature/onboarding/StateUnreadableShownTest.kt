@@ -47,6 +47,18 @@ class StateUnreadableShownTest {
         assertFalse("not a phone the vault does not know", s.notRecognised)
     }
 
+    /** An old phone that kept its keys after a transfer: the state opened with them, so it is not "the move back failed". */
+    @Test
+    fun onAPhoneThatKeptItsKeysAfterATransferItIsNotTheMoveBackFailing() {
+        val r = UnlockAttempt.Failed(FailureKind.STATE_UNREADABLE, "state_unreadable")
+        assertEquals(UnlockMessage.Failed(FailureKind.STATE_UNREADABLE, "state_unreadable"), unlockFailedMessage(r, keptTransfer = true))
+        // A failure that says the keys no longer open the vault still is.
+        assertEquals(
+            UnlockMessage.MoveBackFailed,
+            unlockFailedMessage(UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, "device_secret"), keptTransfer = true),
+        )
+    }
+
     @Test
     fun theRecoveryOpenShowsItsOwnTextAndAllowsALaterTry() {
         val t = openAnswerText(RecoveryOpenOutcome("state_unreadable"), false)
@@ -56,6 +68,7 @@ class StateUnreadableShownTest {
                 "try again: each try uses one of your recovery attempts.",
             ctx.getString(t.res),
         )
+        // Holds for any code outside the ended ones; kept so that adding this code there would be seen.
         assertTrue("not an ended recovery", openCanTryAgain("state_unreadable"))
     }
 }
