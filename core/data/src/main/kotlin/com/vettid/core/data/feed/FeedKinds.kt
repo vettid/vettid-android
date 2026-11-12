@@ -146,8 +146,14 @@ sealed interface FeedTarget {
     /** Settings → Security → Credential. */
     data object Credential : FeedTarget
 
-    /** Settings → Security (the daily check and the hold). */
+    /** Settings → Security. */
     data object Security : FeedTarget
+
+    /**
+     * (ANDROID-PLAN 0.1.124) Settings → Security → Advanced security, at [row]: "the check" opens the interval row,
+     * "the hold" the hold row.
+     */
+    data class AdvancedSecurity(val row: AdvancedSecurityRow) : FeedTarget
 
     data object Sheet : FeedTarget
 }
@@ -590,7 +596,10 @@ object FeedKinds {
             "credential.alarm" -> FeedTarget.Alarm
             "credential.password_failed" -> FeedTarget.History
             "credential.rotated", "credential.reset" -> FeedTarget.Credential
-            "owner_check.failed", "owner_check.locked", "owner_check.hold_changed" -> FeedTarget.Security
+            // ANDROID-PLAN 0.1.124: the check's and the hold's rows are in Advanced security; the lock is Security's.
+            "owner_check.failed" -> FeedTarget.AdvancedSecurity(AdvancedSecurityRow.INTERVAL)
+            "owner_check.hold_changed" -> FeedTarget.AdvancedSecurity(AdvancedSecurityRow.HOLD)
+            "owner_check.locked" -> FeedTarget.Security
             else -> FeedTarget.Sheet
         }
     }
