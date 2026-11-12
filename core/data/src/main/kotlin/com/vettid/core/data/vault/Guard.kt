@@ -12,6 +12,7 @@ import com.vettid.core.vault.NotATransferCodeException
 import com.vettid.core.vault.PairingRejectedException
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
+import com.vettid.core.vault.heldByLockGate
 import com.vettid.core.vault.opType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -128,7 +129,8 @@ private suspend inline fun <T> counted(block: suspend () -> T): T = try {
 } catch (e: IOException) {
     // No answer (a timeout, a transport failure, a relay refusal): a counted operation may already be at the vault and have
     // counted; any other leaves the estimate alone. The type comes from the device's send, not from the message.
-    if (e.opType in CheckSink.COUNTED) CheckSink.counter?.unanswered()
+    // A send the device's lock gate held (ANDROID-PLAN §4 "While pending") never reached the vault: it counted nothing.
+    if (e.opType in CheckSink.COUNTED && !e.heldByLockGate) CheckSink.counter?.unanswered()
     throw e
 }
 

@@ -91,4 +91,25 @@ class VaultClientAccessTest {
         assertEquals("the declaration and the two uses", 3, count("""\blockTimeIo\b"""))
         assertEquals("only there", 1, count("""\bLockTimeSend\b"""))
     }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") The unlock runs while this phone is held locked (a lock pending, or "opened again"): the
+     * block it runs under [LockKeeper.unlocking], and the unlock it calls, send nothing over the relay (no request, no client):
+     * the unlock goes over the member API, and the gate opens once it opened the vault.
+     */
+    @Test
+    fun theUnlockSendsNothingOverTheRelay() {
+        val start = code.indexOfFirst { it.startsWith("lockKeeper.unlocking(") }
+        val end = (start until code.size).first { code[it].startsWith("} catch (e: VaultFailure) {") }
+        assertTrue(start in 0 until end)
+        val forbidden = Regex("""\b(request|requestOnce|op|opOnce|send|sendOnce|requestWithId|sendKept)\(|\bopenApi\b|\blockTimeApi\(|\bvaultApi\(""")
+        val block = code.subList(start, end)
+        assertTrue(block.filter { forbidden.containsMatchIn(it) }.toString(), block.none { forbidden.containsMatchIn(it) })
+        // The unlock it calls (one attempt with this phone's secret), whole.
+        val once = code.indexOfFirst { it.startsWith("private suspend fun unlockWithSecretOnce(") }
+        val onceEnd = (once + 1 until code.size).first { code[it].startsWith("private ") || code[it].startsWith("internal ") || code[it].startsWith("override ") || code[it].startsWith("fun ") || code[it].startsWith("suspend fun ") }
+        val body = code.subList(once, onceEnd)
+        assertTrue(body.filter { forbidden.containsMatchIn(it) }.toString(), body.none { forbidden.containsMatchIn(it) })
+        assertTrue(block.any { it.contains("unlockWithSecret(") })
+    }
 }

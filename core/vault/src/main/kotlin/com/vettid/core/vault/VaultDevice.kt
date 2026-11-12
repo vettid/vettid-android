@@ -211,6 +211,15 @@ class OpTypeTag(val type: String) : Exception("op $type")
 val Throwable.opType: String?
     get() = (this as? VaultStateException)?.type ?: suppressed.filterIsInstance<OpTypeTag>().firstOrNull()?.type
 
+/**
+ * (ANDROID-PLAN §4 "While pending") Whether this failure, or one it was caused by, is a send the device's lock gate held
+ * ([VaultDevice.CODE_LOCK_PENDING]): a first send, so nothing of that request was sent.
+ */
+val Throwable.heldByLockGate: Boolean
+    get() = generateSequence(this) { it.cause }.take(CAUSE_DEPTH).any { it is VaultStateException && it.code == VaultDevice.CODE_LOCK_PENDING }
+
+private const val CAUSE_DEPTH = 8
+
 /** Runs the send of a request of [type]; an I/O failure leaves it tagged (same exception, same class). */
 private inline fun <T> tagged(type: String, block: () -> T): T = try {
     block()
@@ -720,6 +729,8 @@ class VaultDevice private constructor(
      * shared storage). Returns the relay's `blob_id`.
      */
     suspend fun uploadBlobToVault(blob: ByteArray): String {
+        // (ANDROID-PLAN §4 "While pending") Not while the lock gate holds it: nothing is uploaded.
+        lock.withLock { if (!maySend(TYPE_BLOB_PUT)) throw heldByGate(TYPE_BLOB_PUT) }
         checkLive()
         val v = requireVault()
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
@@ -3072,6 +3083,16 @@ class VaultDevice private constructor(
     }
 
     /**
+     * (ANDROID-PLAN §4 "While pending") [id] was never sent (its first send was held by the lock gate): neither unsettled nor a
+     * `wallet.sign` outstanding ([SignMark]).
+     */
+    internal suspend fun dropUnsent(id: String) = lock.withLock {
+        val a = st.unsettled.remove(id) != null
+        val b = st.unsettledSigns.remove(id) != null
+        if (a || b) save()
+    }
+
+    /**
      * No credential operation of this phone can still reach the vault: each was answered, or the newest `ts` the vault
      * stamped (never the phone's estimate) is more than [SETTLE_MARGIN] past its `exp`.
      */
@@ -3095,7 +3116,9 @@ class VaultDevice private constructor(
                 // expired by the phone's estimate, one request that is not a credential operation fetches a stamped one.
                 if (!probed && expiredByEstimate()) {
                     probed = true
+                    // (ANDROID-PLAN §4 "While pending") A probe the lock gate held is said as such, not as "unsettled".
                     runCatching { requestOnce("credential.version", timeout = cfg.requestTimeout) }
+                        .onFailure { if (it.heldByLockGate) throw it }
                     continue
                 }
                 kotlinx.coroutines.delay(SETTLE_POLL_MS)
@@ -3271,6 +3294,9 @@ class VaultDevice private constructor(
 
         /** [VaultStateException.code] of a send the lock gate held: the same as the manager's `lock_pending`. */
         const val CODE_LOCK_PENDING = "lock_pending"
+
+        /** The lock gate's name for a blob upload to the vault's mailbox ([uploadBlobToVault]). */
+        const val TYPE_BLOB_PUT = "blob.put"
 
         /**
          * (A6 audit N2) A state written by an app version that put requests in the outbox: every entry that is not of

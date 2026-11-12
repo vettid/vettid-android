@@ -123,4 +123,28 @@ class GuardTest {
         assertEquals(FailureKind.OTHER, f.kind)
         assertEquals(VaultManager.CODE_LOCK_PENDING, com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING)
     }
+
+    /**
+     * A counted operation (`item.reveal`) whose first send the lock gate held never reached the vault: the owner check's
+     * estimate of tries left is not lowered. One that got no answer still is.
+     */
+    @Test
+    fun aHeldCountedSendSpendsNoTry() = runTest {
+        var unanswered = 0
+        CheckSink.counter = object : CheckSink.Counter {
+            override fun answered() = Unit
+
+            override fun unanswered() {
+                unanswered++
+            }
+        }
+        try {
+            runCatching { vaultGuard { throw com.vettid.core.vault.VaultStateException("held", "item.reveal", com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING) } }
+            assertEquals("held: nothing counted", 0, unanswered)
+            runCatching { vaultGuard { throw com.vettid.core.vault.VaultStateException("item.reveal: no response", "item.reveal") } }
+            assertEquals("unanswered: one", 1, unanswered)
+        } finally {
+            CheckSink.counter = null
+        }
+    }
 }

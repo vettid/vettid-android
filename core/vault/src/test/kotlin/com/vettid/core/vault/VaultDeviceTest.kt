@@ -7031,6 +7031,116 @@ class VaultDeviceTest {
         }
     }
 
+    /** The vault's answer to the device's `credential.utk.get`: one fresh UTK. */
+    private suspend fun answerUtkGet(d: VaultDevice, v: FakeVault, id: String) {
+        val get = v.open(nextDeposit().second)
+        assertEquals("credential.utk.get", get.type)
+        d.handle(v.seal(get.type, """{"utks":[${utkJson(id, KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") A credential operation ([CredentialOps.sealedWith], `account.name.set`) whose first send
+     * the lock gate held: nothing was sent, so it is not unsettled and its UTK is back in the pool; the failure is the gate's.
+     */
+    @Test
+    fun aHeldCredentialOperationLeavesNothingBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "account.name.set" } // the lock asked for after the UTK came
+            val op = async(Dispatchers.IO) { runCatching { api.accountNameSet("975310", "password one", "Ada", "L") } }
+            answerUtkGet(d, v, "00112233445566d1")
+            val e = op.await().exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertTrue("not unsettled", savedState(store).unsettled.isEmpty())
+            assertEquals("the UTK is back", 1, d.utkCount)
+        }
+    }
+
+    /**
+     * A `wallet.sign` whose first send the lock gate held: not unsettled, no [SignMark], the UTK back, nothing kept; the gate's
+     * failure is thrown, not [ChangeUnansweredException]. One that goes out and gets no answer is kept and marked as before.
+     */
+    @Test
+    fun aHeldWalletSignLeavesNothingBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "wallet.sign" }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
+            answerUtkGet(d, v, "00112233445566d2")
+            val e = sign.await().exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            val st = savedState(store)
+            assertTrue("not unsettled", st.unsettled.isEmpty())
+            assertTrue("no SignMark", st.unsettledSigns.isEmpty())
+            assertEquals("the UTK is back", 1, d.utkCount)
+            // As before: sent and unanswered, it is kept, unsettled and marked.
+            d.sendGate = VaultDevice.SendGate { true }
+            val again = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
+            (1..3).map { assertEquals("wallet.sign", v.open(nextDeposit().second).type) }
+            val u = again.await().exceptionOrNull()
+            assertTrue("$u", u is ChangeUnansweredException && !u.heldByLockGate)
+            assertEquals(setOf(signWallet), savedState(store).unsettledSigns.values.map { it.walletId }.toSet())
+            assertEquals(1, savedState(store).unsettled.size)
+            assertEquals("spent", 0, d.utkCount)
+        }
+    }
+
+    /**
+     * A PIN or password change whose first send the lock gate held: [ChangeUnansweredException] with the gate's failure as its
+     * cause (the caller clears the marker), the UTK back, nothing sent.
+     */
+    @Test
+    fun aHeldChangeGivesItsUtkBackAndSaysWhy() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != ChangeTypes.PASSWORD_CHANGE }
+            val markers = mutableListOf<ChangeMarker>()
+            val change = async(Dispatchers.IO) {
+                runCatching { api.credentialChangePassword("old password", "new password!", "975310") { m -> markers.add(m) } }
+            }
+            answerVersion(d, v, 3)
+            answerUtkGet(d, v, "00112233445566d3")
+            val e = change.await().exceptionOrNull()
+            assertTrue("$e", e is ChangeUnansweredException && e.heldByLockGate)
+            assertEquals(1, markers.size)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals("the UTK is back", 1, d.utkCount)
+        }
+    }
+
+    /** A blob upload to the vault's mailbox waits for the gate: nothing is uploaded, the gate's failure is thrown. */
+    @Test
+    fun aBlobUploadWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val e = runCatching { d.uploadBlobToVault(ByteArray(16)) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+        }
+    }
+
+    /** The settle wait's probe (`credential.version`) held by the gate says so, rather than "unsettled". */
+    @Test
+    fun aHeldSettleProbeSaysLockPending() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.trackCredential(d.newId(), d.vaultNow().minus(java.time.Duration.ofHours(1)))
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val e = runCatching { d.awaitCredentialSettled() }.exceptionOrNull()
+            assertTrue("$e", e != null && e.heldByLockGate)
+        }
+    }
+
     /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
     private class RecordingFlakyStore : DeviceStateStore {
         private val inner = InMemoryDeviceStateStore()

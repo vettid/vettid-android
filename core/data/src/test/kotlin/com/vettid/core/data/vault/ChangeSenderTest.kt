@@ -235,4 +235,25 @@ class ChangeSenderTest {
             f.scope.cancel()
         }
     }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") A change whose first send the lock gate held: nothing was sent, so the marker goes, nothing
+     * is kept to resend and no check starts; the failure is `lock_pending`.
+     */
+    @Test
+    fun aChangeHeldByTheLockGateClearsItsMarker() = runTest {
+        val f = Fixture(testScheduler)
+        val held = com.vettid.core.vault.VaultStateException("held", ChangeTypes.PIN_CHANGE, com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING)
+        val r = f.send { store ->
+            store(marker)
+            throw ChangeUnansweredException(kept(marker), held)
+        }
+        val e = r.exceptionOrNull() as VaultFailure
+        assertEquals(com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING, e.code)
+        assertNull("no marker", f.record.value.unresolvedChange)
+        assertNull("nothing kept", f.kept)
+        assertNull("no check", f.resolver.check.value)
+        assertEquals(3L, f.record.value.phoneEpoch)
+        f.scope.cancel()
+    }
 }

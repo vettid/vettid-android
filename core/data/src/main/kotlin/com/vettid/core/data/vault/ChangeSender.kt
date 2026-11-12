@@ -4,7 +4,9 @@ import com.vettid.core.vault.ChangeMarker
 import com.vettid.core.vault.ChangeUnansweredException
 import com.vettid.core.vault.CredentialUnsettledException
 import com.vettid.core.vault.KeptChange
+import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.heldByLockGate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 
@@ -56,6 +58,12 @@ internal class ChangeSender(
         } catch (e: CredentialUnsettledException) {
             throw VaultFailure(FailureKind.CREDENTIAL_UNSETTLED, CODE_UNSETTLED, cause = e)
         } catch (e: ChangeUnansweredException) {
+            // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent, so the change did not
+            // apply. The marker goes and nothing is kept or checked: nothing sends this change later by itself.
+            if (e.heldByLockGate) {
+                marker?.let { ops.clear(it) }
+                throw VaultFailure(FailureKind.OTHER, VaultDevice.CODE_LOCK_PENDING, cause = e)
+            }
             ops.keep(e.kept)
             resolver.publish(ChangeCheck.Checking(kind))
             resolver.kick()
