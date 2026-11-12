@@ -57,8 +57,8 @@ class VaultClientAccessTest {
         assertEquals(0, count("""\bd\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
         // (ANDROID-PLAN §4 "While pending") The device asks the lock gate before each deposit of an outbox entry, for every
         // flush, its own collection start's included; the manager installs it on every session's device.
-        val gate = "device.sendGate = VaultDevice.SendGate { type -> type in VaultDevice.UNGATED_TYPES || lockGuard.admits() }"
-        assertTrue(code.any { it.contains(gate) })
+        val gate = Regex("""device\.sendGate\s*=.*UNGATED_TYPES.*lockGuard\.admits\(\)""")
+        assertTrue(code.any { gate.containsMatchIn(it) })
         // The outbox is flushed in two places, both only while no lock is pending.
         assertEquals(2, count("""flushOutbox\(\)"""))
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")

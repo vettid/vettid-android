@@ -6586,6 +6586,30 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * A pending `call.end` is not held behind an entry the gate holds while its mailbox waits for a quota: once the backoff
+     * has ended it goes.
+     */
+    @Test
+    fun aCallEndIsNotHeldBehindAGatedEntryInAQuotaWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "t") }) // held by the gate, first in the outbox
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            d.flushOutbox()
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+        }
+    }
+
     /** A pending `call.end` passes a shut gate (the plan's one exception besides the lock). */
     @Test
     fun aCallEndPassesAShutGate() = runBlocking<Unit> {
@@ -6598,7 +6622,10 @@ class VaultDeviceTest {
         }
     }
 
-    /** A stop that comes while a flush runs wins: nothing is deposited after it, and what is left stays in the outbox. */
+    /**
+     * A stop that comes while a flush runs wins: the entries after it are not deposited and stay in the outbox (the gate's
+     * own stop comes after its entry's check, so that one entry still goes).
+     */
     @Test
     fun aStopDuringAFlushWins() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -6620,7 +6647,7 @@ class VaultDeviceTest {
             }
             d.flushOutbox()
             nextDeposit()
-            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertNull("no entry after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
             assertEquals(1, d.outboxEntries.size)
             refuseStatus = 403
         }

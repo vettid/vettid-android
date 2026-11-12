@@ -755,7 +755,8 @@ class VaultDevice private constructor(
      * foreground's, the collection start's) and by what a handling queued ([deliverQueued], the 12-day `hs.confirm`). A held
      * entry stays in the outbox for the next flush the gate admits. Not asked for a rekey's `hs.resp` (owner decision
      * 2026-11-12, a: it would hold the vault's rekeys until the handshake expires) nor for requests, which the owner gates
-     * itself. Everything by default.
+     * itself. Everything by default. A lock that starts while an admitted entry is being deposited follows that deposit (the
+     * lock's own request needs the device lock).
      */
     fun interface SendGate {
         fun admits(type: String): Boolean
@@ -1842,7 +1843,9 @@ class VaultDevice private constructor(
         // (Item 1) While its mailbox waits for a quota, an entry goes only after every earlier entry of that mailbox has
         // gone: one still in the outbox holds it for the next flush (which takes them in order). The refresh is never held
         // behind another entry this way (the review of 4de9019c, Medium 1): it asks for the token the others may need.
-        val behindEarlier = st.outbox.takeWhile { it !== e }.any { it.mailbox == e.mailbox }
+        // An earlier entry the lock gate holds is not "earlier" here: it is not being sent, and a pending `call.end` must not
+        // wait behind it.
+        val behindEarlier = st.outbox.takeWhile { it !== e }.any { it.mailbox == e.mailbox && sendGate.admits(it.type) }
         if (e.type != TYPE_TOKEN_REFRESH && behindEarlier && quotaWaiting(e.mailbox)) throw QuotaWait()
         val until = quotaBackoff[e.mailbox]?.first
         if (until != null && cfg.elapsedMs() < until) throw QuotaWait()
