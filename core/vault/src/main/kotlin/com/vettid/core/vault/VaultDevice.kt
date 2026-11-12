@@ -748,9 +748,33 @@ class VaultDevice private constructor(
         return true
     }
 
+    /**
+     * (ANDROID-PLAN §4 "While pending") What the owner of this device lets out of the outbox now, by entry type: while a
+     * lock is pending nothing is sent to the vault but the lock and a pending `call.end` ([UNGATED_TYPES]). Asked under the
+     * device lock right before each deposit of an outbox entry, by every flush ([flushOutbox]: the manager's, the
+     * foreground's, the collection start's) and by what a handling queued ([deliverQueued], the 12-day `hs.confirm`). A held
+     * entry stays in the outbox for the next flush the gate admits. Not asked for a rekey's `hs.resp` (owner decision
+     * 2026-11-12, a: it would hold the vault's rekeys until the handshake expires) nor for requests, which the owner gates
+     * itself. Everything by default.
+     */
+    fun interface SendGate {
+        fun admits(type: String): Boolean
+    }
+
+    @Volatile
+    var sendGate: SendGate = SendGate { true }
+
+    /** Counts [stop]s: a flush asked for before a stop deposits nothing after it (the stop wins). */
+    @Volatile
+    private var stopSeq = 0L
+
+    /** Whether [e] may be deposited now by a flush asked for at stop count [seq]. Under [lock]. */
+    private fun mayDeposit(e: OutboxEntry, seq: Long): Boolean = !forgotten && stopSeq == seq && sendGate.admits(e.type)
+
     /** Stops collecting. */
     @Synchronized
     fun stop() {
+        stopSeq++
         collectScope = null
         collectGen++ // what the stopped collection's rounds still report is theirs, not the next one's
         // A request that is out at the relay is cut by this; the cancelled round counts it (once) as lost.
@@ -1694,14 +1718,17 @@ class VaultDevice private constructor(
     private suspend fun deliverInOrder(entry: OutboxEntry) {
         val waiting = quotaWaiting(entry.mailbox)
         val earlier = if (waiting) st.outbox.takeWhile { it !== entry }.filter { it.mailbox == entry.mailbox } else emptyList()
+        val seq = stopSeq
         for (e in earlier) {
+            if (!mayDeposit(e, seq)) continue // held by the gate: it stays for the next flush the gate admits
             try {
                 if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e)
             } catch (_: IOException) {
                 // still waiting: it stays, and [entry] waits behind it ([awaitQuota])
             }
         }
-        deliver(entry)
+        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it.
+        if (mayDeposit(entry, seq)) deliver(entry)
     }
 
     /**
@@ -1867,11 +1894,15 @@ class VaultDevice private constructor(
 
     /** Re-deposits what the outbox still holds (after a restart or a transport failure). */
     suspend fun flushOutbox() {
+        val seq = stopSeq
         val entries = lock.withLock { st.outbox.toList() }
         for (e in entries) {
             try {
                 lock.withLock {
                     if (!st.outbox.contains(e)) return@withLock
+                    // The gate (a lock pending) and a stop since this flush was asked for: asked again for each entry, so a
+                    // lock or a stop that comes while the flush runs holds what is left.
+                    if (!mayDeposit(e, seq)) return@withLock
                     if (e.id in unsaved) save() // written first, sent after; a failed save leaves it for the next flush
                     if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e) // hs.confirm's time follows a refusal for good
                 }
@@ -2604,7 +2635,8 @@ class VaultDevice private constructor(
                 // pruned in memory; the next save writes it
             }
         }
-        tickConfirmLocked(t, save = true)?.let { deliverConfirm(it) }
+        // Queued whatever the gate says (its time is kept); deposited only while the gate admits it.
+        tickConfirmLocked(t, save = true)?.let { if (mayDeposit(it, stopSeq)) deliverConfirm(it) }
     }
 
     /**
@@ -2653,6 +2685,9 @@ class VaultDevice private constructor(
         val (waiting, ready) = queued.partition { it.id in unsaved }
         afterHandle.addAll(waiting)
         for (e in ready) {
+            // What a vault message brought (the refresh answer, `device.features`, an `hs.confirm`) waits in the outbox while
+            // the gate is shut (a lock pending): the next flush it admits sends it.
+            if (!mayDeposit(e, stopSeq)) continue
             if (e.type == HsTypes.CONFIRM) {
                 deliverConfirm(e)
             } else {
@@ -3123,6 +3158,9 @@ class VaultDevice private constructor(
          * `device.features` too: durable, never answered, and the same whenever they arrive (VAULT-MESSAGING §6.3.1
          * "Responder": "queues `hs.confirm` … durable"; §10.2).
          */
+        /** (ANDROID-PLAN §4 "While pending") The outbox types the lock gate lets out while a lock is pending. */
+        val UNGATED_TYPES: Set<String> = setOf("call.end")
+
         internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end", HsTypes.CONFIRM, TYPE_DEVICE_FEATURES)
 
         /**

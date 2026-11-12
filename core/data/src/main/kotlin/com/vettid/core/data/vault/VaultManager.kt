@@ -1515,6 +1515,9 @@ class VaultManager(
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
                 // before it compares the bytes as typed.
+                // (ANDROID-PLAN §4 "While pending") Nothing but the lock and a pending `call.end` leaves the outbox while a lock is
+                // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
+                device.sendGate = VaultDevice.SendGate { type -> type in VaultDevice.UNGATED_TYPES || lockGuard.admits() }
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }

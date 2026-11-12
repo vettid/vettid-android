@@ -6524,6 +6524,108 @@ class VaultDeviceTest {
 
     private fun confirmsQueued(d: VaultDevice) = d.outboxEntries.count { it.type == "hs.confirm" }
 
+    // --- the lock gate (ANDROID-PLAN §4 "While pending") ---
+
+    /**
+     * A shut gate (a lock pending): the rekey's `hs.resp` still goes (owner decision 2026-11-12, a) and the vault's `hs.fin`
+     * is taken (the epoch is active), but what it brings (`hs.confirm`, `device.features`) waits in the outbox, through a flush and a collection start's 12-day check,
+     * until the gate admits it.
+     */
+    @Test
+    fun aShutGateHoldsWhatARekeysFinBringsButTheRekeysAnswerGoes() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { false }
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow()) // the hs.resp went
+            d.handle(v.msg(res.fin))
+            // The vault's hs.fin is taken at the session layer while the gate is shut: the epoch is active (else the answer
+            // would wait 16 days and the vault's pending epoch its bound), and nothing else is deposited.
+            assertArrayEquals("the epoch is active", res.epoch.id, d.currentEpochId)
+            assertNull("held", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertTrue(d.outboxEntries.any { it.type == "hs.confirm" })
+            assertTrue(d.outboxEntries.any { it.type == VaultDevice.TYPE_DEVICE_FEATURES })
+            d.flushOutbox()
+            d.tickConfirm()
+            assertNull("still held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /** The 12-day `hs.confirm` at a collection start is queued while the gate is shut, and deposited once it admits it. */
+    @Test
+    fun theTwelveDayConfirmWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val r = rekeyed(this)
+            r.d.sendGate = VaultDevice.SendGate { false }
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            r.d.tickConfirm()
+            assertEquals("queued", 1, confirmsQueued(r.d))
+            noConfirm(r.new)
+            r.d.sendGate = VaultDevice.SendGate { true }
+            r.d.flushOutbox()
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /** A send of another type while the gate is shut is kept in the outbox, not deposited. */
+    @Test
+    fun aSendOfAnotherTypeWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "t") })
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+        }
+    }
+
+    /** A pending `call.end` passes a shut gate (the plan's one exception besides the lock). */
+    @Test
+    fun aCallEndPassesAShutGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("call.end", buildJsonObject { put("call_id", "c1") })
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    /** A stop that comes while a flush runs wins: nothing is deposited after it, and what is left stays in the outbox. */
+    @Test
+    fun aStopDuringAFlushWins() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // kept in the outbox
+            runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }
+            runCatching { d.send("call.end", buildJsonObject { put("call_id", "c2") }) }
+            assertEquals(2, d.outboxEntries.size)
+            refused.set(0)
+            refuseDeposits = null
+            var stopped = false
+            d.sendGate = VaultDevice.SendGate {
+                if (!stopped) {
+                    stopped = true
+                    d.stop() // the stop comes while the flush runs
+                }
+                true
+            }
+            d.flushOutbox()
+            nextDeposit()
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            refuseStatus = 403
+        }
+    }
+
     /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
     private class RecordingFlakyStore : DeviceStateStore {
         private val inner = InMemoryDeviceStateStore()
