@@ -263,7 +263,7 @@ private fun elapsed(since: Instant?, now: () -> Instant): String {
 }
 
 /** (C2) "Calls with <First> are off." takes the first name, as the owner approved it; every other ending the full one. */
-private fun endedName(call: CallState.Ended, state: CallUiState, name: String): String =
+internal fun endedName(call: CallState.Ended, state: CallUiState, name: String): String =
     if (call.reason == CallEnd.CALLS_OFF) AccountNames.isolateOrNull(state.firstName) ?: name else name
 
 @Composable

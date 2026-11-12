@@ -117,6 +117,16 @@ class CallTextsTest {
         }
     }
 
+    /** "Calls with <First> are off." takes the first name (the full one without it); every other ending the full one. */
+    @Test
+    fun theCallsOffEndingNamesTheFirstName() {
+        fun ended(r: CallEnd) = CallState.Ended("c1", CallDirection.OUTGOING, r, "01JB2Z6V9K3M4N5P6Q7R8S9T50")
+        val state = CallUiState(name = "Ada Lovelace", firstName = "Ada")
+        assertEquals("\u2068Ada\u2069", endedName(ended(CallEnd.CALLS_OFF), state, "Ada Lovelace"))
+        assertEquals("Ada Lovelace", endedName(ended(CallEnd.CALLS_OFF), state.copy(firstName = null), "Ada Lovelace"))
+        for (r in CallEnd.entries - CallEnd.CALLS_OFF) assertEquals("$r", "Ada Lovelace", endedName(ended(r), state, "Ada Lovelace"))
+    }
+
     /** Review P2 of #128: the microphone prompt for answering goes when the call it was for is no longer ringing. */
     @Test
     fun aMicrophonePromptForAnAnswerEndsWithTheRinging() {

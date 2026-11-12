@@ -480,11 +480,16 @@ class CallsControllerTest {
         c.setAllowed("conn-1", false)
         assertFalse(c.permissions.value.of("conn-1").allowed)
         vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
-        vault.gateway.permissionGate = {}
+        // The read the change asks for is held too, so that only the old read can have written in between.
+        val next = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { next.await() }
         gate.complete(Unit)
         runCurrent()
         assertFalse("the old read did not flip it back", c.permissions.value.of("conn-1").allowed)
         assertTrue("the read the change asked for followed", vault.gateway.permissionReads > reads)
+        next.complete(Unit)
+        runCurrent()
+        assertFalse(c.permissions.value.of("conn-1").allowed)
     }
 
     @Test

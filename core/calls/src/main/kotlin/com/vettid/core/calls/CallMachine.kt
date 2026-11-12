@@ -338,6 +338,8 @@ internal class CallMachine(
         val early = s.early.toList()
         s.early.clear()
         s.callId = m.call.callId
+        // An offer held before the call had its id, that turns out to carry this very id, is no other call.
+        if (s.glareOffer?.callId == m.call.callId) s.glareOffer = null
         s.formTwo = m.call.formTwo
         s.phase = CallPhase.CALLING
         s.canSendIce = true
@@ -460,13 +462,14 @@ internal class CallMachine(
     /** The vault's `call.end` for the call here, for its held glare offer, or for neither. */
     private fun onEnd(s: Session, e: SignalEvent.End) {
         if (s.glareOffer?.callId == e.callId) {
-            // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer.
+            // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer, and an
+            // offer for it delivered again is not either.
             s.glareOffer = null
+            rememberEnded(e.callId)
         } else if (s.supersededBy != null && s.supersededBy == e.callId) {
             // The winner itself ended before its offer reached this device: there is nothing to answer, and the vault
             // ended this device's own call already. A late offer for it is not answered or rung.
-            endedWinners.addLast(e.callId)
-            if (endedWinners.size > MAX_ENDED_WINNERS) endedWinners.removeFirst()
+            rememberEnded(e.callId)
             finish(s, CallEnd.MISSED, null)
         } else if (s.callId == e.callId && s.supersededBy == null) {
             // (While a lost glare waits for its winner, X's own end came already: a second one changes nothing.)
@@ -478,6 +481,11 @@ internal class CallMachine(
                 finish(s, ended(s, e.reason), null)
             }
         }
+    }
+
+    private fun rememberEnded(callId: String) {
+        endedWinners.addLast(callId)
+        if (endedWinners.size > MAX_ENDED_WINNERS) endedWinners.removeFirst()
     }
 
     /** [e] is the connection's own call while this device's outgoing call to it still rings: a glare, perhaps. */
