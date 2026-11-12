@@ -1695,6 +1695,18 @@ class VaultDeviceTest {
         }
     }
 
+    /** (Show held as held) Which failures of a durable send leave the entry in the outbox (and so are "held", not lost). */
+    @Test
+    fun whichFailuresKeepTheEntryInTheOutbox() {
+        assertTrue(VaultDevice.keptInOutbox(VaultDevice.QuotaWait()))
+        assertTrue(VaultDevice.keptInOutbox(RelayException(429, RelayException.QUOTA_EXCEEDED, "")))
+        assertTrue(VaultDevice.keptInOutbox(RelayException(503, "unavailable", "")))
+        assertTrue(VaultDevice.keptInOutbox(java.io.IOException("connection reset")))
+        assertFalse("a terminal refusal removed it", VaultDevice.keptInOutbox(RelayException(403, "token_revoked", "")))
+        assertFalse("nothing was queued", VaultDevice.keptInOutbox(VaultStateException("no session with the vault")))
+        assertFalse(VaultDevice.keptInOutbox(IllegalStateException("x")))
+    }
+
     /**
      * (Show held as held) A mailbox quota's backoff is announced with its length, each time it is set (a minute, then
      * doubled), so the app can flush when it ends; a token's quota (a wait for a fresh token) announces nothing.

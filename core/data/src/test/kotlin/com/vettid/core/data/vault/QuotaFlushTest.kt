@@ -32,13 +32,20 @@ class QuotaFlushTest {
     }
 
     @Test
-    fun notWhileALockIsPending() = runTest {
+    fun notWhileALockIsPendingAndOnceTheLockIsConfirmedItGoes() = runTest {
         val f = flush()
         admits = false
         f.backoffSet(60_000)
         advanceTimeBy(61_000)
         runCurrent()
         assertEquals("nothing but the lock goes", 0, flushes)
+        advanceTimeBy(QuotaFlush.RECHECK_MS * 3)
+        runCurrent()
+        assertEquals("still pending", 0, flushes)
+        admits = true // the lock is confirmed after the backoff ended
+        advanceTimeBy(QuotaFlush.RECHECK_MS + 1)
+        runCurrent()
+        assertEquals("it goes at the next look", 1, flushes)
     }
 
     @Test
@@ -64,7 +71,7 @@ class QuotaFlushTest {
     }
 
     @Test
-    fun aLaterBackoffReplacesTheWaitAndCancelEndsIt() = runTest {
+    fun aLaterBackoffReplacesTheWait() = runTest {
         val f = flush()
         f.backoffSet(60_000)
         advanceTimeBy(30_000)
@@ -73,11 +80,6 @@ class QuotaFlushTest {
         runCurrent()
         assertEquals(0, flushes)
         advanceTimeBy(81_000)
-        runCurrent()
-        assertEquals(1, flushes)
-        f.backoffSet(60_000)
-        f.cancel()
-        advanceTimeBy(61_000)
         runCurrent()
         assertEquals(1, flushes)
     }

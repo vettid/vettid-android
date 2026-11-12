@@ -802,7 +802,7 @@ internal class CallMachine(
                 // side's ring timer bounds the wait). Only the failure's type is logged.
                 runCatching { signalling.end(callId, reason) }.onFailure { e ->
                     if (e is CancellationException) return@onFailure
-                    if (e is java.io.IOException) {
+                    if (com.vettid.core.vault.VaultDevice.keptInOutbox(e)) {
                         android.util.Log.i(TAG, "call.end held for the outbox's next flush (${e.javaClass.simpleName})")
                     } else {
                         android.util.Log.w(TAG, "call.end not sent (${e.javaClass.simpleName})")
