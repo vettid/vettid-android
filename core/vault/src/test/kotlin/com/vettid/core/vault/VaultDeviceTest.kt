@@ -1738,6 +1738,42 @@ class VaultDeviceTest {
     }
 
     /**
+     * (Show held as held) A stop and a start while a quota backoff runs (a reconnect) announce what is left of it again, so the
+     * owner's flush at its end, asked for under the new stop count, deposits the held `call.end`; a stop with no start announces
+     * nothing.
+     */
+    @Test
+    fun aRestartDuringAQuotaBackoffAnnouncesItAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            val asked = d.stopCount
+            elapsed += min / 3
+            d.stop()
+            assertEquals("a stop alone announces nothing", listOf(min), seen.toList())
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            assertEquals("what is left, again", listOf(min, min - min / 3), seen.toList())
+            assertTrue("a new stop count for the flush asked now", d.stopCount != asked)
+            elapsed += min
+            d.flushOutbox(d.stopCount)
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            scope.cancel()
+            watcher.cancel()
+            d.stop()
+        }
+    }
+
+    /**
      * (A6 audit N1) The device's own wait ending drops nothing (the dropping is the 11-minute deadline's, after its
      * collect, in the app): an approval that comes later still completes the transfer.
      */

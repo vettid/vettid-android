@@ -9,9 +9,10 @@ import kotlinx.coroutines.launch
  * (Show held as held, Android) Flushes the outbox once a mailbox's quota backoff has ended, so an entry held by it (a
  * `call.end`, the outbox's only member-facing entry) goes as soon as the relay allows. What goes is the device's lock gate's to
  * decide, by type (ANDROID-PLAN §4 "While pending": a pending `call.end` goes while a lock is pending, nothing else does); the
- * flush takes the stop count of the moment the backoff was set ([stopCount]), so a stop since wins, and runs only while [live]
- * (the session is still this device's). A later backoff replaces the wait. The wait ends with the scope (the session's
- * observer).
+ * flush takes the stop count of the moment the backoff was set ([stopCount]), so a stop during the wait cancels that flush
+ * (the device deposits nothing for it), and runs only while [live] (the session is still this device's). A restart of the
+ * collection during the wait announces the rest of the backoff again ([com.vettid.core.vault.VaultDevice.quotaBackoffSet]),
+ * which replaces the wait with one under the new stop count. The wait ends with the scope (the session's observer).
  */
 internal class QuotaFlush(
     private val scope: CoroutineScope,

@@ -95,7 +95,7 @@ class QuotaFlushTest {
      * `call.end` out and nothing else.
      */
     @Test
-    fun withALockPendingTheCallEndGoesOnceTheBackoffEnds() = runTest {
+    fun withALockPendingTheCallEndGoesOnceTheBackoffEndsWithAFakeOutbox() = runTest {
         val guard = LockGuard(Ports(), { Instant.parse("2026-11-12T10:00:00Z") }) { attempt ->
             LockWiring.keeper(backgroundScope, Store(), attempt, {}) {}
         }
@@ -113,5 +113,27 @@ class QuotaFlushTest {
         runCurrent()
         assertEquals(listOf("call.end"), sent)
         assertEquals(listOf("relay.token.issued", "device.features"), outbox)
+    }
+
+    /**
+     * With a fake device whose flush deposits only under its current stop count: a stop and a start during the backoff (a
+     * reconnect) announce the rest of it again, so the flush at its end goes; a stop with no start leaves nothing to go.
+     */
+    @Test
+    fun aRestartDuringTheBackoffStillFlushesWithAFakeOutbox() = runTest {
+        val deposits = mutableListOf<Long>()
+        val f = QuotaFlush(backgroundScope, { stops }, { live }) { seq -> if (seq == stops) deposits += seq }
+        f.backoffSet(60_000)
+        advanceTimeBy(20_000)
+        stops++ // stop()
+        f.backoffSet(40_000) // start(): what is left of the backoff, announced again
+        advanceTimeBy(40_000 + QuotaFlush.MARGIN_MS + 1)
+        runCurrent()
+        assertEquals("it goes once the backoff ends", listOf(1L), deposits)
+        f.backoffSet(60_000)
+        stops++ // stop(), no start
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertEquals("nothing more", listOf(1L), deposits)
     }
 }

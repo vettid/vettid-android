@@ -389,7 +389,8 @@ class VaultDevice private constructor(
      * flushes the outbox when it ends ([flushOutbox]), behind its own lock gate, so a held entry (a `call.end`) goes as soon
      * as the relay allows rather than at some later, unrelated flush. Nothing is shown to the member for it: messages and
      * actions are requests, never outbox entries (a refusal is the caller's and is shown), and the outbox's only
-     * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds.
+     * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds. A [start] while a
+     * backoff runs (a restart after a [stop]) announces what is left of it again.
      */
     val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
 
@@ -656,6 +657,9 @@ class VaultDevice private constructor(
         collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
+        // (Show held as held) A quota backoff still running is announced again with what is left of it: the owner's flush when
+        // it ends was asked for under the stop count before this start, which a stop since makes deposit nothing.
+        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> quotaBackoffs.tryEmit((until - cfg.elapsedMs()).coerceAtLeast(0)) }
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
