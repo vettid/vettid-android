@@ -7,17 +7,17 @@ import kotlinx.coroutines.launch
 
 /**
  * (Show held as held, Android) Flushes the outbox once a mailbox's quota backoff has ended, so an entry held by it (a
- * `call.end`, the outbox's only member-facing entry) goes as soon as the relay allows. The flush passes the same gate as
- * every other: [admits] (nothing but the lock while one is pending, nor while this phone is held locked) and [live] (the
- * session is still this device's, and it was not stopped); a later backoff replaces the wait. A gate still shut when the
- * backoff ends is looked at again every [RECHECK_MS] while the session lives, so a lock that is confirmed later does not
- * leave the entry for some unrelated flush. The wait ends with the scope (the session's observer).
+ * `call.end`, the outbox's only member-facing entry) goes as soon as the relay allows. What goes is the device's lock gate's to
+ * decide, by type (ANDROID-PLAN §4 "While pending": a pending `call.end` goes while a lock is pending, nothing else does); the
+ * flush takes the stop count of the moment the backoff was set ([stopCount]), so a stop since wins, and runs only while [live]
+ * (the session is still this device's). A later backoff replaces the wait. The wait ends with the scope (the session's
+ * observer).
  */
 internal class QuotaFlush(
     private val scope: CoroutineScope,
-    private val admits: () -> Boolean,
+    private val stopCount: () -> Long,
     private val live: () -> Boolean,
-    private val flush: suspend () -> Unit,
+    private val flush: suspend (seq: Long) -> Unit,
 ) {
     private var wait: Job? = null
 
@@ -25,18 +25,15 @@ internal class QuotaFlush(
     @Synchronized
     fun backoffSet(ms: Long) {
         wait?.cancel()
+        val seq = stopCount() // taken here, where the flush is asked for
         wait = scope.launch {
             delay(ms + MARGIN_MS)
-            while (live() && !admits()) delay(RECHECK_MS)
-            if (live()) runCatching { flush() }
+            if (live()) runCatching { flush(seq) }
         }
     }
 
     internal companion object {
         /** After the backoff's end, so that the flush does not meet the backoff still running. */
         const val MARGIN_MS = 250L
-
-        /** How often a shut gate (a pending lock) is looked at again once the backoff has ended. */
-        const val RECHECK_MS = 5_000L
     }
 }

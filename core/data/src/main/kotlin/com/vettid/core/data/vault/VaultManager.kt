@@ -1517,7 +1517,7 @@ class VaultManager(
                 // before it compares the bytes as typed.
                 // (ANDROID-PLAN §4 "While pending") Nothing but the lock and a pending `call.end` leaves the outbox while a lock is
                 // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
-                device.sendGate = VaultDevice.SendGate { type -> type in VaultDevice.UNGATED_TYPES || lockGuard.admits() }
+                device.sendGate = lockGuard.sendGate()
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
@@ -1699,13 +1699,14 @@ class VaultManager(
                 }
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
-            // (Show held as held) The outbox once a mailbox's quota backoff ends, behind the lock gate; this observer's own
-            // scope, so it ends with the session.
+            // (Show held as held) The outbox once a mailbox's quota backoff ends; this observer's own scope, so it ends with the
+            // session. The device's gate decides by type (a pending `call.end` goes while a lock is pending, nothing else does),
+            // and the stop count is the one when the backoff was set.
             val quotaFlush = QuotaFlush(
                 this,
-                admits = { lockGuard.admits() },
+                stopCount = { s.device.stopCount },
                 live = { session === s && !s.device.stopped },
-                flush = { if (lockGuard.admits()) s.device.flushOutbox() }, // the gate again, at the flush itself
+                flush = { seq -> s.device.flushOutbox(seq) },
             )
             launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->

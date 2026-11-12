@@ -1679,7 +1679,10 @@ class VaultDevice private constructor(
         type: String,
         body: JsonObject = EMPTY,
         id: String? = null,
-    ): String = lock.withLock { sendLocked(id, type, body, null, null, null) }
+    ): String = lock.withLock {
+        checkLive() // a forgotten device sends nothing: said, not kept silently
+        sendLocked(id, type, body, null, null, null)
+    }
 
     /**
      * Seals a message and hands it to the relay client **once**: it is never written to the outbox, so it is not

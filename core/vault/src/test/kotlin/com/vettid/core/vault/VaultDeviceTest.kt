@@ -7211,6 +7211,27 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * A send on a forgotten device fails (it is not kept silently as if it had been queued): one forgotten with its keys, and
+     * one stopped with its keys still in memory (a drop it could not save, [VaultDevice.stopped]).
+     */
+    @Test
+    fun aSendOnAForgottenDeviceFails() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.forget()
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.exceptionOrNull() is VaultStateException)
+            val (stopped, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            // As saveDropOrStop leaves it: forgotten, its session keys still held.
+            VaultDevice::class.java.getDeclaredField("forgotten").apply { isAccessible = true }.setBoolean(stopped, true)
+            assertTrue(stopped.stopped)
+            val e = runCatching { stopped.send("call.end", buildJsonObject { put("call_id", "c2") }) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException)
+            assertTrue(stopped.outboxEntries.isEmpty())
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
     /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
     private class RecordingFlakyStore : DeviceStateStore {
         private val inner = InMemoryDeviceStateStore()

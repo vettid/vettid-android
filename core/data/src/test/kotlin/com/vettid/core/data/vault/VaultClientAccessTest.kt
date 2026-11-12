@@ -55,24 +55,26 @@ class VaultClientAccessTest {
     fun nothingIsSentThroughTheDeviceDirectly() {
         assertEquals(0, count("""\bdevice\??\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
         assertEquals(0, count("""\bd\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
-        // (ANDROID-PLAN §4 "While pending") The device asks the lock gate before each deposit of an outbox entry, for every
-        // flush, its own collection start's included; the manager installs it on every session's device.
-        val gate = Regex("""device\.sendGate\s*=.*UNGATED_TYPES.*lockGuard\.admits\(\)""")
-        assertTrue(code.any { gate.containsMatchIn(it) })
-        // The outbox is flushed in three places. The foreground return and the unlock take the stop count where the flush is
-        // asked for (before its launch), so that a stop after the ask wins; the unlock's flush waits for no lock pending, and the
-        // foreground's is left to the device's gate, which decides by type, so that a pending `call.end` goes on the return to
-        // the foreground. (Show held as held) The third runs once a mailbox's quota backoff has ended (QuotaFlush), behind the
-        // lock gate, with the stop count of that moment.
+        // (ANDROID-PLAN §4 "While pending"; owner decision 2026-11-12) The device asks the lock gate before each deposit and
+        // send; the manager installs LockGuard's (held only while a lock is pending) on every session's device.
+        assertTrue(code.any { it == "device.sendGate = lockGuard.sendGate()" })
+        assertEquals(1, count("""\bsendGate\s*="""))
+        // The outbox is flushed in three places, each with the stop count taken where the flush is asked for (before its
+        // launch), so that a stop after the ask wins. Only the unlock's waits for no lock pending; the foreground's and the
+        // quota backoff's (Show held as held) are left to the device's gate, which decides by type, so that a pending
+        // `call.end` goes.
         assertEquals(3, count("""flushOutbox\("""))
-        assertEquals(2, count("""flushOutbox\((seq|flushSeq)\)"""))
-        assertTrue(code.any { it.contains("flush = { if (lockGuard.admits()) s.device.flushOutbox() }") })
+        assertEquals(3, count("""flushOutbox\((seq|flushSeq)\)"""))
         val foreground = "d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }"
         assertTrue(code.any { it == foreground })
         assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
+        assertTrue(code.any { it == "stopCount = { s.device.stopCount }," })
+        assertTrue(code.any { it == "flush = { seq -> s.device.flushOutbox(seq) }," })
+        val quota = code.indexOfFirst { it.startsWith("val quotaFlush = QuotaFlush(") }
+        assertTrue("no lock check of its own", code.subList(quota, quota + 6).none { it.contains("admits") })
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
         val guarded = code.count { line -> line.contains("flushOutbox(") && checks.any { line.contains(it) } }
-        assertEquals("the unlock's and the quota flush's", 2, guarded)
+        assertEquals("the unlock's", 1, guarded)
     }
 
     /** A send the device's gate held (`lock_pending`) is not a lost answer: a recovered phone does not unlock after it. */
