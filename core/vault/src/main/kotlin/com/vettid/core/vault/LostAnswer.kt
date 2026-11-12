@@ -63,6 +63,10 @@ class KeptChange(
     /** The vault's answer to any of the sends, whenever it comes ([VaultDevice.sendKept]). */
     internal val answer = CompletableDeferred<Inner>()
 
+    /** Whether the device has sent it (or tried to): every later send is a repeat ([VaultDevice.sendKept]). */
+    @Volatile
+    internal var sent = false
+
     /** Stops the device awaiting [answer] (set by [VaultDevice.sendKept]). */
     @Volatile
     internal var release: (() -> Unit)? = null

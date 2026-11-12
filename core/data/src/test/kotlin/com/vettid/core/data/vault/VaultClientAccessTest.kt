@@ -59,10 +59,28 @@ class VaultClientAccessTest {
         // flush, its own collection start's included; the manager installs it on every session's device.
         val gate = Regex("""device\.sendGate\s*=.*UNGATED_TYPES.*lockGuard\.admits\(\)""")
         assertTrue(code.any { gate.containsMatchIn(it) })
-        // The outbox is flushed in two places, both only while no lock is pending.
-        assertEquals(2, count("""flushOutbox\(\)"""))
+        // The outbox is flushed in two places, both only while no lock is pending, each with the stop count taken where the
+        // flush is asked for (before its launch), so that a stop after the ask wins.
+        assertEquals(2, count("""flushOutbox\("""))
+        assertEquals(2, count("""flushOutbox\((seq|flushSeq)\)"""))
+        assertTrue(code.any { it.contains("d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }") })
+        assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
-        val guarded = code.count { line -> line.contains("flushOutbox()") && checks.any { line.contains(it) } }
+        val guarded = code.count { line -> line.contains("flushOutbox(") && checks.any { line.contains(it) } }
         assertEquals(2, guarded)
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") The device holds what it would send again of its own accord while a lock is pending,
+     * except for a lock-time call: the lock and its status read run marked [com.vettid.core.vault.VaultDevice.LockTimeSend], so
+     * the status read's re-sends pass as its first send did. Nothing else is marked.
+     */
+    @Test
+    fun theLockTimeUsesAreMarkedForTheDevice() {
+        assertTrue(code.any { it.contains("lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }") })
+        assertTrue(code.any { it.contains("lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }") })
+        assertTrue(code.any { it.contains("withContext(Dispatchers.IO + VaultDevice.LockTimeSend)") })
+        assertEquals("the declaration and the two uses", 3, count("""\blockTimeIo\b"""))
+        assertEquals("only there", 1, count("""\bLockTimeSend\b"""))
     }
 }

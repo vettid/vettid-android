@@ -1363,7 +1363,7 @@ class VaultManager(
             override suspend fun relayLock(unlockId: String?): RelayLock {
                 val s = lockSession() ?: return RelayLock.NO_ANSWER
                 return try {
-                    io { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
+                    lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
                     RelayLock.LOCKED
                 } catch (_: TimeoutCancellationException) {
                     RelayLock.NO_ANSWER
@@ -1865,7 +1865,8 @@ class VaultManager(
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
         // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
         // Not while this phone is held locked (a lock pending, or one the vault said was over: release L).
-        if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
+        // The stop count is taken here, where the flush is asked for: a stop before the launched flush runs wins.
+        if (lockGuard.admits()) d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
@@ -2533,12 +2534,14 @@ class VaultManager(
         // opened or flushed.
         val lockedSince = lockGuard.lockedWhatever(unlocked = true)
         val overtaken = lockedSince || gen != generation
+        // The stop count where the flush is asked for: a stop before the launched flush runs wins.
+        val flushSeq = s.device.stopCount
         scope.launch {
             // Never a lock from before this unlock (LockKeeper): one left in the outbox by an earlier version of the
             // app, which sent locks through it, is dropped before anything is flushed.
             runCatching { s.device.dropFromOutbox(TYPE_VAULT_LOCK) }
             // Nothing but the lock while one is pending: what the member wrote earlier waits for the next unlock.
-            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox() }
+            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox(flushSeq) }
         }
         val opened = if (overtaken) {
             // (Not after a wipe, which also bumps the generation and has said SignedOut.)
@@ -2862,7 +2865,7 @@ class VaultManager(
         // The mark is taken before the status is read (F1); the rest runs in the manager's scope.
         LockAgain.start(
             scope, lockKeeper, mine, LOCK_STATUS_WAIT,
-            read = { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
+            read = { lockSession()?.let { s -> lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
             then = { locking.run(lock = { lockKeeper.ask(mine) }, after = {}) },
         )
     }
@@ -5055,6 +5058,12 @@ class VaultManager(
     private fun view(r: Release) = ReleaseView(r.number, r.pcr0, r.status.wire, r.endsAt, r.notes)
 
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    /**
+     * [io] for a lock-time use of the client ([LockTimeUse.LOCK], [LockTimeUse.LOCK_STATUS]): marked [VaultDevice.LockTimeSend],
+     * so that what the device sends again for it (the status read's re-sends) passes the lock gate as its first send did.
+     */
+    private suspend fun <T> lockTimeIo(block: suspend () -> T): T = withContext(Dispatchers.IO + VaultDevice.LockTimeSend) { block() }
 
     /**
      * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: only for an idempotent
