@@ -49,4 +49,23 @@ class RtcConfigurationTest {
         assertEquals(true, MediaConfig().plain)
         assertEquals(false, MediaConfig(relayOnly = true).plain)
     }
+
+    /**
+     * The check next to the engine: a build that is not a test build makes no engine with any test option, whatever
+     * asked (it refuses before the native library is loaded or the context used).
+     */
+    @Test
+    fun anEngineFactoryOfABuildThatIsNotATestBuildRefusesEveryTestOption() {
+        val factory = WebRtcMediaEngine.factory(android.content.ContextWrapper(null), testBuild = false)
+        for (c in listOf(
+            MediaConfig(relayOnly = true),
+            MediaConfig(dtlsPqcTrial = true),
+            MediaConfig(faults = MediaFaults(keepRemoteSsrc = true)),
+            MediaConfig(faults = MediaFaults(misstateOwnSsrc = true)),
+            MediaConfig(faults = MediaFaults(sendUnencrypted = true)),
+            MediaConfig(faults = MediaFaults(wrongSendKey = true)),
+        )) {
+            org.junit.Assert.assertThrows("$c", IllegalStateException::class.java) { factory.create(c) }
+        }
+    }
 }

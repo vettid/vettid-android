@@ -617,6 +617,7 @@ class CallsControllerTest {
         assertTrue(!c.testsAllowed.value)
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(faulty) }
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(relayOnly = true)) }
     }
 
     /**

@@ -182,7 +182,7 @@ class WebRtcMediaEngine private constructor(
         on {
             val pc = checkNotNull(connection) { "no offer" }
             val offer = checkNotNull(pendingOffer) { "no offer" }
-            if (servers.isNotEmpty()) check(pc.setConfiguration(configuration(servers, relayOnly))) { "servers refused" }
+            if (servers.isNotEmpty()) check(pc.setConfiguration(rtc(servers))) { "servers refused" }
             val set = CompletableDeferred<Unit>()
             pc.setLocalDescription(Sdp(onSet = { set.complete(Unit) }, onError = { set.completeExceptionally(MediaException(it)) }), offer)
             set
@@ -314,9 +314,12 @@ class WebRtcMediaEngine private constructor(
 
     // --- on the worker ---
 
+    /** This call's configuration: the one place that builds it, so every use carries [relayOnly]. */
+    private fun rtc(servers: List<CallWire.IceServer>) = configuration(servers, relayOnly)
+
     private fun open(servers: List<CallWire.IceServer>): PeerConnection {
         check(connection == null) { "this engine already has a call" }
-        val pc = checkNotNull(factory.createPeerConnection(configuration(servers, relayOnly), Events())) { "no peer connection" }
+        val pc = checkNotNull(factory.createPeerConnection(rtc(servers), Events())) { "no peer connection" }
         connection = pc
         return pc
     }
