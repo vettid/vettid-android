@@ -1294,4 +1294,21 @@ class PairingManagerTest {
             m.clear()
         }
     }
+
+    /** (iOS #255) Only the comparison's owner clears its kept refusal; the comparison stays for another try. */
+    @Test
+    fun onlyItsOwnerClearsAKeptRefusal() = runTest {
+        val ops = Ops().apply { refuse["approve"] = "owner_check_required" }
+        val m = manager(ops)
+        val x = Any()
+        m.start(PairRole.AGENT, x)
+        m.onEvent(pending())
+        m.approve(3600)
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        m.acknowledgeRefusal(Any())
+        assertEquals("another screen's leaves it", FailureKind.OWNER_CHECK_REQUIRED, m.state.value.error)
+        m.acknowledgeRefusal(x)
+        assertNull(m.state.value.error)
+        assertTrue(m.state.value.stage is PairingStage.Compare)
+    }
 }

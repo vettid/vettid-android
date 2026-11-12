@@ -689,6 +689,7 @@ class PairingManager(
     override fun acknowledgeRefusal(owner: Any) {
         synchronized(lock) {
             val s = flow.value
+            // Busy is a defence only: an approval or a rejection going out clears the error, so no state is busy and refused.
             if (owner !== this.owner || s.busy) return
             if (s.stage is PairingStage.Compare && s.error == FailureKind.OWNER_CHECK_REQUIRED) flow.value = PairingState(s.stage)
         }
