@@ -508,6 +508,7 @@ class WalletsManager(
     }
 
     /** (Tests) Runs between the stale check of a read and its show: a change made here then must not be hidden. */
+    @androidx.annotation.VisibleForTesting
     internal var afterStaleCheck: suspend () -> Unit = {}
 
     /** Read [seq] of generation [g] is a first list begun no later than a change made here ([changedAt]). */

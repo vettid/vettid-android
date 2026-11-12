@@ -239,5 +239,24 @@ class WalletReadOrderTest {
         m.open()
         assertTrue("the wallet made between the check and the show", m.wallets.value.any { it.id == made })
         assertEquals(2, m.wallets.value.size)
+        assertEquals("exactly one read more", 2, ops.calls.count { it == "list" })
+    }
+
+    /** The same, and the read again fails: the first list is shown after all (the new wallet hidden until Try again). */
+    @Test
+    fun aChangeBetweenTheStaleCheckAndTheShowThenAFailedReadShowsTheFirstList() = runBlocking {
+        val w = wallet()
+        val m = manager()
+        var once = true
+        m.afterStaleCheck = {
+            if (once) {
+                once = false
+                m.create("New", Network.TESTNET4, "pw".toCharArray(), null)
+                ops.listFails = true
+            }
+        }
+        m.open()
+        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertEquals("the first list, as read", listOf(w.id), m.wallets.value.map { it.id })
     }
 }
