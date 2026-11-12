@@ -59,7 +59,8 @@ suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T =
 } catch (e: AltChannelException) {
     throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
 } catch (e: VaultStateException) {
-    throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, cause = e)
+    // A send the device's lock gate held carries the manager's `lock_pending` (ANDROID-PLAN §4 "While pending").
+    throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, e.code, cause = e)
 } catch (e: PairingRejectedException) {
     throw VaultFailure(FailureKind.REJECTED, "rejected", cause = e)
 } catch (e: NotATransferCodeException) {

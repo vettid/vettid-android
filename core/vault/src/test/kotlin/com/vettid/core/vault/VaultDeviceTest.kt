@@ -6913,6 +6913,124 @@ class VaultDeviceTest {
         }
     }
 
+    private fun assertHeld(e: Throwable?) {
+        assertTrue("held: $e", e is VaultStateException && e.code == VaultDevice.CODE_LOCK_PENDING)
+        assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+    }
+
+    /** (A client handed out before a lock began) A request's first send waits for the gate: nothing is sent, it fails. */
+    @Test
+    fun aRequestsFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.request("vault.status") }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aRequestWithIdsFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.requestWithId(d.newId(), "pin.change", buildJsonObject { }) }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aOneShotRequestWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.requestOnce("credential.version") }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aOneShotSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.sendOnce("call.ringing", buildJsonObject { put("call_id", "c1") }) }.exceptionOrNull())
+        }
+    }
+
+    /** A kept change's first send waits for the gate: nothing is sent, it fails, and it is not marked sent. */
+    @Test
+    fun aKeptChangesFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val k = KeptChange("pin.change", d.newId(), buildJsonObject { put("x", 1) }, d.vaultNow().plusSeconds(600), 1)
+            assertHeld(runCatching { d.sendKept(k, 3, java.time.Duration.ofMillis(200)) }.exceptionOrNull())
+            assertFalse(k.sent)
+            d.sendGate = VaultDevice.SendGate { true }
+            val r = async(Dispatchers.IO) { d.sendKept(k, 1, java.time.Duration.ofSeconds(5)) }
+            assertEquals(k.innerId, v.open(nextDeposit().second).id)
+            d.handle(v.seal("pin.change", "{}", re = k.innerId, status = Inner.STATUS_OK))
+            assertNotNull(r.await())
+            d.dropKept(k)
+        }
+    }
+
+    /** The lock's own one-shot request (`vault.lock`, marked [VaultDevice.LockTimeSend]) passes a shut gate. */
+    @Test
+    fun theLockPassesAShutGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val lock = async(Dispatchers.IO + VaultDevice.LockTimeSend) { d.opOnce("vault.lock", exp = d.clockNow().plusSeconds(30)) }
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.lock", req.type)
+            d.handle(v.seal("vault.lock", "{}", re = req.id, status = Inner.STATUS_OK))
+            lock.await()
+        }
+    }
+
+    /**
+     * An own refresh whose deposit failed (a transient relay error) stays the one in the outbox and is tried again after the
+     * next handled message, as a new one was before: once, without a second entry.
+     */
+    @Test
+    fun aFailedOwnRefreshIsRetriedAtTheNextMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            // Day 21: the token this phone issued to the vault is renewed (under 10 days left); the vault's has 9 days left.
+            ahead(java.time.Duration.ofDays(21))
+            d.handle(v.msg(v.keyring.current()!!.seal(message("issue"))))
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+            ahead(java.time.Duration.ofDays(7)) // under 3 days left on the vault's token
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // retryable: kept
+            d.handle(v.msg(v.keyring.current()!!.seal(message("m0"))))
+            assertEquals(1, d.outboxEntries.count { it.type == "relay.token.refresh" })
+            refuseDeposits = null
+            refuseStatus = 403
+            deposits.clear()
+            d.handle(v.msg(v.keyring.current()!!.seal(message("m1"))))
+            val sent = generateSequence { deposits.poll(500, TimeUnit.MILLISECONDS) }.map { v.open(it.second) }.toList()
+            assertEquals(1, sent.count { it.type == "relay.token.refresh" })
+            assertEquals(0, d.outboxEntries.count { it.type == "relay.token.refresh" })
+        }
+    }
+
+    /** A held answer to the vault's refresh is dropped only once the newer one is queued: a failure to queue it keeps it. */
+    @Test
+    fun anOlderHeldAnswerStaysWhenTheNewOneIsNotQueued() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val first = Ulid.new()
+            d.handle(v.seal("relay.token.refresh", "{}", id = first))
+            assertEquals(listOf(first), d.outboxEntries.filter { it.type == "relay.token.refresh" }.map { it.re })
+            store.fail = true
+            runCatching { d.handle(v.seal("relay.token.refresh", "{}", id = Ulid.new())) }
+            assertTrue("the older answer stays", d.outboxEntries.any { it.type == "relay.token.refresh" && it.re == first })
+            store.fail = false
+        }
+    }
+
     /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
     private class RecordingFlakyStore : DeviceStateStore {
         private val inner = InMemoryDeviceStateStore()

@@ -1863,10 +1863,10 @@ class VaultManager(
         if (local.transferApprovedAtMs != null) scope.launch { runCatching { checkKeptTransfer() } }
         val d = session?.device ?: return
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
-        // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
-        // Not while this phone is held locked (a lock pending, or one the vault said was over: release L).
-        // The stop count is taken here, where the flush is asked for: a stop before the launched flush runs wins.
-        if (lockGuard.admits()) d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }
+        // The device's gate decides by type (ANDROID-PLAN §4 "While pending"): while this phone is held locked only a pending
+        // `call.end` goes on the return to the foreground, everything else waits. The stop count is taken here, where the flush
+        // is asked for: a stop before the launched flush runs wins.
+        d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
@@ -3759,7 +3759,8 @@ class VaultManager(
         s.openApi.credentialFetch()
         null
     } catch (e: VaultStateException) {
-        if (!unlockFirst) throw e
+        // Held by the lock gate (a lock pending): nothing was sent, so it is not "not answered", and no unlock follows.
+        if (!unlockFirst || e.code == VaultDevice.CODE_LOCK_PENDING) throw e
         android.util.Log.i("VaultManager", "the recovered phone's credential.get was not answered: unlocking with its own key")
         unlockOwn(s, pin, e) ?: run {
             s.openApi.credentialFetch()

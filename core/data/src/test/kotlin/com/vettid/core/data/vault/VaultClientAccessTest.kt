@@ -59,15 +59,23 @@ class VaultClientAccessTest {
         // flush, its own collection start's included; the manager installs it on every session's device.
         val gate = Regex("""device\.sendGate\s*=.*UNGATED_TYPES.*lockGuard\.admits\(\)""")
         assertTrue(code.any { gate.containsMatchIn(it) })
-        // The outbox is flushed in two places, both only while no lock is pending, each with the stop count taken where the
-        // flush is asked for (before its launch), so that a stop after the ask wins.
+        // The outbox is flushed in two places, each with the stop count taken where the flush is asked for (before its
+        // launch), so that a stop after the ask wins. The unlock's flush waits for no lock pending; the foreground's is left to
+        // the device's gate, which decides by type, so that a pending `call.end` goes on the return to the foreground.
         assertEquals(2, count("""flushOutbox\("""))
         assertEquals(2, count("""flushOutbox\((seq|flushSeq)\)"""))
-        assertTrue(code.any { it.contains("d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }") })
+        val foreground = "d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }"
+        assertTrue(code.any { it == foreground })
         assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
         val guarded = code.count { line -> line.contains("flushOutbox(") && checks.any { line.contains(it) } }
-        assertEquals(2, guarded)
+        assertEquals("the unlock's only", 1, guarded)
+    }
+
+    /** A send the device's gate held (`lock_pending`) is not a lost answer: a recovered phone does not unlock after it. */
+    @Test
+    fun aHeldSendIsNotTakenForNoAnswer() {
+        assertTrue(code.any { it.contains("if (!unlockFirst || e.code == VaultDevice.CODE_LOCK_PENDING) throw e") })
     }
 
     /**

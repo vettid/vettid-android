@@ -109,4 +109,18 @@ class GuardTest {
         assertEquals(0L, failureOf(VaultOpException("vault.owner-check", "backoff", body = body(JsonPrimitive("30")))).retryAfterSeconds)
         assertEquals(0L, failureOf(VaultOpException("vault.owner-check", "backoff", body = body(JsonPrimitive(-1)))).retryAfterSeconds)
     }
+
+    /** (ANDROID-PLAN §4 "While pending") A send the device's lock gate held reads as the manager's `lock_pending`. */
+    @Test
+    fun aSendTheLockGateHeldIsLockPending() = runTest {
+        val f = try {
+            vaultGuard { throw com.vettid.core.vault.VaultStateException("held", "vault.status", com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING) }
+            error("no failure")
+        } catch (f: VaultFailure) {
+            f
+        }
+        assertEquals(VaultManager.CODE_LOCK_PENDING, f.code)
+        assertEquals(FailureKind.OTHER, f.kind)
+        assertEquals(VaultManager.CODE_LOCK_PENDING, com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING)
+    }
 }

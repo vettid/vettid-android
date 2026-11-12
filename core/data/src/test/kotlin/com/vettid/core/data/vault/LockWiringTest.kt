@@ -136,4 +136,37 @@ class LockWiringTest {
         assertEquals(z, k.boundUnlockId)
         assertEquals(z, store.record.unlockId)
     }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") The device's lock gate as the manager installs it holds every request while this phone
+     * is held ("opened again" after a stale lock, or a lock pending), and the unlock, which reaches the vault over the member
+     * API and not the relay, still goes through; once it opened the vault the gate admits requests again.
+     */
+    @Test
+    fun theUnlockFromOpenedAgainGoesThroughAndOpensTheGate() = runTest {
+        val ports = Ports()
+        val guard = LockGuard(ports, { t0 }) { attempt -> LockWiring.keeper(backgroundScope, Store(), attempt, {}) {} }
+        val k = guard.keeper
+        val gate = com.vettid.core.vault.VaultDevice.SendGate { type -> type in com.vettid.core.vault.VaultDevice.UNGATED_TYPES || guard.admits() }
+        k.ask(k.begin(dead)) // stale: opened again, held
+        assertEquals(LockNotice.OpenedAgain, k.notice.value)
+        assertFalse("held", gate.admits("vault.status"))
+        assertTrue("a pending call.end passes", gate.admits("call.end"))
+        var ran = false
+        val r = k.unlocking({ true }, { w }) {
+            ran = true
+            "opened"
+        }
+        assertEquals("opened", r)
+        assertTrue(ran)
+        assertTrue("open again", gate.admits("vault.status"))
+        // From a pending lock the same: the unlock goes through and opens the gate.
+        ports.relayAnswer = RelayLock.NO_ANSWER
+        ports.unlocked = null
+        k.begin(null)
+        assertFalse(gate.admits("vault.status"))
+        k.unlocking({ true }, { null }) { "opened" }
+        assertTrue(gate.admits("vault.status"))
+    }
 }
+
