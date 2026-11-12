@@ -117,8 +117,8 @@ class WalletReadOrderTest {
     @Test
     fun aFailedSecondReadStillLetsOpenSendThePendingLimit() = runBlocking {
         val w = wallet()
-        flagsFile.bytes = """{"version":1,"backed_up":["${w.id}"],"testnet":{},"note_shown":[],"pending_caps":{"${w.id}":{"per_tx_sats":100000}}}"""
-            .encodeToByteArray()
+        val pending = """"pending_caps":{"${w.id}":{"per_tx_sats":100000}}"""
+        flagsFile.bytes = """{"version":1,"backed_up":["${w.id}"],"testnet":{},"note_shown":[],$pending}""".encodeToByteArray()
         val m = manager()
         val gate = CompletableDeferred<Unit>()
         ops.slowRead = gate
