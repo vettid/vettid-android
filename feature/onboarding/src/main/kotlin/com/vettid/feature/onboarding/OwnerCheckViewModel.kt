@@ -98,6 +98,11 @@ data class OwnerCheckUiState(
      * "Check passed" are held (1 s, 3 s while a screen reader is on), then [OwnerCheckActions.tickShown] closes the screen.
      */
     val passedTick: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.124) The member's Lock vault failed while a check whose answer is dropped was still out: no second
+     * check goes alongside it until that one has returned.
+     */
+    val awaitingDropped: Boolean = false,
     val locking: Boolean = false,
     /**
      * (Release R, §11.14.5) The vault could not record that the member was here (`present_recorded: false`): the
@@ -126,7 +131,7 @@ data class OwnerCheckUiState(
 ) {
     val submitAllowed: Boolean
         get() = !busy && !locking && !locked && watch == LockWatch.NONE && waitSeconds == 0L && pin.length >= MIN_PIN &&
-            password.isNotEmpty() && !passedTick
+            password.isNotEmpty() && !passedTick && !awaitingDropped
 
     /**
      * (ANDROID-PLAN 0.1.124) A check is with the vault: "Checking with your vault…" in place of the entries, and the back gesture
@@ -201,6 +206,13 @@ class OwnerCheckViewModel @Inject constructor(
      */
     private var checkSeq = 0L
 
+    /** A check was sent and has not returned (its answer used or dropped). On the main thread. */
+    private var checkOut = false
+
+    /** When the "Check passed" tick began (System.nanoTime), and whether its haptic was given: a rotation repeats neither. */
+    private var tickStartedNanos: Long? = null
+    private var tickHapticGiven = false
+
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
         // ANDROID-PLAN 0.1.93: the PIN kept for the password-only retry is forgotten when the app leaves the foreground (the
@@ -272,6 +284,8 @@ class OwnerCheckViewModel @Inject constructor(
     fun cancel() {
         startedMode = null
         checkSeq++
+        tickStartedNanos = null
+        tickHapticGiven = false
         ticker?.cancel()
         stopReads()
         state.update {
@@ -282,6 +296,15 @@ class OwnerCheckViewModel @Inject constructor(
     override fun acknowledgePresence() = state.update { if (it.passedUnrecorded) it.copy(passed = true) else it }
 
     override fun tickShown() = state.update { if (it.passedTick) it.copy(passed = true) else it }
+
+    /** The haptic of the tick, once per pass: true the first time it is asked for. */
+    fun takeTickHaptic(): Boolean = (tickStartedNanos != null && !tickHapticGiven).also { if (it) tickHapticGiven = true }
+
+    /** What is left of the tick's [holdMs] since it began (all of it if it has not), so a rotation does not restart it. */
+    fun tickRemainingMs(holdMs: Long): Long {
+        val start = tickStartedNanos ?: return holdMs
+        return (holdMs - (System.nanoTime() - start) / NANOS_PER_MS).coerceIn(0, holdMs)
+    }
 
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
@@ -299,19 +322,26 @@ class OwnerCheckViewModel @Inject constructor(
         } else {
             null
         }
-        state.update { it.copy(busy = true, message = null) }
+        // §3.6.5: the entries are not kept past the send (the unlock's kept PIN stays for another password-only try).
+        state.update { it.copy(busy = true, message = null, password = "", pin = if (it.pinKept) it.pin else "") }
         // The app leaving and coming back while the request runs keeps no PIN (the generation counts the departures).
         val generation = repo.foregroundGeneration
         val seq = checkSeq
+        checkOut = true
         viewModelScope.launch {
             val r = try {
                 repo.check(s.pin, s.password, holdOff)
             } catch (e: VaultFailure) {
                 OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
+            } finally {
+                checkOut = false
             }
-            // (ANDROID-PLAN 0.1.124) The member locked the vault (or the screen started again) while the check was out: its
-            // answer is dropped, and nothing that follows from it runs.
-            if (seq != checkSeq) return@launch
+            // (ANDROID-PLAN 0.1.124) The member locked the vault (or the screen left) while the check was out: its answer is
+            // dropped, and nothing that follows from it runs; a check held back for it may go now.
+            if (seq != checkSeq) {
+                state.update { it.copy(awaitingDropped = false) }
+                return@launch
+            }
             // (ANDROID-PLAN 0.1.95) A check with no answer, tries still estimated to be left: one re-read of the vault's state.
             val probe = if (needsReread(r)) {
                 // §3.6.5: nothing entered is kept past the check's answer, so before the re-read, not after it.
@@ -326,6 +356,10 @@ class OwnerCheckViewModel @Inject constructor(
             val passed = r == OwnerCheckOutcome.Passed
             val unrecorded = passed && repo.presenceUnrecorded.value
             state.update { it.answered(r, passed, unrecorded, repo.foregroundGeneration == generation, probe) }
+            if (passed && !unrecorded) {
+                tickStartedNanos = System.nanoTime()
+                tickHapticGiven = false
+            }
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
             if (!repo.lockedByOwnerCheck.value && needsWatch(r)) beginWatch()
         }
@@ -487,7 +521,10 @@ class OwnerCheckViewModel @Inject constructor(
                 vault.lock()
             } catch (e: VaultFailure) {
                 // Not expected (an unconfirmed lock stays pending and is retried), but never silent.
-                state.update { it.copy(locking = false, message = OwnerCheckMessage.Failed(e.kind, e.code, e.shownCode)) }
+                // A check still out (its answer dropped) holds back a second one until it returns.
+                state.update {
+                    it.copy(locking = false, message = OwnerCheckMessage.Failed(e.kind, e.code, e.shownCode), awaitingDropped = checkOut)
+                }
                 if (state.value.watch != LockWatch.NONE) runReads() // still probably locked: the reads go on
             }
         }
@@ -515,6 +552,7 @@ class OwnerCheckViewModel @Inject constructor(
 
     private companion object {
         const val TICK_MS = 1000L
+        const val NANOS_PER_MS = 1_000_000L
 
         /**
          * The waits before each read while probably locked (VAULT-MESSAGING 0.73.0): at once, then about 5 s, 15 s, 1 min and

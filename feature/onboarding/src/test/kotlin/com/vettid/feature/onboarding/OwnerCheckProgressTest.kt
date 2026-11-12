@@ -174,6 +174,59 @@ class OwnerCheckProgressTest {
     }
 
     @Test
+    fun lockVaultBeforeAnUnansweredChecksAnswerMakesNoReRead() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        vault.checkResults.add(OwnerCheckOutcome.Failed(FailureKind.NETWORK, null, estimatedLeft = 5))
+        val vm = sendHeld(OwnerCheckMode.GATED, gate)
+        vm.lockVault()
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse("no re-read after the member's own lock", vault.calls.contains("probeVault"))
+    }
+
+    @Test
+    fun aFailedLockHoldsASecondCheckUntilTheDroppedOneReturns() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val vm = sendHeld(OwnerCheckMode.GATED, gate)
+        vault.fail["lock"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.lockVault()
+        runCurrent()
+        vm.setPin("40281795")
+        vm.setPassword("correct horse")
+        assertTrue(vm.uiState.value.awaitingDropped)
+        assertFalse("no second check alongside the first", vm.uiState.value.submitAllowed)
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse(vm.uiState.value.awaitingDropped)
+        assertTrue(vm.uiState.value.submitAllowed)
+    }
+
+    @Test
+    fun theEntriesGoWhenTheCheckIsSent() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val vm = sendHeld(OwnerCheckMode.VOLUNTARY, gate)
+        assertEquals("", vm.uiState.value.pin)
+        assertEquals("", vm.uiState.value.password)
+        assertEquals("the check carried what was typed", "40281795", vault.lastPin)
+        gate.complete(Unit)
+        runCurrent()
+    }
+
+    @Test
+    fun theTicksHapticIsGivenOnceAndItsHoldIsNotRestarted() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val vm = sendHeld(OwnerCheckMode.VOLUNTARY, gate)
+        assertFalse("no tick yet", vm.takeTickHaptic())
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue(vm.takeTickHaptic())
+        assertFalse("a rotation gives no second haptic", vm.takeTickHaptic())
+        Thread.sleep(50)
+        assertTrue("the hold counts from the tick's start", vm.tickRemainingMs(1_000) < 1_000)
+    }
+
+    @Test
     fun theScreenLeavingDropsALateAnswer() = runTest {
         val gate = CompletableDeferred<Unit>()
         val vm = sendHeld(OwnerCheckMode.GATED, gate)
