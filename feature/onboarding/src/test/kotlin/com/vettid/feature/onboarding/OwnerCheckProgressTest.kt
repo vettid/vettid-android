@@ -217,13 +217,13 @@ class OwnerCheckProgressTest {
     fun theTicksHapticIsGivenOnceAndItsHoldIsNotRestarted() = runTest {
         val gate = CompletableDeferred<Unit>()
         val vm = sendHeld(OwnerCheckMode.VOLUNTARY, gate)
-        assertFalse("no tick yet", vm.takeTickHaptic())
+        assertFalse("no tick yet", vm.tick.takeHaptic())
         gate.complete(Unit)
         runCurrent()
-        assertTrue(vm.takeTickHaptic())
-        assertFalse("a rotation gives no second haptic", vm.takeTickHaptic())
+        assertTrue(vm.tick.takeHaptic())
+        assertFalse("a rotation gives no second haptic", vm.tick.takeHaptic())
         Thread.sleep(50)
-        assertTrue("the hold counts from the tick's start", vm.tickRemainingMs(1_000) < 1_000)
+        assertTrue("the hold counts from the tick's start", vm.tick.remainingMs(1_000) < 1_000)
     }
 
     @Test

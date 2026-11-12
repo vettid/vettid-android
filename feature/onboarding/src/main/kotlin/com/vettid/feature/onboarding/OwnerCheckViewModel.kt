@@ -209,9 +209,8 @@ class OwnerCheckViewModel @Inject constructor(
     /** A check was sent and has not returned (its answer used or dropped). On the main thread. */
     private var checkOut = false
 
-    /** When the "Check passed" tick began (System.nanoTime), and whether its haptic was given: a rotation repeats neither. */
-    private var tickStartedNanos: Long? = null
-    private var tickHapticGiven = false
+    /** (ANDROID-PLAN 0.1.124) The "Check passed" tick's start and haptic: a rotation repeats neither. */
+    val tick = PassedTick()
 
     init {
         viewModelScope.launch { repo.ownerCheck.collect { v -> state.update { it.copy(view = v) } } }
@@ -284,8 +283,7 @@ class OwnerCheckViewModel @Inject constructor(
     fun cancel() {
         startedMode = null
         checkSeq++
-        tickStartedNanos = null
-        tickHapticGiven = false
+        tick.reset()
         ticker?.cancel()
         stopReads()
         state.update {
@@ -297,14 +295,6 @@ class OwnerCheckViewModel @Inject constructor(
 
     override fun tickShown() = state.update { if (it.passedTick) it.copy(passed = true) else it }
 
-    /** The haptic of the tick, once per pass: true the first time it is asked for. */
-    fun takeTickHaptic(): Boolean = (tickStartedNanos != null && !tickHapticGiven).also { if (it) tickHapticGiven = true }
-
-    /** What is left of the tick's [holdMs] since it began (all of it if it has not), so a rotation does not restart it. */
-    fun tickRemainingMs(holdMs: Long): Long {
-        val start = tickStartedNanos ?: return holdMs
-        return (holdMs - (System.nanoTime() - start) / NANOS_PER_MS).coerceIn(0, holdMs)
-    }
 
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
@@ -317,11 +307,7 @@ class OwnerCheckViewModel @Inject constructor(
     override fun submit() {
         val s = state.value
         if (!s.submitAllowed) return
-        val holdOff = if (s.mode == OwnerCheckMode.HOLD_OFF) {
-            HoldOff(s.holdOff.days?.let { Instant.now().plus(Duration.ofDays(it)) })
-        } else {
-            null
-        }
+        val holdOff = holdOffOf(s, Instant.now())
         // §3.6.5: the entries are not kept past the send (the unlock's kept PIN stays for another password-only try).
         state.update { it.copy(busy = true, message = null, password = "", pin = if (it.pinKept) it.pin else "") }
         // The app leaving and coming back while the request runs keeps no PIN (the generation counts the departures).
@@ -330,9 +316,7 @@ class OwnerCheckViewModel @Inject constructor(
         checkOut = true
         viewModelScope.launch {
             val r = try {
-                repo.check(s.pin, s.password, holdOff)
-            } catch (e: VaultFailure) {
-                OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
+                repo.checkOutcome(s.pin, s.password, holdOff)
             } finally {
                 checkOut = false
             }
@@ -356,10 +340,7 @@ class OwnerCheckViewModel @Inject constructor(
             val passed = r == OwnerCheckOutcome.Passed
             val unrecorded = passed && repo.presenceUnrecorded.value
             state.update { it.answered(r, passed, unrecorded, repo.foregroundGeneration == generation, probe) }
-            if (passed && !unrecorded) {
-                tickStartedNanos = System.nanoTime()
-                tickHapticGiven = false
-            }
+            if (passed && !unrecorded) tick.start()
             if (r is OwnerCheckOutcome.Backoff) startBackoff(r.retryAfterSeconds)
             if (!repo.lockedByOwnerCheck.value && needsWatch(r)) beginWatch()
         }
@@ -552,12 +533,55 @@ class OwnerCheckViewModel @Inject constructor(
 
     private companion object {
         const val TICK_MS = 1000L
-        const val NANOS_PER_MS = 1_000_000L
 
         /**
          * The waits before each read while probably locked (VAULT-MESSAGING 0.73.0): at once, then about 5 s, 15 s, 1 min and
          * 3 min after the start; each gap is counted from the end of the read before.
          */
         val READ_GAPS_MS = listOf(0L, 5_000L, 10_000L, 45_000L, 120_000L)
+    }
+}
+
+/** The hold-off a check carries (§3.6.7): only when turning the hold off, ending [HoldOffChoice.days] after [now]. */
+internal fun holdOffOf(s: OwnerCheckUiState, now: Instant): HoldOff? =
+    if (s.mode == OwnerCheckMode.HOLD_OFF) HoldOff(s.holdOff.days?.let { now.plus(Duration.ofDays(it)) }) else null
+
+/** A check's outcome, a vault failure included (as its own outcome). */
+internal suspend fun OwnerCheckRepository.checkOutcome(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome =
+    try {
+        check(pin, password, holdOff)
+    } catch (e: VaultFailure) {
+        OwnerCheckOutcome.Failed(e.kind, e.code, e.shownCode)
+    }
+
+/**
+ * (ANDROID-PLAN 0.1.124) The "Check passed" tick's start and its haptic, kept by the view model so that a rotation neither
+ * repeats the haptic nor restarts the hold. On the main thread.
+ */
+class PassedTick {
+    private var startedNanos: Long? = null
+    private var hapticGiven = false
+
+    fun start() {
+        startedNanos = System.nanoTime()
+        hapticGiven = false
+    }
+
+    fun reset() {
+        startedNanos = null
+        hapticGiven = false
+    }
+
+    /** The haptic, once per pass: true the first time it is asked for after [start]. */
+    fun takeHaptic(): Boolean = (startedNanos != null && !hapticGiven).also { if (it) hapticGiven = true }
+
+    /** What is left of [holdMs] since the tick began (all of it if it has not), so a rotation does not restart it. */
+    fun remainingMs(holdMs: Long): Long {
+        val start = startedNanos ?: return holdMs
+        return (holdMs - (System.nanoTime() - start) / NANOS_PER_MS).coerceIn(0, holdMs)
+    }
+
+    private companion object {
+        const val NANOS_PER_MS = 1_000_000L
     }
 }

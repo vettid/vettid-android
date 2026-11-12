@@ -108,8 +108,8 @@ fun OwnerCheckRoute(
         onTickShowing(state.passedTick)
         if (!state.passedTick) return@LaunchedEffect
         // Once per pass, and what is left of the hold: a rotation repeats neither.
-        if (viewModel.takeTickHaptic()) view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-        delay(viewModel.tickRemainingMs(passedTickMillis(context.screenReaderOn())))
+        if (viewModel.tick.takeHaptic()) view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        delay(viewModel.tick.remainingMs(passedTickMillis(context.screenReaderOn())))
         viewModel.tickShown()
     }
     DisposableEffect(Unit) { onDispose { onTickShowing(false) } }
