@@ -53,6 +53,8 @@ class CallPermissionListTest {
             """{"connections":[{"connection_id":"c1","limited":false}]}""",
             """{"connections":[{"connection_id":"","allowed":false,"limited":false}]}""",
             """{"connections":[7]}""",
+            // A connection named twice: one could hide the other's "off".
+            """{"connections":[{"connection_id":"c1","allowed":false,"limited":false},{"connection_id":"c1","allowed":true,"limited":false}]}""",
         )) {
             org.junit.Assert.assertThrows(bad, CallMessageException::class.java) { read(bad) }
         }

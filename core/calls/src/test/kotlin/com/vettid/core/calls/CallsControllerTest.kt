@@ -126,12 +126,16 @@ class CallsControllerTest {
 
         override suspend fun permissions(): List<com.vettid.core.vault.CallPermission> {
             permissionReads++
+            val asItWas = permissionList // the vault's answer as of when the read began
             permissionGate()
             permissionFailure?.let { throw it }
-            return permissionList
+            return asItWas
         }
 
+        var setGate: suspend () -> Unit = {}
+
         override suspend fun setPermission(connectionId: String, allowed: Boolean) {
+            setGate()
             permissionFailure?.let { throw it }
             permissionSets += connectionId to allowed
         }
@@ -437,6 +441,50 @@ class CallsControllerTest {
         gate.complete(Unit)
         runCurrent()
         assertEquals("the read from before the lock wrote nothing", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** A change interrupted by a lock writes nothing after it. */
+    @Test
+    fun aChangeInterruptedByALockWritesNothing() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.setGate = { gate.await() }
+        val set = backgroundScope.launch { runCatching { c.setAllowed("conn-1", false) } }
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        set.join()
+        assertEquals(com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** A read that began before the member's own change does not flip the switch back; the read after it does count. */
+    @Test
+    fun aReadOlderThanTheMembersChangeIsDropped() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { gate.await() }
+        vault.gateway.permissionList = emptyList() // the old read answers: allowed
+        vault.gateway.changes.emit("conn-1") // a read starts, and waits
+        runCurrent()
+        val reads = vault.gateway.permissionReads
+        c.setAllowed("conn-1", false)
+        assertFalse(c.permissions.value.of("conn-1").allowed)
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        vault.gateway.permissionGate = {}
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse("the old read did not flip it back", c.permissions.value.of("conn-1").allowed)
+        assertTrue("the read the change asked for followed", vault.gateway.permissionReads > reads)
     }
 
     @Test

@@ -63,6 +63,9 @@ interface CallVault {
     /** The name the app shows for [connectionId] on its screens; null if it has none. */
     fun name(connectionId: String): String?
 
+    /** (C2) The connection's first name, for the lines that name it so ("Calls with <First> are off."); null if none. */
+    fun firstName(connectionId: String): String? = null
+
     /**
      * The name for [connectionId] in a notification: [name], or null when the member's notifications show no names
      * (the choice the message notifications follow).
@@ -214,6 +217,12 @@ class CallsController(
     private var permissionEpoch = 0L
     private val permissionLock = Any()
 
+    /**
+     * Bumped by each change the member made here ([setAllowed]), under [permissionLock]: a read begun before it holds
+     * the list as it was and is dropped (the read the change asks for follows it), so the switch never flips back.
+     */
+    private var ownChanges = 0L
+
     private fun permissionEpochNow(): Long = synchronized(permissionLock) { permissionEpoch }
 
     private val diagnosticsFlow = MutableStateFlow(CallsDiagnostics())
@@ -298,6 +307,9 @@ class CallsController(
 
     /** The connection's name for the call screens. */
     fun screenName(connectionId: String): String? = vault.name(connectionId)
+
+    /** The connection's first name for the call screens' lines that use it. */
+    fun screenFirstName(connectionId: String): String? = vault.firstName(connectionId)
 
     // --- the vault ---
 
@@ -444,6 +456,7 @@ class CallsController(
     @Suppress("ReturnCount") // each way a read ends: locked meanwhile, refused, read
     private suspend fun readPermissions() {
         val epoch = permissionEpochNow()
+        val changes = synchronized(permissionLock) { ownChanges }
         repeat(PROBE_ATTEMPTS) { attempt ->
             if (!open || !vaultC2 || epoch != permissionEpochNow()) return
             val list = try {
@@ -466,7 +479,9 @@ class CallsController(
                 differing = list.associate { it.connectionId to ConnectionCalls(it.allowed, it.limited) }
                     .filterValues { it != ConnectionCalls() },
             )
-            synchronized(permissionLock) { if (epoch == permissionEpoch && open) permissionsFlow.value = read }
+            synchronized(permissionLock) {
+                if (epoch == permissionEpoch && changes == ownChanges && open) permissionsFlow.value = read
+            }
             return
         }
     }
@@ -478,6 +493,7 @@ class CallsController(
             vault.gateway.setPermission(connectionId, allowed)
         }
         synchronized(permissionLock) {
+            ownChanges++
             if (epoch == permissionEpoch) {
                 permissionsFlow.update { p ->
                     val now = p.of(connectionId).copy(allowed = allowed)

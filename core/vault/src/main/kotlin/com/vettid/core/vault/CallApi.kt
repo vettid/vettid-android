@@ -667,11 +667,14 @@ suspend fun VaultApi.callPermissionList(): List<CallPermission> = callPermission
  */
 internal fun callPermissionsOf(o: JsonObject): List<CallPermission> {
     val list = o["connections"] as? JsonArray ?: throw CallMessageException("connections")
-    return list.map { e ->
+    val read = list.map { e ->
         val obj = e as? JsonObject ?: throw CallMessageException("connections")
         val id = VaultJson.str(obj, "connection_id")?.takeIf { it.isNotEmpty() } ?: throw CallMessageException("connection_id")
         CallPermission(id, obj.bool("allowed"), obj.bool("limited"))
     }
+    // A connection named twice is not a list the app can trust: one of the two could be an "off" that the other hides.
+    if (read.map { it.connectionId }.toSet().size != read.size) throw CallMessageException("connection_id repeated")
+    return read
 }
 
 private fun JsonObject.bool(name: String): Boolean =

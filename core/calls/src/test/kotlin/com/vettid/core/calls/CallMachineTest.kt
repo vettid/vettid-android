@@ -871,6 +871,126 @@ class CallMachineTest {
         assertEquals(CallPhase.CONNECTING, m.live().phase)
     }
 
+    /** An offer of the connection with an exp of its own (the default helper's is 45 s). */
+    private fun offerUntil(callId: String, exp: java.time.Instant) =
+        SignalEvent.Offer(callId, "conn-1", "v=0\r\ns=offer\r\n", exp, Duration.between(T0, exp), emptyList(), MediaSuite.AES_128_GCM)
+
+    /**
+     * The vault refused `call.start` (`busy`: it rang the connection's call first): the call held meanwhile rings here,
+     * it is not answered by itself. The member's own hang-up or a lock in STARTING rings nothing.
+     */
+    @Test
+    fun aRefusedStartRingsTheHeldOfferButTheMembersOwnEndDoesNot() = runTest {
+        val s = FakeSignalling().apply {
+            startGate = Channel(1)
+            startResult = { throw CallRefusedException("busy") }
+        }
+        val m = machine(s)
+        m.call("conn-1")
+        runCurrent()
+        s.deliver(offer(GLARE_ID))
+        runCurrent()
+        s.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CallDirection.INCOMING, m.live().direction)
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertEquals(GLARE_ID, m.live().callId)
+        assertTrue(s.sent.none { it.startsWith("answer(") })
+
+        for (lock in listOf(false, true)) {
+            val s2 = FakeSignalling().apply { startGate = Channel(1) }
+            val m2 = machine(s2)
+            m2.call("conn-1")
+            runCurrent()
+            s2.deliver(offer(GLARE_ID))
+            runCurrent()
+            if (lock) m2.vaultLocking() else m2.hangUp()
+            runCurrent()
+            assertTrue("lock $lock", m2.state.value is CallState.Ended)
+            assertTrue(s2.sent.none { it.startsWith("ringing(") })
+        }
+    }
+
+    /** A held offer past its exp is neither rung when the call ends otherwise nor answered for a glare. */
+    @Test
+    fun anExpiredHeldOfferIsNeitherRungNorAnswered() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offerUntil(GLARE_ID, T0.plusSeconds(5)))
+        runCurrent()
+        advanceTimeBy(6_000)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(offerUntil(GLARE_ID, T0.plusSeconds(5)))
+        runCurrent()
+        advanceTimeBy(6_000)
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertTrue(s2.sent.none { it.startsWith("answer(") })
+        assertEquals("waits for the winner as when it is not here", CallDirection.OUTGOING, m2.live().direction)
+    }
+
+    /**
+     * Not a glare: `superseded_by` with another reason than `busy`, or naming a call that is not lower; an offer with the
+     * outgoing call's own id. None of them is answered by itself, and the call's own end still ends it.
+     */
+    @Test
+    fun whatIsNotAGlareIsNotAnswered() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertTrue(signalling.sent.none { it.startsWith("answer(") })
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = "01JB2Z6V9K3M4N5P6Q7R8S9T5Z"))
+        runCurrent()
+        assertEquals("a higher id is no glare's winner", CallEnd.BUSY, m2.ended().reason)
+
+        val s3 = FakeSignalling()
+        val m3 = machine(s3)
+        m3.call("conn-1")
+        runCurrent()
+        s3.deliver(offer(CALL_ID))
+        s3.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m3.ended().reason)
+    }
+
+    /** While a lost glare waits: an engine failure sends nothing; the winner's own end ends the wait, and its late offer is ignored. */
+    @Test
+    fun whileALostGlareWaits() = runTest {
+        val m = machine()
+        placed(m)
+        val lost = engines.last
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        lost.emit(MediaEvent.Failed("test"))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m.live().direction)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        runCurrent()
+        assertEquals(CallEnd.MISSED, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertTrue("a winner that ended is not rung", m.state.value is CallState.Ended)
+    }
+
     @Test
     fun anAnswerThatDoesNotVerifyEndsTheCall() = runTest {
         val m = machine()

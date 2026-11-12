@@ -53,7 +53,7 @@ internal object CallsCatalog {
 
     @Composable
     private fun Call(call: CallState, speaker: Boolean = false, name: String? = NAME) =
-        CallScreen(CallUiState(call, name, speaker, canSpeaker = true), actions, now = { t0.plusSeconds(252) })
+        CallScreen(CallUiState(call, name, firstName = "Ada", speaker = speaker, canSpeaker = true), actions, now = { t0.plusSeconds(252) })
 
     @Composable
     private fun Ended(reason: CallEnd, direction: CallDirection = CallDirection.OUTGOING) =
