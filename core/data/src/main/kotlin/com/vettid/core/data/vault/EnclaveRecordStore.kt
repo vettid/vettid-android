@@ -22,10 +22,22 @@ import java.time.Instant
  * screen then says the phone has not verified the enclave yet), and the next verification replaces it.
  */
 class EnclaveRecordStore(private val file: DeviceStateStore) : EnclaveRecords {
-    private val current = MutableStateFlow(load())
+    /** Empty until [load] has read the file (off the main thread: it is a Keystore decrypt). */
+    private val current = MutableStateFlow<EnclaveRecord?>(null)
 
     /** Bumped by [forget]: a verification that began before a wipe never writes after it. */
     private var generation = 0L
+
+    /** Set by [load], and by a record or a wipe made before it: after either, what the file held is out of date. */
+    private var settled = false
+
+    /** Reads the stored record into [record], once, at start (on an IO thread); a record or wipe already made wins. */
+    @Synchronized
+    fun load() {
+        if (settled) return
+        settled = true
+        current.value = read()
+    }
 
     /** The last record, or null. */
     val record: StateFlow<EnclaveRecord?> = current.asStateFlow()
@@ -41,6 +53,7 @@ class EnclaveRecordStore(private val file: DeviceStateStore) : EnclaveRecords {
     @Synchronized
     private fun recordIn(g: Long, r: EnclaveRecord) {
         if (g != generation) return
+        settled = true
         current.value = r
         // Best effort: the screen shows the record in memory either way; a failed write leaves the earlier one on disk.
         runCatching { file.save(json.encodeToString(Stored.serializer(), Stored.of(r)).encodeToByteArray()) }
@@ -50,11 +63,12 @@ class EnclaveRecordStore(private val file: DeviceStateStore) : EnclaveRecords {
     @Synchronized
     fun forget() {
         generation++
+        settled = true
         current.value = null
         file.clear()
     }
 
-    private fun load(): EnclaveRecord? = try {
+    private fun read(): EnclaveRecord? = try {
         file.load()?.let { json.decodeFromString(Stored.serializer(), it.decodeToString()).record() }
     } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {
         null

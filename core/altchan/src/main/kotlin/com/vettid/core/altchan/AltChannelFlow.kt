@@ -380,7 +380,13 @@ class AltChannelFlow(
             val built = try {
                 party.prepareUnlock(userGuid, pin, e, m, attester, options.copy(unlockSecret = secret))
             } catch (x: AltRefusedException) {
-                if (x.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) refusedAfterChecks(v, EnclaveRefusal.OLDER_RELEASE)
+                when (x.reason) {
+                    AltRefusedException.Reason.ROLLBACK_RELEASE -> refusedAfterChecks(v, EnclaveRefusal.OLDER_RELEASE)
+                    // The list is older than one this phone has used (checked again as the request is built): line 1 failed,
+                    // so the pass just recorded does not stay on the screen.
+                    AltRefusedException.Reason.MANIFEST_OLDER -> records?.record(EnclaveRecord.manifestFailed(Instant.now(clock)))
+                    else -> Unit
+                }
                 throw x
             } finally {
                 secret?.fill(0)

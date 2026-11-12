@@ -1115,6 +1115,7 @@ class VaultManager(
 
     init {
         scope.launch { runCatching { canary.load() } }
+        scope.launch { io { enclaveRecords.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
         // A leftover of the removed social.bin (its write went through a temporary file).

@@ -238,7 +238,10 @@ class MemberApiTest {
         private val relayKey = Ed25519PrivateKey.generate()
         val app = AppIdentity(ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone")
 
-        override fun manifestSerialSeen() = state.manifestSerial
+        /** What the flow is told this phone has seen, when it is not the state's (the state is read again as the request is built). */
+        var seen: Long? = null
+
+        override fun manifestSerialSeen() = seen ?: state.manifestSerial
 
         override fun vaultId() = vaultId
 
@@ -432,6 +435,14 @@ class MemberApiTest {
         assertTrue(records.last().allPassed)
         assertEquals(com.vettid.core.attestation.EnclaveRefusal.OTHER_INSTANCE, records.last().refusal)
         routedInstance = null
+        // A list older than one this phone has used, found only as the request is built (after the pass was recorded):
+        // line 1 failed, and the pass does not stay.
+        p.state = p.state.copy(releaseNumber = 0, manifestSerial = Long.MAX_VALUE)
+        p.seen = 0
+        val e = assertThrows(AltRefusedException::class.java) { runBlocking { f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertEquals(AltRefusedException.Reason.MANIFEST_OLDER, e.reason)
+        assertEquals(com.vettid.core.attestation.EnclaveCheck.entries.first(), records.last().failed)
+        assertTrue(records[records.size - 2].allPassed)
     }
 
     private suspend fun register(): RecoveryResult {
