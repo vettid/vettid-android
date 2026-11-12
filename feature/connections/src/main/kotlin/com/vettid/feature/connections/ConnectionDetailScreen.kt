@@ -151,6 +151,8 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             stringResource(R.string.connections_detail_call),
                             actions.onCall,
                             enabled = state.canCall,
+                            stateDescription = stringResource(R.string.connections_call_off_hint, firstOf(c, name))
+                                .takeIf { state.callHintShown },
                         )
                             .takeIf { c.state == ConnectionState.ACTIVE && (state.canCall || state.callsOff) && !c.service },
                         PillAction(

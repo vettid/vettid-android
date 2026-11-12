@@ -15,6 +15,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -29,6 +31,8 @@ data class PillAction(
     val destructive: Boolean = false,
     /** Shown but not usable (the bar's [hint] may say why). */
     val enabled: Boolean = true,
+    /** Read by TalkBack with the action (why it is disabled, for one). */
+    val stateDescription: String? = null,
 )
 
 /** Floating pill of icon actions at the bottom of a detail screen (Proton); [hint], a short line above it. */
@@ -68,7 +72,13 @@ fun BoxScope.FloatingPillActionBar(
         ) {
             Row(Modifier.padding(horizontal = Spacing.m, vertical = Spacing.xs)) {
                 actions.forEach { action ->
-                    IconButton(onClick = action.onClick, enabled = action.enabled, modifier = Modifier.padding(horizontal = Spacing.xxs)) {
+                    IconButton(
+                        onClick = action.onClick,
+                        enabled = action.enabled,
+                        modifier = Modifier
+                            .padding(horizontal = Spacing.xxs)
+                            .semantics { action.stateDescription?.let { stateDescription = it } },
+                    ) {
                         val tint = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                         Icon(
                             imageVector = action.icon,

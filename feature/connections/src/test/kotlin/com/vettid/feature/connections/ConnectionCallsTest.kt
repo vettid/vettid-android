@@ -3,6 +3,9 @@
 
 package com.vettid.feature.connections
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -137,6 +140,7 @@ class ConnectionCallsTest {
             )
         }
         rule.onNodeWithContentDescription("Call").assertIsNotEnabled()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Calls with \u2068Ada\u2069 are off."))
         rule.onNodeWithTag("pill_hint").assertIsDisplayed()
         rule.onNodeWithText("Calls with \u2068Ada\u2069 are off.").assertIsDisplayed()
     }
@@ -151,6 +155,7 @@ class ConnectionCallsTest {
             )
         }
         rule.onNodeWithContentDescription("Call").assertIsEnabled()
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
         rule.onNodeWithTag("pill_hint").assertDoesNotExist()
     }
 }

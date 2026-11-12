@@ -1,5 +1,8 @@
 package com.vettid.feature.messages
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -20,6 +23,10 @@ class ConversationCallsOffScreenTest {
     @get:Rule
     val rule = createComposeRule()
 
+    private companion object {
+        const val TEXT_4 = "Calls with \u2068Alex\u2069 are off. You can turn them on in \u2068Alex\u2069's details."
+    }
+
     private val alex = ConnectionInfo("c2", "Alex", ConnectionState.ACTIVE, firstName = "Alex", lastName = "Doe")
 
     private fun show(off: Boolean) = rule.setContent {
@@ -33,14 +40,16 @@ class ConversationCallsOffScreenTest {
     fun offDisablesTheButtonAndSaysWhereToTurnThemOn() {
         show(off = true)
         rule.onNodeWithTag("conversation_call").assertIsNotEnabled()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, TEXT_4))
         rule.onNodeWithTag("conversation_calls_off").assertIsDisplayed()
-        rule.onNodeWithText("Calls with ⁨Alex⁩ are off. You can turn them on in ⁨Alex⁩'s details.").assertIsDisplayed()
+        rule.onNodeWithText(TEXT_4).assertIsDisplayed()
     }
 
     @Test
     fun onKeepsTheButtonAndSaysNothing() {
         show(off = false)
         rule.onNodeWithTag("conversation_call").assertIsEnabled()
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
         rule.onNodeWithTag("conversation_calls_off").assertDoesNotExist()
     }
 }

@@ -856,6 +856,41 @@ class CallMachineTest {
         assertEquals(CallEnd.PEER_HUNG_UP, m2.ended().reason)
     }
 
+    /** A held offer whose caller hung up is not held again when its offer is delivered once more: it never rings. */
+    @Test
+    fun aHeldOfferThatEndedIsNotHeldAgain() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("ringing($GLARE_ID") })
+    }
+
+    /**
+     * An offer that arrives while `call.start` is out, and turns out to carry the call's own id, is not held as
+     * another call: the call's own end still ends it.
+     */
+    @Test
+    fun anOfferWithTheCallsOwnIdIsNotHeldOnceTheCallHasIt() = runTest {
+        signalling.startGate = Channel(1)
+        val m = machine()
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(CallPhase.STARTING, m.live().phase)
+        signalling.deliver(offer(CALL_ID))
+        runCurrent()
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CALL_ID, m.live().callId)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+    }
+
     /** X's end delivered twice while the lost glare waits changes nothing; the winner is still answered. */
     @Test
     fun aSecondEndOfTheLostCallChangesNothing() = runTest {
