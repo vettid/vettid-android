@@ -301,6 +301,12 @@ class WalletsManager(
     private var listReads = 0L
     private var listShown = 0L
 
+    /**
+     * A change was made here before the first list was shown: that list may be from a read begun before it (a wallet
+     * created while the list was loading would be hidden by it), so the list is read once more right after. Under [lock].
+     */
+    private var changedBeforeList = false
+
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
@@ -397,6 +403,7 @@ class WalletsManager(
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
             listRead = false
+            changedBeforeList = false
             lookupsFlow.value = emptyMap()
             transactionsFlow.value = emptyMap()
             checked.clear()
@@ -461,7 +468,7 @@ class WalletsManager(
      */
     private fun showLocal(change: (List<VaultWallet>) -> List<VaultWallet>) = synchronized(lock) {
         // Every read begun so far is older than this change (a read is dropped when its number is below listShown).
-        if (listRead) listShown = listReads + 1
+        if (listRead) listShown = listReads + 1 else changedBeforeList = true
         walletsFlow.update(change)
     }
 
@@ -481,8 +488,12 @@ class WalletsManager(
             throw e
         }
         // One check and one write under the lock: no later read can be shown between them.
+        var readAgain = false
         val published = synchronized(lock) {
             if (g != generation || seq < listShown) return@synchronized false
+            // The first list, with a change made here while it loaded: it is read once more (below).
+            readAgain = !listRead && changedBeforeList
+            changedBeforeList = false
             listShown = seq
             walletsFlow.value = list
             availabilityFlow.value = WalletAvailability.AVAILABLE
@@ -494,6 +505,7 @@ class WalletsManager(
         }
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
         if (published) flags.listed(list.map { it.id }.toSet())
+        if (readAgain) refresh()
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
