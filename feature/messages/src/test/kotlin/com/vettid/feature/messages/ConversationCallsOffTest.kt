@@ -28,9 +28,9 @@ class ConversationCallsOffTest {
     private fun conversation(calls: FakeCalls) =
         ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, com.vettid.core.testing.FakeAttachments(), calls)
 
-    /** (C2) Calls with this connection turned off: the call button says where to turn them on, and calls nobody. */
+    /** (C2) Calls with this connection turned off: the button is disabled (owner decision 2026-11-12) and calls nobody. */
     @Test
-    fun callsOffSayWhereToTurnThemOn() = runTest {
+    fun callsOffDisableTheButton() = runTest {
         val calls = FakeCalls()
         calls.permissions.value = CallPermissions(
             supported = true, known = true, differing = mapOf("c2" to ConnectionCalls(allowed = false)),
@@ -38,14 +38,15 @@ class ConversationCallsOffTest {
         val vm = conversation(calls)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.callShown && vm.uiState.value.callsOff)
+        assertFalse("disabled while calls are off", vm.uiState.value.callEnabled)
         vm.call()
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.callsOffNotice)
         assertTrue(calls.called.isEmpty())
-        // Turned on again (here or on another device): the notice goes, and the button calls.
+        // Turned on again (here or on another device): the button is enabled and calls.
         calls.permissions.value = CallPermissions(supported = true, known = true)
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.callsOffNotice)
+        assertFalse(vm.uiState.value.callsOff)
+        assertTrue(vm.uiState.value.callEnabled)
         vm.call()
         assertEquals(listOf("c2"), calls.called)
     }

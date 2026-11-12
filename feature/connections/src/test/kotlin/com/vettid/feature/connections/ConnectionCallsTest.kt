@@ -4,7 +4,10 @@
 package com.vettid.feature.connections
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.lifecycle.SavedStateHandle
@@ -89,6 +92,7 @@ class ConnectionCallsTest {
         assertEquals(listOf("c1" to false), calls.allowedSet)
         assertFalse(vm.uiState.value.calls!!.allowed)
         assertFalse("no Call while calls are off", vm.uiState.value.canCall)
+        assertTrue("shown disabled while calls are off", vm.uiState.value.callsOff)
         vm.call()
         assertTrue(calls.called.isEmpty())
         assertFalse(vm.uiState.value.callsChanging)
@@ -120,5 +124,33 @@ class ConnectionCallsTest {
     fun theLimitedNote() {
         rule.setContent { CallsCard(allowed = true, limited = true, first = "Ada", enabled = true, onChange = {}) }
         rule.onNodeWithText("Ada called several times without an answer, so their calls won't ring for a while.").assertIsDisplayed()
+    }
+
+    /** (C2, owner decisions 2026-11-12) Calls off: the page's Call is disabled, with "Calls with <First> are off." above it. */
+    @Test
+    fun offShowsCallDisabledWithTheHint() {
+        val ada = ConnectionInfo("c1", "Countess", ConnectionState.ACTIVE, firstName = "Ada", lastName = "Lovelace")
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(ada.id, ada, null, loading = false, callsOff = true, calls = DetailCalls(allowed = false, limited = false)),
+                DetailActions(),
+            )
+        }
+        rule.onNodeWithContentDescription("Call").assertIsNotEnabled()
+        rule.onNodeWithTag("pill_hint").assertIsDisplayed()
+        rule.onNodeWithText("Calls with \u2068Ada\u2069 are off.").assertIsDisplayed()
+    }
+
+    @Test
+    fun onShowsCallEnabledWithNoHint() {
+        val ada = ConnectionInfo("c1", "Countess", ConnectionState.ACTIVE, firstName = "Ada", lastName = "Lovelace")
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(ada.id, ada, null, loading = false, canCall = true, calls = DetailCalls(allowed = true, limited = false)),
+                DetailActions(),
+            )
+        }
+        rule.onNodeWithContentDescription("Call").assertIsEnabled()
+        rule.onNodeWithTag("pill_hint").assertDoesNotExist()
     }
 }

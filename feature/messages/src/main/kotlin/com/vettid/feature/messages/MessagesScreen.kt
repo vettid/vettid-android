@@ -418,6 +418,20 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
             CenteredTitle(name)
             // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
             state.presence?.let { ConversationPresenceLine(it) }
+            if (state.callShown && state.callsOff) {
+                // (C2) The call button is disabled: why, and where to turn calls on, under the title, without a tap.
+                val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
+                Text(
+                    stringResource(R.string.messages_calls_off, first),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
+                        .testTag("conversation_calls_off"),
+                )
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.loading && state.messages.isEmpty() -> Loading()
@@ -428,17 +442,6 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                     )
                     else -> MessageList(state, name, listState, actions)
                 }
-            }
-            if (state.callsOffNotice) {
-                // (C2) Calls with this connection are off, both ways: where to turn them on.
-                val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
-                NoticeCard(
-                    kind = NoticeKind.INFO,
-                    title = stringResource(R.string.messages_call),
-                    body = stringResource(R.string.messages_calls_off, first),
-                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_calls_off"),
-                    actions = { TextButton(onClick = actions.onDismissCallNotice) { Text(stringResource(R.string.messages_ok)) } },
-                )
             }
             if (state.callsNotAvailable) {
                 NoticeCard(

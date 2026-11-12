@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.social.AuthenticationState
@@ -143,8 +145,14 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                         )
                             // A service can't message or call (ANDROID-PLAN 0.1.90): the buttons are simply absent.
                             .takeIf { c.state == ConnectionState.ACTIVE && !c.service },
-                        PillAction(Icons.Outlined.Call, stringResource(R.string.connections_detail_call), actions.onCall)
-                            .takeIf { c.state == ConnectionState.ACTIVE && state.canCall && !c.service },
+                        // Calls off: shown disabled, with where to turn them on (the hint below).
+                        PillAction(
+                            Icons.Outlined.Call,
+                            stringResource(R.string.connections_detail_call),
+                            actions.onCall,
+                            enabled = state.canCall,
+                        )
+                            .takeIf { c.state == ConnectionState.ACTIVE && (state.canCall || state.callsOff) && !c.service },
                         PillAction(
                             if (c.favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
                             stringResource(
@@ -161,6 +169,8 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             destructive = true,
                         ),
                     ),
+                    hint = stringResource(R.string.connections_call_off_hint, firstOf(c, name))
+                        .takeIf { state.callHintShown },
                 )
             }
         },
@@ -184,7 +194,8 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(bottom = PILL_SPACE),
+            // The hint is text: its room grows with the font size (two lines of small text and its padding).
+            .padding(bottom = if (state.callHintShown) PILL_SPACE + hintSpace() else PILL_SPACE),
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -489,6 +500,17 @@ private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions:
 }
 
 private val PILL_SPACE = 104.dp
+
+/** Room for the pill's hint above it: two lines of small text, and its padding and gap. */
+private val HINT_LINES = 32.sp
+private val HINT_PADDING = 16.dp
+
+@Composable
+private fun hintSpace() = with(LocalDensity.current) { HINT_LINES.toDp() } + HINT_PADDING
+
+/** (C2) Calls with this person are off: "Call" is disabled and the hint says so (owner decisions 2026-11-12). */
+internal val ConnectionDetailUiState.callHintShown: Boolean
+    get() = callsOff && connection?.state == ConnectionState.ACTIVE && connection?.service == false
 
 /** The connection's first name for a sentence of the location texts (the card, the ask dialog), else [fallback] (isolated). */
 internal fun firstOf(c: ConnectionInfo, fallback: String): String = sharingName(c)?.let { AccountNames.isolate(it) } ?: fallback

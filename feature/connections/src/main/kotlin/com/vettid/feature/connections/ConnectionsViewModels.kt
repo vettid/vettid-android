@@ -627,6 +627,11 @@ data class ConnectionDetailUiState(
      */
     val canCall: Boolean = false,
     /**
+     * (C2) The vault has calls and calls with this connection are off: "Call" is shown disabled, with where to turn them on
+     * (owner decision 2026-11-12).
+     */
+    val callsOff: Boolean = false,
+    /**
      * (C2, VAULT-MESSAGING §10.10 "Permission and limits") The "Calls with <First>" switch: only for a person who is
      * connected, on a vault with the permission once it has been read; null otherwise.
      */
@@ -826,6 +831,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 connection = c,
                 auth = auth[id],
                 canCall = call == CallAvailability.READY && perms.of(id).allowed,
+                callsOff = call == CallAvailability.READY && perms.supported && perms.known && !perms.of(id).allowed,
                 calls = perms.takeIf {
                     it.supported && it.known && c?.state == ConnectionState.ACTIVE && !c.service &&
                         (call == CallAvailability.READY || call == CallAvailability.IN_CALL)
