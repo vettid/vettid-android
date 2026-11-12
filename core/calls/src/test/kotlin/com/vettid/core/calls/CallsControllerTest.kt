@@ -51,26 +51,50 @@ class CallsControllerTest {
 
         /** The entries of `call.list` that did not read (GC #7718). */
         var skipped: List<com.vettid.core.vault.SkippedCall> = emptyList()
+
+        /** (C2) The list's `v` and `now`: a C2 vault with both set. */
+        var version: Int? = null
+        var vaultNow: Instant? = null
         var listGate: suspend () -> Unit = {}
 
-        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
-            sent += "start($connectionId)"
+        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+            sent += "start($connectionId)" + (if (peerIk != null) " form2" else "")
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             return OutgoingCall(CALL_ID, connectionId, "audio", T0.plusSeconds(45), ice, listOf(1), KemPrivateKey.generate())
         }
 
         var incoming = false
+
+        /** (C2) The members of a form 2 offer; null: the offer is form 1. */
+        var incomingParties: CallWire.Parties? = null
         var endGate: Channel<Unit>? = null
 
         override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall {
             check(incoming) { "unused" }
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             val n = com.vettid.core.crypto.call.CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
-            return IncomingCall(CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216))
+            return IncomingCall(
+                CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216), incomingParties,
+            )
         }
 
-        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys =
-            CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        /** Answers and keep-alives, in the order they went out. */
+        val order = mutableListOf<String>()
+
+        val answeredWithKeepalive = mutableListOf<Boolean>()
+
+        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+            synchronized(order) { order += "answer" }
+            answeredWithKeepalive += keepalive
+            return CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        }
+
+        val keepalives = mutableListOf<String>()
+
+        override suspend fun keepalive(callId: String) {
+            synchronized(keepalives) { keepalives += callId }
+            synchronized(order) { order += "keepalive" }
+        }
 
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
             AcceptedCall(call.callId, "v=0", CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
@@ -87,7 +111,7 @@ class CallsControllerTest {
         override suspend fun list(limit: Int): com.vettid.core.vault.CallList {
             sent += "list($limit)"
             listGate()
-            return com.vettid.core.vault.CallList(list(), skipped)
+            return com.vettid.core.vault.CallList(list(), skipped, version, vaultNow)
         }
     }
 
@@ -107,6 +131,12 @@ class CallsControllerTest {
         }
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
+
+        override suspend fun identityKey(connectionId: String): ByteArray? = ByteArray(32) { 9 }
+
+        var me: String? = "dev-me"
+
+        override suspend fun deviceId(): String? = me
 
         var showNames = true
 
@@ -300,6 +330,165 @@ class CallsControllerTest {
         vault.unlocked.value = true
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Liveness") Against a C2 vault the sweep ends only this device's own calls, judged by
+     * `exp` and the vault's `now`, never this phone's clock: an active one `failed`, its own outgoing call still ringing
+     * past `exp` `timeout`. Another device's calls, and its own ringing call not yet past `exp`, are left alone.
+     */
+    @Test
+    fun aC2VaultIsSweptByDeviceIdAndTheVaultsClock() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0.plusSeconds(3600) // the phone's clock says T0: only the vault's counts
+        fun rec(id: String, state: String, dir: String, device: String?, exp: Instant? = null) =
+            CallRecord(id, "conn-1", dir, "audio", state, null, T0.toString(), exp = exp?.toString(), deviceId = device)
+        vault.gateway.list = {
+            listOf(
+                rec("A", "active", "in", "dev-me"),
+                rec("B", "ringing", "out", "dev-me", exp = T0.plusSeconds(3000)), // past exp by the vault's clock
+                rec("C", "ringing", "out", "dev-me", exp = T0.plusSeconds(3700)), // still ringing
+                rec("D", "active", "out", "dev-other"), // another device's call
+                rec("E", "ringing", "in", null), // an incoming call ringing has no device
+            )
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(listOf("list(200)", "end(A, failed)", "end(B, timeout)"), vault.gateway.sent)
+        assertEquals(2, c.diagnostics.value.staleEnded)
+    }
+
+    /** (C2) The call's device sends `call.keepalive` once the answer is in, then every 30 s, and stops with the call. */
+    @Test
+    fun keepAlivesWhileTheCallLastsOnAC2Vault() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue("the start names the connection's key", vault.gateway.sent.contains("start(conn-1) form2"))
+        assertTrue("none while it rings", vault.gateway.keepalives.isEmpty())
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+        advanceTimeBy(30_001)
+        assertEquals(2, vault.gateway.keepalives.size)
+        c.hangUp()
+        runCurrent()
+        advanceTimeBy(90_000)
+        assertEquals(2, vault.gateway.keepalives.size)
+    }
+
+    /**
+     * The answering device's first keep-alive goes only after its `call.answer` is with the vault: one before it is
+     * answered `call.end{unavailable}` by a vault that still has the call ringing, which would end the call. The
+     * engine takes its time over the offer, as the real one does.
+     */
+    @Test
+    fun theCalleesKeepAlivesFollowItsAnswer() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        engines.onCreate = { (it as FakeEngine).acceptOfferMs = 500 }
+        c.answer()
+        runCurrent()
+        advanceTimeBy(100)
+        assertTrue("nothing before the answer", vault.gateway.keepalives.isEmpty())
+        advanceTimeBy(1_000)
+        assertEquals(listOf("answer", "keepalive"), vault.gateway.order)
+        assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+    }
+
+    /**
+     * (C2) An offer in form 2 proves the vault C2 for that call, whatever the probe found (here an S10 answer, as from
+     * a probe that has not read the vault's level yet): the callee answers with `keepalive` and its keep-alives go.
+     */
+    @Test
+    fun aFormTwoOfferStartsKeepAlivesBeforeTheProbeKnows() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.incomingParties = CallWire.Parties(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        c.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        runCurrent()
+        assertTrue(c.state.value.toString(), c.state.value is CallState.Live)
+        advanceTimeBy(30_001)
+        assertEquals(listOf(CALL_ID, CALL_ID), vault.gateway.keepalives)
+        assertEquals(listOf(true), vault.gateway.answeredWithKeepalive)
+    }
+
+    /** What the probe found is forgotten at the lock: the next unlock's probe decides again. */
+    @Test
+    fun theVaultsLevelIsForgottenAtLock() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        vault.gateway.version = null
+        vault.gateway.vaultNow = null
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.toString(), vault.gateway.sent.contains("start(conn-1)"))
+    }
+
+    /** The C2 sweep leaves alone a call that is live on this phone, even one the vault lists as this device's. */
+    @Test
+    fun theC2SweepLeavesALiveCallAlone() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        var asks = 0
+        vault.gateway.list = {
+            if (asks++ == 0) emptyList() else listOf(CallRecord(CALL_ID, "conn-1", "out", "audio", "active", null, T0.toString(), deviceId = "dev-me"))
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        c.forgetProbeForTest()
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(2, asks)
+        assertTrue(vault.gateway.sent.none { it.startsWith("end(") })
+    }
+
+    /** Against an S10 vault: form 1 and no keep-alive (it would answer an unknown type). */
+    @Test
+    fun noKeepAliveToAnS10Vault() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.contains("start(conn-1)"))
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        advanceTimeBy(60_000)
+        assertTrue(vault.gateway.keepalives.isEmpty())
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.vettid.core.calls
 
 import com.vettid.core.crypto.call.MediaSuite
+import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,7 +30,7 @@ class CallMachineTest {
 
     private fun CallMachine.ended() = state.value as CallState.Ended
 
-    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1") =
+    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1", formTwo: Boolean = false) =
         SignalEvent.Offer(
             callId,
             connectionId,
@@ -37,6 +39,7 @@ class CallMachineTest {
             Duration.ofSeconds(45),
             emptyList(),
             MediaSuite.AES_128_GCM,
+            formTwo,
         )
 
     private fun answer() =
@@ -426,6 +429,76 @@ class CallMachineTest {
         assertEquals(CallPhase.CALLING, m.live().phase)
     }
 
+    /**
+     * (C2, VAULT-MESSAGING "Key confirmation") Against a C2 vault the answering device holds its microphone back until
+     * its receiver first decrypts a frame; the member's own mute still applies after. No frame 20 s after the
+     * connection is up: the call ends as not encrypted. Against an S10 vault nothing is held.
+     */
+    @Test
+    fun theAnsweringDeviceSendsNothingBeforeAFrameDecrypts() = runTest {
+        // Keyed on the offer's form: here the vault probe has not found the vault C2 (yet), and the hold still applies.
+        signalling.c2 = false
+        val m = machine()
+        signalling.deliver(offer(formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        val engine = engines.last
+        assertTrue("held from the answer on", engine.holding)
+        engine.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        assertTrue("connected is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.SEND, CryptorState.OK))
+        runCurrent()
+        assertTrue("its own sender working is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.RECEIVE, CryptorState.OK))
+        runCurrent()
+        assertFalse(engine.holding)
+        advanceTimeBy(60_000)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        m.hangUp()
+        runCurrent()
+        m.dismiss()
+
+        // No frame decrypts: 20 s after the connection, not encrypted.
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70", formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        advanceTimeBy(19_999)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        advanceTimeBy(2)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertTrue(engines.last.holding)
+
+        // The caller's call.end{failed} while this device is held (its wrong confirm): the same text.
+        m.dismiss()
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T72", formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertTrue("a form 2 call says so", m.live().formTwo)
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T72", CallReason.FAILED))
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+
+        // A form 1 offer (an S10 peer), even on a C2 vault: nothing held.
+        m.dismiss()
+        signalling.c2 = true
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T71"))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertFalse(engines.last.holding)
+        assertFalse(m.live().formTwo)
+        // Not held, the caller's call.end{failed} keeps its usual meaning.
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T71", CallReason.FAILED))
+        runCurrent()
+        assertNotEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+    }
+
     @Test
     fun noPathBetweenTheTwoDevices() = runTest {
         val m = machine()
@@ -433,7 +506,7 @@ class CallMachineTest {
         engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
         signalling.deliver(answer())
         runCurrent()
-        advanceTimeBy(29_999)
+        advanceTimeBy(59_999)
         assertEquals(CallPhase.CONNECTING, m.live().phase)
         advanceTimeBy(2)
         assertEquals(CallEnd.COULD_NOT_CONNECT, m.ended().reason)
