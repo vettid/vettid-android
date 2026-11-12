@@ -243,7 +243,8 @@ class ChangeSenderTest {
     @Test
     fun aChangeHeldByTheLockGateClearsItsMarker() = runTest {
         val f = Fixture(testScheduler)
-        val held = com.vettid.core.vault.VaultStateException("held", ChangeTypes.PIN_CHANGE, com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING)
+        val held =
+            com.vettid.core.vault.VaultStateException("held", ChangeTypes.PIN_CHANGE, com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING)
         val r = f.send { store ->
             store(marker)
             throw ChangeUnansweredException(kept(marker), held)

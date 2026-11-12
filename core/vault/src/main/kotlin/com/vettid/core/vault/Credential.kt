@@ -607,22 +607,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // while it was out is refused when it gets the lock. The gate keeps the rest out until the reset is decided.
         try {
             // After the marker, whatever goes wrong before an answer is read is "no answer" (§11.14.9 step 2), never a failure.
-            @Suppress("TooGenericExceptionCaught")
-            val r = try {
-                d.sendKept(kept, CHANGE_SENDS)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent. Nothing is kept to
-                // resend and the UTK goes back; still thrown as [ChangeUnansweredException] (the marker is the caller's), with
-                // the gate's failure as its cause, so that the caller clears the marker rather than checks it.
-                if (e.heldByLockGate) {
-                    d.dropKept(kept)
-                    taken?.let { d.returnUtk(it) }
-                }
-                throw ChangeUnansweredException(kept, e)
-            } ?: throw ChangeUnansweredException(kept)
-            return settle(kept, r)
+            return settle(kept, sendChange(kept, taken))
         } finally {
             // Under the lock, off the cancellation of the caller: the count must not be lost or torn (`++` is not atomic). This
             // is not inside the lock (the lock block above ended, and [settle] released its own), so it cannot deadlock.
@@ -631,6 +616,23 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             }
         }
     }
+
+    /** [change]'s sends of [kept] (its UTK [utk]): the answer, or [ChangeUnansweredException]. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun sendChange(kept: KeptChange, utk: UtkRecord?): VaultMessage = try {
+        d.sendKept(kept, CHANGE_SENDS)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent. Nothing is kept to resend and the
+        // UTK goes back; still thrown as [ChangeUnansweredException] (the marker is the caller's), with the gate's failure as its
+        // cause, so that the caller clears the marker rather than checks it.
+        if (e.heldByLockGate) {
+            d.dropKept(kept)
+            utk?.let { d.returnUtk(it) }
+        }
+        throw ChangeUnansweredException(kept, e)
+    } ?: throw ChangeUnansweredException(kept)
 
     /**
      * (§11.14.9 step 3) [kept] sent again, once, while its `exp` has not passed: the vault answers it from its cache

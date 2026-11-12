@@ -216,7 +216,8 @@ val Throwable.opType: String?
  * ([VaultDevice.CODE_LOCK_PENDING]): a first send, so nothing of that request was sent.
  */
 val Throwable.heldByLockGate: Boolean
-    get() = generateSequence(this) { it.cause }.take(CAUSE_DEPTH).any { it is VaultStateException && it.code == VaultDevice.CODE_LOCK_PENDING }
+    get() = generateSequence(this) { it.cause }.take(CAUSE_DEPTH)
+        .any { it is VaultStateException && it.code == VaultDevice.CODE_LOCK_PENDING }
 
 private const val CAUSE_DEPTH = 8
 

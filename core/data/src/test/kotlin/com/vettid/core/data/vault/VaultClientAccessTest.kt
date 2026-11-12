@@ -102,12 +102,14 @@ class VaultClientAccessTest {
         val start = code.indexOfFirst { it.startsWith("lockKeeper.unlocking(") }
         val end = (start until code.size).first { code[it].startsWith("} catch (e: VaultFailure) {") }
         assertTrue(start in 0 until end)
-        val forbidden = Regex("""\b(request|requestOnce|op|opOnce|send|sendOnce|requestWithId|sendKept)\(|\bopenApi\b|\blockTimeApi\(|\bvaultApi\(""")
+        val sends = """\b(request|requestOnce|op|opOnce|send|sendOnce|requestWithId|sendKept)\("""
+        val forbidden = Regex("""$sends|\bopenApi\b|\blockTimeApi\(|\bvaultApi\(""")
         val block = code.subList(start, end)
         assertTrue(block.filter { forbidden.containsMatchIn(it) }.toString(), block.none { forbidden.containsMatchIn(it) })
         // The unlock it calls (one attempt with this phone's secret), whole.
         val once = code.indexOfFirst { it.startsWith("private suspend fun unlockWithSecretOnce(") }
-        val onceEnd = (once + 1 until code.size).first { code[it].startsWith("private ") || code[it].startsWith("internal ") || code[it].startsWith("override ") || code[it].startsWith("fun ") || code[it].startsWith("suspend fun ") }
+        val starts = listOf("private ", "internal ", "override ", "fun ", "suspend fun ")
+        val onceEnd = (once + 1 until code.size).first { i -> starts.any { code[i].startsWith(it) } }
         val body = code.subList(once, onceEnd)
         assertTrue(body.filter { forbidden.containsMatchIn(it) }.toString(), body.none { forbidden.containsMatchIn(it) })
         assertTrue(block.any { it.contains("unlockWithSecret(") })
