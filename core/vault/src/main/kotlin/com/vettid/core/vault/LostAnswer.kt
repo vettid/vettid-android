@@ -87,6 +87,10 @@ class KeptChange(
 /**
  * No answer to a change after its automatic resends (§11.14.9 step 2): not a failure. [kept] is what the app resends
  * while it decides the change.
+ *
+ * (ANDROID-PLAN §4 "While pending") When its cause is a send the device's lock gate held ([heldByLockGate]), nothing of the
+ * change was sent: [kept]'s UTK has been returned to the pool and its answer is no longer awaited, so [kept] must not be
+ * resent (the caller clears the marker instead).
  */
 class ChangeUnansweredException(val kept: KeptChange, cause: Throwable? = null) :
     IOException("vault client: ${kept.type}: no answer yet", cause)

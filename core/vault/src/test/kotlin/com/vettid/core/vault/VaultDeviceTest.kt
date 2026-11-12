@@ -7115,6 +7115,34 @@ class VaultDeviceTest {
             assertEquals(1, markers.size)
             assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
             assertEquals("the UTK is back", 1, d.utkCount)
+            // Its answer is no longer awaited: a late one to its id is not taken for the change.
+            val kept = (e as ChangeUnansweredException).kept
+            d.handle(v.seal(ChangeTypes.PASSWORD_CHANGE, "{}", re = kept.innerId, status = Inner.STATUS_OK))
+            assertNull("not taken", kept.answered())
+        }
+    }
+
+    /**
+     * An answered credential operation whose `credential.ack` the lock gate held: it succeeded, its blob is kept, and the
+     * acknowledgement is left to the next operation (nothing sent now).
+     */
+    @Test
+    fun aHeldAckLeavesTheAnsweredOperationDone() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "credential.ack" } // the lock asked for while the operation was out
+            val op = async(Dispatchers.IO) { runCatching { api.accountNameSet("975310", "password one", "Ada", "L") } }
+            answerUtkGet(d, v, "00112233445566d4")
+            val r = v.open(nextDeposit().second)
+            assertEquals("account.name.set", r.type)
+            val request = """{"seq":1,"first_name":"Ada","last_name":"L","state":"pending"}"""
+            d.handle(v.seal(r.type, """{"request":$request,"credential":"TkVXNA==","credential_version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            assertEquals("Ada", op.await().getOrThrow().firstName)
+            assertEquals("TkVXNA==", d.credentialBlob())
+            assertEquals(4L, d.credentialVersion)
+            assertNull("the ack waits", deposits.poll(300, TimeUnit.MILLISECONDS))
         }
     }
 

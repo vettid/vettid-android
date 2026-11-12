@@ -80,7 +80,13 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         d.keepCredential(blob, v, answerKey ?: d.credentialKey.takeIf { sameKey })
         // A rotate, reset or fetch that names no key replaced the credential: the key shown for it is no longer known to be right.
         if (answerKey == null && !sameKey) d.signalKeyUnknown()
-        d.op("credential.ack", buildJsonObject { put("version", v) })
+        try {
+            d.op("credential.ack", buildJsonObject { put("version", v) })
+        } catch (e: java.io.IOException) {
+            // (ANDROID-PLAN §4 "While pending") An ack the lock gate held: the operation was answered and its blob is kept; the
+            // acknowledgement is left to the next operation, as [keepIfNewer] leaves one. Any other failure is thrown as before.
+            if (!e.heldByLockGate) throw e
+        }
     }
 
     /**
