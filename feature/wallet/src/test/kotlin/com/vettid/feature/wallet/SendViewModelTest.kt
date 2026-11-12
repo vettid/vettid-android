@@ -61,13 +61,17 @@ class SendViewModelTest {
         return SendViewModel(SavedStateHandle(mapOf("walletId" to id)), m, FakeServerSettings(), engine)
     }
 
-    /** The form ready to review: a payee, 40,000 sats, Normal. */
+    /**
+     * The form ready to review: a payee, 40,000 sats, Normal. Ready means [SendUiState.canReview]: also the recent payments'
+     * check done, which ends on its own and may come after the fee estimates; `review()` before it does nothing.
+     */
     private suspend fun TestScope.ready(): SendViewModel {
         val vm = vm()
         eventually { vm.state.value.estimates != null }
         vm.setAddress(PAYEE)
         vm.setUnit(AmountUnit.SATS)
         vm.setAmount("40000")
+        eventually { vm.state.value.canReview }
         return vm
     }
 
@@ -206,7 +210,7 @@ class SendViewModelTest {
         // What is sent is the trimmed address.
         vm.setUnit(AmountUnit.SATS)
         vm.setAmount("40000")
-        eventually { vm.state.value.estimates != null }
+        eventually { vm.state.value.canReview }
         vm.review()
         eventually { engine.requests.isNotEmpty() }
         assertEquals(PAYEE, engine.requests.single().address)

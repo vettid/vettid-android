@@ -69,6 +69,24 @@ class WalletsManagerTest {
         this.chain.history[WalletFixtures.address(chain, index).address] = ChainSummary(sats, unconfirmed, 1, 1)
     }
 
+    /** A read that began before another and ends after it does not put its older list back over the newer one. */
+    @Test
+    fun anOlderReadThatEndsLastDoesNotReplaceANewerList() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val older = CoroutineScope(Dispatchers.Default).launch { m.refresh() }
+        while (ops.slowRead != null) kotlinx.coroutines.delay(5) // the older read has begun
+        ops.wallets[w.id] = w.copy(name = "Renamed elsewhere")
+        m.refresh()
+        assertEquals("Renamed elsewhere", m.wallets.value.single().name)
+        gate.complete(Unit)
+        older.join()
+        assertEquals("the older read's list was dropped", "Renamed elsewhere", m.wallets.value.single().name)
+    }
+
     @Test
     fun theListMakesTheWalletsAvailable() = runBlocking {
         withWallet()

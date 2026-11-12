@@ -291,6 +291,14 @@ class WalletsManager(
     /** A `wallet.list` was published since the vault opened (a created or imported wallet alone does not count). Under [lock]. */
     private var listRead = false
 
+    /**
+     * Each `wallet.list` read takes a number when it starts ([listReads]); [listShown] is the number of the read whose list
+     * is shown. A read that started before the one shown is dropped when it ends: a slow read never puts an older list (an
+     * older limit, a deleted wallet) back over a newer one. Under [lock].
+     */
+    private var listReads = 0L
+    private var listShown = 0L
+
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
@@ -449,7 +457,7 @@ class WalletsManager(
      * until the next unlock.
      */
     suspend fun refresh() {
-        val g = synchronized(lock) { if (!open) return else generation }
+        val (g, seq) = synchronized(lock) { if (!open) return else generation to ++listReads }
         if (availabilityFlow.value == WalletAvailability.UNSUPPORTED) return
         val list = try {
             vaultGuard { ops().list() }
@@ -457,13 +465,17 @@ class WalletsManager(
             if (e.kind == FailureKind.NOT_SUPPORTED) publish(g) { availabilityFlow.value = WalletAvailability.UNSUPPORTED }
             throw e
         }
-        val published = publish(g) {
+        // One check and one write under the lock: no later read can be shown between them.
+        val published = synchronized(lock) {
+            if (g != generation || seq < listShown) return@synchronized false
+            listShown = seq
             walletsFlow.value = list
             availabilityFlow.value = WalletAvailability.AVAILABLE
             listRead = true
             // A wallet gone (deleted on another device): its look-up goes too.
             lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
             transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+            true
         }
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
         if (published) flags.listed(list.map { it.id }.toSet())
