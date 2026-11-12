@@ -123,5 +123,7 @@ class PairKeptRefusalTest {
         assertEquals(false, checkPassed(vault))
         vault.ownerCheck.value = view(OwnerCheckState.OK)
         assertEquals(true, checkPassed(vault))
+        vault.ownerCheck.value = view(OwnerCheckState.OK).copy(deadline = Instant.now().minusSeconds(60))
+        assertEquals("OK but past its deadline: due", false, checkPassed(vault))
     }
 }

@@ -246,7 +246,8 @@ class PairingManager(
      * (Re-check Low 1) The owner left while its approval was out (a cancel can't stop it): if the vault then keeps the
      * comparison open (the daily check due), it is rejected instead of kept with no screen. The same holds while the member's
      * own reject is out (busy too): that reject settles it. Reset by a new owner ([claim], a [start] by another screen), by a
-     * start that makes a new code, when the member's rejection of that comparison settles, and by [clear].
+     * start that makes a new code, when the member's rejection of that comparison settles, and by [clear]. A settled
+     * approval does not reset it: it then outlives that comparison until the next new code, [claim] or [clear].
      */
     private var ownerLeft = false
 

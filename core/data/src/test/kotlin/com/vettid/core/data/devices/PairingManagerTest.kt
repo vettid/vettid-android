@@ -1252,4 +1252,46 @@ class PairingManagerTest {
             m.clear() // nothing of a kept comparison (its timer) outlives a failed run
         }
     }
+
+    /**
+     * (iOS #255) A rejection that settles late, of an earlier pairing, leaves a later comparison's leave mark alone: that
+     * comparison's approval, refused for the daily check after its screen left, is still rejected, not kept with no screen.
+     */
+    @Test
+    fun aLateRejectionOfAnEarlierPairingLeavesALaterOnesMarkAlone() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.start(PairRole.AGENT, Any())
+        m.onEvent(pending("p1"))
+        val rejectGate = CompletableDeferred<Unit>()
+        ops.holdReject = rejectGate
+        val rejecting = launch { m.reject("p1") }
+        pump { ops.rejectEntered.isCompleted }
+        m.clear() // the vault locked; it opens again, and a new screen pairs p2
+        ops.created = obj("""{"pairing_id":"p2","link":"${link()}","exp":"${clock.plusSeconds(600)}"}""")
+        val owner = Any()
+        m.start(PairRole.AGENT, owner)
+        m.onEvent(pending("p2"))
+        ops.refuse["approve"] = "owner_check_required"
+        val approveGate = CompletableDeferred<Unit>()
+        ops.holdApprove = approveGate
+        val approving = launch { m.approve(3600) }
+        try {
+            pump { ops.approveEntered.isCompleted }
+            m.leave(owner)
+            pump { m.abandoned }
+            rejectGate.complete(Unit)
+            rejecting.join()
+            assertTrue("p1's late rejection leaves p2's mark", m.abandoned)
+            approveGate.complete(Unit)
+            approving.join()
+            runCurrent()
+            assertEquals("p2 rejected, not kept with no screen", PairingState(), m.state.value)
+            pump { "reject:p2" in ops.calls }
+        } finally {
+            rejectGate.complete(Unit)
+            approveGate.complete(Unit)
+            m.clear()
+        }
+    }
 }
