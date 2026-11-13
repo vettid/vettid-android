@@ -6,6 +6,7 @@ import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.WalletImport
+import com.vettid.core.vault.heldByLockGate
 import com.vettid.core.vault.walletCapsRaise
 import com.vettid.core.vault.walletCapsSet
 import com.vettid.core.vault.walletAddressList
@@ -204,8 +205,9 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            // Before the request went out nothing reached the vault: said as a result, and the manager gives the payment back.
-            if (sent) throw e else SignOutcome.NotSent(e)
+            // Before the request went out nothing reached the vault: said as a result, and the manager gives the payment back. So
+            // for a first send the device's lock gate held (ANDROID-PLAN §4 "While pending"): nothing of it was sent.
+            if (mayHaveReached(sent, e)) throw e else SignOutcome.NotSent(e)
         }
     }
 
@@ -227,6 +229,12 @@ class VaultWalletOps(private val api: suspend () -> VaultApi) : WalletOps {
     override suspend fun history(walletId: String, limit: Int?): List<WalletTx> = WalletWire.history(api().walletHistory(walletId, limit))
 
     internal companion object {
+        /**
+         * Whether a sign that failed with [e] may have reached the vault: only once it went out ([sent]), and never when its first
+         * send was held by the device's lock gate (ANDROID-PLAN §4 "While pending"), which sends nothing.
+         */
+        fun mayHaveReached(sent: Boolean, e: Throwable): Boolean = sent && !e.heldByLockGate
+
         const val PHRASE_LABEL = "Recovery phrase"
         const val PASSPHRASE_LABEL = "Passphrase"
 

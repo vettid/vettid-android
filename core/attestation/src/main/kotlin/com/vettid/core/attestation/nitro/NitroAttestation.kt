@@ -101,6 +101,8 @@ class NitroVerifier(private val roots: List<X509Certificate> = listOf(NitroRoot.
         } catch (_: GeneralSecurityException) {
             false
         }
+        // The only Signature this verifier throws, and only after the chain passed: EnclaveVerifier.verify reads it as
+        // "the chain passed, the signature failed" (ANDROID-PLAN 0.1.124, lines 2 and 3).
         if (!ok) throw AttestationException.Signature("attestation")
         return d
     }

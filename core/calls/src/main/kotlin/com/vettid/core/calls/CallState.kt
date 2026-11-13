@@ -58,6 +58,9 @@ enum class CallEnd {
     /** This member's vault is already in a call. */
     OWN_VAULT_BUSY,
 
+    /** (C2) The member turned calls with this connection off (perhaps on another device a moment before): `calls_off`. */
+    CALLS_OFF,
+
     /** The daily owner check is due: no calls until it is done. */
     OWNER_CHECK_REQUIRED,
 
@@ -67,7 +70,7 @@ enum class CallEnd {
     /** This device found no network address to be reached at (for example a blocked network permission). */
     NO_ADDRESS,
 
-    /** The two devices found no path to each other (today: they are not on the same network). */
+    /** The two devices found no path to each other within 60 s. */
     COULD_NOT_CONNECT,
 
     /** The path was lost during the call. */
@@ -97,6 +100,17 @@ sealed interface CallState {
         val activeSince: Instant? = null,
         /** Active, but the path is interrupted; the media stack is trying to get it back. */
         val reconnecting: Boolean = false,
+        /**
+         * (C2) This device's side of the answer is through: the callee's `call.answer` is with its vault, or the caller
+         * has taken the answer. From then the call is `active` in the vault, and keep-alives may go (VAULT-MESSAGING
+         * "Liveness"); one before it is answered `call.end{unavailable}`.
+         */
+        val answerThrough: Boolean = false,
+        /**
+         * (C2) The call is in form 2: placed in form 2, or answering an offer in form 2. That proves the vault C2 for
+         * this call, whatever the `call.list` probe has found yet: keep-alives go on it.
+         */
+        val formTwo: Boolean = false,
     ) : CallState
 
     /** The last call, until it is dismissed or another begins. */
@@ -121,13 +135,29 @@ data class CallDiagnostics(
     val media: MediaDiagnostics? = null,
 )
 
+/**
+ * (C2; CALLS-PLAN §7 C5: "the app records direct or relayed per call, locally") How the calls that connected since the
+ * process started went: directly between the two phones, through a relay, or not known (the stack never said). Three
+ * counts and nothing else (no call id, address or time), in memory for the life of the process; kept in every build
+ * with calls, and read only by the call test screen.
+ */
+data class CallPaths(val direct: Int = 0, val relayed: Int = 0, val unknown: Int = 0)
+
 /** The times the state machine keeps. Defaults are the plan's; tests shorten nothing (virtual time). */
 @Suppress("MagicNumber")
 data class CallTimings(
     /** No address gathered after this long: the call ends [CallEnd.NO_ADDRESS]. */
     val gather: Duration = Duration.ofSeconds(8),
-    /** No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. */
-    val connect: Duration = Duration.ofSeconds(30),
+    /**
+     * No media this long after the answer: the call ends [CallEnd.COULD_NOT_CONNECT]. 60 s (owner decision 2026-11-11,
+     * VAULT-MESSAGING 0.88.16): a slow path (TURN, a network allowing only TCP 443) may take a while.
+     */
+    val connect: Duration = Duration.ofSeconds(60),
+    /**
+     * (C2) The answering device, its microphone held back, ends the call as not encrypted when no frame has decrypted
+     * this long after its connection is established (VAULT-MESSAGING "Key confirmation").
+     */
+    val decrypt: Duration = Duration.ofSeconds(20),
     /** The caller rings for the offer's lifetime, kept within these bounds whatever the two clocks say. */
     val minRing: Duration = Duration.ofSeconds(10),
     val maxRing: Duration = Duration.ofSeconds(60),

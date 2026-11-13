@@ -250,13 +250,19 @@ internal class FakeServerSettings(var server: com.vettid.core.chain.ChainServer 
     override suspend fun reset(network: Network): Boolean = error("not here")
 }
 
-/** The vault calls run on the IO dispatcher: waits for [cond] in real time. */
+/**
+ * The vault calls run on the IO dispatcher: waits for [cond] in real time. A wait that runs out fails with the test line it
+ * was waiting at (a bare timeout said nothing of which of a test's waits it was).
+ */
 internal suspend fun eventually(cond: () -> Boolean) {
-    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-        kotlinx.coroutines.withTimeout(EVENTUALLY_MS) {
+    val at = Throwable().stackTrace.firstOrNull { it.className.contains("Test") && !it.className.contains("TestSupport") }
+    val met = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        kotlinx.coroutines.withTimeoutOrNull(EVENTUALLY_MS) {
             while (!cond()) kotlinx.coroutines.delay(10)
+            true
         }
     }
+    if (met == null) throw AssertionError("not met within $EVENTUALLY_MS ms, waiting at $at")
 }
 
 internal const val FP = "73c5da0a"

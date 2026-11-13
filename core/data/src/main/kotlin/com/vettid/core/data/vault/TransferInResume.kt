@@ -205,11 +205,14 @@ internal object TransferInResume {
      * move it at every failure for ever); or, after the final send, one more held final collect, for a lease noticed during
      * it that outlives its start (past the cap, or within it but ending after the send began), or for a final collect the
      * relay refused (call B: 429, or 401 with a stale signature; any other status is no cut). In production the relay client
-     * itself first retries a 429 or a stale 401 (up to 3 attempts, each signed afresh, honoring `retry_after`): a refusal
-     * reaches the window only after those, and is then held for its `retry_after`, at most V, and sent as a new request; a
-     * `retry_after` over the client's cap (30 s, `RelayClient.CallLimits`) is not waited for: it reaches the window
-     * at once as that refusal, held the same way; one the client waits for that runs past the request's bound
-     * (wait + 30 s) ends it as an abandoned request first, a cut held to max(now, s + w) + V + 15 s. Once the extra is
+     * itself first retries a 429, a 5xx or a stale 401 (up to 3 attempts, each signed afresh, honoring `retry_after`), all
+     * within the request's bound (wait + 30 s, `VaultDevice.settleCollect`'s whole-request deadline, GC #6847): its
+     * attempts and their waits together never run past it, and a retry that could not finish within it is not made, so
+     * the last refusal reaches the window before the bound; a refusal reaches the window only after those, and is then
+     * held for its `retry_after`, at most V, and sent as a new request; a `retry_after` over the client's cap (30 s,
+     * `RelayClient.CallLimits`) or over what is left of the bound is not waited for: it reaches the window at once as that
+     * refusal, held the same way. A request still out at the bound (a body read that stalls) ends as an abandoned request,
+     * a cut held to max(now, s + w) + V + 15 s. Once the extra is
      * used at or after the cap, nothing raises a hold past what was due when it
      * was taken (a background or a return grants nothing; one used before the cap leaves the first hold due); but a freeze
      * during the last send (the app in the background) earns one more `wait=0` look, so the drop never follows only a look

@@ -13,7 +13,6 @@ import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallIce
 import com.vettid.core.vault.CallKeys
 import com.vettid.core.vault.CallMessageException
-import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.MadeByCallApi
 import com.vettid.core.vault.OutgoingCall
@@ -28,6 +27,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,9 +52,10 @@ class VaultCallSignallingTest {
         var start: () -> OutgoingCall = { throw CallMessageException("not set") }
         var startGate: Channel<Unit>? = null
         var answerKeys: CallKeys? = null
+        var acceptGate: Channel<Unit>? = null
 
-        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
-            asked += "start($connectionId, ${suites.map { it.id }})"
+        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+            asked += "start($connectionId, ${suites.map { it.id }})" + (peerIk?.let { " form2 ${it.size}" } ?: "")
             startGate?.receive()
             return start()
         }
@@ -64,13 +65,14 @@ class VaultCallSignallingTest {
             return incoming(event)
         }
 
-        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys {
-            asked += "answer(${call.callId})"
+        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+            asked += "answer(${call.callId})" + (if (keepalive) " keepalive" else "")
             return answerKeys!!
         }
 
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall {
             asked += "accept(${call.callId}, $pinnedFingerprint)"
+            acceptGate?.receive()
             return accept(call)
         }
 
@@ -86,7 +88,7 @@ class VaultCallSignallingTest {
             asked += "end($callId, $reason)"
         }
 
-        override suspend fun list(limit: Int): List<CallRecord> = emptyList()
+        override suspend fun list(limit: Int): com.vettid.core.vault.CallList = com.vettid.core.vault.CallList(emptyList(), emptyList())
     }
 
     private val gateway = Gateway()
@@ -96,7 +98,11 @@ class VaultCallSignallingTest {
     private var refreshes = 0
     private var onRefresh: () -> Unit = {}
 
-    private fun TestScope.signalling(suites: List<MediaSuite> = listOf(s1)): VaultCallSignalling {
+    private fun TestScope.signalling(
+        suites: List<MediaSuite> = listOf(s1),
+        c2: Boolean = false,
+        keys: Map<String, ByteArray> = emptyMap(),
+    ): VaultCallSignalling {
         val s = VaultCallSignalling(
             gateway,
             { identities[it] },
@@ -105,6 +111,8 @@ class VaultCallSignallingTest {
                 refreshes++
                 onRefresh()
             },
+            peerKey = { keys[it] },
+            vaultIsC2 = { c2 },
         )
         backgroundScope.launch { s.events.collect { out += it } }
         runCurrent()
@@ -121,9 +129,14 @@ class VaultCallSignallingTest {
 
     private fun answerEvent(callId: String = CALL_ID) = CallEvent.Answer(message("call.answer", """{"call_id":"$callId"}"""))
 
-    private fun incomingCall(connectionId: String = "conn-1", chosen: MediaSuite = s1, offered: List<Int> = listOf(1)) = IncomingCall(
+    private fun incomingCall(
+        connectionId: String = "conn-1",
+        chosen: MediaSuite = s1,
+        offered: List<Int> = listOf(1),
+        parties: CallWire.Parties? = null,
+    ) = IncomingCall(
         CALL_ID, connectionId, "audio", "v=0\r\n", T0.plusSeconds(45), Duration.ofSeconds(45),
-        CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList()), CallMedia.Negotiated(chosen, offered), ByteArray(1216),
+        CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList()), CallMedia.Negotiated(chosen, offered), ByteArray(1216), parties,
     )
 
     private fun outgoingCall(connectionId: String = "conn-1") = OutgoingCall(
@@ -164,6 +177,72 @@ class VaultCallSignallingTest {
         // And it cannot be answered.
         assertThrows(CallSecurityException::class.java) { kotlinx.coroutines.runBlocking { s.answer(CALL_ID, "v=0", listOf(s1)) } }
         assertTrue(gateway.asked.none { it.startsWith("answer") })
+    }
+
+    /**
+     * (C2) A device that knows its vault to be C2 starts in form 2, naming the connection's key, and answers with
+     * `keepalive`; with no key for the connection it places no call at all (form 1 alone would leave a relay unseen).
+     * Against an S10 vault: form 1, no keep-alive.
+     */
+    @Test
+    fun aC2VaultGetsFormTwoAndKeepAlives() = runTest {
+        val s = signalling(c2 = true, keys = mapOf("conn-1" to ByteArray(32) { 7 }))
+        gateway.start = { outgoingCall() }
+        s.start("conn-1", "v=0", listOf(s1))
+        assertTrue(gateway.asked.toString(), gateway.asked.contains("start(conn-1, [1]) form2 32"))
+        assertThrows(CallSecurityException::class.java) { kotlinx.coroutines.runBlocking { s.start("conn-2", "v=0", listOf(s1)) } }
+        assertFalse(gateway.asked.any { it.startsWith("start(conn-2") })
+        gateway.incoming = { incomingCall() }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        gateway.answerKeys = keys()
+        s.answer(CALL_ID, "v=0", listOf(s1))
+        assertTrue(gateway.asked.contains("answer($CALL_ID) keepalive"))
+
+        val g1 = Gateway().also { it.start = { outgoingCall() } }
+        val s10 = VaultCallSignalling(g1, { identities[it] }, listOf(s1), peerKey = { ByteArray(32) { 7 } }, vaultIsC2 = { false })
+        s10.start("conn-1", "v=0", listOf(s1))
+        assertEquals(listOf("start(conn-1, [1])"), g1.asked)
+    }
+
+    /** (C2) A form 2 offer is answered with `keepalive` even before the probe has found the vault C2. */
+    @Test
+    fun aFormTwoOfferIsAnsweredWithKeepAlivesWhateverTheProbeSays() = runTest {
+        val s = signalling(c2 = false)
+        gateway.incoming = { incomingCall(parties = CallWire.Parties(ByteArray(32) { 1 }, ByteArray(32) { 2 })) }
+        gateway.channel.send(offerEvent())
+        runCurrent()
+        gateway.answerKeys = keys()
+        s.answer(CALL_ID, "v=0", listOf(s1))
+        assertTrue(gateway.asked.toString(), gateway.asked.contains("answer($CALL_ID) keepalive"))
+    }
+
+    /**
+     * Two answers for one call, one checked by the start that was overtaken and one from the events, at the same
+     * time: only one is checked; the other finds no call and cannot end the one accepted.
+     */
+    @Test
+    fun aDuplicateAnswerCannotEndAnAcceptedCall() = runTest {
+        val s = signalling()
+        gateway.startGate = Channel(1)
+        gateway.acceptGate = Channel(1)
+        gateway.start = { outgoingCall() }
+        gateway.accept = { AcceptedCall(CALL_ID, "v=0 answer", keys()) }
+        backgroundScope.launch { s.start("conn-1", "v=0", listOf(s1)) }
+        runCurrent()
+        gateway.channel.send(answerEvent())
+        runCurrent()
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        // The held answer is being checked (accept waits); the duplicate arrives now.
+        assertEquals(1, gateway.asked.count { it.startsWith("accept") })
+        gateway.channel.send(answerEvent())
+        runCurrent()
+        gateway.acceptGate!!.send(Unit)
+        runCurrent()
+        assertEquals(1, gateway.asked.count { it.startsWith("accept") })
+        assertTrue(out.toString(), out.none { it is SignalEvent.AnswerRejected })
+        assertEquals("v=0 answer", (out.single() as SignalEvent.Answer).sdp)
     }
 
     @Test
@@ -296,7 +375,7 @@ class VaultCallSignallingTest {
         gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
         runCurrent()
         assertEquals(2, s.errors.value)
-        assertEquals(listOf("Offer($CALL_ID)", "End(callId=$CALL_ID, reason=hangup)"), out.map { it.toString() })
+        assertEquals(listOf("Offer($CALL_ID)", "End(callId=$CALL_ID, reason=hangup, supersededBy=null)"), out.map { it.toString() })
 
         // The same under an answer: the call is over, the listening is not.
         gateway.start = { outgoingCall() }

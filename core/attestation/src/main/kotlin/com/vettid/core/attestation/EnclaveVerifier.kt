@@ -35,25 +35,79 @@ class EnclaveVerifier(private val nitro: NitroVerifier = NitroVerifier()) {
         manifest: ReleaseManifest,
         enroll: Boolean,
         now: Instant,
-    ): VerifiedEnclave {
+    ): VerifiedEnclave = verify(descriptor, attestation, manifest, enroll, now).enclave()
+
+    /**
+     * [verifyEnclave] with its record (ANDROID-PLAN 0.1.124 §4 "Attestation in detail"): the same checks, in the order of
+     * [EnclaveCheck] ([manifest] has passed line 1), each recorded as it passes; the first that fails is recorded failed
+     * and every later one not run. A release that passed every check and is not `active` for an enrollment is refused
+     * after them ([EnclaveRefusal.NOT_ACTIVE]).
+     */
+    @Suppress("CyclomaticComplexMethod", "LongMethod") // one step per check, in order
+    fun verify(
+        descriptor: ByteArray,
+        attestation: ByteArray,
+        manifest: ReleaseManifest,
+        enroll: Boolean,
+        now: Instant,
+    ): EnclaveVerification {
+        var r = EnclaveRecord(now, EnclaveRecord.results(1, failed = false), manifest.keyId, manifest.serial)
+        var passed = 1
+        fun pass() {
+            passed++
+            r = r.copy(results = EnclaveRecord.results(passed, failed = false))
+        }
+        fun fail(e: AttestationException): EnclaveVerification =
+            EnclaveVerification(null, e, r.copy(results = EnclaveRecord.results(passed, failed = true)))
+        // Lines 2 and 3: the chain (and the document's format) is checked before the signature, which is the last
+        // thing NitroVerifier checks and the only one it reports as a Signature failure.
+        val doc = try {
+            nitro.verify(attestation)
+        } catch (e: AttestationException.Signature) {
+            pass()
+            return fail(e)
+        } catch (e: AttestationException) {
+            return fail(e)
+        }
+        val ms = doc.measurements
+        r = r.copy(pcr0 = ms.pcr0, pcr1 = ms.pcr1, pcr2 = ms.pcr2, attestedAt = doc.timestamp)
+        pass()
+        pass()
+        // Line 4: the descriptor's format and user_data over it.
         val ds = try {
             Descriptor.parse(descriptor)
         } catch (_: CryptoException) {
-            throw AttestationException.Format("descriptor")
+            return fail(AttestationException.Format("descriptor"))
         }
-        val doc = nitro.verify(attestation)
-        doc.checkUserData(AltChannel.etkUserData(descriptor))
-        doc.checkFresh(now, MAX_ATTESTATION_AGE, ATTESTATION_SKEW)
-        val ms = doc.measurements
-        if (ms.isDebug) throw AttestationException.Debug()
-        if (!Bytes.constantTimeEquals(ms.pcr0.toByteArray(), ds.release.toByteArray())) throw AttestationException.Pcr("release")
+        r = r.copy(notAfter = ds.notAfter)
+        try {
+            doc.checkUserData(AltChannel.etkUserData(descriptor))
+        } catch (e: AttestationException) {
+            return fail(e)
+        }
+        pass()
+        try {
+            doc.checkFresh(now, MAX_ATTESTATION_AGE, ATTESTATION_SKEW)
+        } catch (e: AttestationException) {
+            return fail(e)
+        }
+        pass()
+        if (ms.isDebug) return fail(AttestationException.Debug())
+        pass()
+        if (!Bytes.constantTimeEquals(ms.pcr0.toByteArray(), ds.release.toByteArray())) return fail(AttestationException.Pcr("release"))
+        pass()
         if (!now.isBefore(ds.notAfter) || ds.notAfter.isAfter(doc.timestamp.plus(MAX_DESCRIPTOR_LIFE))) {
-            throw AttestationException.Stale()
+            return fail(AttestationException.Stale())
         }
-        val e = manifest.byPcr0(ms.pcr0) ?: throw AttestationException.Release("not listed", unknown = true)
-        if (!e.measurements.matches(ms)) throw AttestationException.Pcr("manifest")
-        if (enroll && e.status != ReleaseStatus.ACTIVE) throw AttestationException.Release("not active")
-        return VerifiedEnclave(ds, ms, e)
+        pass()
+        val e = manifest.byPcr0(ms.pcr0) ?: return fail(AttestationException.Release("not listed", unknown = true))
+        if (!e.measurements.matches(ms)) return fail(AttestationException.Pcr("manifest"))
+        pass()
+        r = r.copy(releaseNumber = e.number, releaseStatus = e.status, releaseEndsAt = e.endsAt)
+        if (enroll && e.status != ReleaseStatus.ACTIVE) {
+            return EnclaveVerification(null, AttestationException.Release("not active"), r.copy(refusal = EnclaveRefusal.NOT_ACTIVE))
+        }
+        return EnclaveVerification(VerifiedEnclave(ds, ms, e), null, r)
     }
 
     /**

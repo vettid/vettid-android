@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.altchan.Slot
+import com.vettid.core.vault.VaultDevice
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.time.Instant
@@ -79,7 +80,8 @@ sealed interface MemberLock {
  *    it (the vault was opened again since), unless a status read then says it is locked after all.
  * 2. **While a lock is pending this phone is locked whatever the status says** ([lockedWhatever]).
  * 3. **While a lock is pending nothing is sent to the vault** but the lock, a pending `call.end` and (release L, "Lock
- *    it now") the one `vault.status` that names the opening the fresh lock is bound to ([admits]).
+ *    it now") the one `vault.status` that names the opening the fresh lock is bound to ([admits] for the client, [sendGate]
+ *    for what the device sends).
  * 4. **While a lock is pending nothing the vault sends is taken into the app's lists** ([takesEvents]).
  */
 class LockGuard(
@@ -168,6 +170,14 @@ class LockGuard(
      * not held locked ([LockKeeper.holdsPhone]); for a [LockTimeUse] always.
      */
     fun admits(use: LockTimeUse? = null): Boolean = use != null || !lock.holdsPhone
+
+    /**
+     * (ANDROID-PLAN §4 "While pending"; owner decision 2026-11-12) The device's send gate: while a lock is [pending] nothing but
+     * [VaultDevice.UNGATED_TYPES] leaves the device (the outbox, re-sends and repeats, first sends from a client handed out
+     * earlier; the lock and its status read pass as [VaultDevice.LockTimeSend]). Not held in "opened again" (a bound lock ended
+     * `stale_lock`/`stale`): the phone's replies go then, while [admits] still hands out no new client until an unlock here.
+     */
+    fun sendGate(): VaultDevice.SendGate = VaultDevice.SendGate { type -> type in VaultDevice.UNGATED_TYPES || !pending }
 
     /** Whether what the vault sends is taken into the app's lists: not while this phone is held locked. */
     fun takesEvents(): Boolean = !lock.holdsPhone

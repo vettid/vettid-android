@@ -1,6 +1,7 @@
 package com.vettid.core.calls
 
 import com.vettid.core.crypto.call.MediaSuite
+import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,7 +30,7 @@ class CallMachineTest {
 
     private fun CallMachine.ended() = state.value as CallState.Ended
 
-    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1") =
+    private fun offer(callId: String = CALL_ID, connectionId: String = "conn-1", formTwo: Boolean = false) =
         SignalEvent.Offer(
             callId,
             connectionId,
@@ -37,6 +39,7 @@ class CallMachineTest {
             Duration.ofSeconds(45),
             emptyList(),
             MediaSuite.AES_128_GCM,
+            formTwo,
         )
 
     private fun answer() =
@@ -426,6 +429,76 @@ class CallMachineTest {
         assertEquals(CallPhase.CALLING, m.live().phase)
     }
 
+    /**
+     * (C2, VAULT-MESSAGING "Key confirmation") Against a C2 vault the answering device holds its microphone back until
+     * its receiver first decrypts a frame; the member's own mute still applies after. No frame 20 s after the
+     * connection is up: the call ends as not encrypted. Against an S10 vault nothing is held.
+     */
+    @Test
+    fun theAnsweringDeviceSendsNothingBeforeAFrameDecrypts() = runTest {
+        // Keyed on the offer's form: here the vault probe has not found the vault C2 (yet), and the hold still applies.
+        signalling.c2 = false
+        val m = machine()
+        signalling.deliver(offer(formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        val engine = engines.last
+        assertTrue("held from the answer on", engine.holding)
+        engine.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        assertTrue("connected is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.SEND, CryptorState.OK))
+        runCurrent()
+        assertTrue("its own sender working is not enough", engine.holding)
+        engine.emit(MediaEvent.Cryptor(MediaDirection.RECEIVE, CryptorState.OK))
+        runCurrent()
+        assertFalse(engine.holding)
+        advanceTimeBy(60_000)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        m.hangUp()
+        runCurrent()
+        m.dismiss()
+
+        // No frame decrypts: 20 s after the connection, not encrypted.
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70", formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        advanceTimeBy(19_999)
+        assertEquals(CallPhase.ACTIVE, m.live().phase)
+        advanceTimeBy(2)
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+        assertTrue(engines.last.holding)
+
+        // The caller's call.end{failed} while this device is held (its wrong confirm): the same text.
+        m.dismiss()
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T72", formTwo = true))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertTrue("a form 2 call says so", m.live().formTwo)
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T72", CallReason.FAILED))
+        runCurrent()
+        assertEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+
+        // A form 1 offer (an S10 peer), even on a C2 vault: nothing held.
+        m.dismiss()
+        signalling.c2 = true
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T71"))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertFalse(engines.last.holding)
+        assertFalse(m.live().formTwo)
+        // Not held, the caller's call.end{failed} keeps its usual meaning.
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T71", CallReason.FAILED))
+        runCurrent()
+        assertNotEquals(CallEnd.NOT_ENCRYPTED, m.ended().reason)
+    }
+
     @Test
     fun noPathBetweenTheTwoDevices() = runTest {
         val m = machine()
@@ -433,7 +506,7 @@ class CallMachineTest {
         engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
         signalling.deliver(answer())
         runCurrent()
-        advanceTimeBy(29_999)
+        advanceTimeBy(59_999)
         assertEquals(CallPhase.CONNECTING, m.live().phase)
         advanceTimeBy(2)
         assertEquals(CallEnd.COULD_NOT_CONNECT, m.ended().reason)
@@ -625,6 +698,332 @@ class CallMachineTest {
         runCurrent()
         assertEquals(CallEnd.HUNG_UP, m3.ended().reason)
         assertTrue(stray.keys.send.all { it == 0.toByte() } && stray.keys.receive.all { it == 0.toByte() })
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Glare", decision D21 a) This device's outgoing call lost a glare: the vault ends it
+     * `busy` with `superseded_by` and rings the connection's own call, which this device answers without asking,
+     * whichever of the two arrives first. Nothing is sent for the lost call, and "busy" is never shown.
+     */
+    @Test
+    fun aLostGlareAnswersTheWinningCall() = runTest {
+        for (offerFirst in listOf(false, true)) {
+            val s = FakeSignalling()
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            val lost = engines.last
+            if (offerFirst) s.deliver(offer(GLARE_ID))
+            s.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+            if (!offerFirst) {
+                runCurrent()
+                // Waiting for the winner: the outgoing screen stays, and its media is let go.
+                assertEquals(CallDirection.OUTGOING, m.live().direction)
+                assertTrue("the lost call's engine is closed", lost.closed)
+                s.deliver(offer(GLARE_ID))
+            }
+            runCurrent()
+            val live = m.live()
+            assertEquals("offer first: $offerFirst", CallDirection.INCOMING, live.direction)
+            assertEquals(GLARE_ID, live.callId)
+            assertEquals(CallPhase.CONNECTING, live.phase)
+            assertTrue(s.sent.contains("answer($GLARE_ID)"))
+            assertTrue("nothing sent for the lost call", s.sent.none { it.startsWith("end(") })
+            assertTrue("no ringing for a call answered at once", s.sent.none { it.startsWith("ringing(") })
+        }
+    }
+
+    /** A lost glare whose winner never comes ends as busy at the ring timer, with nothing sent; a hang-up sends nothing. */
+    @Test
+    fun aLostGlareWithoutTheWinningOfferShowsBusy() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m.live().direction)
+        advanceTimeBy(46_000)
+        runCurrent()
+        assertEquals(CallEnd.BUSY, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        m2.hangUp()
+        runCurrent()
+        assertEquals(CallEnd.HUNG_UP, m2.ended().reason)
+        assertTrue(s2.sent.none { it.startsWith("end(") })
+        // The winner then rings as any call: the member hung up on the wait, not on the call.
+        s2.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m2.live().phase)
+    }
+
+    /**
+     * Not a glare: an offer from another connection does not interrupt the call; a plain `busy` (no `superseded_by`)
+     * shows busy; a `superseded_by` naming another call than the offer held does not answer that offer.
+     */
+    @Test
+    fun onlyTheNamedOfferOfTheSameConnectionIsAnsweredForAGlare() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID, connectionId = "conn-2"))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY))
+        runCurrent()
+        assertEquals(CallEnd.BUSY, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("answer(") })
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(offer(OTHER_ID))
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m2.live().direction)
+        assertTrue(s2.sent.none { it.startsWith("answer(") })
+        s2.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(GLARE_ID, m2.live().callId)
+        assertEquals(CallPhase.CONNECTING, m2.live().phase)
+    }
+
+    /**
+     * The connection's own offer held while this device's call rang to it is not lost when that call ends another way
+     * (declined there): it rings.
+     */
+    @Test
+    fun aHeldOfferRingsWhenTheOutgoingCallEndsOtherwise() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallDirection.INCOMING, m.live().direction)
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertEquals(GLARE_ID, m.live().callId)
+    }
+
+    /**
+     * A lock never rings the connection's held offer (a call rings only while the vault is open here), and so
+     * never declines it unseen; nor does the member's own hang-up.
+     */
+    @Test
+    fun aLockNeverRingsTheHeldOffer() = runTest {
+        for (lock in listOf(true, false)) {
+            val s = FakeSignalling()
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            s.deliver(offer(GLARE_ID))
+            runCurrent()
+            if (lock) m.vaultLocking() else m.hangUp()
+            runCurrent()
+            assertTrue("lock $lock: ${m.state.value}", m.state.value is CallState.Ended)
+            assertTrue(s.sent.none { it.startsWith("ringing(") || it.startsWith("end($GLARE_ID") })
+            if (lock) {
+                m.vaultLocking()
+                runCurrent()
+                assertTrue(s.sent.none { it.startsWith("end($GLARE_ID") })
+            }
+        }
+    }
+
+    /** A held offer whose caller hung up, or one held while the call was answered, is not rung afterwards. */
+    @Test
+    fun aHeldOfferThatEndedOrAnAnsweredCallRingsNothingAfter() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(offer(GLARE_ID))
+        s2.deliver(answer())
+        runCurrent()
+        assertEquals(CallPhase.CONNECTING, m2.live().phase)
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.HANGUP))
+        runCurrent()
+        assertEquals(CallEnd.PEER_HUNG_UP, m2.ended().reason)
+    }
+
+    /** A held offer whose caller hung up is not held again when its offer is delivered once more: it never rings. */
+    @Test
+    fun aHeldOfferThatEndedIsNotHeldAgain() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("ringing($GLARE_ID") })
+    }
+
+    /**
+     * An offer that arrives while `call.start` is out, and turns out to carry the call's own id, is not held as
+     * another call: the call's own end still ends it.
+     */
+    @Test
+    fun anOfferWithTheCallsOwnIdIsNotHeldOnceTheCallHasIt() = runTest {
+        signalling.startGate = Channel(1)
+        val m = machine()
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(CallPhase.STARTING, m.live().phase)
+        signalling.deliver(offer(CALL_ID))
+        runCurrent()
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CALL_ID, m.live().callId)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+    }
+
+    /** X's end delivered twice while the lost glare waits changes nothing; the winner is still answered. */
+    @Test
+    fun aSecondEndOfTheLostCallChangesNothing() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m.live().direction)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(GLARE_ID, m.live().callId)
+        assertEquals(CallPhase.CONNECTING, m.live().phase)
+    }
+
+    /** An offer of the connection with an exp of its own (the default helper's is 45 s). */
+    private fun offerUntil(callId: String, exp: java.time.Instant) =
+        SignalEvent.Offer(callId, "conn-1", "v=0\r\ns=offer\r\n", exp, Duration.between(T0, exp), emptyList(), MediaSuite.AES_128_GCM)
+
+    /**
+     * The vault refused `call.start` (`busy`: it rang the connection's call first): the call held meanwhile rings here,
+     * it is not answered by itself. The member's own hang-up or a lock in STARTING rings nothing.
+     */
+    @Test
+    fun aRefusedStartRingsTheHeldOfferButTheMembersOwnEndDoesNot() = runTest {
+        val s = FakeSignalling().apply {
+            startGate = Channel(1)
+            startResult = { throw CallRefusedException("busy") }
+        }
+        val m = machine(s)
+        m.call("conn-1")
+        runCurrent()
+        s.deliver(offer(GLARE_ID))
+        runCurrent()
+        s.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CallDirection.INCOMING, m.live().direction)
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertEquals(GLARE_ID, m.live().callId)
+        assertTrue(s.sent.none { it.startsWith("answer(") })
+
+        for (lock in listOf(false, true)) {
+            val s2 = FakeSignalling().apply { startGate = Channel(1) }
+            val m2 = machine(s2)
+            m2.call("conn-1")
+            runCurrent()
+            s2.deliver(offer(GLARE_ID))
+            runCurrent()
+            if (lock) m2.vaultLocking() else m2.hangUp()
+            runCurrent()
+            assertTrue("lock $lock", m2.state.value is CallState.Ended)
+            assertTrue(s2.sent.none { it.startsWith("ringing(") })
+        }
+    }
+
+    /** A held offer past its exp is neither rung when the call ends otherwise nor answered for a glare. */
+    @Test
+    fun anExpiredHeldOfferIsNeitherRungNorAnswered() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offerUntil(GLARE_ID, T0.plusSeconds(5)))
+        runCurrent()
+        advanceTimeBy(6_000)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(offerUntil(GLARE_ID, T0.plusSeconds(5)))
+        runCurrent()
+        advanceTimeBy(6_000)
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertTrue(s2.sent.none { it.startsWith("answer(") })
+        assertEquals("waits for the winner as when it is not here", CallDirection.OUTGOING, m2.live().direction)
+    }
+
+    /**
+     * Not a glare: `superseded_by` with another reason than `busy`, or naming a call that is not lower; an offer with the
+     * outgoing call's own id. None of them is answered by itself, and the call's own end still ends it.
+     */
+    @Test
+    fun whatIsNotAGlareIsNotAnswered() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertTrue(signalling.sent.none { it.startsWith("answer(") })
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = "01JB2Z6V9K3M4N5P6Q7R8S9T5Z"))
+        runCurrent()
+        assertEquals("a higher id is no glare's winner", CallEnd.BUSY, m2.ended().reason)
+
+        val s3 = FakeSignalling()
+        val m3 = machine(s3)
+        m3.call("conn-1")
+        runCurrent()
+        s3.deliver(offer(CALL_ID))
+        s3.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m3.ended().reason)
+    }
+
+    /** While a lost glare waits: an engine failure sends nothing; the winner's own end ends the wait, and its late offer is ignored. */
+    @Test
+    fun whileALostGlareWaits() = runTest {
+        val m = machine()
+        placed(m)
+        val lost = engines.last
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        lost.emit(MediaEvent.Failed("test"))
+        runCurrent()
+        assertEquals(CallDirection.OUTGOING, m.live().direction)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        runCurrent()
+        assertEquals(CallEnd.MISSED, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertTrue("a winner that ended is not rung", m.state.value is CallState.Ended)
     }
 
     @Test

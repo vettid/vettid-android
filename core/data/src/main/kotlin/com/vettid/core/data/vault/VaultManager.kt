@@ -916,6 +916,12 @@ class VaultManager(
     }
 
     /**
+     * (ANDROID-PLAN 0.1.124) The last verification of the enclave the vault runs on, for Settings → Attestation: kept in an
+     * encrypted file in no-backup storage, replaced by the next verification, erased by the wipe with the directory.
+     */
+    val enclaveRecords = EnclaveRecordStore(KeystoreFileStore(File(app.noBackupFilesDir, ENCLAVE_RECORD_FILE), "enclave-record"))
+
+    /**
      * A canary manifest loaded out of band (VAULT-RELEASES §10.1 step 9, W10-READINESS P31/B5): verified under
      * this build's pinned manifest keys and used instead of the published manifest only while it is newer.
      */
@@ -1109,6 +1115,7 @@ class VaultManager(
 
     init {
         scope.launch { runCatching { canary.load() } }
+        scope.launch { io { enclaveRecords.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
         // A leftover of the removed social.bin (its write went through a temporary file).
@@ -1356,7 +1363,7 @@ class VaultManager(
             override suspend fun relayLock(unlockId: String?): RelayLock {
                 val s = lockSession() ?: return RelayLock.NO_ANSWER
                 return try {
-                    io { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
+                    lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
                     RelayLock.LOCKED
                 } catch (_: TimeoutCancellationException) {
                     RelayLock.NO_ANSWER
@@ -1508,10 +1515,14 @@ class VaultManager(
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
                 // before it compares the bytes as typed.
+                // (ANDROID-PLAN §4 "While pending") Nothing but the lock and a pending `call.end` leaves the outbox while a lock is
+                // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
+                device.sendGate = lockGuard.sendGate()
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
-                val s = Session(device, api, member, AltChannelFlow(member, trust, canary = canary)) { lockGuard }
+                val flow = AltChannelFlow(member, trust, canary = canary, records = enclaveRecords.sink())
+                val s = Session(device, api, member, flow) { lockGuard }
                 // (A6 audit N1) A transfer past its deadline: the collection stays stopped (it could lease a waiting
                 // device.paired before the settlement's collects); the settlement (atTransferDeadline, run by the
                 // transfer-in screen's wait) starts it when it ends. evaluate() publishes the waiting phase meanwhile.
@@ -1688,6 +1699,16 @@ class VaultManager(
                 }
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            // (Show held as held) The outbox once a mailbox's quota backoff ends; this observer's own scope, so it ends with the
+            // session. The device's gate decides by type (a pending `call.end` goes while a lock is pending, nothing else does),
+            // and the stop count is the one when the backoff was set.
+            val quotaFlush = QuotaFlush(
+                this,
+                stopCount = { s.device.stopCount },
+                live = { session === s && !s.device.stopped },
+                flush = { seq -> s.device.flushOutbox(seq) },
+            )
+            launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
                 credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }
@@ -1852,9 +1873,10 @@ class VaultManager(
         if (local.transferApprovedAtMs != null) scope.launch { runCatching { checkKeptTransfer() } }
         val d = session?.device ?: return
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
-        // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
-        // Not while this phone is held locked (a lock pending, or one the vault said was over: release L).
-        if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
+        // The device's gate decides by type (ANDROID-PLAN §4 "While pending"): while this phone is held locked only a pending
+        // `call.end` goes on the return to the foreground, everything else waits. The stop count is taken here, where the flush
+        // is asked for: a stop before the launched flush runs wins.
+        d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
@@ -2492,14 +2514,6 @@ class VaultManager(
             if (holderApp && holder.onSealedUnlockResult(r)) return StepOutcome(UnlockAttempt.Failed(FailureKind.OTHER, r.code))
             return StepOutcome(
                 when (r.code) {
-                    "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
-                    "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
-                    "recovery_pending" -> UnlockAttempt.RecoveryPending
-                    // §11.7.1 (0.27.0): sealed, decided before the PIN; not a PIN failure and no backoff.
-                    SignerWire.CODE_SIGNER_REFUSED -> UnlockAttempt.SignerRefused
-                    "state_rollback" -> UnlockAttempt.StateRollback
-                    "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
-                    "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
                     // Release R (§11.4, §11.14): decided before the PIN, not PIN failures. (0.44.0, §11.14.9 step 5) With
                     // a PIN change unresolved, the previous PIN's `device_secret` asks for the new PIN.
                     "device_secret" -> if (newPinStep && pinChangeUndecided()) {
@@ -2507,9 +2521,7 @@ class VaultManager(
                     } else {
                         UnlockAttempt.Failed(FailureKind.DEVICE_SECRET, r.code)
                     }
-                    "transfer_incomplete" -> UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, r.code)
-                    "retry" -> UnlockAttempt.Failed(FailureKind.RETRY, r.code)
-                    else -> UnlockAttempt.Failed(FailureKind.OTHER, r.code)
+                    else -> sealedUnlockRefusal(r.code, r.retryAfterSeconds)
                 },
             )
         }
@@ -2532,12 +2544,14 @@ class VaultManager(
         // opened or flushed.
         val lockedSince = lockGuard.lockedWhatever(unlocked = true)
         val overtaken = lockedSince || gen != generation
+        // The stop count where the flush is asked for: a stop before the launched flush runs wins.
+        val flushSeq = s.device.stopCount
         scope.launch {
             // Never a lock from before this unlock (LockKeeper): one left in the outbox by an earlier version of the
             // app, which sent locks through it, is dropped before anything is flushed.
             runCatching { s.device.dropFromOutbox(TYPE_VAULT_LOCK) }
             // Nothing but the lock while one is pending: what the member wrote earlier waits for the next unlock.
-            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox() }
+            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox(flushSeq) }
         }
         val opened = if (overtaken) {
             // (Not after a wipe, which also bumps the generation and has said SignedOut.)
@@ -2861,7 +2875,7 @@ class VaultManager(
         // The mark is taken before the status is read (F1); the rest runs in the manager's scope.
         LockAgain.start(
             scope, lockKeeper, mine, LOCK_STATUS_WAIT,
-            read = { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
+            read = { lockSession()?.let { s -> lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
             then = { locking.run(lock = { lockKeeper.ask(mine) }, after = {}) },
         )
     }
@@ -3171,6 +3185,8 @@ class VaultManager(
         st.recoveryState?.let { RecoveryView(it, st.recoveryAvailableAt ?: "") }
     }
 
+    override val enclaveRecord: StateFlow<com.vettid.core.attestation.EnclaveRecord?> get() = enclaveRecords.record
+
     override suspend fun attestationInfo(): AttestationInfo = io {
         // The key the identity in use signs with (ANDROID-PLAN §4 step 5).
         val key = slots.attestation.current(slots.active)?.let { DeviceAttestationKey(it.alias) }
@@ -3200,8 +3216,29 @@ class VaultManager(
             bootKeyFingerprint = rot?.let { Bytes.hex(it.verifiedBootKey()).take(FINGERPRINT_HEX).chunked(GROUP).joinToString(" ") },
             lastRelease = alt?.releaseNumber ?: 0,
             lastReleaseFingerprint = alt?.release?.takeIf { it.isNotEmpty() }?.take(FINGERPRINT_HEX)?.chunked(GROUP)?.joinToString(" "),
+            appVersion = appVersion(),
+            rootFingerprint = rootFingerprint(),
+            releaseTagPrefix = releaseTagPrefix(),
         )
     }
+
+    /** The signed tag prefix of this build's channel (VAULT-RELEASES); null on the dev stack. */
+    private fun releaseTagPrefix(): String? = when (env.name) {
+        ENV_STAGING -> "release/staging/"
+        ENV_PRODUCTION -> "release/prod/"
+        else -> null
+    }
+
+    /** SHA-256 of the Nitro root this build checks against (built in). */
+    private suspend fun rootFingerprint(): String =
+        env.trust(http).nitroRoots.firstOrNull()?.let(com.vettid.core.attestation.nitro.NitroRoot::fingerprintOf)
+            ?: com.vettid.core.attestation.nitro.NitroRoot.fingerprint
+
+    /** This app's version name and build number, "1.2.3 (45)"; empty if the package manager cannot say. */
+    private fun appVersion(): String = runCatching {
+        val p = app.packageManager.getPackageInfo(app.packageName, 0)
+        "${p.versionName} (${p.longVersionCode})"
+    }.getOrDefault("")
 
     // --- CredentialRepository ---
 
@@ -3732,7 +3769,8 @@ class VaultManager(
         s.openApi.credentialFetch()
         null
     } catch (e: VaultStateException) {
-        if (!unlockFirst) throw e
+        // Held by the lock gate (a lock pending): nothing was sent, so it is not "not answered", and no unlock follows.
+        if (!unlockFirst || e.code == VaultDevice.CODE_LOCK_PENDING) throw e
         android.util.Log.i("VaultManager", "the recovered phone's credential.get was not answered: unlocking with its own key")
         unlockOwn(s, pin, e) ?: run {
             s.openApi.credentialFetch()
@@ -4882,6 +4920,7 @@ class VaultManager(
         steps.step { presence.clear() }
         steps.step { location.forget() }
         steps.step { canary.removeCanaryManifest() }
+        steps.step { enclaveRecords.forget() }
         openTransferId = null
         alarmFlow.value = null
         windowFlow.value = null
@@ -5032,6 +5071,12 @@ class VaultManager(
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     /**
+     * [io] for a lock-time use of the client ([LockTimeUse.LOCK], [LockTimeUse.LOCK_STATUS]): marked [VaultDevice.LockTimeSend],
+     * so that what the device sends again for it (the status read's re-sends) passes the lock gate as its first send did.
+     */
+    private suspend fun <T> lockTimeIo(block: suspend () -> T): T = withContext(Dispatchers.IO + VaultDevice.LockTimeSend) { block() }
+
+    /**
      * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: only for an idempotent
      * read without secrets ([vaultGuard]).
      */
@@ -5090,6 +5135,7 @@ class VaultManager(
         private const val SOCIAL_FILE = "social.bin"
         private const val PENDING_ASKS_FILE = "pending-asks.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
+        private const val ENCLAVE_RECORD_FILE = "enclave-record.bin"
         private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val LOCATION_FILE = "location-shares.bin"
         /** The last attempt at each vote's results (VAULT-MESSAGING 0.86.4 §10.19.6): no choice, row or proof. */
@@ -5116,6 +5162,7 @@ class VaultManager(
         private const val COUNTER_UNAVAILABLE = "unavailable"
         private const val MS_PER_SECOND = 1_000L
         private const val ENV_STAGING = "staging"
+        private const val ENV_PRODUCTION = "production"
         private const val LOCKED_WAIT_MS = 15_000L
         private const val FINISH_MOVE_HOLD_MS = 90_000L
         private const val LOCKED_POLL_MS = 1_000L
@@ -5294,6 +5341,24 @@ class VaultManager(
             else -> FailureKind.OTHER
         }
     }
+}
+
+/** A sealed unlock refusal's attempt (§11.4), for every code but `device_secret`, which depends on a PIN change's state. */
+internal fun sealedUnlockRefusal(code: String?, retryAfterSeconds: Long): UnlockAttempt = when (code) {
+    "bad_pin" -> UnlockAttempt.BadPin(retryAfterSeconds)
+    "backoff" -> UnlockAttempt.Backoff(retryAfterSeconds)
+    "recovery_pending" -> UnlockAttempt.RecoveryPending
+    // §11.7.1 (0.27.0): sealed, decided before the PIN; not a PIN failure and no backoff.
+    SignerWire.CODE_SIGNER_REFUSED -> UnlockAttempt.SignerRefused
+    "state_rollback" -> UnlockAttempt.StateRollback
+    "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, code)
+    "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, code)
+    "transfer_incomplete" -> UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, code)
+    // (0.88.17 §11.4) Sealed, after the release decisions: the vault did not open and nothing was written. Not a PIN
+    // failure; "Try again" as for any refusal, and nothing more is sent after it.
+    VaultCodes.STATE_UNREADABLE -> UnlockAttempt.Failed(FailureKind.STATE_UNREADABLE, code)
+    "retry" -> UnlockAttempt.Failed(FailureKind.RETRY, code)
+    else -> UnlockAttempt.Failed(FailureKind.OTHER, code)
 }
 
 /** What [VaultManager.refreshAccount] keeps from an `account.get`. */

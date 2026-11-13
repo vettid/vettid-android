@@ -146,8 +146,14 @@ sealed interface FeedTarget {
     /** Settings → Security → Credential. */
     data object Credential : FeedTarget
 
-    /** Settings → Security (the daily check and the hold). */
+    /** Settings → Security. */
     data object Security : FeedTarget
+
+    /**
+     * (ANDROID-PLAN 0.1.124) Settings → Security → Advanced security, at [row]: "the check" opens the interval row,
+     * "the hold" the hold row.
+     */
+    data class AdvancedSecurity(val row: AdvancedSecurityRow) : FeedTarget
 
     data object Sheet : FeedTarget
 }
@@ -162,6 +168,8 @@ object FeedKinds {
     val KNOWN = setOf(
         "connection.request", "connection.request.peer_declined", "connection.added", "connection.removed",
         "connection.stale", "connection.asks_paused", "connection.authenticate.requested",
+        // VAULT-MESSAGING 0.88.7 §3.4.1 "Stale is not final": the peer's rekey or reconnect made a `stale` connection active.
+        "connection.active_again",
         "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused",
         "grant.request", "grant.shared", "grant.revoked", "share.pending", "share.rate_limited",
         "critical-secret.use.request", "item.revealed",
@@ -319,6 +327,7 @@ object FeedKinds {
             "connection.added" -> FeedText(R.string.data_feed_connection_added, listOf(who))
             "connection.removed" -> FeedText(R.string.data_feed_connection_removed, listOf(who))
             "connection.stale" -> FeedText(R.string.data_feed_connection_stale, listOf(who))
+            "connection.active_again" -> FeedText(R.string.data_feed_connection_active_again, listOf(who))
             "connection.asks_paused" -> FeedText(R.string.data_feed_asks_paused, listOf(first))
             "connection.authenticate.requested" -> authenticationTitle(item, names)
             "message.received" -> FeedText(R.string.data_feed_message, listOf(who))
@@ -559,7 +568,8 @@ object FeedKinds {
         FeedAsks.approvalKey(item.kind, item.ref)?.let { return askTarget(item, it, open) }
         return when (item.kind) {
             "connection.request.peer_declined" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Connections
-            "connection.added", "connection.stale", "connection.asks_paused" -> c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
+            "connection.added", "connection.stale", "connection.active_again", "connection.asks_paused" ->
+                c?.let { FeedTarget.Connection(it) } ?: FeedTarget.Sheet
             "message.received", "call.missed", "message.attachment_failed", "message.attachment_refused" ->
                 c?.let { FeedTarget.Conversation(it) } ?: FeedTarget.Sheet
             "grant.shared", "grant.revoked" -> c?.let { FeedTarget.SharedWithYou(it) } ?: FeedTarget.Sheet
@@ -586,7 +596,10 @@ object FeedKinds {
             "credential.alarm" -> FeedTarget.Alarm
             "credential.password_failed" -> FeedTarget.History
             "credential.rotated", "credential.reset" -> FeedTarget.Credential
-            "owner_check.failed", "owner_check.locked", "owner_check.hold_changed" -> FeedTarget.Security
+            // ANDROID-PLAN 0.1.124: the check's and the hold's rows are in Advanced security; the lock is Security's.
+            "owner_check.failed" -> FeedTarget.AdvancedSecurity(AdvancedSecurityRow.INTERVAL)
+            "owner_check.hold_changed" -> FeedTarget.AdvancedSecurity(AdvancedSecurityRow.HOLD)
+            "owner_check.locked" -> FeedTarget.Security
             else -> FeedTarget.Sheet
         }
     }

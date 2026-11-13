@@ -81,4 +81,7 @@
     <string name="unlock_idle_locked_body_unknown">You hadn\'t checked in, so your vault locked. Unlock it with your PIN and your credential password to carry on. New messages wait for up to 14 days.</string>
     <!-- Release L: the held and daily-check screens (ANDROID-PLAN §4 "Locking the vault" part 2; approved by the owner 2026-10-24); %1$s a date and time. -->
     <string name="ownercheck_idle_lock_at">Your vault locks itself on %1$s if you don\'t check in.</string>
+    <!-- ANDROID-PLAN 0.1.124 §4 "The owner check's progress": while the vault verifies a check, and on a pass (texts approved by the owner 2026-11-11). -->
+    <string name="ownercheck_checking">Checking with your vault…</string>
+    <string name="ownercheck_passed">Check passed</string>
 </resources>

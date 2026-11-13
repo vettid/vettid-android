@@ -19,6 +19,12 @@ TEST-ONLY.
 - The code it was generated through (`vms/callwire`, `vms/suite`) is identical at that commit and at the tag
   `release/staging/10` (8678752): the vectors describe what staging release 10 does.
 - Copied: 2026-10-12. Checked by `CallVectorsTest` in `:core:crypto`.
+- (C2, 2026-11-11) Copied again from vettid-vault PR #226 (form 2 of the shares, key confirmation, both
+  members named: VAULT-MESSAGING 0.88.16, vettid.org #575), commit abb299c784ebb87d021fec87c2f8fd0958d04f83;
+  byte for byte the file on `main` at its merge, 74bb8c4: the form 1 values are unchanged; it adds
+  `offer_share2`, `answer_share2`, `k_call2_hex`, `label_confirm`, `k_confirm_hex`, `confirm_b64` and a relayed
+  call (`relay_vault_ik_b64`, `k_call2_relayed_callee_hex`, `confirm_relayed_b64`). Checked by
+  `CallForm2VectorsTest`, which also holds the §16 values.
 
 `unlock.json`, `recovery.json` and `verdicts.json` (VAULT-MESSAGING 0.33.0 §11.14, release R; `verdicts.json` is
 vettid-vault's `testdata/passwords/verdicts.json`) come from the **draft** vettid-vault PR #101 (release R 3/3), not
@@ -51,7 +57,7 @@ ba4776070f7babc465d4db23f860fe998f6d7f3accab5cac8a153ff0090d3914  altchan.json
 6d7be9ba65f8426070ee54f0ea6ed84fed1e49c54eb31e09a1e177d3d5286d2f  invite.json
 6025085eb23f7ce100de09389d2a087ce8384b638461bc9891cfd5ad6db44570  keys.json
 29060418b258c813a8304047b826f70ec87e66ae10ea1c4e4ffc10d213eebb96  release.json
-94cb55fca6b63e5983474a7b9715acd4f4d9ce8930a1a801d09efb9e73d54d01  calls.json
+fe97dbdfcf870e1200f9292972aa5b5f78c3059c0167d883be9296f383e21c40  calls.json
 0073c578252ba87960b74f6a1825b6dbb06f8762c77b7f8003d380b48c373905  unlock.json
 157f89fb392ffb74f5cc76671f19b011cf8edd048faecc2ebf3a3d4b948d5eb4  recovery.json
 09540a0c78b03fb03cfdee762066a9f1171419d2958798b5b4cf054f7dda66a5  verdicts.json

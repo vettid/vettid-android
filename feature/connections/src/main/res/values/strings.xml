@@ -257,6 +257,12 @@
     <string name="connections_share_theirs_unnamed">Theirs</string>
     <!-- Calls (texts approved 2026-10-12). -->
     <string name="connections_detail_call">Call</string>
+    <!-- Owner-approved 2026-11-12: calls with one connection allowed or off (C2), and the limited state. -->
+    <string name="connections_calls_switch">Calls with %1$s</string>
+    <string name="connections_calls_off">Off both ways. %1$s can\'t call you and you can\'t call %1$s. %1$s isn\'t told: their calls just go unanswered.</string>
+    <!-- Owner-approved 2026-11-12: above the disabled Call while calls with the connection are off (the words of the call's calls-off ending). -->
+    <string name="connections_call_off_hint">Calls with %1$s are off.</string>
+    <string name="connections_calls_limited">%1$s called several times without an answer, so their calls won\'t ring for a while.</string>
     <!-- ANDROID-PLAN 0.1.102 "Votes": approved by the owner 2026-10-30 (the same words as :feature:votes). -->
     <string name="connections_vote_row">Votes from %1$s</string>
     <string name="connections_vote_remove_warning">You have a vote with %1$s that isn\'t finished. If you remove this connection you can\'t vote in it.</string>

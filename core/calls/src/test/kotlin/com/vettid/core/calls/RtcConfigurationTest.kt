@@ -35,4 +35,37 @@ class RtcConfigurationTest {
         assertEquals("secret", c.iceServers[1].password)
         assertEquals("", c.iceServers[0].username)
     }
+
+    /** (C5 test switch) Relay only: no host or reflexive candidate, so the call connects through the TURN server or not at all. */
+    @Test
+    fun relayOnlyUsesRelayedCandidatesAlone() {
+        assertEquals(PeerConnection.IceTransportsType.ALL, WebRtcMediaEngine.configuration(servers).iceTransportsType)
+        assertEquals(PeerConnection.IceTransportsType.RELAY, WebRtcMediaEngine.configuration(servers, relayOnly = true).iceTransportsType)
+    }
+
+    /** Relay only is a test option: not plain, so only a test build with the development signer may set it. */
+    @Test
+    fun relayOnlyIsATestOption() {
+        assertEquals(true, MediaConfig().plain)
+        assertEquals(false, MediaConfig(relayOnly = true).plain)
+    }
+
+    /**
+     * The check next to the engine: a build that is not a test build makes no engine with any test option, whatever
+     * asked (it refuses before the native library is loaded or the context used).
+     */
+    @Test
+    fun anEngineFactoryOfABuildThatIsNotATestBuildRefusesEveryTestOption() {
+        val factory = WebRtcMediaEngine.factory(android.content.ContextWrapper(null), testBuild = false)
+        for (c in listOf(
+            MediaConfig(relayOnly = true),
+            MediaConfig(dtlsPqcTrial = true),
+            MediaConfig(faults = MediaFaults(keepRemoteSsrc = true)),
+            MediaConfig(faults = MediaFaults(misstateOwnSsrc = true)),
+            MediaConfig(faults = MediaFaults(sendUnencrypted = true)),
+            MediaConfig(faults = MediaFaults(wrongSendKey = true)),
+        )) {
+            org.junit.Assert.assertThrows("$c", IllegalStateException::class.java) { factory.create(c) }
+        }
+    }
 }

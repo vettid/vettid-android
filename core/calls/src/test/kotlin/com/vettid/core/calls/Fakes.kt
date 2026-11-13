@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import java.time.Instant
 
 const val CALL_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T50"
+const val GLARE_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4Z"
+const val OTHER_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4Y"
 val T0: Instant = Instant.parse("2026-10-12T10:00:00Z")
 
 fun candidate(n: Int) = CallCandidate("candidate:$n 1 udp 2122260223 192.0.2.$n 50000 typ host", "0", 0)
@@ -53,7 +55,11 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         onRemoteSdp()
     }
 
+    /** How long acceptOffer takes (the real engine's runs on its worker for 100 ms or more). */
+    var acceptOfferMs = 0L
+
     override suspend fun acceptOffer(sdp: String, servers: List<CallWire.IceServer>, suite: MediaSuite): String {
+        if (acceptOfferMs > 0) kotlinx.coroutines.delay(acceptOfferMs)
         check(suite in suites) { "suite ${suite.id}" }
         madeFor = suite
         calls += "acceptOffer"
@@ -85,9 +91,24 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
         micOff = muted
     }
 
+    /** (C2) Held back until the first decrypted frame (VAULT-MESSAGING "Key confirmation"). */
+    var holding = false
+
+    override fun setHeld(held: Boolean) {
+        holding = held
+    }
+
     var streams = 1
 
-    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(packetsSent = 1, inboundAudioStreams = streams)
+    /** The candidate pair the stack reports: relayed, direct, or none yet (null). */
+    var relayed: Boolean? = null
+
+    override suspend fun diagnostics(): MediaDiagnostics? = MediaDiagnostics(
+        packetsSent = 1,
+        inboundAudioStreams = streams,
+        local = relayed?.let { CandidateInfo(if (it) "relay" else "host", "udp", "wifi") },
+        remote = relayed?.let { CandidateInfo("host", "udp", "") },
+    )
 
     override fun close() {
         closed = true
@@ -103,9 +124,15 @@ class FakeEngines(
     val created = mutableListOf<MediaEngine>()
     var config: MediaConfig? = null
 
+    /** Called with each engine made (a test sets an engine up as it is created). */
+    var onCreate: (MediaEngine) -> Unit = {}
+
     override fun create(config: MediaConfig): MediaEngine {
         this.config = config
-        return make().also { created += it }
+        return make().also {
+            created += it
+            onCreate(it)
+        }
     }
 
     val last: FakeEngine get() = created.last() as FakeEngine
@@ -119,6 +146,10 @@ open class FakeSignalling : CallSignalling {
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }
     var startGate: Channel<Unit>? = null
+
+    /** (C2) As if the vault were C2. */
+    var c2 = false
+    override val formTwo: Boolean get() = c2
     var answerResult: () -> MediaKeys = { MediaKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 }) }
 
     fun deliver(e: SignalEvent) {

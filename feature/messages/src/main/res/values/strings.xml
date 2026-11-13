@@ -53,6 +53,8 @@
     <!-- Calls (texts approved 2026-10-12). The button, and a call's line in the conversation. -->
     <string name="messages_call">Call</string>
     <string name="messages_call_not_in_vault">Calls are not available for your vault yet</string>
+    <!-- Owner-approved 2026-11-12: under the disabled call button while calls with the connection are off (C2). -->
+    <string name="messages_calls_off">Calls with %1$s are off. You can turn them on in %1$s\'s details.</string>
     <string name="messages_call_talked">Call, %1$s</string>
     <string name="messages_call_declined">Call declined</string>
     <string name="messages_call_declined_here">Call you declined</string>
@@ -60,6 +62,8 @@
     <string name="messages_call_not_answered">Call not answered</string>
     <string name="messages_call_missed">Missed call</string>
     <string name="messages_call_failed">Call failed</string>
+    <!-- GC #7718: the vault's call list had calls that did not read; the rest are shown. Owner-approved 2026-11-10 (GC #7716), both apps. -->
+    <string name="messages_calls_not_shown">Some calls couldn\'t be shown.</string> <!-- Owner-approved 2026-11-10 -->
     <string name="messages_call_duration_h_min">%1$d h %2$d min</string>
     <string name="messages_call_duration_min_s">%1$d min %2$d s</string>
     <string name="messages_call_duration_s">%1$d s</string>

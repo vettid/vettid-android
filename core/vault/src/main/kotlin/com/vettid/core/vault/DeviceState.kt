@@ -205,9 +205,20 @@ internal data class OutboxEntry(
     val type: String,
     val relayUrl: String,
     val mailbox: String,
-    val token: String,
+    var token: String,
     val envelope: String,
     var attempts: Int = 0,
+    /**
+     * (GC #6847; VAULT-MESSAGING §8.6, RELAY-PROTOCOL §7.1) The token whose quota refused this entry (`quota_exceeded`,
+     * `quota: token`): it is never sent under it again, and waits for another standing token for the vault.
+     */
+    var quotaToken: String? = null,
+    /**
+     * The inner id of the vault's message this entry answers (its `re`): set for the answer to the vault's own
+     * `relay.token.refresh`, null for what the device sends of its own accord (its own refresh). Absent from an entry an earlier
+     * version saved, which then reads as the device's own (the worst that does is hold back one own refresh until it has gone).
+     */
+    val re: String? = null,
 )
 
 internal val stateJson = Json {

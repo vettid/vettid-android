@@ -55,10 +55,68 @@ class VaultClientAccessTest {
     fun nothingIsSentThroughTheDeviceDirectly() {
         assertEquals(0, count("""\bdevice\??\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
         assertEquals(0, count("""\bd\.(op|opOnce|send|sendOnce|request|requestOnce)\("""))
-        // The outbox is flushed in two places, both only while no lock is pending.
-        assertEquals(2, count("""flushOutbox\(\)"""))
+        // (ANDROID-PLAN §4 "While pending"; owner decision 2026-11-12) The device asks the lock gate before each deposit and
+        // send; the manager installs LockGuard's (held only while a lock is pending) on every session's device.
+        assertTrue(code.any { it == "device.sendGate = lockGuard.sendGate()" })
+        assertEquals(1, count("""\bsendGate\s*="""))
+        // The outbox is flushed in three places, each with the stop count taken where the flush is asked for (before its
+        // launch), so that a stop after the ask wins. Only the unlock's waits for no lock pending; the foreground's and the
+        // quota backoff's (Show held as held) are left to the device's gate, which decides by type, so that a pending
+        // `call.end` goes.
+        assertEquals(3, count("""flushOutbox\("""))
+        assertEquals(3, count("""flushOutbox\((seq|flushSeq)\)"""))
+        val foreground = "d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }"
+        assertTrue(code.any { it == foreground })
+        assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
+        assertTrue(code.any { it == "stopCount = { s.device.stopCount }," })
+        assertTrue(code.any { it == "flush = { seq -> s.device.flushOutbox(seq) }," })
+        val quota = code.indexOfFirst { it.startsWith("val quotaFlush = QuotaFlush(") }
+        assertTrue("no lock check of its own", code.subList(quota, quota + 6).none { it.contains("admits") })
         val checks = listOf("lockGuard.admits()", "!lockKeeper.pending")
-        val guarded = code.count { line -> line.contains("flushOutbox()") && checks.any { line.contains(it) } }
-        assertEquals(2, guarded)
+        val guarded = code.count { line -> line.contains("flushOutbox(") && checks.any { line.contains(it) } }
+        assertEquals("the unlock's", 1, guarded)
+    }
+
+    /** A send the device's gate held (`lock_pending`) is not a lost answer: a recovered phone does not unlock after it. */
+    @Test
+    fun aHeldSendIsNotTakenForNoAnswer() {
+        assertTrue(code.any { it.contains("if (!unlockFirst || e.code == VaultDevice.CODE_LOCK_PENDING) throw e") })
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") The device holds what it would send again of its own accord while a lock is pending,
+     * except for a lock-time call: the lock and its status read run marked [com.vettid.core.vault.VaultDevice.LockTimeSend], so
+     * the status read's re-sends pass as its first send did. Nothing else is marked.
+     */
+    @Test
+    fun theLockTimeUsesAreMarkedForTheDevice() {
+        assertTrue(code.any { it.contains("lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }") })
+        assertTrue(code.any { it.contains("lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }") })
+        assertTrue(code.any { it.contains("withContext(Dispatchers.IO + VaultDevice.LockTimeSend)") })
+        assertEquals("the declaration and the two uses", 3, count("""\blockTimeIo\b"""))
+        assertEquals("only there", 1, count("""\bLockTimeSend\b"""))
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") The unlock runs while this phone is held locked (a lock pending, or "opened again"): the
+     * block it runs under [LockKeeper.unlocking], and the unlock it calls, send nothing over the relay (no request, no client):
+     * the unlock goes over the member API, and the gate opens once it opened the vault.
+     */
+    @Test
+    fun theUnlockSendsNothingOverTheRelay() {
+        val start = code.indexOfFirst { it.startsWith("lockKeeper.unlocking(") }
+        val end = (start until code.size).first { code[it].startsWith("} catch (e: VaultFailure) {") }
+        assertTrue(start in 0 until end)
+        val sends = """\b(request|requestOnce|op|opOnce|send|sendOnce|requestWithId|sendKept)\("""
+        val forbidden = Regex("""$sends|\bopenApi\b|\blockTimeApi\(|\bvaultApi\(""")
+        val block = code.subList(start, end)
+        assertTrue(block.filter { forbidden.containsMatchIn(it) }.toString(), block.none { forbidden.containsMatchIn(it) })
+        // The unlock it calls (one attempt with this phone's secret), whole.
+        val once = code.indexOfFirst { it.startsWith("private suspend fun unlockWithSecretOnce(") }
+        val starts = listOf("private ", "internal ", "override ", "fun ", "suspend fun ")
+        val onceEnd = (once + 1 until code.size).first { i -> starts.any { code[i].startsWith(it) } }
+        val body = code.subList(once, onceEnd)
+        assertTrue(body.filter { forbidden.containsMatchIn(it) }.toString(), body.none { forbidden.containsMatchIn(it) })
+        assertTrue(block.any { it.contains("unlockWithSecret(") })
     }
 }

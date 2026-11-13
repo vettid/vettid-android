@@ -69,6 +69,49 @@ class WalletsManagerTest {
         this.chain.history[WalletFixtures.address(chain, index).address] = ChainSummary(sats, unconfirmed, 1, 1)
     }
 
+    /** A read that began before another and ends after it does not put its older list back over the newer one. */
+    @Test
+    fun anOlderReadThatEndsLastDoesNotReplaceANewerList() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val older = CoroutineScope(Dispatchers.Default).launch { m.refresh() }
+        try {
+            ops.slowReadStarted.await() // the older read has taken its list
+            ops.wallets[w.id] = w.copy(name = "Renamed elsewhere")
+            m.refresh()
+            assertEquals("Renamed elsewhere", m.wallets.value.single().name)
+        } finally {
+            gate.complete(Unit)
+        }
+        older.join()
+        assertEquals("the older read's list was dropped", "Renamed elsewhere", m.wallets.value.single().name)
+    }
+
+    /** A change this phone made while a list read was in flight is not undone when that read ends with the older list. */
+    @Test
+    fun aReadInFlightDoesNotUndoAChangeMadeHere() = runBlocking {
+        val w = withWallet()
+        val m = manager()
+        m.open()
+        val before = m.wallets.value.single().addressType
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.slowRead = gate
+        val older = CoroutineScope(Dispatchers.Default).launch { m.refresh() }
+        try {
+            ops.slowReadStarted.await()
+            m.setAddressType(w.id, "p2wpkh")
+            assertEquals("p2wpkh", m.wallets.value.single().addressType)
+        } finally {
+            gate.complete(Unit)
+        }
+        older.join()
+        assertTrue("the setup had another type", before != "p2wpkh")
+        assertEquals("the read begun before the change was dropped", "p2wpkh", m.wallets.value.single().addressType)
+    }
+
     @Test
     fun theListMakesTheWalletsAvailable() = runBlocking {
         withWallet()

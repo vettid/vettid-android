@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.vettid.core.data.feed.AdvancedSecurityRow
 import com.vettid.core.data.map.MapServer
 import com.vettid.core.data.prefs.AppLockMethod
 import androidx.compose.foundation.layout.Column
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Screenshot
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.SystemUpdate
@@ -112,6 +114,17 @@ data object RecoveryRoute
 @Serializable
 data object AttestationRoute
 
+/**
+ * (ANDROID-PLAN 0.1.124) Settings → Security → Advanced security; [focus]: the name of the [AdvancedSecurityRow] a
+ * notification or a link opens it at, or null.
+ */
+@Serializable
+data class AdvancedSecurityRoute(val focus: String? = null) {
+    constructor(row: AdvancedSecurityRow) : this(row.name)
+
+    val row: AdvancedSecurityRow? get() = AdvancedSecurityRow.entries.firstOrNull { it.name == focus }
+}
+
 @Serializable
 data object TransferOutRoute
 
@@ -172,6 +185,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 recovery = { host.navigate(RecoveryRoute) },
                 transfer = { host.navigate(TransferOutRoute) },
                 attestation = { host.navigate(AttestationRoute) },
+                advancedSecurity = { host.navigate(AdvancedSecurityRoute()) },
                 setAppLock = { on -> if (on) host.onEnableAppLock(state.appLockMethod) else vm.disableAppLock(host.confirmAppLockOff) },
                 setAppLockMethod = { m ->
                     when {
@@ -200,16 +214,27 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 mapServer = { host.navigate(MapServerRoute) },
             ),
             ownerCheck = ownerCheck,
-            ownerCheckActions = OwnerCheckSettingsActions(
-                setIntervalHours = ocVm::setIntervalHours,
-                setHold = { on -> if (on) ocVm.turnHoldOn() else host.onOwnerCheck(true) },
-                checkNow = { host.onOwnerCheck(false) },
-                dismissOffer = ocVm::dismissOffer,
-                dismissError = ocVm::dismissError,
-                setIdleLock = ocVm::setIdleLock,
-                dismissIdleNote = ocVm::dismissIdleNote,
-            ),
+            ownerCheckActions = ownerCheckActions(ocVm, host),
             bell = host.bell,
+        )
+    }
+    composable<AdvancedSecurityRoute> { entry ->
+        val vm: SettingsViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        val ocVm: OwnerCheckSettingsViewModel = hiltViewModel()
+        val ownerCheck by ocVm.uiState.collectAsStateWithLifecycle()
+        AdvancedSecurityContent(
+            state,
+            SettingsActions(
+                back = host.onBack,
+                newPhoneSecret = { host.navigate(NewPhoneSecretRoute) },
+                attestation = { host.navigate(AttestationRoute) },
+                setTimeout = vm::setAppLockTimeout,
+                setScreenshotsAllowed = vm::setScreenshotsAllowed,
+            ),
+            ownerCheck = ownerCheck,
+            ownerCheckActions = ownerCheckActions(ocVm, host),
+            focus = entry.toRoute<AdvancedSecurityRoute>().row,
         )
     }
     composable<SharedProfileRoute> {
@@ -323,7 +348,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val vm: AttestationViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
         val canary by vm.canary.collectAsStateWithLifecycle()
-        AttestationContent(state, host.onBack, canary, vm::removeCanary)
+        val record by vm.record.collectAsStateWithLifecycle()
+        AttestationContent(state, host.onBack, canary, vm::removeCanary, record)
     }
     composable<DeleteVaultRoute> {
         val vm: DeleteVaultViewModel = hiltViewModel()
@@ -353,6 +379,17 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     }
 }
 
+/** The owner check's actions, the same on Security and on Advanced security. */
+private fun ownerCheckActions(ocVm: OwnerCheckSettingsViewModel, host: SettingsHost) = OwnerCheckSettingsActions(
+    setIntervalHours = ocVm::setIntervalHours,
+    setHold = { on -> if (on) ocVm.turnHoldOn() else host.onOwnerCheck(true) },
+    checkNow = { host.onOwnerCheck(false) },
+    dismissOffer = ocVm::dismissOffer,
+    dismissError = ocVm::dismissError,
+    setIdleLock = ocVm::setIdleLock,
+    dismissIdleNote = ocVm::dismissIdleNote,
+)
+
 /** The theme choice after [mode], cycling System → Light → Dark. */
 fun nextThemeMode(mode: ThemeMode): ThemeMode = when (mode) {
     ThemeMode.System -> ThemeMode.Light
@@ -379,7 +416,7 @@ private fun themeLabel(t: ThemePreference): String = stringResource(
 )
 
 @Composable
-private fun timeoutLabel(t: AppLockTimeout): String = stringResource(
+internal fun timeoutLabel(t: AppLockTimeout): String = stringResource(
     when (t) {
         AppLockTimeout.IMMEDIATELY -> R.string.settings_timeout_immediately
         AppLockTimeout.ONE_MINUTE -> R.string.settings_timeout_1min
@@ -402,6 +439,8 @@ data class SettingsActions(
     val recovery: () -> Unit = {},
     val transfer: () -> Unit = {},
     val attestation: () -> Unit = {},
+    /** (ANDROID-PLAN 0.1.124) Settings → Security → Advanced security. */
+    val advancedSecurity: () -> Unit = {},
     val setAppLock: (Boolean) -> Unit = {},
     val setAppLockMethod: (AppLockMethod) -> Unit = {},
     val openSecuritySettings: () -> Unit = {},
@@ -464,8 +503,6 @@ fun SettingsContent(
     ownerCheck: OwnerCheckSettingsUiState = OwnerCheckSettingsUiState(),
     ownerCheckActions: OwnerCheckSettingsActions = OwnerCheckSettingsActions(),
     bell: com.vettid.core.ui.components.NotificationBell? = null,
-    /** The "Allow screenshots?" confirmation shows from the start (the debug screen catalog). */
-    askScreenshots: Boolean = false,
     /** The Units picker shows from the start (the debug screen catalog). */
     askUnits: Boolean = false,
 ) {
@@ -473,7 +510,6 @@ fun SettingsContent(
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var unitsPicker by rememberSaveable { mutableStateOf(askUnits) }
-    var timeoutPicker by rememberSaveable { mutableStateOf(false) }
     var methodPicker by rememberSaveable { mutableStateOf(false) }
     DetailScaffold(
         onBackClick = actions.back,
@@ -530,6 +566,7 @@ fun SettingsContent(
                 SettingsRow(stringResource(R.string.settings_vault_pin), actions.changePin, icon = Icons.Outlined.Password)
             }
 
+            // ANDROID-PLAN 0.1.124: what a member uses often or needs in a hurry; the rest is behind Advanced security.
             SettingsSectionHeader(stringResource(R.string.settings_section_security))
             SettingsGroup {
                 SettingsRow(
@@ -538,23 +575,9 @@ fun SettingsContent(
                 )
                 SettingsDivider()
                 SettingsRow(
-                    stringResource(R.string.settings_security_transfer), actions.transfer, icon = Icons.Outlined.PhonelinkSetup,
-                    supporting = stringResource(R.string.settings_security_transfer_body), modifier = Modifier.testTag("transfer"),
+                    stringResource(R.string.settings_security_recovery), actions.recovery, icon = Icons.Outlined.Restore,
+                    modifier = Modifier.testTag("recovery"),
                 )
-                SettingsDivider()
-                SettingsRow(stringResource(R.string.settings_security_recovery), actions.recovery, icon = Icons.Outlined.Restore)
-                SettingsDivider()
-                if (state.phoneSecret) {
-                    SettingsRow(
-                        stringResource(R.string.settings_security_new_secret), actions.newPhoneSecret, icon = Icons.Outlined.Key,
-                        supporting = stringResource(R.string.settings_security_new_secret_body),
-                        modifier = Modifier.testTag("new_phone_secret_row"),
-                    )
-                    SettingsDivider()
-                }
-                SettingsRow(stringResource(R.string.settings_security_attestation), actions.attestation, icon = Icons.Outlined.VerifiedUser)
-                // The daily owner check (VAULT-MESSAGING §3.6.2, §3.6.7): the interval, a check now, the hold switch.
-                OwnerCheckSettingsRows(ownerCheck, ownerCheckActions)
                 SettingsDivider()
                 SettingsSwitchRow(
                     label = stringResource(R.string.settings_security_app_lock),
@@ -576,13 +599,22 @@ fun SettingsContent(
                     icon = Icons.Outlined.LockOpen, supporting = methodLabel(state.appLockMethod),
                     modifier = Modifier.testTag("app_lock_method"),
                 )
-                if (state.appLockOn) {
+                // The daily owner check (VAULT-MESSAGING §3.6.5): a check now; its settings are in Advanced security.
+                if (ownerCheck.view != null) {
                     SettingsDivider()
-                    SettingsRow(
-                        stringResource(R.string.settings_security_lock_timeout), { timeoutPicker = true },
-                        icon = Icons.Outlined.Timer, supporting = timeoutLabel(state.preferences.appLockTimeout),
-                    )
+                    OwnerCheckNowRow(ownerCheck, ownerCheckActions)
                 }
+                SettingsDivider()
+                SettingsRow(
+                    stringResource(R.string.settings_security_transfer), actions.transfer, icon = Icons.Outlined.PhonelinkSetup,
+                    supporting = stringResource(R.string.settings_security_transfer_body), modifier = Modifier.testTag("transfer"),
+                )
+                SettingsDivider()
+                SettingsRow(
+                    stringResource(R.string.settings_security_advanced), actions.advancedSecurity, icon = Icons.Outlined.Shield,
+                    supporting = stringResource(R.string.settings_security_advanced_body),
+                    modifier = Modifier.testTag("advanced_security"),
+                )
             }
 
             SettingsSectionHeader(stringResource(R.string.settings_section_privacy))
@@ -648,8 +680,6 @@ fun SettingsContent(
                     supporting = stringResource(modeSummary(state.preferences.effectiveNotificationMode)),
                     modifier = Modifier.testTag("notifications"),
                 )
-                SettingsDivider()
-                AllowScreenshotsRow(state, actions.setScreenshotsAllowed, askScreenshots)
             }
 
             SettingsSectionHeader(stringResource(R.string.settings_section_account))
@@ -713,16 +743,6 @@ fun SettingsContent(
             onDismiss = { methodPicker = false },
         )
     }
-    if (timeoutPicker) {
-        ChoiceDialog(
-            title = stringResource(R.string.settings_security_lock_timeout),
-            options = AppLockTimeout.entries,
-            selected = state.preferences.appLockTimeout,
-            label = { timeoutLabel(it) },
-            onPick = { actions.setTimeout(it); timeoutPicker = false },
-            onDismiss = { timeoutPicker = false },
-        )
-    }
 }
 
 /**
@@ -731,7 +751,7 @@ fun SettingsContent(
  * it does; turning it off does not ask. [ask]: the dialog shows from the start (the debug screen catalog).
  */
 @Composable
-private fun AllowScreenshotsRow(state: SettingsUiState, onSet: (Boolean) -> Unit, ask: Boolean) {
+internal fun AllowScreenshotsRow(state: SettingsUiState, onSet: (Boolean) -> Unit, ask: Boolean) {
     var confirm by rememberSaveable { mutableStateOf(ask) }
     SettingsSwitchRow(
         label = stringResource(R.string.settings_app_screenshots),
