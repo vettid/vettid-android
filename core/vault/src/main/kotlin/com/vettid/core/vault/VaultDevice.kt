@@ -348,13 +348,32 @@ class VaultDevice private constructor(
      * `hs.resp` bytes until the relay has accepted them (null after: a redelivered `hs.init` sends them again only
      * while unsent, §6.3, and is dropped otherwise, §6.5). Both null in a record written before.
      */
-    private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null) {
+    private class Awaiting(
+        val resp: Responder,
+        val createdMs: Long,
+        val initId: String? = null,
+        var respBytes: ByteArray? = null,
         /**
-         * (RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6 for a device) After a `quota_exceeded` its re-send waits: from
-         * [QUOTA_BACKOFF_MIN], doubling to [QUOTA_BACKOFF_MAX], on [DeviceConfig.elapsedMs]. Memory only.
+         * Whether an earlier deposit of [respBytes] may have reached the relay (an attempt with no definite answer, or one
+         * from before a restart): a later refusal for good then cannot tell that the vault never saw this `hs.resp`.
+         * Memory only; a restored responder with kept bytes counts as one that may have.
          */
-        var quotaUntilMs = 0L
-        var quotaBackoffMs = 0L
+        var mayHaveArrived: Boolean = false,
+    ) {
+        /**
+         * (RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6 for a device) Its re-send waits after a `quota_exceeded`, and
+         * after a second attempt in a row with no definite answer: from [QUOTA_BACKOFF_MIN], doubling to
+         * [QUOTA_BACKOFF_MAX], on [DeviceConfig.elapsedMs]; any deposit the relay accepts to the vault's mailbox ends the
+         * wait ([quotaEnded]). Memory only.
+         */
+        var waitUntilMs = 0L
+        var waitBackoffMs = 0L
+
+        /** Attempts in a row with no definite answer (a 5xx, a lost answer); the second and later start a wait. */
+        var unanswered = 0
+
+        /** The token a `quota: token` refusal spent: no re-send under it (§8.6); another held token ends this. */
+        var spentToken: String? = null
     }
 
     private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
@@ -642,7 +661,8 @@ class VaultDevice private constructor(
         val cutoff = now().minus(HANDSHAKE_TTL).toEpochMilli()
         return st.vault?.awaiting.orEmpty().filter { it.createdMs >= cutoff }.mapNotNull { a ->
             try {
-                Awaiting(Responder.import(Base64s.decodeStd(a.state)), a.createdMs, a.initId, a.resp?.let(Base64s::decodeStd))
+                val bytes = a.resp?.let(Base64s::decodeStd)
+                Awaiting(Responder.import(Base64s.decodeStd(a.state)), a.createdMs, a.initId, bytes, mayHaveArrived = bytes != null)
             } catch (_: CryptoException) {
                 null
             }
@@ -918,6 +938,7 @@ class VaultDevice private constructor(
         keyring = Keyring()
         awaiting.forEach { it.resp.abort() }
         awaiting.clear()
+        unsavedAwaiting.clear()
     }
 
     // --- alternate channel (AltParty) ---
@@ -1847,7 +1868,7 @@ class VaultDevice private constructor(
         awaitQuota(e)
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
-            quotaBackoff.remove(e.mailbox)
+            quotaEnded(e.mailbox)
             st.outbox.remove(e)
             // (M1) An entry an earlier app version queued (no exp): sent now, the vault acts on it in its next batch; from
             // here it is settled like a request with an exp of now + 10 minutes, unless it is answered first.
@@ -1959,12 +1980,21 @@ class VaultDevice private constructor(
         if (x.code == RelayException.TOKEN_REVOKED && v != null && mailbox == v.mailbox && token == v.token) refusalCount.value++
     }
 
+    /**
+     * (VAULT-MESSAGING §8.6) A deposit the relay accepted to [mailbox] ends its quota backoff, and, for the vault's mailbox,
+     * the waits of the `hs.resp`s to it ([Awaiting.waitUntilMs]).
+     */
+    private fun quotaEnded(mailbox: String) {
+        quotaBackoff.remove(mailbox)
+        if (mailbox == st.vault?.mailbox) awaiting.forEach { it.waitUntilMs = 0L }
+    }
+
     /** A deposit straight to the vault (handshake messages, outside the outbox), its refusal counted as [deliver]'s. */
     private suspend fun depositToVault(v: VaultRecord, payload: ByteArray, resendAfterSent: Boolean = true) {
         checkLive()
         try {
             relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload, resendAfterSent)
-            quotaBackoff.remove(v.mailbox) // (the review of 4de9019c, Low 2) the mailbox takes deposits again
+            quotaEnded(v.mailbox) // the mailbox takes deposits again
         } catch (x: RelayException) {
             countRefusal(x, v.mailbox, v.token)
             throw x
@@ -1988,6 +2018,8 @@ class VaultDevice private constructor(
      * was asked for ([stopCount], taken by the caller before it launches the flush): nothing is deposited after a stop since.
      */
     suspend fun flushOutbox(seq: Long = stopSeq) {
+        // The `hs.resp`s whose wait has ended go too (never held by the gate: [SendGate]); not after a stop since.
+        lock.withLock { if (!forgotten && seq == stopSeq) resendRespsLocked() }
         val entries = lock.withLock { st.outbox.toList() }
         for (e in entries) {
             try {
@@ -2556,9 +2588,9 @@ class VaultDevice private constructor(
             val a = awaiting.firstOrNull { it.initId == initId } ?: return
             val again = a.respBytes ?: return
             // During its quota wait it is not sent at once either: the wait's end sends it ([resendRespsLocked]).
-            if (quotaHeld(a)) return
+            if (respHeld(a)) return
             if (a in unsavedAwaiting) save()
-            depositResp(requireVault(), a, again, first = false)
+            depositResp(requireVault(), a, again)
             return
         }
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
@@ -2581,7 +2613,7 @@ class VaultDevice private constructor(
         st.seenInner[initId] = maxOf(t, ts).toEpochMilli()
         prune(st.seenInner, t)
         save()
-        depositResp(v, a, env, first = true)
+        depositResp(v, a, env)
     }
 
     /**
@@ -2590,25 +2622,31 @@ class VaultDevice private constructor(
      * dropped). Otherwise (a lost answer, a retryable error) it may have arrived: the responder stays for its `hs.fin`,
      * expires if none comes, and keeps the bytes for a redelivery.
      *
-     * Refused for good: on the [first] attempt in this process the vault never sees it, so the responder ends and its
-     * `hs.init` may be answered afresh (it is not a second `hs.resp`). On a re-send an earlier
-     * attempt's outcome was unknown, so the vault may hold that copy: the responder and the mark stay, and only the
-     * re-sending stops (no second, different `hs.resp`; at worst the responder waits out [HANDSHAKE_TTL]). A re-send also
-     * covers a first deposit that never happened (a stop between the save and the deposit): its refusal leaves the responder
-     * until [HANDSHAKE_TTL] too, the intended trade-off.
+     * Refused for good: [respRefused] (the responder ends unless an earlier copy may have arrived). A responder restored
+     * with its bytes kept counts as one that may have (a stop between the save and the deposit, or after a lost answer):
+     * its refusal leaves the responder until [HANDSHAKE_TTL], the intended trade-off.
      */
-    private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray, first: Boolean) {
+    private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray) {
         try {
             depositToVault(v, bytes, resendAfterSent = false)
             a.respBytes = null
+            a.unanswered = 0
         } catch (e: RelayException) {
             when {
                 // Not a refusal of this hs.resp: the mailbox (a device's token has no quota, §7.1) is full. It waits, then goes
-                // again, the same bytes (never at every message: [quotaHeld]). Matched before the refusal below: the relay client now
-                // counts `quota_exceeded` as not retryable, and it must not end the responder whose bytes are kept.
-                e.code == RelayException.QUOTA_EXCEEDED -> quotaWait(a)
-                !e.retryable -> respRefused(a, first)
+                // again, the same bytes (never at every message: [respHeld]). Matched before the refusal below: the relay client
+                // counts `quota_exceeded` as not retryable, and it must not end the responder whose bytes are kept. Nothing of
+                // it was stored, so it says nothing of whether an earlier copy arrived.
+                e.code == RelayException.QUOTA_EXCEEDED -> {
+                    if (e.quota == RelayException.QUOTA_TOKEN) a.spentToken = v.token
+                    respWait(a)
+                }
+                !e.retryable -> respRefused(a)
+                else -> respUnanswered(a)
             }
+            throw e
+        } catch (e: IOException) {
+            respUnanswered(a)
             throw e
         }
     }
@@ -2623,7 +2661,7 @@ class VaultDevice private constructor(
         // Nothing past HANDSHAKE_TTL goes again. With no inbound traffic and no collection start nothing is re-sent: the
         // vault then sends nothing either, and its own rekey ends at its bound, as one this device never answered.
         pruneAwaiting(now())
-        val due = awaiting.filter { it.respBytes != null && !quotaHeld(it) }
+        val due = awaiting.filter { it.respBytes != null && !respHeld(it) }
         if (due.isEmpty()) return
         val v = st.vault ?: return
         if (due.any { it in unsavedAwaiting }) {
@@ -2647,7 +2685,7 @@ class VaultDevice private constructor(
     private suspend fun resendOne(v: VaultRecord, a: Awaiting): Boolean {
         val bytes = a.respBytes ?: return false
         return try {
-            depositResp(v, a, bytes, first = false)
+            depositResp(v, a, bytes)
             true // accepted: its bytes are no longer kept
         } catch (e: RelayException) {
             !e.retryable && e.code != RelayException.QUOTA_EXCEEDED // refused for good; else tried again later
@@ -2656,16 +2694,35 @@ class VaultDevice private constructor(
         }
     }
 
-    private fun quotaWait(a: Awaiting) {
-        a.quotaBackoffMs = (a.quotaBackoffMs * 2).coerceIn(QUOTA_BACKOFF_MIN.toMillis(), QUOTA_BACKOFF_MAX.toMillis())
-        a.quotaUntilMs = cfg.elapsedMs() + a.quotaBackoffMs
+    /**
+     * [a]'s re-send waits, doubling up to [QUOTA_BACKOFF_MAX]. The wait is announced as a mailbox's quota backoff is
+     * ([quotaBackoffSet]), so the owner's flush at its end ([flushOutbox]) sends it, not the next message an hour later.
+     */
+    private fun respWait(a: Awaiting) {
+        a.waitBackoffMs = (a.waitBackoffMs * 2).coerceIn(QUOTA_BACKOFF_MIN.toMillis(), QUOTA_BACKOFF_MAX.toMillis())
+        a.waitUntilMs = cfg.elapsedMs() + a.waitBackoffMs
+        quotaBackoffs.tryEmit(a.waitBackoffMs)
     }
 
-    private fun quotaHeld(a: Awaiting): Boolean = cfg.elapsedMs() < a.quotaUntilMs
+    /** No definite answer: it may have arrived. The first such attempt is sent again at once; from the second it waits. */
+    private fun respUnanswered(a: Awaiting) {
+        a.mayHaveArrived = true
+        if (++a.unanswered >= 2) respWait(a)
+    }
 
-    /** [depositResp]'s refusal for good: the first attempt's ends the responder and its mark; a re-send's only stops re-sending. */
-    private fun respRefused(a: Awaiting, first: Boolean) {
-        if (!first) {
+    /** Whether [a]'s re-send waits now: its wait runs, or the token a `quota: token` refusal spent is still the one held. */
+    private fun respHeld(a: Awaiting): Boolean =
+        cfg.elapsedMs() < a.waitUntilMs || (a.spentToken != null && a.spentToken == st.vault?.token)
+
+    /**
+     * [depositResp]'s refusal for good. When no earlier copy may have reached the relay ([Awaiting.mayHaveArrived]: only
+     * refusals and quota answers before, whose outcome is known) the vault never saw this `hs.resp`: the responder and its
+     * mark end, so the `hs.init` may be answered afresh (not a second `hs.resp`). Otherwise the vault may hold that copy:
+     * the responder and the mark stay, and only the re-sending stops (no second, different `hs.resp`; at worst the
+     * responder waits out [HANDSHAKE_TTL]).
+     */
+    private fun respRefused(a: Awaiting) {
+        if (a.mayHaveArrived) {
             a.respBytes = null
             return
         }
