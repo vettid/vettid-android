@@ -369,8 +369,14 @@ class VaultDevice private constructor(
         var waitUntilMs = 0L
         var waitBackoffMs = 0L
 
-        /** Attempts in a row with no definite answer (a 5xx, a lost answer); the second and later start a wait. */
+        /**
+         * Attempts in a row with no definite answer (a 5xx, a lost answer, a non-quota 429 the client's own retries did
+         * not get past: counted as no answer, the safe side); the second and later start a wait.
+         */
         var unanswered = 0
+
+        /** A wait was set and no attempt has been made since: the flush at its end ([flushOutbox]) sends it. */
+        var waited = false
 
         /** The token a `quota: token` refusal spent: no re-send under it (§8.6); another held token ends this. */
         var spentToken: String? = null
@@ -699,7 +705,10 @@ class VaultDevice private constructor(
         collectorEnd.value = null
         // (Show held as held) A quota backoff still running is announced again with what is left of it: the owner's flush when
         // it ends was asked for under the stop count before this start, which a stop since makes deposit nothing.
-        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> quotaBackoffs.tryEmit((until - cfg.elapsedMs()).coerceAtLeast(0)) }
+        // The owner's flush asked before is void (the stop count), so nothing counts as announced; the collection start's
+        // flush announces the `hs.resp` waits too ([flushOutbox], [announceWaitsLocked]).
+        announcedEndMs = 0L
+        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> announceEnd(until) }
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
@@ -1919,7 +1928,7 @@ class VaultDevice private constructor(
             val prev = quotaBackoff[e.mailbox]?.second ?: 0L
             val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
             quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
-            quotaBackoffs.tryEmit(next)
+            announceWaitsLocked()
         }
         save()
     }
@@ -2019,7 +2028,7 @@ class VaultDevice private constructor(
      */
     suspend fun flushOutbox(seq: Long = stopSeq) {
         // The `hs.resp`s whose wait has ended go too (never held by the gate: [SendGate]); not after a stop since.
-        lock.withLock { if (!forgotten && seq == stopSeq) resendRespsLocked() }
+        lock.withLock { if (!forgotten && seq == stopSeq) resendRespsLocked(afterWait = true) }
         val entries = lock.withLock { st.outbox.toList() }
         for (e in entries) {
             try {
@@ -2035,6 +2044,8 @@ class VaultDevice private constructor(
                 // retried at the next flush
             }
         }
+        // What still waits after it is announced again, so its end has a flush of its own ([announceWaitsLocked]).
+        lock.withLock { if (!forgotten) announceWaitsLocked() }
     }
 
     /**
@@ -2627,6 +2638,11 @@ class VaultDevice private constructor(
      * its refusal leaves the responder until [HANDSHAKE_TTL], the intended trade-off.
      */
     private suspend fun depositResp(v: VaultRecord, a: Awaiting, bytes: ByteArray) {
+        // Counted as possibly arrived from before the request goes out, and put back only on a definite answer: any other
+        // end of the attempt (a cancellation while it is in flight among them) leaves it possibly arrived.
+        val before = a.mayHaveArrived
+        a.mayHaveArrived = true
+        a.waited = false
         try {
             depositToVault(v, bytes, resendAfterSent = false)
             a.respBytes = null
@@ -2638,10 +2654,14 @@ class VaultDevice private constructor(
                 // counts `quota_exceeded` as not retryable, and it must not end the responder whose bytes are kept. Nothing of
                 // it was stored, so it says nothing of whether an earlier copy arrived.
                 e.code == RelayException.QUOTA_EXCEEDED -> {
+                    a.mayHaveArrived = before
                     if (e.quota == RelayException.QUOTA_TOKEN) a.spentToken = v.token
                     respWait(a)
                 }
-                !e.retryable -> respRefused(a)
+                !e.retryable -> {
+                    a.mayHaveArrived = before
+                    respRefused(a)
+                }
                 else -> respUnanswered(a)
             }
             throw e
@@ -2657,11 +2677,11 @@ class VaultDevice private constructor(
      * as an outbox would: at each collection start and after each handled message. Never before a save holds the responder
      * (§8.3); a failure leaves it for the next time. Under [lock].
      */
-    private suspend fun resendRespsLocked() {
+    private suspend fun resendRespsLocked(afterWait: Boolean = false) {
         // Nothing past HANDSHAKE_TTL goes again. With no inbound traffic and no collection start nothing is re-sent: the
         // vault then sends nothing either, and its own rekey ends at its bound, as one this device never answered.
         pruneAwaiting(now())
-        val due = awaiting.filter { it.respBytes != null && !respHeld(it) }
+        val due = awaiting.filter { it.respBytes != null && !respHeld(it) && (!afterWait || it.waited) }
         if (due.isEmpty()) return
         val v = st.vault ?: return
         if (due.any { it in unsavedAwaiting }) {
@@ -2695,16 +2715,40 @@ class VaultDevice private constructor(
     }
 
     /**
-     * [a]'s re-send waits, doubling up to [QUOTA_BACKOFF_MAX]. The wait is announced as a mailbox's quota backoff is
-     * ([quotaBackoffSet]), so the owner's flush at its end ([flushOutbox]) sends it, not the next message an hour later.
+     * [a]'s re-send waits, doubling up to [QUOTA_BACKOFF_MAX]. The wait is announced with the mailboxes' quota backoffs
+     * ([announceWaitsLocked]), so the owner's flush at its end ([flushOutbox]) sends it, not the next message an hour later.
      */
     private fun respWait(a: Awaiting) {
         a.waitBackoffMs = (a.waitBackoffMs * 2).coerceIn(QUOTA_BACKOFF_MIN.toMillis(), QUOTA_BACKOFF_MAX.toMillis())
         a.waitUntilMs = cfg.elapsedMs() + a.waitBackoffMs
-        quotaBackoffs.tryEmit(a.waitBackoffMs)
+        a.waited = true
+        announceWaitsLocked()
     }
 
-    /** No definite answer: it may have arrived. The first such attempt is sent again at once; from the second it waits. */
+    /**
+     * Announces on [quotaBackoffSet] what is left of the soonest wait still running: a mailbox's quota backoff or an
+     * `hs.resp`'s wait. The owner keeps one flush, for the last length announced, so the soonest is announced, and
+     * [flushOutbox] announces again what is left after it: no wait's end is left without a flush. Under [lock].
+     */
+    private fun announceWaitsLocked() {
+        val now = cfg.elapsedMs()
+        val ends = quotaBackoff.values.map { it.first } + awaiting.map { it.waitUntilMs }
+        ends.filter { it > now }.minOrNull()?.let { if (it != announcedEndMs) announceEnd(it) }
+    }
+
+    /** The end (elapsed clock) last announced on [quotaBackoffSet]: the one the owner's flush is set for. */
+    @Volatile
+    private var announcedEndMs = 0L
+
+    private fun announceEnd(end: Long) {
+        announcedEndMs = end
+        quotaBackoffs.tryEmit((end - cfg.elapsedMs()).coerceAtLeast(0))
+    }
+
+    /**
+     * No definite answer: it may have arrived. After the first such attempt it goes again at the next collection start or
+     * handled message; from the second in a row it waits.
+     */
     private fun respUnanswered(a: Awaiting) {
         a.mayHaveArrived = true
         if (++a.unanswered >= 2) respWait(a)

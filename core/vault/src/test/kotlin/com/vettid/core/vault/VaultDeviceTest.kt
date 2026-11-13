@@ -1236,6 +1236,123 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * An `hs.resp` deposit cancelled while in flight (a stop) may have reached the relay: a later refusal for good of its
+     * re-send keeps the responder and its mark, and the vault's re-deposit of the `hs.init` gets no second, different
+     * `hs.resp`.
+     */
+    @Test
+    fun aCancelledRespDepositCountsAsPossiblyArrived() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            val gate = java.util.concurrent.CountDownLatch(1)
+            depositGate = gate
+            val before = depositsStarted.get()
+            val handling = launch(Dispatchers.IO) { runCatching { d.handle(v.msg(init)) } }
+            while (depositsStarted.get() == before) kotlinx.coroutines.delay(10)
+            handling.cancel() // the request is at the relay; its answer never comes back
+            handling.join()
+            depositGate = null
+            gate.countDown() // the relay stores it
+            nextDeposit()
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            d.tickConfirm() // the re-send, refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init)) // the vault's re-deposit
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder, kept", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /**
+     * A flush sends only the `hs.resp`s whose wait has ended: one whose attempt just went unanswered goes again at the next
+     * collection start or handled message, not a second time at once in the same start's flush.
+     */
+    @Test
+    fun aFlushSendsOnlyTheRespsThatWaited() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(v.rekeyInit(d).envelope())) } // no answer
+            val tried = refusedBodies.size
+            d.flushOutbox()
+            assertEquals("not tried again by the flush", tried, refusedBodies.size)
+            refuseDeposits = null
+            refuseStatus = 403
+        }
+    }
+
+    /**
+     * An `hs.resp`'s wait and a mailbox's longer quota backoff overlap: the owner keeps one flush, so the soonest end is
+     * announced, and the flush at it announces what is left of the mailbox's backoff, so the held `call.end` still gets a
+     * flush at its end.
+     */
+    @Test
+    fun overlappingWaitsEachGetAFlush() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += min
+            d.flushOutbox() // refused again: the mailbox waits 2 minutes
+            runCatching { d.handle(v.msg(v.rekeyInit(d).envelope())) } // the hs.resp waits 1 minute
+            assertEquals("the soonest end, each time", listOf(min, min * 2, min), seen.toList())
+            elapsed += min + 1_000
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            refuseQuota = null
+            d.flushOutbox() // the hs.resp's wait ended: tried, refused for good (no new wait); the mailbox's backoff still runs
+            assertEquals("what is left of the mailbox's backoff", min - 1_000, seen.last())
+            watcher.cancel()
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            d.stop()
+        }
+    }
+
+    /**
+     * A stop and a start while an `hs.resp` waits: the collection start announces what is left of its wait again, so the
+     * owner's flush at its end, under the new stop count, sends it.
+     */
+    @Test
+    fun aRestartDuringARespWaitAnnouncesItAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            elapsed += min / 3
+            d.stop()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            withTimeout(5_000) { while (seen.last() != min - min / 3) kotlinx.coroutines.delay(20) }
+            elapsed += min
+            d.flushOutbox(d.stopCount)
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            scope.cancel()
+            watcher.cancel()
+            d.stop()
+        }
+    }
+
     /** An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
     @Test
     fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {
