@@ -49,8 +49,8 @@ class RelayException(
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
      * ([staleSignature]); other client errors never are, and neither is `quota_exceeded` (a 429 that is not transient:
-     * §7.1, "a client MUST NOT retry the request unchanged"; GC #6847, #336's Opus L3). A change for callers: a
-     * device's `hs.resp` refused `quota_exceeded` now ends its responder, as any refusal that is not retried.
+     * §7.1, "a client MUST NOT retry the request unchanged"). For callers: a device's `hs.resp` refused `quota_exceeded`
+     * keeps its responder and waits, then goes again (VaultDevice's `depositResp`); it is not a refusal for good.
      */
     val retryable: Boolean
         get() = code != QUOTA_EXCEEDED && (status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature)
@@ -432,13 +432,15 @@ class RelayClient(
         DepositTokens.mintOpen(key, audience, Instant.now(clock), ttl, jti)
 
     /**
-     * Deposits [payload] into [mailboxId] with [token] (§6.2) and returns the
-     * relay's msg_id. A retried deposit whose first attempt succeeded leaves
-     * two messages: receivers dedupe at the E2E layer too.
+     * Deposits [payload] into [mailboxId] with [token] (§6.2) and returns the relay's msg_id. A retried deposit whose first
+     * attempt succeeded leaves two messages: receivers dedupe at the E2E layer too. [resendAfterSent] false: an attempt that
+     * went out and then failed without the relay's own refusal is not sent again (see [Call.resendAfterSent]), so a refusal
+     * comes only after attempts the relay applied nothing of.
      */
-    suspend fun deposit(mailboxId: String, token: String, payload: ByteArray): String {
+    suspend fun deposit(mailboxId: String, token: String, payload: ByteArray, resendAfterSent: Boolean = true): String {
         val body = JsonBuilder().base64("payload", payload).bytes()
-        return json(Call("POST", "/v1/mailbox/$mailboxId", body = body, token = token))!!.string("msg_id")
+        return json(Call("POST", "/v1/mailbox/$mailboxId", body = body, token = token, resendAfterSent = resendAfterSent))!!
+            .string("msg_id")
     }
 
     /**

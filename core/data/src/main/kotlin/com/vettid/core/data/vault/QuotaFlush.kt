@@ -12,10 +12,10 @@ import kotlinx.coroutines.launch
  * flush is asked for under the stop count the device announced with the backoff
  * ([com.vettid.core.vault.VaultDevice.QuotaBackoff], taken together with it), so a stop during the wait cancels that flush (the
  * device deposits nothing for it), and a restart of the collection during the wait announces the rest of the backoff again
- * under its own count, which replaces the wait. Replacing is enough: a device's outbox has one mailbox, so the latest
- * announcement is that mailbox's current backoff (a refusal's ends later, a start's re-announcement ends at the same time, and
- * one after a deposit the relay took, which ended the backoff, is the new one). It runs only while [live] (the session is
- * still this device's). The wait ends with the scope (the session's observer).
+ * under its own count, which replaces the wait. Replacing is enough: the device announces the soonest wait still running
+ * (its mailbox's backoff or a rekey answer's wait), and announces again after each flush what is left, so each wait's end
+ * gets its flush in turn. It runs only while [live] (the session is still this device's). The wait ends with the scope (the
+ * session's observer).
  */
 internal class QuotaFlush(
     private val scope: CoroutineScope,

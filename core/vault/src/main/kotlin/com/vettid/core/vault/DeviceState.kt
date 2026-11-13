@@ -159,9 +159,13 @@ internal data class VaultRecord(
     var confirmAtMs: Long? = null,
 )
 
-/** A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began. */
+/**
+ * A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began; (VAULT-MESSAGING
+ * §6.3: one `hs.resp` per `hs.init`) the inner id of the `hs.init` it answers and the `hs.resp` it
+ * deposited (base64), so that a redelivered `hs.init` gets the same bytes again. Both absent in a record written before.
+ */
 @Serializable
-internal data class AwaitingRekey(val createdMs: Long, val state: String)
+internal data class AwaitingRekey(val createdMs: Long, val state: String, val initId: String? = null, val resp: String? = null)
 
 /** This app's copy of the Protean Credential (§3.5): the sealed blob, useless without the vault's CEK and the password. */
 @Serializable
