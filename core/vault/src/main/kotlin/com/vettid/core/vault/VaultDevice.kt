@@ -392,7 +392,14 @@ class VaultDevice private constructor(
      * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds. A [start] while a
      * backoff runs (a restart after a [stop]) announces what is left of it again.
      */
-    val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
+    val quotaBackoffSet: SharedFlow<QuotaBackoff> get() = quotaBackoffs.asSharedFlow()
+
+    /**
+     * A quota backoff of [ms] announced at stop count [stopCount] ([quotaBackoffSet]): both taken together, under this device's
+     * monitor (which [stop] and [start] hold), so the owner's flush when the backoff ends ([flushOutbox] with [stopCount])
+     * deposits nothing after a stop since, and a [start] since has announced the rest under its own count.
+     */
+    data class QuotaBackoff(val ms: Long, val stopCount: Long)
 
     private val ownerCheckRefusals =
         MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -414,7 +421,8 @@ class VaultDevice private constructor(
     private val collectorEnd = MutableStateFlow<String?>(null)
     // replay = 1: the session's observer subscribes after the collection started, whose first flush may already have
     // been refused for a quota; the last backoff then still reaches it (a stale one only makes one gated flush).
-    private val quotaBackoffs = MutableSharedFlow<Long>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val quotaBackoffs =
+        MutableSharedFlow<QuotaBackoff>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
@@ -659,7 +667,10 @@ class VaultDevice private constructor(
         collectorEnd.value = null
         // (Show held as held) A quota backoff still running is announced again with what is left of it: the owner's flush when
         // it ends was asked for under the stop count before this start, which a stop since makes deposit nothing.
-        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> quotaBackoffs.tryEmit((until - cfg.elapsedMs()).coerceAtLeast(0)) }
+        // Under this monitor, as [stop] and [quotaRefused]'s announcement: the rest and this start's stop count together.
+        quotaBackoff.values.maxOfOrNull { it.first }?.let { until ->
+            quotaBackoffs.tryEmit(QuotaBackoff((until - cfg.elapsedMs()).coerceAtLeast(0), stopSeq))
+        }
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
@@ -1877,8 +1888,12 @@ class VaultDevice private constructor(
         } else {
             val prev = quotaBackoff[e.mailbox]?.second ?: 0L
             val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
-            quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
-            quotaBackoffs.tryEmit(next)
+            // The backoff and the stop count it is announced at, taken together under the monitor [stop] and [start] hold: a
+            // start either sees this backoff (and announces its rest under its own count) or comes after this announcement.
+            synchronized(this) {
+                quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+                quotaBackoffs.tryEmit(QuotaBackoff(next, stopSeq))
+            }
         }
         save()
     }

@@ -20,12 +20,12 @@ class QuotaFlushTest {
     private var live = true
     private val flushed = mutableListOf<Long>()
 
-    private fun kotlinx.coroutines.test.TestScope.flush() = QuotaFlush(backgroundScope, { stops }, { live }, { seq -> flushed += seq })
+    private fun kotlinx.coroutines.test.TestScope.flush() = QuotaFlush(backgroundScope, { live }, { seq -> flushed += seq })
 
     @Test
     fun theOutboxIsFlushedWhenTheBackoffEnds() = runTest {
         val f = flush()
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, stops)
         advanceTimeBy(60_000)
         runCurrent()
         assertEquals("not before the backoff has ended", 0, flushed.size)
@@ -34,11 +34,11 @@ class QuotaFlushTest {
         assertEquals(1, flushed.size)
     }
 
-    /** The stop count is the one when the backoff was set: a stop since makes the device deposit nothing. */
+    /** The flush is asked for under the stop count announced with the backoff, not one read later. */
     @Test
-    fun theFlushTakesTheStopCountOfTheAsk() = runTest {
+    fun theFlushTakesTheStopCountOfTheAnnouncement() = runTest {
         val f = flush()
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, 0)
         stops = 1 // stopped while the backoff ran
         advanceTimeBy(61_000)
         runCurrent()
@@ -49,7 +49,7 @@ class QuotaFlushTest {
     fun notOnceTheSessionEndedOrTheDeviceWasForgotten() = runTest {
         val f = flush()
         live = false
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, stops)
         advanceTimeBy(61_000)
         runCurrent()
         assertEquals(0, flushed.size)
@@ -58,9 +58,9 @@ class QuotaFlushTest {
     @Test
     fun aLaterBackoffReplacesTheWait() = runTest {
         val f = flush()
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, stops)
         advanceTimeBy(30_000)
-        f.backoffSet(120_000) // doubled: the first wait no longer counts
+        f.backoffSet(120_000, stops) // doubled: the first wait no longer counts
         advanceTimeBy(40_000)
         runCurrent()
         assertEquals(0, flushed.size)
@@ -103,12 +103,12 @@ class QuotaFlushTest {
         val gate = guard.sendGate()
         val outbox = mutableListOf("relay.token.issued", "call.end", "device.features")
         val sent = mutableListOf<String>()
-        val f = QuotaFlush(backgroundScope, { 0L }, { true }) { _ ->
+        val f = QuotaFlush(backgroundScope, { true }) { _ ->
             val going = outbox.filter { gate.admits(it) }
             sent += going
             outbox -= going.toSet()
         }
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, 0)
         advanceTimeBy(61_000)
         runCurrent()
         assertEquals(listOf("call.end"), sent)
@@ -116,24 +116,33 @@ class QuotaFlushTest {
     }
 
     /**
-     * With a fake device whose flush deposits only under its current stop count: a stop and a start during the backoff (a
-     * reconnect) announce the rest of it again, so the flush at its end goes; a stop with no start leaves nothing to go.
+     * With a fake device whose flush deposits only under its current stop count, interleaved step by step: an announcement
+     * taken before a stop but handled after it (the observer runs late) deposits nothing; the start's announcement of the rest,
+     * under the new count, makes the flush go when the backoff ends; a stop with no start leaves nothing to go.
      */
     @Test
     fun aRestartDuringTheBackoffStillFlushesWithAFakeOutbox() = runTest {
         val deposits = mutableListOf<Long>()
-        val f = QuotaFlush(backgroundScope, { stops }, { live }) { seq -> if (seq == stops) deposits += seq }
-        f.backoffSet(60_000)
+        val f = QuotaFlush(backgroundScope, { live }) { seq -> if (seq == stops) deposits += seq }
+        val announced = 0L // the refusal's announcement, at count 0
+        stops++ // stop(), before the observer handles it
+        f.backoffSet(60_000, announced)
         advanceTimeBy(20_000)
-        stops++ // stop()
-        f.backoffSet(40_000) // start(): what is left of the backoff, announced again
+        f.backoffSet(40_000, stops) // start(): the rest, under its own count
         advanceTimeBy(40_000 + QuotaFlush.MARGIN_MS + 1)
         runCurrent()
         assertEquals("it goes once the backoff ends", listOf(1L), deposits)
-        f.backoffSet(60_000)
+        f.backoffSet(60_000, stops)
         stops++ // stop(), no start
         advanceTimeBy(61_000)
         runCurrent()
         assertEquals("nothing more", listOf(1L), deposits)
+        // Without the start's announcement, the late-handled one alone deposits nothing.
+        val alone = mutableListOf<Long>()
+        val g = QuotaFlush(backgroundScope, { live }) { seq -> if (seq == stops) alone += seq }
+        g.backoffSet(60_000, stops - 1)
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertEquals(emptyList<Long>(), alone)
     }
 }

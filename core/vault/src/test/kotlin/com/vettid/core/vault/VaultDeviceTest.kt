@@ -1717,7 +1717,7 @@ class VaultDeviceTest {
             val store = InMemoryDeviceStateStore()
             val (d, _) = pairedDevice(this, store)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
@@ -1738,38 +1738,49 @@ class VaultDeviceTest {
     }
 
     /**
-     * (Show held as held) A stop and a start while a quota backoff runs (a reconnect) announce what is left of it again, so the
-     * owner's flush at its end, asked for under the new stop count, deposits the held `call.end`; a stop with no start announces
-     * nothing.
+     * (Show held as held) Each quota backoff is announced with the stop count it is announced at, taken together: a flush asked
+     * for under an announcement's count deposits nothing after a stop since; a start during the backoff (a reconnect) announces
+     * what is left of it under its own count, and a flush asked for under that one deposits the held `call.end`; a stop with no
+     * start announces nothing. Stop, start and the backoff's end are interleaved here step by step.
      */
     @Test
     fun aRestartDuringAQuotaBackoffAnnouncesItAgain() = runBlocking<Unit> {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
-            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
             val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
             assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            val c0 = d.stopCount
+            assertEquals(listOf(VaultDevice.QuotaBackoff(min, c0)), seen.toList())
+            elapsed += min / 3
+            d.stop()
+            assertEquals("a stop alone announces nothing", 1, seen.size)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            val c1 = d.stopCount
+            assertTrue(c1 != c0)
+            assertEquals("the rest, under the new count", VaultDevice.QuotaBackoff(min - min / 3, c1), seen[1])
+            scope.cancel()
+            d.stop() // no collection in the way of the steps below
+            val c2 = d.stopCount
+            // A refusal now is announced under the count of its moment.
+            elapsed += min
+            d.flushOutbox(c2)
+            assertEquals(VaultDevice.QuotaBackoff(min * 2, c2), seen.last())
             refuseDeposits = null
             refuseQuota = null
             refuseStatus = 403
-            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
-            val asked = d.stopCount
-            elapsed += min / 3
-            d.stop()
-            assertEquals("a stop alone announces nothing", listOf(min), seen.toList())
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-            d.start(scope)
-            assertEquals("what is left, again", listOf(min, min - min / 3), seen.toList())
-            assertTrue("a new stop count for the flush asked now", d.stopCount != asked)
-            elapsed += min
-            d.flushOutbox(d.stopCount)
+            elapsed += min * 2
+            d.flushOutbox(c0)
+            d.flushOutbox(c1)
+            assertNull("asked for before a stop: nothing", deposits.poll(300, TimeUnit.MILLISECONDS))
+            d.flushOutbox(seen.last().stopCount)
             assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
-            scope.cancel()
             watcher.cancel()
-            d.stop()
         }
     }
 
