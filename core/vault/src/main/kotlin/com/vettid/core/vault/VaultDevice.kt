@@ -350,8 +350,8 @@ class VaultDevice private constructor(
      */
     private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null) {
         /**
-         * (Opus L4 of the re-check of 4a6e92bb; RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6 for a device) After a
-         * `quota_exceeded` its re-send waits: from 1 minute, doubling to 1 hour, on [DeviceConfig.elapsedMs]. Memory only.
+         * (RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6 for a device) After a `quota_exceeded` its re-send waits: from
+         * [QUOTA_BACKOFF_MIN], doubling to [QUOTA_BACKOFF_MAX], on [DeviceConfig.elapsedMs]. Memory only.
          */
         var quotaUntilMs = 0L
         var quotaBackoffMs = 0L
@@ -2555,6 +2555,8 @@ class VaultDevice private constructor(
         if (st.seenInner.containsKey(initId)) {
             val a = awaiting.firstOrNull { it.initId == initId } ?: return
             val again = a.respBytes ?: return
+            // During its quota wait it is not sent at once either: the wait's end sends it ([resendRespsLocked]).
+            if (quotaHeld(a)) return
             if (a in unsavedAwaiting) save()
             depositResp(requireVault(), a, again, first = false)
             return
@@ -2655,7 +2657,7 @@ class VaultDevice private constructor(
     }
 
     private fun quotaWait(a: Awaiting) {
-        a.quotaBackoffMs = (a.quotaBackoffMs * 2).coerceIn(QUOTA_BACKOFF_FIRST_MS, QUOTA_BACKOFF_MAX_MS)
+        a.quotaBackoffMs = (a.quotaBackoffMs * 2).coerceIn(QUOTA_BACKOFF_MIN.toMillis(), QUOTA_BACKOFF_MAX.toMillis())
         a.quotaUntilMs = cfg.elapsedMs() + a.quotaBackoffMs
     }
 
@@ -3413,9 +3415,6 @@ class VaultDevice private constructor(
         /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
         private val HANDSHAKE_TTL: Duration = Duration.ofDays(16)
 
-        /** An `hs.resp` re-send's wait after a `quota_exceeded` ([quotaWait]): from 1 minute, doubling to 1 hour. */
-        private const val QUOTA_BACKOFF_FIRST_MS = 60_000L
-        private const val QUOTA_BACKOFF_MAX_MS = 3_600_000L
         private const val MAX_AWAITING = 8
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)

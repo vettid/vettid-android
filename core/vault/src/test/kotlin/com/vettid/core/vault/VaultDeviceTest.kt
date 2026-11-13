@@ -1019,6 +1019,62 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * The device's own re-send of an `hs.resp` is not held by a shut send gate (owner decision 2026-11-12, a: holding it would
+     * hold the vault's rekey until the handshake expires): at a collection start and after a handled message alike.
+     */
+    @Test
+    fun theSelfResendGoesWhileTheGateIsShut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            for (afterMessage in listOf(false, true)) {
+                val (d, v) = pairedDevice(this)
+                val ini = v.rekeyInit(d)
+                refuseDeposits = "unavailable"
+                refuseStatus = 503
+                runCatching { d.handle(v.msg(ini.envelope())) }
+                refuseDeposits = null
+                refuseStatus = 403
+                d.sendGate = VaultDevice.SendGate { false }
+                if (afterMessage) {
+                    d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+                } else {
+                    d.tickConfirm()
+                }
+                val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+                d.handle(v.msg(res.fin))
+                assertArrayEquals("the epoch is active", res.epoch.id, d.currentEpochId)
+                d.stop()
+            }
+        }
+    }
+
+    /**
+     * An `hs.init` the vault deposits again while its `hs.resp` waits after a `quota_exceeded` sends nothing at once: the
+     * wait's end sends the same bytes.
+     */
+    @Test
+    fun aRedepositedInitDuringTheQuotaWaitSendsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = null
+            refuseStatus = 403
+            val before = refused.get()
+            d.handle(v.msg(init)) // the vault's re-deposit: a new msg_id, the same bytes
+            assertEquals("nothing tried during the wait", before, refused.get())
+            noHandshakeAnswer(v.keyring.current()!!)
+            elapsed += 61_000
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
     /** An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
     @Test
     fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {

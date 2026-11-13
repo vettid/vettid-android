@@ -49,8 +49,8 @@ class RelayException(
     /**
      * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
      * ([staleSignature]); other client errors never are, and neither is `quota_exceeded` (a 429 that is not transient:
-     * §7.1, "a client MUST NOT retry the request unchanged"; GC #6847, #336's Opus L3). A change for callers: a
-     * device's `hs.resp` refused `quota_exceeded` now ends its responder, as any refusal that is not retried.
+     * §7.1, "a client MUST NOT retry the request unchanged"). For callers: a device's `hs.resp` refused `quota_exceeded`
+     * keeps its responder and waits, then goes again (VaultDevice's `depositResp`); it is not a refusal for good.
      */
     val retryable: Boolean
         get() = code != QUOTA_EXCEEDED && (status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature)
