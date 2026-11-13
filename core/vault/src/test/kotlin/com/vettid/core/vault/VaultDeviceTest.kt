@@ -8114,6 +8114,67 @@ class VaultDeviceTest {
     }
 
     /**
+     * After a restart with the vault's time not known, 40 days really pass and the phone's clock reads 50: a message under
+     * the kept confirmed epoch (48 days by the phone's count) shows the vault's time itself, by its own authenticated ts, and
+     * is handled at once. Nothing else from the vault is needed, and the clock need not come back.
+     */
+    @Test
+    fun aMessageUnderAHiddenEpochShowsTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            elapsed += java.time.Duration.ofDays(40).toMillis()
+            ahead(java.time.Duration.ofDays(40))
+            val vaultAt = deviceNow()
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            again.handle(r.v.msg(r.old.seal(message("hidden", at = vaultAt))))
+            assertEquals(
+                "hidden",
+                VaultJson.str(again.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "hidden" }.body, "text"),
+            )
+            assertTrue("the kept epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * After a restart, 49 days really pass: a message under the kept confirmed epoch is past its 48 days by its own ts too,
+     * so it is still hidden once that ts is the keys' clock, and is left for redelivery, never handled or dropped.
+     */
+    @Test
+    fun aMessagePastItsEpochsLifeByItsOwnTimeIsLeftForRedelivery() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            elapsed += java.time.Duration.ofDays(49).toMillis()
+            ahead(java.time.Duration.ofDays(49))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            val m = r.v.msg(r.old.seal(message("late", at = deviceNow())))
+            assertThrows(LeaveUnacked::class.java) { runBlocking { again.handle(m) } }
+            assertNull("not recorded as seen", savedState(r.store).seen[m.msgId])
+        }
+    }
+
+    /**
+     * With the vault's time known, the phone's clock jumps 10 days ahead and a message under the current epoch releases the
+     * kept one: its 16 days count from the vault's time, not the phone's, so 17 real days later it is gone.
+     */
+    @Test
+    fun aReleaseWithTheClockAheadCountsFromTheVaultsTime() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            val vaultAt = deviceNow()
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            runCatching { r.d.handle(r.v.msg(r.new.seal(message("under the new epoch", at = vaultAt)))) }
+            clockAheadMs = 0
+            elapsed += java.time.Duration.ofDays(17).toMillis()
+            ahead(java.time.Duration.ofDays(17))
+            runCatching { r.d.handle(r.v.msg(r.new.seal(message("later", at = deviceNow())))) }
+            assertFalse("the released epoch ends 16 days after the vault's time", keptInFile(r))
+        }
+    }
+
+    /**
      * With the phone's clock 60 days behind, a message under the current epoch releases the kept one:
      * its 16 days count from the vault's time, not the phone's, so once the clock is corrected it is not destroyed at once.
      */

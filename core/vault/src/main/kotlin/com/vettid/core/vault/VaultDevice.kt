@@ -2257,14 +2257,13 @@ class VaultDevice private constructor(
         if (!Ed25519.equalPublic(sender, Base64s.decodeStd(v.relayPk))) return // §6.3: only the vault's relay key sends to a device
         // Opened against the same time keys are destroyed by ([pruneTime]): a wall clock ahead does
         // not hide a retained epoch the vault's time still keeps. Before the vault's time is known in this process, a
-        // message under a retained epoch hidden by this phone's clock alone is left for redelivery, never dropped.
+        // message under a retained epoch hidden by this phone's clock alone shows the vault's time itself ([openHidden]).
         val keyTime = pruneTime(t)
         val opened = try {
             keyring.open(env, keyTime ?: t)
         } catch (_: CryptoException) {
             null
-        }
-        if (opened == null && keyTime == null && keyring.hiddenAt(env.recipientKid, t)) throw HiddenEpoch()
+        } ?: if (keyTime == null && keyring.hiddenAt(env.recipientKid, t)) openHidden(env, t) else null
         if (opened == null) {
             pruneAwaiting(t)
             val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
@@ -2354,6 +2353,33 @@ class VaultDevice private constructor(
         if (older.isNotEmpty()) st.outbox.removeAll { e -> older.any { it === e } }
     }
 
+    /**
+     * A message under a retained epoch that only this phone's clock hides, before the vault's time is known in this process:
+     * opened with that epoch's key whatever its life, its own authenticated `ts` (within the time window this phone's clock
+     * allows it, [Inner.checkTime]) is noted as the keys' clock ([noteKeyTime]), and the message is judged again by that
+     * time. So a phone whose clock stays ahead is not left waiting for a message from the vault under another epoch: the
+     * vault may send nothing else. Still hidden by the vault's own time (the key is past its life), or a time this phone's
+     * clock would refuse: left for redelivery ([HiddenEpoch]), never dropped.
+     */
+    private fun openHidden(env: Envelope, t: Instant): Pair<Inner, Epoch> {
+        val any = try {
+            keyring.open(env, Instant.EPOCH)
+        } catch (_: CryptoException) {
+            throw HiddenEpoch()
+        }
+        // Only a message this phone's clock would take: one it would drop for its time (the clock that far ahead) waits.
+        try {
+            any.first.checkTime(t, any.first.exp == null)
+        } catch (_: CryptoException.Time) {
+            throw HiddenEpoch()
+        }
+        noteKeyTime(any.first.ts)
+        val at = pruneTime(t) ?: throw HiddenEpoch()
+        // Judged again by the keys' clock, without a second open (which would count the message twice).
+        if (keyring.find(any.second.id, at) == null) throw HiddenEpoch()
+        return any
+    }
+
     /** A message neither seen nor acked: the relay delivers it again ([handleLocked]). */
     private open class ForRedelivery(val why: String) : Exception(why)
 
@@ -2361,8 +2387,8 @@ class VaultDevice private constructor(
     private class LeftForLater : ForRedelivery("held")
 
     /**
-     * A message under a retained epoch that only this phone's clock hides: delivered again, once the clock is back
-     * or the vault's time is known.
+     * A message under a retained epoch that only this phone's clock hides, and that does not show the vault's time
+     * itself ([openHidden]): delivered again, once the clock is back or the vault's time is known.
      */
     private class HiddenEpoch : ForRedelivery("hidden")
 
@@ -3068,20 +3094,16 @@ class VaultDevice private constructor(
     private fun keyBase(t: Instant): Instant = synchronized(vaultClockLock) { keyClock() ?: t }
 
     /**
-     * A released epoch's receive key: kept 16 days from the latest of this phone's time, the vault's and the message's own
-     * authenticated [ts] (a clock behind does not shorten them), but never counted from later than the later of this phone's
-     * time and the vault's, plus MAX_DURABLE_AGE + MAX_CLOCK_SKEW_FUTURE (a stamp far in the future does not keep it to that
-     * date). Known limit: before the vault's time is known, a phone more than that far behind has the stamp capped too.
+     * A released epoch's receive key: kept 16 days from the later of the keys' clock ([keyClock]; this phone's time while it
+     * is not known) and the message's own authenticated [ts] (a clock behind does not shorten them, and once the vault's
+     * time is known a clock ahead does not lengthen them), but never counted from later than that clock plus
+     * MAX_DURABLE_AGE + MAX_CLOCK_SKEW_FUTURE (a stamp far in the future does not keep it to that date). Known limit: before
+     * the vault's time is known, a phone more than that far behind has the stamp capped too.
      */
     private fun releaseUntil(t: Instant, ts: Instant): Instant {
-        val known = laterOfVault(t)
+        val known = synchronized(vaultClockLock) { keyClock() } ?: t
         val cap = known.plus(Inner.MAX_DURABLE_AGE).plus(Inner.MAX_CLOCK_SKEW_FUTURE)
         return minOf(maxOf(known, ts), cap).plus(Epoch.RECEIVE_KEY_RETENTION)
-    }
-
-    /** The later of [t] and the vault's time ([vaultNow]) once it is known in this process; [t] before. */
-    private fun laterOfVault(t: Instant): Instant = synchronized(vaultClockLock) {
-        keyClock()?.let { maxOf(t, it) } ?: t
     }
 
     /** Destroys the retained epochs past their life as of [pruneTime]; true when one was. */
