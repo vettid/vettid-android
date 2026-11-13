@@ -1738,6 +1738,42 @@ class VaultDeviceTest {
     }
 
     /**
+     * (Show held as held) A stop and a start while a quota backoff runs (a reconnect) announce what is left of it again, so the
+     * owner's flush at its end, asked for under the new stop count, deposits the held `call.end`; a stop with no start announces
+     * nothing.
+     */
+    @Test
+    fun aRestartDuringAQuotaBackoffAnnouncesItAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            val asked = d.stopCount
+            elapsed += min / 3
+            d.stop()
+            assertEquals("a stop alone announces nothing", listOf(min), seen.toList())
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            assertEquals("what is left, again", listOf(min, min - min / 3), seen.toList())
+            assertTrue("a new stop count for the flush asked now", d.stopCount != asked)
+            elapsed += min
+            d.flushOutbox(d.stopCount)
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            scope.cancel()
+            watcher.cancel()
+            d.stop()
+        }
+    }
+
+    /**
      * (A6 audit N1) The device's own wait ending drops nothing (the dropping is the 11-minute deadline's, after its
      * collect, in the app): an approval that comes later still completes the transfer.
      */
@@ -6565,6 +6601,672 @@ class VaultDeviceTest {
     }
 
     private fun confirmsQueued(d: VaultDevice) = d.outboxEntries.count { it.type == "hs.confirm" }
+
+    // --- the lock gate (ANDROID-PLAN §4 "While pending") ---
+
+    /**
+     * A shut gate (a lock pending): the rekey's `hs.resp` still goes (owner decision 2026-11-12, a) and the vault's `hs.fin`
+     * is taken (the epoch is active), but what it brings (`hs.confirm`, `device.features`) waits in the outbox, through a flush and a collection start's 12-day check,
+     * until the gate admits it.
+     */
+    @Test
+    fun aShutGateHoldsWhatARekeysFinBringsButTheRekeysAnswerGoes() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { false }
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow()) // the hs.resp went
+            d.handle(v.msg(res.fin))
+            // The vault's hs.fin is taken at the session layer while the gate is shut: the epoch is active (else the answer
+            // would wait 16 days and the vault's pending epoch its bound), and nothing else is deposited.
+            assertArrayEquals("the epoch is active", res.epoch.id, d.currentEpochId)
+            assertNull("held", deposits.poll(500, TimeUnit.MILLISECONDS))
+            assertTrue(d.outboxEntries.any { it.type == "hs.confirm" })
+            assertTrue(d.outboxEntries.any { it.type == VaultDevice.TYPE_DEVICE_FEATURES })
+            d.flushOutbox()
+            d.tickConfirm()
+            assertNull("still held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /** The 12-day `hs.confirm` at a collection start is queued while the gate is shut, and deposited once it admits it. */
+    @Test
+    fun theTwelveDayConfirmWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val r = rekeyed(this)
+            r.d.sendGate = VaultDevice.SendGate { false }
+            ahead(java.time.Duration.ofDays(12).plusSeconds(60))
+            r.d.tickConfirm()
+            assertEquals("queued", 1, confirmsQueued(r.d))
+            noConfirm(r.new)
+            r.d.sendGate = VaultDevice.SendGate { true }
+            r.d.flushOutbox()
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /** A send of another type while the gate is shut is kept in the outbox, not deposited. */
+    @Test
+    fun aSendOfAnotherTypeWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "t") })
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+        }
+    }
+
+    /**
+     * A pending `call.end` is not held behind an entry the gate holds while its mailbox waits for a quota: once the backoff
+     * has ended it goes.
+     */
+    @Test
+    fun aCallEndIsNotHeldBehindAGatedEntryInAQuotaWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "t") }) // held by the gate, first in the outbox
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            d.flushOutbox()
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+        }
+    }
+
+    /** A pending `call.end` passes a shut gate (the plan's one exception besides the lock). */
+    @Test
+    fun aCallEndPassesAShutGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("call.end", buildJsonObject { put("call_id", "c1") })
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    /**
+     * A stop that comes while a flush runs wins: nothing after it is deposited and the entries stay in the outbox. The gate is
+     * asked before the stop count is compared, so a stop that comes while the gate is being asked holds that entry too.
+     */
+    @Test
+    fun aStopDuringAFlushWins() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // kept in the outbox
+            runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }
+            runCatching { d.send("call.end", buildJsonObject { put("call_id", "c2") }) }
+            assertEquals(2, d.outboxEntries.size)
+            refused.set(0)
+            refuseDeposits = null
+            var stopped = false
+            d.sendGate = VaultDevice.SendGate {
+                if (!stopped) {
+                    stopped = true
+                    d.stop() // the stop comes while the gate is asked, during the flush
+                }
+                true
+            }
+            d.flushOutbox()
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(2, d.outboxEntries.size)
+            refuseStatus = 403
+        }
+    }
+
+    /** A flush asked for before a stop (its stop count taken then) deposits nothing once it runs after the stop. */
+    @Test
+    fun aFlushAskedForBeforeAStopDepositsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { false }
+            d.send("call.end", buildJsonObject { put("call_id", "c1") })
+            d.sendGate = VaultDevice.SendGate { true }
+            val asked = d.stopCount
+            d.stop()
+            d.flushOutbox(asked)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            d.flushOutbox(d.stopCount) // asked for after the stop
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+        }
+    }
+
+    /** A gate that shuts while a flush runs (a lock asked for meanwhile) holds the entries after it. */
+    @Test
+    fun aGateThatShutsMidFlushHoldsTheRest() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { false }
+            d.send("call.end", buildJsonObject { put("call_id", "c1") })
+            d.send("call.end", buildJsonObject { put("call_id", "c2") })
+            var asks = 0
+            d.sendGate = VaultDevice.SendGate { asks++ == 0 } // open for the first entry, shut after it
+            d.flushOutbox()
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertNull("held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+        }
+    }
+
+    /**
+     * A `call.end` sent while its mailbox waits for a quota takes the earlier entries of the mailbox first ([deliverInOrder]),
+     * but not one the gate holds: the held `relay.token.issued` stays, the earlier `call.end` and the new one go.
+     */
+    @Test
+    fun aCallEndSentInAQuotaWaitTakesNoGatedEarlierEntry() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "t") }) // held, first in the outbox
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            d.send("call.end", buildJsonObject { put("call_id", "c2") })
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertEquals("""{"call_id":"c2"}""", String(v.open(nextDeposit().second).body))
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+        }
+    }
+
+    /**
+     * A send's own `call.end` is not held by a stop that comes while it is being sent (here while the gate is asked): the send
+     * reports success, so its entry goes and is not kept silently.
+     */
+    @Test
+    fun aStopDuringASendDoesNotKeepTheSendsOwnEntry() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            var stopped = false
+            d.sendGate = VaultDevice.SendGate {
+                if (!stopped) {
+                    stopped = true
+                    d.stop()
+                }
+                true
+            }
+            d.send("call.end", buildJsonObject { put("call_id", "c1") })
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    /**
+     * The device's own `relay.token.refresh` does not pile up while the gate holds it: with the vault's token in its refresh
+     * window, several handled messages queue one, and one goes when the gate opens.
+     */
+    @Test
+    fun anOwnRefreshDoesNotPileUpWhileHeld() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            ahead(java.time.Duration.ofDays(28)) // under 3 days left on the vault's token
+            repeat(4) { d.handle(v.msg(v.keyring.current()!!.seal(message("m$it")))) }
+            assertNull("held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            val refreshes = d.outboxEntries.filter { it.type == "relay.token.refresh" }
+            assertEquals(1, refreshes.size)
+            assertNull("the device's own", refreshes.single().re)
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            val sent = generateSequence { deposits.poll(500, TimeUnit.MILLISECONDS) }.map { v.open(it.second) }.toList()
+            assertEquals(1, sent.count { it.type == "relay.token.refresh" })
+            assertTrue(sent.filter { it.type == "relay.token.refresh" }.all { it.re == null })
+            assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    /**
+     * The answer to the vault's `relay.token.refresh` waits while the gate is shut, and only the newest does: when the gate
+     * opens, one answer goes, to the vault's latest refresh.
+     */
+    @Test
+    fun aHeldAnswerToTheVaultsRefreshKeepsOnlyTheNewest() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val first = Ulid.new()
+            d.handle(v.seal("relay.token.refresh", "{}", id = first))
+            assertNull("held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(listOf(first), d.outboxEntries.filter { it.type == "relay.token.refresh" }.map { it.re })
+            val second = Ulid.new()
+            d.handle(v.seal("relay.token.refresh", "{}", id = second))
+            assertNull("held", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(listOf(second), d.outboxEntries.filter { it.type == "relay.token.refresh" }.map { it.re })
+            d.sendGate = VaultDevice.SendGate { true }
+            d.flushOutbox()
+            val ans = v.open(nextDeposit().second)
+            assertEquals("relay.token.refresh" to second, ans.type to ans.re)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** An entry saved by an earlier version (no `re`) still reads, as the device's own. */
+    @Test
+    fun anOutboxEntryWithoutReStillReads() {
+        val e = stateJson.decodeFromString(
+            OutboxEntry.serializer(),
+            """{"id":"i","type":"relay.token.refresh","relayUrl":"u","mailbox":"m","token":"t","envelope":"e","attempts":1}""",
+        )
+        assertNull(e.re)
+        assertEquals(1, e.attempts)
+    }
+
+    /**
+     * A re-confirmation re-queued under the held token after a `token_expired` refusal ([VaultDevice.deliverConfirm]) is
+     * deposited only while the gate admits it: one that shut meanwhile holds it in the outbox.
+     */
+    @Test
+    fun aReaddressedConfirmationWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            val before = r.d.vaultToken!!
+            expiredToken = before
+            refused.set(0)
+            Thread.sleep(1_100) // a later exp than the held token's (whole seconds)
+            val fresh = r.v.tokenFor(r.d)
+            var confirmAsks = 0
+            r.d.sendGate = VaultDevice.SendGate { it != "hs.confirm" || confirmAsks++ == 0 } // shuts after the first try
+            r.d.handle(r.v.msg(r.old.seal(Inner(id = Ulid.new(), type = "relay.token.issued", ts = deviceNow(), body = """{"kind":"standing","token":"$fresh"}""".toByteArray()))))
+            assertEquals(1, refused.get())
+            noConfirm(r.new)
+            assertEquals("re-queued, held", 1, confirmsQueued(r.d))
+            expiredToken = null
+            r.d.sendGate = VaultDevice.SendGate { true }
+            r.d.flushOutbox()
+            take(r.new, "hs.confirm")
+        }
+    }
+
+    /**
+     * A request's re-sends wait for the gate ([VaultDevice.request]): one that shut after the first send holds them, and the
+     * answer to the copy already out is still taken.
+     */
+    @Test
+    fun aRequestsResendsWaitForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore(), timeout = java.time.Duration.ofMillis(600))
+            val status = async(Dispatchers.IO) { d.request("vault.status") }
+            val req = v.open(nextDeposit().second)
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES } // a lock asked for after the first send
+            assertNull("no re-send", deposits.poll(1_300, TimeUnit.MILLISECONDS))
+            d.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
+            assertEquals(req.id, status.await().inner.re)
+        }
+    }
+
+    /** A request with the credential's inner id ([VaultDevice.requestWithId]): its re-sends wait for the gate too. */
+    @Test
+    fun aRequestWithIdsResendsWaitForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore(), timeout = java.time.Duration.ofMillis(300))
+            val id = d.newId()
+            val r = async(Dispatchers.IO) { runCatching { d.requestWithId(id, "pin.change", buildJsonObject { }) } }
+            assertEquals(id, v.open(nextDeposit().second).id)
+            d.sendGate = VaultDevice.SendGate { false }
+            assertTrue("no answer", r.await().isFailure)
+            assertNull("no re-send", deposits.poll(200, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** A lock-time request ([VaultDevice.LockTimeSend], "Lock it now"'s status read) is re-sent while the gate is shut. */
+    @Test
+    fun aLockTimeRequestIsResentWhileTheGateIsShut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore(), timeout = java.time.Duration.ofMillis(400))
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val status = async(Dispatchers.IO + VaultDevice.LockTimeSend) { d.request("vault.status") }
+            val first = v.open(nextDeposit().second)
+            val again = v.open(nextDeposit().second)
+            assertEquals("the same request", first.id, again.id)
+            d.handle(v.seal("vault.status", "{}", re = first.id, status = Inner.STATUS_OK))
+            status.await()
+        }
+    }
+
+    /**
+     * A kept change's repeats ([VaultDevice.sendKept], a PIN or password change) wait for the gate, in the same call and in
+     * a later one; its answer, whenever it comes, is not lost: it is awaited until the change is dropped.
+     */
+    @Test
+    fun aKeptChangesRepeatsWaitForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            val k = KeptChange("pin.change", d.newId(), buildJsonObject { put("x", 1) }, d.vaultNow().plusSeconds(600), 1)
+            val r = async(Dispatchers.IO) { d.sendKept(k, 3, java.time.Duration.ofMillis(300)) }
+            assertEquals(k.innerId, v.open(nextDeposit().second).id)
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertNull("no answer yet", r.await())
+            assertNull("no repeat", deposits.poll(100, TimeUnit.MILLISECONDS))
+            assertNull("a later call's send is a repeat too", d.sendKept(k, 1, java.time.Duration.ofMillis(200)))
+            assertNull(deposits.poll(100, TimeUnit.MILLISECONDS))
+            // The answer to the first send comes late: it is kept for the change.
+            d.handle(v.seal("pin.change", "{}", re = k.innerId, status = Inner.STATUS_OK))
+            assertEquals(k.innerId, d.sendKept(k, 1, java.time.Duration.ofMillis(200))?.inner?.re)
+            assertNull(deposits.poll(100, TimeUnit.MILLISECONDS))
+            d.dropKept(k)
+        }
+    }
+
+    /**
+     * The renewal of the vault's standing token before a transfer approval ([VaultDevice.renewIssuedToken]) waits for the
+     * gate: held, nothing is minted, dropped or sent.
+     */
+    @Test
+    fun theTokenRenewalWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            d.send("relay.token.issued", buildJsonObject { put("token", "older") }) // held in the outbox
+            val issued = d.issuedTokenExpMs
+            assertTrue(runCatching { d.renewIssuedToken() }.exceptionOrNull() is VaultStateException)
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(issued, d.issuedTokenExpMs)
+            assertEquals(listOf("relay.token.issued"), d.outboxEntries.map { it.type })
+            d.sendGate = VaultDevice.SendGate { true }
+            d.renewIssuedToken()
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+            assertTrue(d.outboxEntries.isEmpty())
+        }
+    }
+
+    private fun assertHeld(e: Throwable?) {
+        assertTrue("held: $e", e is VaultStateException && e.code == VaultDevice.CODE_LOCK_PENDING)
+        assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+    }
+
+    /** (A client handed out before a lock began) A request's first send waits for the gate: nothing is sent, it fails. */
+    @Test
+    fun aRequestsFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.request("vault.status") }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aRequestWithIdsFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.requestWithId(d.newId(), "pin.change", buildJsonObject { }) }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aOneShotRequestWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.requestOnce("credential.version") }.exceptionOrNull())
+        }
+    }
+
+    @Test
+    fun aOneShotSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            assertHeld(runCatching { d.sendOnce("call.ringing", buildJsonObject { put("call_id", "c1") }) }.exceptionOrNull())
+        }
+    }
+
+    /** A kept change's first send waits for the gate: nothing is sent, it fails, and it is not marked sent. */
+    @Test
+    fun aKeptChangesFirstSendWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val k = KeptChange("pin.change", d.newId(), buildJsonObject { put("x", 1) }, d.vaultNow().plusSeconds(600), 1)
+            assertHeld(runCatching { d.sendKept(k, 3, java.time.Duration.ofMillis(200)) }.exceptionOrNull())
+            assertFalse(k.sent)
+            d.sendGate = VaultDevice.SendGate { true }
+            val r = async(Dispatchers.IO) { d.sendKept(k, 1, java.time.Duration.ofSeconds(5)) }
+            assertEquals(k.innerId, v.open(nextDeposit().second).id)
+            d.handle(v.seal("pin.change", "{}", re = k.innerId, status = Inner.STATUS_OK))
+            assertNotNull(r.await())
+            d.dropKept(k)
+        }
+    }
+
+    /** The lock's own one-shot request (`vault.lock`, marked [VaultDevice.LockTimeSend]) passes a shut gate. */
+    @Test
+    fun theLockPassesAShutGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val lock = async(Dispatchers.IO + VaultDevice.LockTimeSend) { d.opOnce("vault.lock", exp = d.clockNow().plusSeconds(30)) }
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.lock", req.type)
+            d.handle(v.seal("vault.lock", "{}", re = req.id, status = Inner.STATUS_OK))
+            lock.await()
+        }
+    }
+
+    /**
+     * An own refresh whose deposit failed (a transient relay error) stays the one in the outbox and is tried again after the
+     * next handled message, as a new one was before: once, without a second entry.
+     */
+    @Test
+    fun aFailedOwnRefreshIsRetriedAtTheNextMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            // Day 21: the token this phone issued to the vault is renewed (under 10 days left); the vault's has 9 days left.
+            ahead(java.time.Duration.ofDays(21))
+            d.handle(v.msg(v.keyring.current()!!.seal(message("issue"))))
+            assertEquals("relay.token.issued", v.open(nextDeposit().second).type)
+            ahead(java.time.Duration.ofDays(7)) // under 3 days left on the vault's token
+            refuseStatus = 503
+            refuseDeposits = "unavailable" // retryable: kept
+            d.handle(v.msg(v.keyring.current()!!.seal(message("m0"))))
+            assertEquals(1, d.outboxEntries.count { it.type == "relay.token.refresh" })
+            refuseDeposits = null
+            refuseStatus = 403
+            deposits.clear()
+            d.handle(v.msg(v.keyring.current()!!.seal(message("m1"))))
+            val sent = generateSequence { deposits.poll(500, TimeUnit.MILLISECONDS) }.map { v.open(it.second) }.toList()
+            assertEquals(1, sent.count { it.type == "relay.token.refresh" })
+            assertEquals(0, d.outboxEntries.count { it.type == "relay.token.refresh" })
+        }
+    }
+
+    /** A held answer to the vault's refresh is dropped only once the newer one is queued: a failure to queue it keeps it. */
+    @Test
+    fun anOlderHeldAnswerStaysWhenTheNewOneIsNotQueued() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val first = Ulid.new()
+            d.handle(v.seal("relay.token.refresh", "{}", id = first))
+            assertEquals(listOf(first), d.outboxEntries.filter { it.type == "relay.token.refresh" }.map { it.re })
+            store.fail = true
+            runCatching { d.handle(v.seal("relay.token.refresh", "{}", id = Ulid.new())) }
+            assertTrue("the older answer stays", d.outboxEntries.any { it.type == "relay.token.refresh" && it.re == first })
+            store.fail = false
+        }
+    }
+
+    /** The vault's answer to the device's `credential.utk.get`: one fresh UTK. */
+    private suspend fun answerUtkGet(d: VaultDevice, v: FakeVault, id: String) {
+        val get = v.open(nextDeposit().second)
+        assertEquals("credential.utk.get", get.type)
+        d.handle(v.seal(get.type, """{"utks":[${utkJson(id, KemPrivateKey.generate())}]}""", re = get.id, status = Inner.STATUS_OK))
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") A credential operation ([CredentialOps.sealedWith], `account.name.set`) whose first send
+     * the lock gate held: nothing was sent, so it is not unsettled and its UTK is back in the pool; the failure is the gate's.
+     */
+    @Test
+    fun aHeldCredentialOperationLeavesNothingBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "account.name.set" } // the lock asked for after the UTK came
+            val op = async(Dispatchers.IO) { runCatching { api.accountNameSet("975310", "password one", "Ada", "L") } }
+            answerUtkGet(d, v, "00112233445566d1")
+            val e = op.await().exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertTrue("not unsettled", savedState(store).unsettled.isEmpty())
+            assertEquals("the UTK is back", 1, d.utkCount)
+        }
+    }
+
+    /**
+     * A `wallet.sign` whose first send the lock gate held: not unsettled, no [SignMark], the UTK back, nothing kept; the gate's
+     * failure is thrown, not [ChangeUnansweredException]. One that goes out and gets no answer is kept and marked as before.
+     */
+    @Test
+    fun aHeldWalletSignLeavesNothingBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "wallet.sign" }
+            val sign = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
+            answerUtkGet(d, v, "00112233445566d2")
+            val e = sign.await().exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            val st = savedState(store)
+            assertTrue("not unsettled", st.unsettled.isEmpty())
+            assertTrue("no SignMark", st.unsettledSigns.isEmpty())
+            assertEquals("the UTK is back", 1, d.utkCount)
+            // As before: sent and unanswered, it is kept, unsettled and marked.
+            d.sendGate = VaultDevice.SendGate { true }
+            val again = async(Dispatchers.IO) { runCatching { api.walletSign(signWallet, signPsbt, "password one".toCharArray()) } }
+            (1..3).map { assertEquals("wallet.sign", v.open(nextDeposit().second).type) }
+            val u = again.await().exceptionOrNull()
+            assertTrue("$u", u is ChangeUnansweredException && !u.heldByLockGate)
+            assertEquals(setOf(signWallet), savedState(store).unsettledSigns.values.map { it.walletId }.toSet())
+            assertEquals(1, savedState(store).unsettled.size)
+            assertEquals("spent", 0, d.utkCount)
+        }
+    }
+
+    /**
+     * A PIN or password change whose first send the lock gate held: [ChangeUnansweredException] with the gate's failure as its
+     * cause (the caller clears the marker), the UTK back, nothing sent.
+     */
+    @Test
+    fun aHeldChangeGivesItsUtkBackAndSaysWhy() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != ChangeTypes.PASSWORD_CHANGE }
+            val markers = mutableListOf<ChangeMarker>()
+            val change = async(Dispatchers.IO) {
+                runCatching { api.credentialChangePassword("old password", "new password!", "975310") { m -> markers.add(m) } }
+            }
+            answerVersion(d, v, 3)
+            answerUtkGet(d, v, "00112233445566d3")
+            val e = change.await().exceptionOrNull()
+            assertTrue("$e", e is ChangeUnansweredException && e.heldByLockGate)
+            assertEquals(1, markers.size)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals("the UTK is back", 1, d.utkCount)
+            // Its answer is no longer awaited: a late one to its id is not taken for the change.
+            val kept = (e as ChangeUnansweredException).kept
+            d.handle(v.seal(ChangeTypes.PASSWORD_CHANGE, "{}", re = kept.innerId, status = Inner.STATUS_OK))
+            assertNull("not taken", kept.answered())
+        }
+    }
+
+    /**
+     * An answered credential operation whose `credential.ack` the lock gate held: it succeeded, its blob is kept, and the
+     * acknowledgement is left to the next operation (nothing sent now).
+     */
+    @Test
+    fun aHeldAckLeavesTheAnsweredOperationDone() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(300))
+            val api = VaultApi(d) { true }
+            d.keepCredential("QkxPQg==", 3)
+            d.sendGate = VaultDevice.SendGate { it != "credential.ack" } // the lock asked for while the operation was out
+            val op = async(Dispatchers.IO) { runCatching { api.accountNameSet("975310", "password one", "Ada", "L") } }
+            answerUtkGet(d, v, "00112233445566d4")
+            val r = v.open(nextDeposit().second)
+            assertEquals("account.name.set", r.type)
+            val request = """{"seq":1,"first_name":"Ada","last_name":"L","state":"pending"}"""
+            d.handle(v.seal(r.type, """{"request":$request,"credential":"TkVXNA==","credential_version":4,"utks":[]}""", re = r.id, status = Inner.STATUS_OK))
+            assertEquals("Ada", op.await().getOrThrow().firstName)
+            assertEquals("TkVXNA==", d.credentialBlob())
+            assertEquals(4L, d.credentialVersion)
+            assertNull("the ack waits", deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** A blob upload to the vault's mailbox waits for the gate: nothing is uploaded, the gate's failure is thrown. */
+    @Test
+    fun aBlobUploadWaitsForTheGate() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val e = runCatching { d.uploadBlobToVault(ByteArray(16)) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException && e.heldByLockGate)
+        }
+    }
+
+    /** The settle wait's probe (`credential.version`) held by the gate says so, rather than "unsettled". */
+    @Test
+    fun aHeldSettleProbeSaysLockPending() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.trackCredential(d.newId(), d.vaultNow().minus(java.time.Duration.ofHours(1)))
+            d.sendGate = VaultDevice.SendGate { it in VaultDevice.UNGATED_TYPES }
+            val e = runCatching { d.awaitCredentialSettled() }.exceptionOrNull()
+            assertTrue("$e", e != null && e.heldByLockGate)
+        }
+    }
+
+    /**
+     * A send on a forgotten device fails (it is not kept silently as if it had been queued): one forgotten with its keys, and
+     * one stopped with its keys still in memory (a drop it could not save, [VaultDevice.stopped]).
+     */
+    @Test
+    fun aSendOnAForgottenDeviceFails() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            d.forget()
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.exceptionOrNull() is VaultStateException)
+            val (stopped, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            // As saveDropOrStop leaves it: forgotten, its session keys still held.
+            VaultDevice::class.java.getDeclaredField("forgotten").apply { isAccessible = true }.setBoolean(stopped, true)
+            assertTrue(stopped.stopped)
+            val e = runCatching { stopped.send("call.end", buildJsonObject { put("call_id", "c2") }) }.exceptionOrNull()
+            assertTrue("$e", e is VaultStateException)
+            assertTrue(stopped.outboxEntries.isEmpty())
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+        }
+    }
 
     /** A store whose saves fail while [fail] is set, and that keeps every state it saved. */
     private class RecordingFlakyStore : DeviceStateStore {

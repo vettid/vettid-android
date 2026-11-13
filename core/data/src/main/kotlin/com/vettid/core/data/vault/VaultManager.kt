@@ -1363,7 +1363,7 @@ class VaultManager(
             override suspend fun relayLock(unlockId: String?): RelayLock {
                 val s = lockSession() ?: return RelayLock.NO_ANSWER
                 return try {
-                    io { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
+                    lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK).lock(unlockId = unlockId) }
                     RelayLock.LOCKED
                 } catch (_: TimeoutCancellationException) {
                     RelayLock.NO_ANSWER
@@ -1515,6 +1515,9 @@ class VaultManager(
                 val member = gateway.member()
                 // §11.14.7: passwords are normalized to NFC for a vault of release R only (one with a phone secret); a vault
                 // before it compares the bytes as typed.
+                // (ANDROID-PLAN §4 "While pending") Nothing but the lock and a pending `call.end` leaves the outbox while a lock is
+                // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
+                device.sendGate = lockGuard.sendGate()
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
@@ -1696,13 +1699,14 @@ class VaultManager(
                 }
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
-            // (Show held as held) The outbox once a mailbox's quota backoff ends, behind the lock gate; this observer's own
-            // scope, so it ends with the session.
+            // (Show held as held) The outbox once a mailbox's quota backoff ends; this observer's own scope, so it ends with the
+            // session. The device's gate decides by type (a pending `call.end` goes while a lock is pending, nothing else does),
+            // and the stop count is the one when the backoff was set.
             val quotaFlush = QuotaFlush(
                 this,
-                admits = { lockGuard.admits() },
+                stopCount = { s.device.stopCount },
                 live = { session === s && !s.device.stopped },
-                flush = { if (lockGuard.admits()) s.device.flushOutbox() }, // the gate again, at the flush itself
+                flush = { seq -> s.device.flushOutbox(seq) },
             )
             launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
@@ -1869,9 +1873,10 @@ class VaultManager(
         if (local.transferApprovedAtMs != null) scope.launch { runCatching { checkKeptTransfer() } }
         val d = session?.device ?: return
         if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
-        // Not while a lock is pending: nothing but the lock is sent to a vault that counts as locked.
-        // Not while this phone is held locked (a lock pending, or one the vault said was over: release L).
-        if (lockGuard.admits()) scope.launch { runCatching { d.flushOutbox() } }
+        // The device's gate decides by type (ANDROID-PLAN §4 "While pending"): while this phone is held locked only a pending
+        // `call.end` goes on the return to the foreground, everything else waits. The stop count is taken here, where the flush
+        // is asked for: a stop before the launched flush runs wins.
+        d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t, timeScaleFlow.value.scale) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
@@ -2539,12 +2544,14 @@ class VaultManager(
         // opened or flushed.
         val lockedSince = lockGuard.lockedWhatever(unlocked = true)
         val overtaken = lockedSince || gen != generation
+        // The stop count where the flush is asked for: a stop before the launched flush runs wins.
+        val flushSeq = s.device.stopCount
         scope.launch {
             // Never a lock from before this unlock (LockKeeper): one left in the outbox by an earlier version of the
             // app, which sent locks through it, is dropped before anything is flushed.
             runCatching { s.device.dropFromOutbox(TYPE_VAULT_LOCK) }
             // Nothing but the lock while one is pending: what the member wrote earlier waits for the next unlock.
-            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox() }
+            if (!overtaken && lockGuard.admits()) runCatching { s.device.flushOutbox(flushSeq) }
         }
         val opened = if (overtaken) {
             // (Not after a wipe, which also bumps the generation and has said SignedOut.)
@@ -2868,7 +2875,7 @@ class VaultManager(
         // The mark is taken before the status is read (F1); the rest runs in the manager's scope.
         LockAgain.start(
             scope, lockKeeper, mine, LOCK_STATUS_WAIT,
-            read = { lockSession()?.let { s -> io { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
+            read = { lockSession()?.let { s -> lockTimeIo { s.lockTimeApi(LockTimeUse.LOCK_STATUS).status() }.unlockId } },
             then = { locking.run(lock = { lockKeeper.ask(mine) }, after = {}) },
         )
     }
@@ -3762,7 +3769,8 @@ class VaultManager(
         s.openApi.credentialFetch()
         null
     } catch (e: VaultStateException) {
-        if (!unlockFirst) throw e
+        // Held by the lock gate (a lock pending): nothing was sent, so it is not "not answered", and no unlock follows.
+        if (!unlockFirst || e.code == VaultDevice.CODE_LOCK_PENDING) throw e
         android.util.Log.i("VaultManager", "the recovered phone's credential.get was not answered: unlocking with its own key")
         unlockOwn(s, pin, e) ?: run {
             s.openApi.credentialFetch()
@@ -5061,6 +5069,12 @@ class VaultManager(
     private fun view(r: Release) = ReleaseView(r.number, r.pcr0, r.status.wire, r.endsAt, r.notes)
 
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    /**
+     * [io] for a lock-time use of the client ([LockTimeUse.LOCK], [LockTimeUse.LOCK_STATUS]): marked [VaultDevice.LockTimeSend],
+     * so that what the device sends again for it (the status read's re-sends) passes the lock gate as its first send did.
+     */
+    private suspend fun <T> lockTimeIo(block: suspend () -> T): T = withContext(Dispatchers.IO + VaultDevice.LockTimeSend) { block() }
 
     /**
      * Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. [resend]: only for an idempotent

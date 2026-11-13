@@ -80,7 +80,13 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         d.keepCredential(blob, v, answerKey ?: d.credentialKey.takeIf { sameKey })
         // A rotate, reset or fetch that names no key replaced the credential: the key shown for it is no longer known to be right.
         if (answerKey == null && !sameKey) d.signalKeyUnknown()
-        d.op("credential.ack", buildJsonObject { put("version", v) })
+        try {
+            d.op("credential.ack", buildJsonObject { put("version", v) })
+        } catch (e: java.io.IOException) {
+            // (ANDROID-PLAN §4 "While pending") An ack the lock gate held: the operation was answered and its blob is kept; the
+            // acknowledgement is left to the next operation, as [keepIfNewer] leaves one. Any other failure is thrown as before.
+            if (!e.heldByLockGate) throw e
+        }
     }
 
     /**
@@ -143,7 +149,18 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
                 }
             }
         }
-        val r = d.requestWithId(id, type, body, exp = exp)
+        val r = try {
+            d.requestWithId(id, type, body, exp = exp)
+        } catch (e: VaultStateException) {
+            // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent, so it is not unsettled and
+            // its UTK goes back to the pool.
+            if (e.heldByLockGate) {
+                d.dropUnsent(id)
+                d.returnUtk(utk)
+                rk?.destroy()
+            }
+            throw e
+        }
         d.settleCredential(id)
         if (r.inner.status != Inner.STATUS_OK) {
             rk?.destroy()
@@ -288,6 +305,14 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent. Not unsettled, no
+            // `wallet.sign` outstanding, the UTK back in the pool, nothing kept to resend; thrown as it is (not "unanswered").
+            if (e.heldByLockGate) {
+                d.dropUnsent(kept.innerId)
+                d.dropKept(kept)
+                d.returnUtk(utk)
+                throw e
+            }
             throw ChangeUnansweredException(kept, e)
         } ?: throw ChangeUnansweredException(kept)
         return settleKept(kept, r)
@@ -554,6 +579,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
     ): JsonObject {
         require(type in ChangeTypes.ALL) { "not a change: $type" }
         val from = since ?: secretGeneration
+        var taken: UtkRecord? = null
         val kept = d.credentialLock.withLock {
             if (secretGeneration != from) throw CredentialUnsettledException()
             // (0.45.0 step 1) Nothing else in flight: the outbox flushed and every earlier credential operation answered
@@ -565,6 +591,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             // nothing later, so nothing is sent ("earlier request" text).
             val heldKey = if (type == ChangeTypes.RESET) vaultKey ?: throw CredentialUnsettledException() else null
             val utk = takeUtk()
+            taken = utk
             var stored = false
             try {
                 val version = d.credentialVersion ?: throw VaultStateException("no credential on this device")
@@ -586,15 +613,7 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
         // while it was out is refused when it gets the lock. The gate keeps the rest out until the reset is decided.
         try {
             // After the marker, whatever goes wrong before an answer is read is "no answer" (§11.14.9 step 2), never a failure.
-            @Suppress("TooGenericExceptionCaught")
-            val r = try {
-                d.sendKept(kept, CHANGE_SENDS)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw ChangeUnansweredException(kept, e)
-            } ?: throw ChangeUnansweredException(kept)
-            return settle(kept, r)
+            return settle(kept, sendChange(kept, taken))
         } finally {
             // Under the lock, off the cancellation of the caller: the count must not be lost or torn (`++` is not atomic). This
             // is not inside the lock (the lock block above ended, and [settle] released its own), so it cannot deadlock.
@@ -603,6 +622,23 @@ internal class CredentialOps(private val d: VaultDevice, private val normalizePa
             }
         }
     }
+
+    /** [change]'s sends of [kept] (its UTK [utk]): the answer, or [ChangeUnansweredException]. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun sendChange(kept: KeptChange, utk: UtkRecord?): VaultMessage = try {
+        d.sendKept(kept, CHANGE_SENDS)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // (ANDROID-PLAN §4 "While pending") Its first send held by the lock gate: nothing was sent. Nothing is kept to resend and the
+        // UTK goes back; still thrown as [ChangeUnansweredException] (the marker is the caller's), with the gate's failure as its
+        // cause, so that the caller clears the marker rather than checks it.
+        if (e.heldByLockGate) {
+            d.dropKept(kept)
+            utk?.let { d.returnUtk(it) }
+        }
+        throw ChangeUnansweredException(kept, e)
+    } ?: throw ChangeUnansweredException(kept)
 
     /**
      * (§11.14.9 step 3) [kept] sent again, once, while its `exp` has not passed: the vault answers it from its cache

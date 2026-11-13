@@ -136,4 +136,39 @@ class LockWiringTest {
         assertEquals(z, k.boundUnlockId)
         assertEquals(z, store.record.unlockId)
     }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending"; owner decision 2026-11-12) The device's send gate ([LockGuard.sendGate], as the manager
+     * installs it) holds only while a lock is pending. In "opened again" (a bound lock answered stale) the phone's replies go:
+     * a held outbox entry, a reply to the vault's message (the refresh answer, `hs.confirm`, `device.features`), a re-send and a
+     * first send from a client handed out earlier; while no new client is handed out ([LockGuard.admits]) until an unlock here.
+     * The unlock goes through from both states (it reaches the vault over the member API, not the relay).
+     */
+    @Test
+    fun theSendGateHoldsOnlyWhileALockIsPending() = runTest {
+        val ports = Ports()
+        val guard = LockGuard(ports, { t0 }) { attempt -> LockWiring.keeper(backgroundScope, Store(), attempt, {}) {} }
+        val k = guard.keeper
+        val gate = guard.sendGate()
+        val replies = listOf("relay.token.issued", "relay.token.refresh", "hs.confirm", "device.features", "vault.status", "item.get")
+        k.ask(k.begin(dead)) // stale: opened again
+        assertEquals(LockNotice.OpenedAgain, k.notice.value)
+        assertFalse("no lock pending", guard.pending)
+        for (t in replies) assertTrue("goes in opened again: $t", gate.admits(t))
+        assertFalse("no new client in opened again", guard.admits())
+        var ran = false
+        assertEquals("opened", k.unlocking({ true }, { w }) { ran = true; "opened" })
+        assertTrue(ran)
+        assertTrue("a client again after the unlock", guard.admits())
+        // A lock pending: everything is held but a pending call.end; the unlock goes through and the gate opens.
+        ports.relayAnswer = RelayLock.NO_ANSWER
+        ports.unlocked = null
+        k.begin(null)
+        assertTrue(guard.pending)
+        for (t in replies) assertFalse("held while pending: $t", gate.admits(t))
+        assertTrue("a pending call.end passes", gate.admits("call.end"))
+        k.unlocking({ true }, { null }) { "opened" }
+        for (t in replies) assertTrue(gate.admits(t))
+    }
 }
+

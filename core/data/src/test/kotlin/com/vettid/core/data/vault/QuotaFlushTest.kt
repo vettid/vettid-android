@@ -6,18 +6,21 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.time.Duration
+import java.time.Instant
 
 /**
- * (Show held as held, Android) The outbox is flushed once a mailbox's quota backoff ends, behind the lock gate: not while a
- * lock is pending (nothing but the lock goes), nor once the session ended or the device was stopped.
+ * (Show held as held, Android) The outbox is flushed once a mailbox's quota backoff ends, with the stop count of the moment
+ * the backoff was set, not once the session ended. What goes is the device's lock gate's to decide (ANDROID-PLAN §4 "While
+ * pending"): while a lock is pending a `call.end` goes and nothing else does.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class QuotaFlushTest {
-    private var admits = true
+    private var stops = 0L
     private var live = true
-    private var flushes = 0
+    private val flushed = mutableListOf<Long>()
 
-    private fun kotlinx.coroutines.test.TestScope.flush() = QuotaFlush(backgroundScope, { admits }, { live }, { flushes++ })
+    private fun kotlinx.coroutines.test.TestScope.flush() = QuotaFlush(backgroundScope, { stops }, { live }, { seq -> flushed += seq })
 
     @Test
     fun theOutboxIsFlushedWhenTheBackoffEnds() = runTest {
@@ -25,49 +28,31 @@ class QuotaFlushTest {
         f.backoffSet(60_000)
         advanceTimeBy(60_000)
         runCurrent()
-        assertEquals("not before the backoff has ended", 0, flushes)
+        assertEquals("not before the backoff has ended", 0, flushed.size)
         advanceTimeBy(QuotaFlush.MARGIN_MS + 1)
         runCurrent()
-        assertEquals(1, flushes)
+        assertEquals(1, flushed.size)
     }
 
+    /** The stop count is the one when the backoff was set: a stop since makes the device deposit nothing. */
     @Test
-    fun notWhileALockIsPendingAndOnceTheLockIsConfirmedItGoes() = runTest {
+    fun theFlushTakesTheStopCountOfTheAsk() = runTest {
         val f = flush()
-        admits = false
         f.backoffSet(60_000)
+        stops = 1 // stopped while the backoff ran
         advanceTimeBy(61_000)
         runCurrent()
-        assertEquals("nothing but the lock goes", 0, flushes)
-        advanceTimeBy(QuotaFlush.RECHECK_MS * 3)
-        runCurrent()
-        assertEquals("still pending", 0, flushes)
-        admits = true // the lock is confirmed after the backoff ended
-        advanceTimeBy(QuotaFlush.RECHECK_MS + 1)
-        runCurrent()
-        assertEquals("it goes at the next look", 1, flushes)
+        assertEquals(listOf(0L), flushed)
     }
 
     @Test
-    fun afterTheLockItGoes() = runTest {
-        val f = flush()
-        admits = false
-        f.backoffSet(60_000)
-        advanceTimeBy(30_000)
-        admits = true // the lock was confirmed while the backoff ran
-        advanceTimeBy(31_000)
-        runCurrent()
-        assertEquals(1, flushes)
-    }
-
-    @Test
-    fun notOnceTheSessionEndedOrTheDeviceStopped() = runTest {
+    fun notOnceTheSessionEndedOrTheDeviceWasForgotten() = runTest {
         val f = flush()
         live = false
         f.backoffSet(60_000)
         advanceTimeBy(61_000)
         runCurrent()
-        assertEquals(0, flushes)
+        assertEquals(0, flushed.size)
     }
 
     @Test
@@ -78,9 +63,77 @@ class QuotaFlushTest {
         f.backoffSet(120_000) // doubled: the first wait no longer counts
         advanceTimeBy(40_000)
         runCurrent()
-        assertEquals(0, flushes)
+        assertEquals(0, flushed.size)
         advanceTimeBy(81_000)
         runCurrent()
-        assertEquals(1, flushes)
+        assertEquals(1, flushed.size)
+    }
+
+    private class Store : LockRecordStore {
+        var record = LockRecord()
+
+        override fun load(): LockRecord = record
+
+        override fun save(record: LockRecord) {
+            this.record = record
+        }
+    }
+
+    private class Ports : LockPorts {
+        override val relayValidFor: Duration = Duration.ofSeconds(30)
+
+        override suspend fun relayLock(unlockId: String?): RelayLock = RelayLock.NO_ANSWER
+
+        override suspend fun memberLock(unlockId: String?): MemberLock = MemberLock.NoAnswer
+
+        override suspend fun unlocked(): Boolean? = null
+    }
+
+    /**
+     * As the manager wires it: a lock pending, a `call.end` waiting for the mailbox's quota behind a held entry. Once the backoff
+     * ends the flush runs with no lock check of its own, and the device's gate (the manager's [LockGuard.sendGate]) lets the
+     * `call.end` out and nothing else.
+     */
+    @Test
+    fun withALockPendingTheCallEndGoesOnceTheBackoffEndsWithAFakeOutbox() = runTest {
+        val guard = LockGuard(Ports(), { Instant.parse("2026-11-12T10:00:00Z") }) { attempt ->
+            LockWiring.keeper(backgroundScope, Store(), attempt, {}) {}
+        }
+        guard.keeper.begin(null)
+        val gate = guard.sendGate()
+        val outbox = mutableListOf("relay.token.issued", "call.end", "device.features")
+        val sent = mutableListOf<String>()
+        val f = QuotaFlush(backgroundScope, { 0L }, { true }) { _ ->
+            val going = outbox.filter { gate.admits(it) }
+            sent += going
+            outbox -= going.toSet()
+        }
+        f.backoffSet(60_000)
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertEquals(listOf("call.end"), sent)
+        assertEquals(listOf("relay.token.issued", "device.features"), outbox)
+    }
+
+    /**
+     * With a fake device whose flush deposits only under its current stop count: a stop and a start during the backoff (a
+     * reconnect) announce the rest of it again, so the flush at its end goes; a stop with no start leaves nothing to go.
+     */
+    @Test
+    fun aRestartDuringTheBackoffStillFlushesWithAFakeOutbox() = runTest {
+        val deposits = mutableListOf<Long>()
+        val f = QuotaFlush(backgroundScope, { stops }, { live }) { seq -> if (seq == stops) deposits += seq }
+        f.backoffSet(60_000)
+        advanceTimeBy(20_000)
+        stops++ // stop()
+        f.backoffSet(40_000) // start(): what is left of the backoff, announced again
+        advanceTimeBy(40_000 + QuotaFlush.MARGIN_MS + 1)
+        runCurrent()
+        assertEquals("it goes once the backoff ends", listOf(1L), deposits)
+        f.backoffSet(60_000)
+        stops++ // stop(), no start
+        advanceTimeBy(61_000)
+        runCurrent()
+        assertEquals("nothing more", listOf(1L), deposits)
     }
 }
