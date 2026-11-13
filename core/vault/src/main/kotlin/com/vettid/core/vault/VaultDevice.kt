@@ -2257,7 +2257,9 @@ class VaultDevice private constructor(
         if (!Ed25519.equalPublic(sender, Base64s.decodeStd(v.relayPk))) return // §6.3: only the vault's relay key sends to a device
         // Opened against the same time keys are destroyed by ([pruneTime]): a wall clock ahead does
         // not hide a retained epoch the vault's time still keeps. Before the vault's time is known in this process, a
-        // message under a retained epoch hidden by this phone's clock alone shows the vault's time itself ([openHidden]).
+        // message under a retained epoch hidden by this phone's clock alone shows the vault's time itself ([openHidden]). The
+        // keys' clock is the newest stamp seen: a stale message the relay delivers first (up to 16 days old) holds it back
+        // until a fresher one arrives, so keys are then kept longer, never destroyed earlier.
         val keyTime = pruneTime(t)
         val opened = try {
             keyring.open(env, keyTime ?: t)
@@ -2368,11 +2370,12 @@ class VaultDevice private constructor(
      * has destroyed yet: a message stamped before that life ended is then taken if it comes first, as it would have been
      * before the end, and dropped if it comes after any message that shows the vault's time.
      */
-    private fun openHidden(env: Envelope, t: Instant): Pair<Inner, Epoch> {
+    private fun openHidden(env: Envelope, t: Instant): Pair<Inner, Epoch>? {
+        // An envelope that does not open under that epoch's key is dropped, as any that does not open.
         val any = try {
             keyring.open(env, Instant.EPOCH)
         } catch (_: CryptoException) {
-            throw HiddenEpoch()
+            return null
         }
         // Only a message this phone's clock would take: one it would drop for its time (the clock that far ahead) waits.
         try {

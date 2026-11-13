@@ -8091,6 +8091,25 @@ class VaultDeviceTest {
     }
 
     /**
+     * Before the vault's time is known, an envelope addressed to a retained epoch only the clock hides that does not open
+     * under that epoch's key (altered in transit) is dropped, as any envelope that does not open: not left for redelivery.
+     */
+    @Test
+    fun anEnvelopeThatDoesNotOpenUnderAHiddenEpochIsDropped() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            ahead(java.time.Duration.ofDays(50))
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            val raw = r.old.seal(message("altered", at = Instant.now()))
+            raw[raw.size - 1] = (raw[raw.size - 1].toInt() xor 1).toByte()
+            val m = r.v.msg(raw)
+            again.handle(m) // dropped: no LeaveUnacked
+            assertNotNull("recorded as seen", savedState(r.store).seen[m.msgId])
+        }
+    }
+
+    /**
      * After a restart the vault's time is not known yet: a message under the kept epoch that only the
      * phone's clock (set past the epoch's life) hides is left unacked, never dropped, and opens once the clock is back.
      */
@@ -8374,6 +8393,38 @@ class VaultDeviceTest {
             r.d.handle(r.v.msg(res.fin))
             take(res.epoch, "hs.confirm") // activated
             assertTrue("the kept epoch is still in the saved keyring", keptInFile(r))
+        }
+    }
+
+    /**
+     * A key's life counts from the vault's time at activation, also with the clock behind: 4 minutes behind at hs.fin (within
+     * the future skew), then corrected, the kept confirmed epoch stays until the vault's 48 days, not 4 minutes less.
+     */
+    @Test
+    fun theKeptEpochsLifeCountsFromTheVaultsTimeWithTheClockBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val old = v.keyring.current()!!
+            val at = deviceNow()
+            val ini = v.rekeyInit(d, at = at)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), at)
+            ahead(java.time.Duration.ofMinutes(-4)) // the wall clock only, before hs.fin
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            fun kept() = Keyring.import(Base64s.decodeStd(savedState(store).vault!!.sessions)).find(old.id, Instant.EPOCH) != null
+            assertTrue("setup: the confirmed epoch is kept", kept())
+            ahead(java.time.Duration.ofMinutes(4)) // corrected
+            val passed = java.time.Duration.ofDays(48).minusMinutes(2)
+            elapsed += passed.toMillis()
+            ahead(passed)
+            d.tickConfirm()
+            assertTrue("kept until the vault's 48 days", kept())
+            elapsed += java.time.Duration.ofMinutes(3).toMillis()
+            ahead(java.time.Duration.ofMinutes(3))
+            d.tickConfirm()
+            assertTrue("gone after them", !kept())
         }
     }
 
