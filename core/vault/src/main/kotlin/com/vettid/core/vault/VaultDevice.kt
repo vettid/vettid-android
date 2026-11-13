@@ -2302,7 +2302,9 @@ class VaultDevice private constructor(
         // During a hold, an event (not an answer, not the session's own messages) is left on the relay: nothing of it is
         // recorded, so it is handled in full when it comes again.
         if (inner.re == null && inner.type !in SESSION_TYPES && leaveForLater(inner.type)) throw LeftForLater()
-        st.seenInner[inner.id] = t.toEpochMilli()
+        // Kept from the later of this phone's time and the message's own (checked) ts: a clock behind when it was handled does
+        // not let the mark go while the message would still pass its time check ([prune]).
+        st.seenInner[inner.id] = maxOf(t, inner.ts).toEpochMilli()
         prune(st.seenInner, t)
         when (inner.type) {
             // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
@@ -2492,8 +2494,10 @@ class VaultDevice private constructor(
      * Drops the marks of [m] (the relay's message ids, the vault's inner ids) older than [SEEN_RETENTION], judged by the time
      * keys are destroyed by ([pruneTime]), not this phone's clock alone: a clock set far ahead and then back forgets no
      * mark early, so a message handled before (an `hs.init` answered before) is not handled again once the clock is back
-     * and its own time passes again. Nothing goes before the vault's time is known in this process. A mark is written at
-     * this phone's time, so one written while the clock was ahead stays that much longer.
+     * and its own time passes again. Nothing goes before the vault's time is known in this process. An inner id's mark is
+     * written at the later of this phone's time and the message's own ts, so it goes only once that ts is older than a
+     * durable message's time check allows (a clock behind when it was handled does not shorten it; one ahead keeps it that
+     * much longer). A relay msg id's mark has no ts: a message the vault deposits again has a new one anyway.
      */
     private fun prune(m: MutableMap<String, Long>, t: Instant) {
         val at = pruneTime(t) ?: return
