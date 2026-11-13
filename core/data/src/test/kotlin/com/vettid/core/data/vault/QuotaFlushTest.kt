@@ -16,7 +16,6 @@ import java.time.Instant
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class QuotaFlushTest {
-    private var stops = 0L
     private var live = true
     private val flushed = mutableListOf<Long>()
 
@@ -25,7 +24,7 @@ class QuotaFlushTest {
     @Test
     fun theOutboxIsFlushedWhenTheBackoffEnds() = runTest {
         val f = flush()
-        f.backoffSet(60_000, stops)
+        f.backoffSet(60_000, 0)
         advanceTimeBy(60_000)
         runCurrent()
         assertEquals("not before the backoff has ended", 0, flushed.size)
@@ -38,18 +37,17 @@ class QuotaFlushTest {
     @Test
     fun theFlushTakesTheStopCountOfTheAnnouncement() = runTest {
         val f = flush()
-        f.backoffSet(60_000, 0)
-        stops = 1 // stopped while the backoff ran
+        f.backoffSet(60_000, 7)
         advanceTimeBy(61_000)
         runCurrent()
-        assertEquals(listOf(0L), flushed)
+        assertEquals("under the announced count", listOf(7L), flushed)
     }
 
     @Test
     fun notOnceTheSessionEndedOrTheDeviceWasForgotten() = runTest {
         val f = flush()
         live = false
-        f.backoffSet(60_000, stops)
+        f.backoffSet(60_000, 0)
         advanceTimeBy(61_000)
         runCurrent()
         assertEquals(0, flushed.size)
@@ -58,9 +56,9 @@ class QuotaFlushTest {
     @Test
     fun aLaterBackoffReplacesTheWait() = runTest {
         val f = flush()
-        f.backoffSet(60_000, stops)
+        f.backoffSet(60_000, 0)
         advanceTimeBy(30_000)
-        f.backoffSet(120_000, stops) // doubled: the first wait no longer counts
+        f.backoffSet(120_000, 0) // doubled: the first wait no longer counts
         advanceTimeBy(40_000)
         runCurrent()
         assertEquals(0, flushed.size)

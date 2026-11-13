@@ -1807,9 +1807,10 @@ class VaultDevice private constructor(
                 // still waiting: it stays, and [entry] waits behind it ([awaitQuota])
             }
         }
-        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it. Not the stop count: the
-        // send's own entry (a `call.end`) must not be kept silently while the send reports success.
-        if (mayDeposit(entry, null)) deliver(entry)
+        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it. Not held by the stop
+        // count: the send's own entry (a `call.end`) must not be kept silently while the send reports success. Its deposit carries
+        // the send's count all the same, so a quota refusal after a stop with no start is announced under it.
+        if (mayDeposit(entry, null)) deliver(entry, seq)
     }
 
     /**

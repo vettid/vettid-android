@@ -1836,6 +1836,42 @@ class VaultDeviceTest {
     }
 
     /**
+     * As [aQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds], driven by a send: its own `call.end`'s deposit is in flight
+     * when the device is stopped and refused for a quota after it, with no start since. The backoff is announced under the
+     * send's count, so the owner's flush when it ends deposits nothing.
+     */
+    @Test
+    fun aSendsQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            refuseGate = java.util.concurrent.CountDownLatch(1)
+            refusalsStarted.set(0)
+            val c0 = d.stopCount
+            val send = async(Dispatchers.IO) { runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) } }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
+            d.stop() // the send's deposit is out at the relay
+            refuseGate!!.countDown()
+            assertTrue("the send says it waits", send.await().isFailure)
+            refuseGate = null
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(VaultDevice.QuotaBackoff(min, c0), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            elapsed += min
+            d.flushOutbox(seen.last().stopCount) // the owner's flush when the backoff ends
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            watcher.cancel()
+        }
+    }
+
+    /**
      * The same refusal after a stop and a start (a reconnect) is announced under the current count: the owner's flush when it
      * ends deposits the held `call.end` (the stop and the start came before the refusal, and the start had no backoff to
      * announce).
