@@ -127,7 +127,7 @@ class RelayClientTest {
         assertTrue(sleeps[0] in 250L..500L)
     }
 
-    /** (GC #7134) A deposit with resendAfterSent = false is not sent again after a 5xx once it went out; a 429 still is. */
+    /** A deposit with resendAfterSent = false is not sent again after a 5xx once it went out; a 429 still is. */
     @Test
     fun aDepositNotToBeResentStopsAtAFiveHundredButRetriesA429() = runBlocking<Unit> {
         server.enqueue(json(503, """{"code":"internal","message":"x"}"""))

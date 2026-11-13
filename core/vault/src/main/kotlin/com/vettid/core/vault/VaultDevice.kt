@@ -345,7 +345,7 @@ class VaultDevice private constructor(
 
     /**
      * A vault rekey this device answered (`hs.resp` sent), awaiting its `hs.fin` (§6.5): the `hs.init`'s inner id, and its
-     * `hs.resp` bytes until the relay has accepted them (null after; GC #7134: a redelivered `hs.init` sends them again only
+     * `hs.resp` bytes until the relay has accepted them (null after: a redelivered `hs.init` sends them again only
      * while unsent, §6.3, and is dropped otherwise, §6.5). Both null in a record written before.
      */
     private class Awaiting(val resp: Responder, val createdMs: Long, val initId: String? = null, var respBytes: ByteArray? = null) {
@@ -2545,7 +2545,7 @@ class VaultDevice private constructor(
      * it would leave this device unable to read anything the vault sends from then on.
      */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String, ts: Instant) {
-        // (GC #7134) An hs.init answered before: the vault deposited it again (a new msg_id, §6.5; the relay's own
+        // An hs.init answered before: the vault deposited it again (a new msg_id, §6.5; the relay's own
         // redelivery of the same msg_id is dropped by `seen`, saved with the responder). §6.5: acked and dropped, never a
         // second responder. Only while its hs.resp may not have reached the relay is that hs.resp deposited again, the same
         // bytes (§6.3), and only once a save holds its responder (§8.3). [resendRespsLocked] does the same by itself. The
@@ -2589,7 +2589,7 @@ class VaultDevice private constructor(
      * expires if none comes, and keeps the bytes for a redelivery.
      *
      * Refused for good: on the [first] attempt in this process the vault never sees it, so the responder ends and its
-     * `hs.init` may be answered afresh (it is not a second `hs.resp`). On a re-send (the review of fbf0712d) an earlier
+     * `hs.init` may be answered afresh (it is not a second `hs.resp`). On a re-send an earlier
      * attempt's outcome was unknown, so the vault may hold that copy: the responder and the mark stay, and only the
      * re-sending stops (no second, different `hs.resp`; at worst the responder waits out [HANDSHAKE_TTL]). A re-send also
      * covers a first deposit that never happened (a stop between the save and the deposit): its refusal leaves the responder
@@ -2612,7 +2612,7 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (GC #7134, the blind reviews of 858695c8, M1) Re-deposits, by itself, every `hs.resp` whose deposit may not have reached
+     * Re-deposits, by itself, every `hs.resp` whose deposit may not have reached
      * the relay ([Awaiting.respBytes] kept: a retryable failure or a lost answer, a stop before the deposit), the same bytes,
      * as an outbox would: at each collection start and after each handled message. Never before a save holds the responder
      * (§8.3); a failure leaves it for the next time. Under [lock].

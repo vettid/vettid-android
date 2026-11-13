@@ -160,8 +160,8 @@ internal data class VaultRecord(
 )
 
 /**
- * A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began; (GC #7134,
- * VAULT-MESSAGING §6.3: one `hs.resp` per `hs.init`) the inner id of the `hs.init` it answers and the `hs.resp` it
+ * A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began; (VAULT-MESSAGING
+ * §6.3: one `hs.resp` per `hs.init`) the inner id of the `hs.init` it answers and the `hs.resp` it
  * deposited (base64), so that a redelivered `hs.init` gets the same bytes again. Both absent in a record written before.
  */
 @Serializable

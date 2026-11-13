@@ -867,7 +867,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, VAULT-MESSAGING §6.5: an `hs.init` answered before is acked and dropped; §6.3: a resend carries the same
+     * (VAULT-MESSAGING §6.5: an `hs.init` answered before is acked and dropped; §6.3: a resend carries the same
      * bytes) A rekey `hs.init` the vault deposits again (a new msg_id) makes no second responder: once the relay has accepted
      * its `hs.resp` nothing is sent; while that deposit may not have arrived (a retryable failure), the same bytes go again,
      * also after a restart; and once the rekey is done nothing at all.
@@ -913,7 +913,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, the review of fbf0712d) A re-sent `hs.resp` refused for good says nothing of the first attempt, which may
+     * A re-sent `hs.resp` refused for good says nothing of the first attempt, which may
      * be at the vault: the responder and the mark stay, the re-sending stops, and no second, different `hs.resp` follows.
      */
     @Test
@@ -936,7 +936,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, the re-checks of 4a6e92bb, item 1) The device's own re-send is a re-send (`first = false`): a 503 on the
+     * The device's own re-send is a re-send (`first = false`): a 503 on the
      * first deposit, `token_revoked` on the collection start's re-send, then the vault's re-deposit of the same `hs.init`:
      * no `hs.resp`, and the responder kept for the first attempt's `hs.fin`.
      */
@@ -960,7 +960,7 @@ class VaultDeviceTest {
         }
     }
 
-    /** (GC #7134, item 2) The device's own re-send waits for a save that holds the responder: none while the store fails. */
+    /** The device's own re-send waits for a save that holds the responder: none while the store fails. */
     @Test
     fun theSelfResendWaitsForASave() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -974,7 +974,7 @@ class VaultDeviceTest {
         }
     }
 
-    /** (GC #7134, item 3) The device's own re-send also goes after a handled message, not only at a collection start. */
+    /** The device's own re-send also goes after a handled message, not only at a collection start. */
     @Test
     fun theSelfResendGoesAfterAHandledMessage() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -993,7 +993,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, item 4; RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6) After a `quota_exceeded` the device's own re-send
+     * (RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6) After a `quota_exceeded` the device's own re-send
      * waits (1 minute first), so it is not sent again unchanged at every message; after the wait it goes.
      */
     @Test
@@ -1019,7 +1019,7 @@ class VaultDeviceTest {
         }
     }
 
-    /** (GC #7134) An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
+    /** An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
     @Test
     fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -1040,7 +1040,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, the blind reviews of 858695c8, M1 and L1) The device re-sends an `hs.resp` whose deposit may not have
+     * The device re-sends an `hs.resp` whose deposit may not have
      * arrived by itself, as an outbox does: one attempt, refused 503, makes exactly one request; the collection start then
      * deposits the same bytes, once; and after a restart the relay's redelivery of the same msg_id (dropped by `seen`) needs
      * nothing: the collection start sends it.
@@ -1075,7 +1075,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7134, the review's M1; §8.3) A redelivered `hs.init` whose responder no save holds (the store failing) sends
+     * (§8.3) A redelivered `hs.init` whose responder no save holds (the store failing) sends
      * nothing: its `hs.resp` goes only once a save has written the responder.
      */
     @Test
