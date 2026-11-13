@@ -8020,7 +8020,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175) A phone clock set 60 days ahead (the wall clock only: no time passed) destroys no key: the kept confirmed
+     * A phone clock set 60 days ahead (the wall clock only: no time passed) destroys no key: the kept confirmed
      * epoch is only hidden while it reads past its 48 days, collection starts prune by the vault's time, and once the clock is
      * back a message under that epoch opens again and brings hs.confirm.
      */
@@ -8047,7 +8047,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175) After a restart nothing of the vault's time is known yet: a clock set far ahead destroys no key at a
+     * After a restart nothing of the vault's time is known yet: a clock set far ahead destroys no key at a
      * collection start (nothing is destroyed before a message from the vault shows its time).
      */
     @Test
@@ -8069,7 +8069,7 @@ class VaultDeviceTest {
         Keyring.import(Base64s.decodeStd(savedState(r.store).vault!!.sessions)).find(r.old.id, Instant.EPOCH) != null
 
     /**
-     * (GC #7175, review M1) 40 days really pass, and the phone's clock reads 50: a message under the kept confirmed epoch
+     * 40 days really pass, and the phone's clock reads 50: a message under the kept confirmed epoch
      * (life 48 days by the phone's count), stamped by the vault's clock, still opens (it is not hidden by the clock alone)
      * and brings hs.confirm, and handling it destroys nothing.
      */
@@ -8091,7 +8091,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, review M1) After a restart the vault's time is not known yet: a message under the kept epoch that only the
+     * After a restart the vault's time is not known yet: a message under the kept epoch that only the
      * phone's clock (set past the epoch's life) hides is left unacked, never dropped, and opens once the clock is back.
      */
     @Test
@@ -8114,7 +8114,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, review M2) With the phone's clock 60 days behind, a message under the current epoch releases the kept one:
+     * With the phone's clock 60 days behind, a message under the current epoch releases the kept one:
      * its 16 days count from the vault's time, not the phone's, so once the clock is corrected it is not destroyed at once.
      */
     @Test
@@ -8130,7 +8130,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check item 3) After a restart with the clock 10 days behind, the first message (under the current epoch)
+     * After a restart with the clock 10 days behind, the first message (under the current epoch)
      * releases the kept one before any vault time is known: its 16 days count from the message's own ts, so once the clock
      * is corrected and the vault's time shows, it is kept.
      */
@@ -8150,7 +8150,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check item 1) The activation's prune: the kept epoch is released (16 days), 10 real days pass, the vault
+     * The activation's prune: the kept epoch is released (16 days), 10 real days pass, the vault
      * rekeys with the clocks in step, then the phone's clock jumps 8 days before hs.fin. The activation destroys nothing the
      * vault's time still keeps.
      */
@@ -8172,7 +8172,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check item 2) A rekey's verified hs.init shows the vault's time: after a restart in which 49 days really
+     * A rekey's verified hs.init shows the vault's time: after a restart in which 49 days really
      * passed, the kept epoch past its life goes at that rekey, with no other message.
      */
     @Test
@@ -8189,7 +8189,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check item 2) A rekey's verified hs.fin shows the vault's time: the vault's rekey comes a minute before the
+     * A rekey's verified hs.fin shows the vault's time: the vault's rekey comes a minute before the
      * kept epoch's 48 days end, the phone restarts (the hs.init's time is not kept), and its hs.fin, minutes later and past
      * the 48 days, destroys the kept epoch at the activation.
      */
@@ -8212,7 +8212,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, blind reviews of 4d1e8a0f, Opus N1) The plain activation (the current epoch unconfirmed, so no kept one is made
+     * The plain activation (the current epoch unconfirmed, so no kept one is made
      * at it): 40 real days pass, the vault rekeys with the clocks in step, the phone's clock jumps 10 days before hs.fin, and the
      * kept confirmed epoch (life 48 days) the vault's time still keeps is not destroyed.
      */
@@ -8234,7 +8234,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, blind reviews of 4d1e8a0f, Opus L1) A key's life counts from the vault's time at activation: with the clock 10
+     * A key's life counts from the vault's time at activation: with the clock 10
      * days ahead at hs.fin, the kept confirmed epoch still goes once the vault's time passes its 48 days (not 58).
      */
     @Test
@@ -8261,7 +8261,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, Opus L3) A clock jumped 20 days ahead aborts no responder awaiting its hs.fin: not at a restart while ahead
+     * A clock jumped 20 days ahead aborts no responder awaiting its hs.fin: not at a restart while ahead
      * (restoreAwaiting), nor when an hs.fin under it arrives meanwhile (pruneAwaiting; that hs.fin, too old by the jumped
      * clock, is dropped); once the clock is back the vault's hs.fin completes the rekey.
      */
@@ -8286,7 +8286,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check of 1b77af15, Low) A responder whose hs.fin never comes ends at HANDSHAKE_TTL by the vault's time: 17
+     * A responder whose hs.fin never comes ends at HANDSHAKE_TTL by the vault's time: 17
      * real days pass and a message from the vault (its time) ends it at the prune after handling.
      */
     @Test
@@ -8305,7 +8305,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check of 1b77af15, item 2) A handshake's stamp moves the keys' clock only: the settlement clock of §11.14.9
+     * A handshake's stamp moves the keys' clock only: the settlement clock of §11.14.9
      * ([VaultDevice.vaultNow]) is as on master, unchanged by a rekey hs.init stamped a day ahead of it.
      */
     @Test
@@ -8320,7 +8320,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, re-check of 1b77af15, Nit 1) A release under a stamp far in the future is capped: its base is never later than
+     * A release under a stamp far in the future is capped: its base is never later than
      * the vault's time + 16 days + skew, so the released epoch goes once real time passes that, not at the stamp's date.
      */
     @Test
@@ -8336,7 +8336,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, last re-check of 2d8c4e7e) A new pairing's activation (handleResp) prunes by the keys' clock: 40 real days
+     * A new pairing's activation (handleResp) prunes by the keys' clock: 40 real days
      * pass, the phone starts a new pairing, and its clock jumps 10 days before the vault's hs.resp arrives. The kept confirmed
      * epoch (life 48 days) the vault's time still keeps is not destroyed.
      */
@@ -8357,7 +8357,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, last re-check of 2d8c4e7e) The hs.resp's verified ts moves the keys' clock: after a restart (nothing of the
+     * The hs.resp's verified ts moves the keys' clock: after a restart (nothing of the
      * vault's time known), with 49 real days past, a new pairing's hs.resp shows the vault's time, and its activation destroys
      * the kept epoch past its 48 days.
      */
@@ -8377,7 +8377,7 @@ class VaultDeviceTest {
     }
 
     /**
-     * (GC #7175, review nit) After a restart in which 49 days really passed, a message from the vault shows its time, and the
+     * After a restart in which 49 days really passed, a message from the vault shows its time, and the
      * kept epoch past its life is destroyed.
      */
     @Test
@@ -8399,7 +8399,7 @@ class VaultDeviceTest {
     fun theConfirmedEpochKeepsItsKeysFortyEightDays() = runBlocking<Unit> {
         withTimeout(30_000) {
             val r = rekeyed(this)
-            // Real time passes (the monotonic clock too): the vault's time, as this phone counts it, keeps up (GC #7175).
+            // Real time passes (the monotonic clock too): the vault's time, as this phone counts it, keeps up.
             ahead(java.time.Duration.ofDays(47))
             elapsed += java.time.Duration.ofDays(47).toMillis()
             r.d.handle(r.v.msg(r.old.seal(message("day 47"))))

@@ -618,7 +618,7 @@ class VaultDevice private constructor(
     }
 
     /**
-     * The persisted rekeys awaiting `hs.fin`; one that does not restore is dropped. (GC #7175) None is dropped by age here: the
+     * The persisted rekeys awaiting `hs.fin`; one that does not restore is dropped. None is dropped by age here: the
      * vault's time is not known at load, and a clock jumped ahead would end them for good; [pruneAwaiting] ends them once
      * it is ([pruneTime]).
      */
@@ -634,7 +634,7 @@ class VaultDevice private constructor(
 
     /** Ends the rekeys awaiting `hs.fin` for longer than [HANDSHAKE_TTL], and all but the newest [MAX_AWAITING]. */
     private fun pruneAwaiting(t: Instant) {
-        // (GC #7175, Opus L3) Judged by the vault's time too ([pruneTime]): a clock jumped ahead aborts no responder; none
+        // Judged by the vault's time too ([pruneTime]): a clock jumped ahead aborts no responder; none
         // ends by age before the vault's time is known.
         val cutoff = pruneTime(t)?.minus(HANDSHAKE_TTL)?.toEpochMilli() ?: Long.MIN_VALUE
         val drop = awaiting.filter { it.createdMs < cutoff } + awaiting.sortedByDescending { it.createdMs }.drop(MAX_AWAITING)
@@ -2255,7 +2255,7 @@ class VaultDevice private constructor(
         }
         val v = st.vault ?: return
         if (!Ed25519.equalPublic(sender, Base64s.decodeStd(v.relayPk))) return // §6.3: only the vault's relay key sends to a device
-        // (GC #7175, review M1) Opened against the same time keys are destroyed by ([pruneTime]): a wall clock ahead does
+        // Opened against the same time keys are destroyed by ([pruneTime]): a wall clock ahead does
         // not hide a retained epoch the vault's time still keeps. Before the vault's time is known in this process, a
         // message under a retained epoch hidden by this phone's clock alone is left for redelivery, never dropped.
         val keyTime = pruneTime(t)
@@ -2270,7 +2270,7 @@ class VaultDevice private constructor(
             val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
             // CryptoException.Early: a message of the new epoch ahead of its hs.fin (handle leaves it for redelivery).
             val fr = r.resp.handleFin(raw, sender, t)
-            noteKeyTime(fr.inner.ts) // its ts passed checkTime (GC #7175, review Low 1); the keys' clock only
+            noteKeyTime(fr.inner.ts) // its ts passed checkTime; the keys' clock only
             // §6.3.1 "Responder": activated at the verified hs.fin; hs.confirm and device.features queued in the same write.
             activateRekeyLocked(fr.epoch, t)
             awaiting.remove(r)
@@ -2361,7 +2361,7 @@ class VaultDevice private constructor(
     private class LeftForLater : ForRedelivery("held")
 
     /**
-     * (GC #7175) A message under a retained epoch that only this phone's clock hides: delivered again, once the clock is back
+     * A message under a retained epoch that only this phone's clock hides: delivered again, once the clock is back
      * or the vault's time is known.
      */
     private class HiddenEpoch : ForRedelivery("hidden")
@@ -2515,7 +2515,7 @@ class VaultDevice private constructor(
             throw e
         }
         ini = null
-        noteKeyTime(res.inner.ts) // its ts passed checkTime (GC #7175, blind reviews of 4d1e8a0f, Fable N2); the keys' clock only
+        noteKeyTime(res.inner.ts) // its ts passed checkTime; the keys' clock only
         val v = requireVault()
         res.resp.token?.let { tok ->
             heldFromVault(tok)?.let { exp ->
@@ -2549,7 +2549,7 @@ class VaultDevice private constructor(
         // §6.3.1: a rekey under the confirmed epoch while it is not current is accepted as if it were current.
         if (keyring.current() !== ep && !isConfirmedLocked(ep)) return
         val pi = PendingInit.openRekey(raw, ep, t)
-        noteKeyTime(pi.inner.ts) // its ts passed checkTime (GC #7175, review Low 1); the keys' clock only
+        noteKeyTime(pi.inner.ts) // its ts passed checkTime; the keys' clock only
         val v = requireVault()
         val (resp, env) = pi.respond(
             ResponderConfig(
@@ -2727,7 +2727,7 @@ class VaultDevice private constructor(
         val v = st.vault ?: return
         if (keyring.current() === ep) {
             val previous = v.confirmed?.let { c -> runCatching { Base64s.decodeStd(c) }.getOrNull() }
-            // (GC #7175, review M2) Counted from the latest of this phone's time, the vault's, and this message's own
+            // Counted from the latest of this phone's time, the vault's, and this message's own
             // authenticated ts (the vault's stamp, even when no vault time is known yet or the message then fails its
             // checkTime): a clock behind does not shorten the 16 days (a message under the released epoch may still be
             // in the mailbox).
@@ -3048,7 +3048,7 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (GC #7175) The time the keyring's retained epochs are destroyed by: this phone's [t], but never later than the vault's
+     * The time the keyring's retained epochs are destroyed by: this phone's [t], but never later than the vault's
      * clock ([vaultNow]) plus [PRUNE_SKEW]; null (nothing destroyed now) while no message from the vault in this process has
      * shown its time. A wall clock set ahead, even briefly, so postpones a destruction and never makes one early: until a
      * key is destroyed, [Keyring.open] still only hides it while the clock says it is past its life, and it is usable again
@@ -3061,7 +3061,7 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (GC #7175, blind reviews of 4d1e8a0f, Opus L1) The time a key's life is counted from at an activation: the vault's time
+     * The time a key's life is counted from at an activation: the vault's time
      * once it is known in this process (at a rekey, hs.fin's ts was just noted), so a clock ahead does not lengthen the
      * kept epoch's 48 days or a receive key's 16; this phone's [t] before.
      */
@@ -3086,7 +3086,7 @@ class VaultDevice private constructor(
 
     /** Destroys the retained epochs past their life as of [pruneTime]; true when one was. */
     private fun pruneKeys(t: Instant): Boolean {
-        // (GC #7175, re-check of 1b77af15, Low) The responders awaiting hs.fin too: one whose hs.fin never comes ends at
+        // The responders awaiting hs.fin too: one whose hs.fin never comes ends at
         // HANDSHAKE_TTL by the vault's time, not never (restoreAwaiting drops none by age).
         val before = awaiting.size
         pruneAwaiting(t)
@@ -3095,7 +3095,7 @@ class VaultDevice private constructor(
     }
 
     /**
-     * (GC #7175, re-check of 1b77af15, item 2) The verified ts of a handshake's hs.init, hs.resp or hs.fin: a second anchor
+     * The verified ts of a handshake's hs.init, hs.resp or hs.fin: a second anchor
      * the keys' clock ([keyClock]) reads, never [vaultNow] (the settlement clock of §11.14.9 stays as it was).
      */
     private fun noteKeyTime(ts: Instant) {
