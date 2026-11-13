@@ -2488,8 +2488,16 @@ class VaultDevice private constructor(
         st.droppedTransfer = DroppedTransferRecord(keys)
     }
 
+    /**
+     * Drops the marks of [m] (the relay's message ids, the vault's inner ids) older than [SEEN_RETENTION], judged by the time
+     * keys are destroyed by ([pruneTime]), not this phone's clock alone: a clock set far ahead and then back forgets no
+     * mark early, so a message handled before (an `hs.init` answered before) is not handled again once the clock is back
+     * and its own time passes again. Nothing goes before the vault's time is known in this process. A mark is written at
+     * this phone's time, so one written while the clock was ahead stays that much longer.
+     */
     private fun prune(m: MutableMap<String, Long>, t: Instant) {
-        val cutoff = t.minus(SEEN_RETENTION).toEpochMilli()
+        val at = pruneTime(t) ?: return
+        val cutoff = at.minus(SEEN_RETENTION).toEpochMilli()
         m.entries.removeAll { it.value < cutoff }
     }
 

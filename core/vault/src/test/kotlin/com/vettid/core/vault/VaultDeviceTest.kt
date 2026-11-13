@@ -8203,6 +8203,33 @@ class VaultDeviceTest {
     }
 
     /**
+     * A message handled, 7 real days, then the phone's clock 10 days ahead while a message arrives (its own time, the vault's,
+     * still passes): the first message's mark is 17 days old by the phone's clock, but not by the vault's, so it is kept.
+     * Once the clock is back the vault deposits the first message again (a new msg_id, the same inner): it is not handled
+     * a second time.
+     */
+    @Test
+    fun aClockAheadAndBackForgetsNoHandledMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            val once = message("once")
+            r.d.handle(r.v.msg(r.new.seal(once)))
+            r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(2)) { VaultJson.str(it, "text") == "once" }
+            elapsed += java.time.Duration.ofDays(7).toMillis()
+            ahead(java.time.Duration.ofDays(7))
+            val vaultAt = deviceNow()
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            r.d.handle(r.v.msg(r.new.seal(message("between", at = vaultAt))))
+            ahead(java.time.Duration.ofDays(-10)) // and back
+            r.d.handle(r.v.msg(r.new.seal(once)))
+            val again = runCatching {
+                r.d.awaitEvent("message.new", java.time.Duration.ofSeconds(1)) { VaultJson.str(it, "text") == "once" }
+            }
+            assertTrue("not handled a second time", again.isFailure)
+        }
+    }
+
+    /**
      * With the phone's clock 60 days behind, a message under the current epoch releases the kept one:
      * its 16 days count from the vault's time, not the phone's, so once the clock is corrected it is not destroyed at once.
      */
