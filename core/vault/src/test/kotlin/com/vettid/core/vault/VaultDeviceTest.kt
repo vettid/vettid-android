@@ -8139,7 +8139,8 @@ class VaultDeviceTest {
 
     /**
      * After a restart, 49 days really pass: a message under the kept confirmed epoch is past its 48 days by its own ts too,
-     * so it is still hidden once that ts is the keys' clock, and is left for redelivery, never handled or dropped.
+     * so it is still hidden once that ts is the keys' clock, and is left for redelivery, not handled; its redelivery finds
+     * the vault's time known and the key destroyed, and drops it.
      */
     @Test
     fun aMessagePastItsEpochsLifeByItsOwnTimeIsLeftForRedelivery() = runBlocking<Unit> {
@@ -8152,6 +8153,33 @@ class VaultDeviceTest {
             val m = r.v.msg(r.old.seal(message("late", at = deviceNow())))
             assertThrows(LeaveUnacked::class.java) { runBlocking { again.handle(m) } }
             assertNull("not recorded as seen", savedState(r.store).seen[m.msgId])
+            again.handle(m) // the relay's redelivery: dropped, the key past its life by the vault's time
+            assertFalse("the kept epoch is destroyed", keptInFile(r))
+        }
+    }
+
+    /**
+     * After a restart with the vault's time not known, 40 days really pass and the phone's clock reads 50: the vault's rekey
+     * under the kept confirmed epoch (48 days by the phone's count) shows the vault's time itself and is answered: one
+     * responder, saved, and its hs.resp deposited. (What the vault then makes of an hs.resp stamped by a clock 10 days ahead
+     * is its own time check's, as for anything such a phone sends.)
+     */
+    @Test
+    fun aRekeyUnderAHiddenConfirmedEpochIsAnswered() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val r = rekeyed(this)
+            r.d.stop()
+            elapsed += java.time.Duration.ofDays(40).toMillis()
+            ahead(java.time.Duration.ofDays(40))
+            val vaultAt = deviceNow()
+            ahead(java.time.Duration.ofDays(10)) // the wall clock only
+            val again = VaultDevice.load(config(r.store), r.secrets)!!
+            val ini = r.v.rekeyInit(again, under = r.old, at = vaultAt)
+            again.handle(r.v.msg(ini.envelope()))
+            // Read at the phone's own clock: only the rekey's hs.resp completes the vault's handshake.
+            val sent = generateSequence { deposits.poll(2, TimeUnit.SECONDS)?.second }.toList()
+            assertTrue("the hs.resp is deposited", sent.any { runCatching { ini.handleResp(it, again.relayAddr.pk(), deviceNow()) }.isSuccess })
+            assertEquals("one responder, saved", 1, savedState(r.store).vault!!.awaiting.size)
         }
     }
 
