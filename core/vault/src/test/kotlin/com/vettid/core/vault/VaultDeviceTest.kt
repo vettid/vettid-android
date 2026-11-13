@@ -8258,6 +8258,7 @@ class VaultDeviceTest {
     fun aRekeyFinShowsTheVaultsTime() = runBlocking<Unit> {
         withTimeout(30_000) {
             val r = rekeyed(this)
+            elapsed += java.time.Duration.ofDays(48).minusMinutes(1).toMillis() // real time: both clocks move
             ahead(java.time.Duration.ofDays(48).minusMinutes(1))
             val at = deviceNow()
             val ini = r.v.rekeyInit(r.d, under = r.new, at = at)
