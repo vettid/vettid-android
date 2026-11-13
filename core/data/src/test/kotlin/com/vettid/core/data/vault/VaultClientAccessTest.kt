@@ -68,7 +68,8 @@ class VaultClientAccessTest {
         val foreground = "d.stopCount.let { seq -> scope.launch { runCatching { d.flushOutbox(seq) } } }"
         assertTrue(code.any { it == foreground })
         assertTrue(code.any { it.contains("val flushSeq = s.device.stopCount") })
-        assertTrue(code.any { it == "stopCount = { s.device.stopCount }," })
+        // The flush is asked for under the stop count the device announced with the backoff, not one read later.
+        assertTrue(code.any { it.contains("{ b -> quotaFlush.backoffSet(b.ms, b.stopCount) }") })
         assertTrue(code.any { it == "flush = { seq -> s.device.flushOutbox(seq) }," })
         val quota = code.indexOfFirst { it.startsWith("val quotaFlush = QuotaFlush(") }
         assertTrue("no lock check of its own", code.subList(quota, quota + 6).none { it.contains("admits") })

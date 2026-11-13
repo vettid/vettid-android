@@ -63,6 +63,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -108,6 +109,11 @@ class VaultDeviceTest {
     @Volatile
     private var depositGate: java.util.concurrent.CountDownLatch? = null
     private val depositsStarted = java.util.concurrent.atomic.AtomicInteger()
+
+    /** When set, a refused deposit waits for it before its answer (a refusal in flight); [refusalsStarted] counts arrivals. */
+    @Volatile
+    private var refuseGate: java.util.concurrent.CountDownLatch? = null
+    private val refusalsStarted = java.util.concurrent.atomic.AtomicInteger()
 
     /** Deposits the relay refused (any code). */
     private val refused = java.util.concurrent.atomic.AtomicInteger()
@@ -273,6 +279,8 @@ class VaultDeviceTest {
                         MockResponse.Builder().code(401).body("""{"code":"token_expired","message":""}""").build()
                     }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
+                        refusalsStarted.incrementAndGet()
+                        refuseGate?.await(10, TimeUnit.SECONDS)
                         refused.incrementAndGet()
                         refusedTokens.add(request.headers["Authorization"].orEmpty().removePrefix("VettID-Deposit "))
                         runCatching { refusedBodies.add(StrictJson.parseObject(request.body!!.toByteArray()).base64("payload")) }
@@ -863,6 +871,580 @@ class VaultDeviceTest {
             assertEquals(res.epoch.recvKid, Envelope.parse(raw).recipientKid)
             again.handle(v.seal("vault.status", """{"vault_id":"x"}""", re = v.open(raw).id, status = Inner.STATUS_OK))
             assertEquals("x", VaultJson.str(status.await(), "vault_id"))
+        }
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.5: an `hs.init` answered before is acked and dropped; §6.3: a resend carries the same
+     * bytes) A rekey `hs.init` the vault deposits again (a new msg_id) makes no second responder: once the relay has accepted
+     * its `hs.resp` nothing is sent; while that deposit may not have arrived (a retryable failure), the same bytes go again,
+     * also after a restart; and once the rekey is done nothing at all.
+     */
+    @Test
+    fun aRedeliveredRekeyInitMakesNoSecondResponder() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            // Accepted at once: the redelivery is dropped.
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            d.handle(v.msg(init))
+            val first = nextDeposit().second
+            d.handle(v.msg(init)) // the vault's re-deposit (a new msg_id, §6.5)
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            assertNull("its bytes are not kept once accepted", savedState(store).vault!!.awaiting.single().resp)
+            // A second rekey whose hs.resp deposit fails retryably: the redelivery sends the same bytes, after a restart too.
+            val ini2 = v.rekeyInit(d)
+            val init2 = ini2.envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init2)) }
+            refuseDeposits = null
+            refuseStatus = 403
+            assertEquals("two responders", 2, savedState(store).vault!!.awaiting.size)
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.handle(v.msg(init2))
+            val second = nextDeposit().second
+            again.handle(v.msg(init2))
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("still two responders", 2, savedState(store).vault!!.awaiting.size)
+            // It is the answer to init2: its hs.fin completes that rekey.
+            val res = ini2.handleResp(second, again.relayAddr.pk(), deviceNow())
+            again.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            again.handle(v.msg(init2)) // once the rekey is done: no answer at all
+            noHandshakeAnswer(res.epoch, v.keyring.current()!!)
+        }
+    }
+
+    /**
+     * A re-sent `hs.resp` refused for good says nothing of the first attempt, which may
+     * be at the vault: the responder and the mark stay, the re-sending stops, and no second, different `hs.resp` follows.
+     */
+    @Test
+    fun aRefusedResendOfAnUnknownRespMakesNoSecondAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init)) } // the outcome unknown (the relay may have stored it)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            runCatching { d.handle(v.msg(init)) } // the re-send refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init))
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder, kept for the first attempt's hs.fin", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /**
+     * The device's own re-send is a re-send (`first = false`): a 503 on the
+     * first deposit, `token_revoked` on the collection start's re-send, then the vault's re-deposit of the same `hs.init`:
+     * no `hs.resp`, and the responder kept for the first attempt's `hs.fin`.
+     */
+    @Test
+    fun aRefusedSelfResendMakesNoSecondAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            d.tickConfirm() // the re-send, refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init)) // the vault's re-deposit
+            d.tickConfirm()
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /** The device's own re-send waits for a save that holds the responder: none while the store fails. */
+    @Test
+    fun theSelfResendWaitsForASave() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            store.fail = true
+            runCatching { d.handle(v.msg(init)) }
+            runCatching { d.tickConfirm() }
+            assertNull("no hs.resp while no save holds its responder", deposits.poll(500, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /** The device's own re-send also goes after a handled message, not only at a collection start. */
+    @Test
+    fun theSelfResendGoesAfterAHandledMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (RELAY-PROTOCOL §7.1, VAULT-MESSAGING 0.88.8 §8.6) After a `quota_exceeded` the device's own re-send
+     * waits (1 minute first), so it is not sent again unchanged at every message; after the wait it goes.
+     */
+    @Test
+    fun theSelfResendWaitsAfterAQuotaRefusal() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            d.tickConfirm()
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            noHandshakeAnswer(v.keyring.current()!!) // nothing deposited during the wait but session messages
+            elapsed += 61_000
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * The device's own re-send of an `hs.resp` is not held by a shut send gate (owner decision 2026-11-12, a: holding it would
+     * hold the vault's rekey until the handshake expires): at a collection start and after a handled message alike.
+     */
+    @Test
+    fun theSelfResendGoesWhileTheGateIsShut() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            for (afterMessage in listOf(false, true)) {
+                val (d, v) = pairedDevice(this)
+                val ini = v.rekeyInit(d)
+                refuseDeposits = "unavailable"
+                refuseStatus = 503
+                runCatching { d.handle(v.msg(ini.envelope())) }
+                refuseDeposits = null
+                refuseStatus = 403
+                d.sendGate = VaultDevice.SendGate { false }
+                if (afterMessage) {
+                    d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+                } else {
+                    d.tickConfirm()
+                }
+                val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+                d.handle(v.msg(res.fin))
+                assertArrayEquals("the epoch is active", res.epoch.id, d.currentEpochId)
+                d.stop()
+            }
+        }
+    }
+
+    /**
+     * An `hs.init` the vault deposits again while its `hs.resp` waits after a `quota_exceeded` sends nothing at once: the
+     * wait's end sends the same bytes.
+     */
+    @Test
+    fun aRedepositedInitDuringTheQuotaWaitSendsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = null
+            refuseStatus = 403
+            d.handle(v.msg(init)) // the vault's re-deposit: a new msg_id, the same bytes
+            noHandshakeAnswer(v.keyring.current()!!) // nothing deposited during the wait but session messages
+            elapsed += 61_000
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * A responder restored with its `hs.resp` kept may have had that `hs.resp` reach the relay before the restart (a stop
+     * after the deposit, its answer lost): a refusal for good of the re-send then keeps the responder and its mark, and the
+     * vault's re-deposit of the `hs.init` gets no second, different `hs.resp`.
+     */
+    @Test
+    fun aRestoredRespRefusedAtItsResendMakesNoSecondAnswer() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val init = v.rekeyInit(d).envelope()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED // nothing stored, in this process; its bytes kept
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(init)) }
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            again.tickConfirm() // the re-send after the restart, refused for good
+            refuseDeposits = null
+            again.handle(v.msg(init)) // the vault's re-deposit
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder, kept", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /**
+     * An `hs.resp` refused for its quota (nothing stored), then refused for good at its re-send: no copy can have reached the
+     * relay, so the responder and its mark end, and the vault's re-deposit of the `hs.init` is answered afresh, once.
+     */
+    @Test
+    fun aRefusedResendAfterAQuotaRefusalIsAnsweredAfresh() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            elapsed += 61_000
+            d.tickConfirm() // the re-send, refused for good
+            refuseDeposits = null
+            assertTrue("the responder ended", savedState(store).vault!!.awaiting.isEmpty())
+            d.handle(v.msg(init)) // the vault's re-deposit
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (VAULT-MESSAGING §8.6) Any deposit the relay accepts to the vault's mailbox ends an `hs.resp`'s quota wait: the next
+     * collection start sends it, with no time passed.
+     */
+    @Test
+    fun anAcceptedDepositEndsTheRespsQuotaWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            d.sendOnce("presence.ping") // accepted by the relay
+            assertEquals("presence.ping", v.open(nextDeposit().second).type)
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * An `hs.resp`'s quota wait is announced as a mailbox's backoff is ([VaultDevice.quotaBackoffSet]), and the owner's flush
+     * at its end sends it.
+     */
+    @Test
+    fun theRespsQuotaWaitIsAnnouncedAndItsFlushSendsIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            assertTrue("announced", 60_000L in seen)
+            elapsed += 61_000
+            d.flushOutbox()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            watcher.cancel()
+        }
+    }
+
+    /**
+     * With the relay answering 5xx, the first re-send goes at once, and from the second attempt with no answer it waits:
+     * not one deposit per handled message.
+     */
+    @Test
+    fun repeatedUnansweredResendsWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = v.rekeyInit(d)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(ini.envelope())) } // the first attempt: no answer
+            d.tickConfirm() // the second, at once: no answer, a wait starts
+            val tried = refusedBodies.size
+            d.tickConfirm()
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            assertEquals("nothing tried during the wait", tried, refusedBodies.size)
+            refuseDeposits = null
+            refuseStatus = 403
+            elapsed += 61_000
+            d.tickConfirm()
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (VAULT-MESSAGING §8.6) An `hs.resp` refused `quota: token` is not sent again under that token, however long: it goes
+     * under the vault's next standing token.
+     */
+    @Test
+    fun aRespRefusedForItsTokensQuotaWaitsForANewToken() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val spent = d.vaultToken!!
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_TOKEN
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            val tried = refusedBodies.size
+            elapsed += 3_700_000
+            d.tickConfirm()
+            d.flushOutbox()
+            assertEquals("never again under the spent token", tried, refusedBodies.size)
+            refuseDeposits = null
+            refuseStatus = 403
+            refuseQuota = null
+            Thread.sleep(1_100) // a later exp than the held token's (whole seconds)
+            val fresh = v.tokenFor(d)
+            d.handle(v.seal("relay.token.issued", """{"kind":"standing","token":"$fresh"}"""))
+            assertNotEquals(spent, d.vaultToken)
+            val res = generateSequence { deposits.poll(2, TimeUnit.SECONDS)?.second }
+                .firstNotNullOfOrNull { raw -> runCatching { ini.handleResp(raw, d.relayAddr.pk(), deviceNow()) }.getOrNull() }
+            assertNotNull("the hs.resp went under the new token", res)
+            d.handle(v.msg(res!!.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * An `hs.resp` deposit cancelled while in flight (a stop) may have reached the relay: a later refusal for good of its
+     * re-send keeps the responder and its mark, and the vault's re-deposit of the `hs.init` gets no second, different
+     * `hs.resp`.
+     */
+    @Test
+    fun aCancelledRespDepositCountsAsPossiblyArrived() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val init = v.rekeyInit(d).envelope()
+            val gate = java.util.concurrent.CountDownLatch(1)
+            depositGate = gate
+            val before = depositsStarted.get()
+            val handling = launch(Dispatchers.IO) { runCatching { d.handle(v.msg(init)) } }
+            while (depositsStarted.get() == before) kotlinx.coroutines.delay(10)
+            handling.cancel() // the request is at the relay; its answer never comes back
+            handling.join()
+            depositGate = null
+            gate.countDown() // the relay stores it
+            nextDeposit()
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            d.tickConfirm() // the re-send, refused for good
+            refuseDeposits = null
+            d.handle(v.msg(init)) // the vault's re-deposit
+            noHandshakeAnswer(v.keyring.current()!!)
+            assertEquals("one responder, kept", 1, savedState(store).vault!!.awaiting.size)
+        }
+    }
+
+    /**
+     * A flush sends only the `hs.resp`s whose wait has ended: one whose attempt just went unanswered goes again at the next
+     * collection start or handled message, not a second time at once in the same start's flush.
+     */
+    @Test
+    fun aFlushSendsOnlyTheRespsThatWaited() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            runCatching { d.handle(v.msg(v.rekeyInit(d).envelope())) } // no answer
+            val tried = refusedBodies.size
+            d.flushOutbox()
+            assertEquals("not tried again by the flush", tried, refusedBodies.size)
+            refuseDeposits = null
+            refuseStatus = 403
+        }
+    }
+
+    /**
+     * An `hs.resp`'s wait and a mailbox's longer quota backoff overlap: the owner keeps one flush, so the soonest end is
+     * announced, and the flush at it announces what is left of the mailbox's backoff, so the held `call.end` still gets a
+     * flush at its end.
+     */
+    @Test
+    fun overlappingWaitsEachGetAFlush() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            elapsed += min
+            d.flushOutbox() // refused again: the mailbox waits 2 minutes
+            runCatching { d.handle(v.msg(v.rekeyInit(d).envelope())) } // the hs.resp waits 1 minute
+            assertEquals("the soonest end, each time", listOf(min, min * 2, min), seen.toList())
+            elapsed += min + 1_000
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            refuseStatus = 403
+            refuseQuota = null
+            d.flushOutbox() // the hs.resp's wait ended: tried, refused for good (no new wait); the mailbox's backoff still runs
+            assertEquals("what is left of the mailbox's backoff", min - 1_000, seen.last())
+            watcher.cancel()
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            d.stop()
+        }
+    }
+
+    /**
+     * A stop and a start while an `hs.resp` waits: the collection start announces what is left of its wait again, so the
+     * owner's flush at its end, under the new stop count, sends it.
+     */
+    @Test
+    fun aRestartDuringARespWaitAnnouncesItAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
+            val ini = v.rekeyInit(d)
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            runCatching { d.handle(v.msg(ini.envelope())) }
+            refuseDeposits = null
+            refuseStatus = 403
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            elapsed += min / 3
+            d.stop()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            withTimeout(5_000) { while (seen.last() != min - min / 3) kotlinx.coroutines.delay(20) }
+            elapsed += min
+            d.flushOutbox(d.stopCount)
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+            scope.cancel()
+            watcher.cancel()
+            d.stop()
+        }
+    }
+
+    /** An `hs.resp` refused for good never reached the vault: a redelivered `hs.init` is answered afresh, once. */
+    @Test
+    fun aRefusedRekeyRespIsAnsweredAfresh() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            runCatching { d.handle(v.msg(init)) }
+            refuseDeposits = null
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            assertEquals("one responder", 1, savedState(store).vault!!.awaiting.size)
+            val res = ini.handleResp(resp, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * The device re-sends an `hs.resp` whose deposit may not have
+     * arrived by itself, as an outbox does: one attempt, refused 503, makes exactly one request; the collection start then
+     * deposits the same bytes, once; and after a restart the relay's redelivery of the same msg_id (dropped by `seen`) needs
+     * nothing: the collection start sends it.
+     */
+    @Test
+    fun anUnsentRespIsDepositedAgainByTheDeviceItself() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val ini = v.rekeyInit(d)
+            val msg = v.msg(ini.envelope())
+            refuseDeposits = "unavailable"
+            refuseStatus = 503
+            val before = refused.get()
+            runCatching { d.handle(msg) }
+            assertEquals("one attempt: not sent again by the client after a 5xx", 1, refused.get() - before)
+            refuseDeposits = null
+            refuseStatus = 403
+            d.stop() // a crash after the save, before the deposit got through
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.handle(msg) // the relay's redelivery: the same msg_id, dropped by `seen`
+            noHandshakeAnswer(v.keyring.current()!!)
+            again.tickConfirm() // a collection start: the kept hs.resp goes out by itself
+            val resp = nextDeposit().second
+            again.tickConfirm()
+            noHandshakeAnswer(v.keyring.current()!!) // one hs.resp in all
+            val res = ini.handleResp(resp, again.relayAddr.pk(), deviceNow())
+            again.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /**
+     * (§8.3) A redelivered `hs.init` whose responder no save holds (the store failing) sends
+     * nothing: its `hs.resp` goes only once a save has written the responder.
+     */
+    @Test
+    fun aRedeliveredRekeyInitSendsNothingBeforeASaveHoldsIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = RecordingFlakyStore()
+            val (d, v) = pairedDevice(this, store)
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            store.fail = true
+            runCatching { d.handle(v.msg(init)) }
+            runCatching { d.handle(v.msg(init)) }
+            assertNull("no hs.resp while no save holds its responder", deposits.poll(500, TimeUnit.MILLISECONDS))
+            store.fail = false
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            val res = ini.handleResp(resp, d.relayAddr.pk(), deviceNow())
+            d.handle(v.msg(res.fin))
+            expectConfirm(res.epoch)
+        }
+    }
+
+    /** No handshake answer (a sealed `hs.resp`, which opens under no session epoch) among the deposits of the next 500 ms. */
+    private fun noHandshakeAnswer(vararg epochs: com.vettid.core.crypto.session.Epoch) {
+        while (true) {
+            val raw = deposits.poll(500, TimeUnit.MILLISECONDS)?.second ?: return
+            val session = epochs.any { e -> runCatching { e.open(Envelope.parse(raw)) }.isSuccess }
+            assertTrue("no hs.resp", session)
         }
     }
 
@@ -1717,7 +2299,7 @@ class VaultDeviceTest {
             val store = InMemoryDeviceStateStore()
             val (d, _) = pairedDevice(this, store)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
@@ -1738,34 +2320,161 @@ class VaultDeviceTest {
     }
 
     /**
-     * (Show held as held) A stop and a start while a quota backoff runs (a reconnect) announce what is left of it again, so the
-     * owner's flush at its end, asked for under the new stop count, deposits the held `call.end`; a stop with no start announces
-     * nothing.
+     * (Show held as held) Each quota backoff is announced with the stop count it is announced at, taken together: a flush asked
+     * for under an announcement's count deposits nothing after a stop since; a start during the backoff (a reconnect) announces
+     * what is left of it under its own count, and a flush asked for under that one deposits the held `call.end`; a stop with no
+     * start announces nothing. Stop, start and the backoff's end are interleaved here step by step.
      */
     @Test
     fun aRestartDuringAQuotaBackoffAnnouncesItAgain() = runBlocking<Unit> {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
-            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
             val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
             assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            val c0 = d.stopCount
+            assertEquals(listOf(VaultDevice.QuotaBackoff(min, c0)), seen.toList())
+            elapsed += min / 3
+            d.stop()
+            assertEquals("a stop alone announces nothing", 1, seen.size)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            val c1 = d.stopCount
+            assertTrue(c1 != c0)
+            assertEquals("the rest, under the new count", VaultDevice.QuotaBackoff(min - min / 3, c1), seen[1])
+            scope.cancel()
+            d.stop() // no collection in the way of the steps below
+            val c2 = d.stopCount
+            // A refusal now is announced under the count of its moment.
+            elapsed += min
+            d.flushOutbox(c2)
+            assertEquals(VaultDevice.QuotaBackoff(min * 2, c2), seen.last())
             refuseDeposits = null
             refuseQuota = null
             refuseStatus = 403
+            elapsed += min * 2
+            d.flushOutbox(c0)
+            d.flushOutbox(c1)
+            assertNull("asked for before a stop: nothing", deposits.poll(300, TimeUnit.MILLISECONDS))
+            d.flushOutbox(seen.last().stopCount)
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            watcher.cancel()
+        }
+    }
+
+    /** A `call.end` held in the outbox, and the relay set to refuse the next deposit for a mailbox quota once [refuseGate] opens. */
+    private suspend fun heldCallEndAndAQuotaRefusalInFlight(d: VaultDevice) {
+        d.sendGate = VaultDevice.SendGate { false }
+        d.send("call.end", buildJsonObject { put("call_id", "c1") })
+        d.sendGate = VaultDevice.SendGate { true }
+        refuseDeposits = RelayException.QUOTA_EXCEEDED
+        refuseStatus = 429
+        refuseQuota = RelayException.QUOTA_MAILBOX
+        refuseGate = java.util.concurrent.CountDownLatch(1)
+        refusalsStarted.set(0)
+    }
+
+    /**
+     * (Show held as held) A flush asked for at count c0 whose deposit is in flight when the device is stopped, and refused for a
+     * mailbox quota after the stop, with no start since: its backoff is announced under c0, so the owner's flush when it ends
+     * deposits nothing (nothing goes after a stop that no flush was asked for since).
+     */
+    @Test
+    fun aQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            heldCallEndAndAQuotaRefusalInFlight(d)
+            val c0 = d.stopCount
+            val flush = async(Dispatchers.IO) { d.flushOutbox(c0) }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
+            d.stop() // the deposit is out at the relay
+            refuseGate!!.countDown()
+            flush.await()
+            refuseGate = null
             val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
-            val asked = d.stopCount
-            elapsed += min / 3
+            assertEquals(VaultDevice.QuotaBackoff(min, c0), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            elapsed += min
+            d.flushOutbox(seen.last().stopCount) // the owner's flush when the backoff ends
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            watcher.cancel()
+        }
+    }
+
+    /**
+     * As [aQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds], driven by a send: its own `call.end`'s deposit is in flight
+     * when the device is stopped and refused for a quota after it, with no start since. The backoff is announced under the
+     * send's count, so the owner's flush when it ends deposits nothing.
+     */
+    @Test
+    fun aSendsQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            refuseGate = java.util.concurrent.CountDownLatch(1)
+            refusalsStarted.set(0)
+            val c0 = d.stopCount
+            val send = async(Dispatchers.IO) { runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) } }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
+            d.stop() // the send's deposit is out at the relay
+            refuseGate!!.countDown()
+            assertTrue("the send says it waits", send.await().isFailure)
+            refuseGate = null
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(VaultDevice.QuotaBackoff(min, c0), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            elapsed += min
+            d.flushOutbox(seen.last().stopCount) // the owner's flush when the backoff ends
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            watcher.cancel()
+        }
+    }
+
+    /**
+     * The same refusal after a stop and a start (a reconnect) is announced under the current count: the owner's flush when it
+     * ends deposits the held `call.end` (the stop and the start came before the refusal, and the start had no backoff to
+     * announce).
+     */
+    @Test
+    fun aQuotaRefusalAfterAStopAndAStartGoesWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            heldCallEndAndAQuotaRefusalInFlight(d)
+            val c0 = d.stopCount
+            val flush = async(Dispatchers.IO) { d.flushOutbox(c0) }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
             d.stop()
-            assertEquals("a stop alone announces nothing", listOf(min), seen.toList())
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             d.start(scope)
-            assertEquals("what is left, again", listOf(min, min - min / 3), seen.toList())
-            assertTrue("a new stop count for the flush asked now", d.stopCount != asked)
+            val c1 = d.stopCount
+            refuseGate!!.countDown()
+            flush.await()
+            refuseGate = null
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(VaultDevice.QuotaBackoff(min, c1), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
             elapsed += min
-            d.flushOutbox(d.stopCount)
+            d.flushOutbox(seen.last().stopCount)
             assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
             scope.cancel()
             watcher.cancel()
