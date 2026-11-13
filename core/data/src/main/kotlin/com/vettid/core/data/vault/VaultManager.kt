@@ -1701,14 +1701,13 @@ class VaultManager(
             launch { s.device.vaultRefusals.collectSurviving("refusals") { n -> refusals.onRefusals(n, phaseFlow.value) } }
             // (Show held as held) The outbox once a mailbox's quota backoff ends; this observer's own scope, so it ends with the
             // session. The device's gate decides by type (a pending `call.end` goes while a lock is pending, nothing else does),
-            // and the stop count is the one when the backoff was set.
+            // and the stop count is the one the device announced with the backoff.
             val quotaFlush = QuotaFlush(
                 this,
-                stopCount = { s.device.stopCount },
                 live = { session === s && !s.device.stopped },
                 flush = { seq -> s.device.flushOutbox(seq) },
             )
-            launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { ms -> quotaFlush.backoffSet(ms) } }
+            launch { s.device.quotaBackoffSet.collectSurviving("quota backoff") { b -> quotaFlush.backoffSet(b.ms, b.stopCount) } }
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
                 credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }

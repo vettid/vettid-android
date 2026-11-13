@@ -434,7 +434,14 @@ class VaultDevice private constructor(
      * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds. A [start] while a
      * backoff runs (a restart after a [stop]) announces what is left of it again.
      */
-    val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
+    val quotaBackoffSet: SharedFlow<QuotaBackoff> get() = quotaBackoffs.asSharedFlow()
+
+    /**
+     * A quota backoff of [ms] announced at stop count [stopCount] ([quotaBackoffSet]): both taken together, under this device's
+     * monitor (which [stop] and [start] hold), so the owner's flush when the backoff ends ([flushOutbox] with [stopCount])
+     * deposits nothing after a stop since, and a [start] since has announced the rest under its own count.
+     */
+    data class QuotaBackoff(val ms: Long, val stopCount: Long)
 
     private val ownerCheckRefusals =
         MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -455,8 +462,11 @@ class VaultDevice private constructor(
     private var collectScope: CoroutineScope? = null
     private val collectorEnd = MutableStateFlow<String?>(null)
     // replay = 1: the session's observer subscribes after the collection started, whose first flush may already have
-    // been refused for a quota; the last backoff then still reaches it (a stale one only makes one gated flush).
-    private val quotaBackoffs = MutableSharedFlow<Long>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    // been refused for a quota; the last backoff then still reaches it. A replay carries the full original length, not what
+    // is left: its flush comes later than needed but under the count announced with it, so after a stop since it deposits
+    // nothing, and otherwise it is one more gated flush (harmless).
+    private val quotaBackoffs =
+        MutableSharedFlow<QuotaBackoff>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
@@ -703,12 +713,12 @@ class VaultDevice private constructor(
         collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
-        // (Show held as held) A quota backoff still running is announced again with what is left of it: the owner's flush when
-        // it ends was asked for under the stop count before this start, which a stop since makes deposit nothing.
-        // The owner's flush asked before is void (the stop count), so nothing counts as announced; the collection start's
-        // flush announces the `hs.resp` waits too ([flushOutbox], [announceWaitsLocked]).
+        // (Show held as held) A quota backoff still running is announced again with what is left of it, under this start's stop
+        // count and this monitor (as [quotaRefused]'s announcement): the owner's earlier flush, asked for under a count from
+        // before a stop, deposits nothing, so this one replaces it. Nothing counts as announced before it; the collection
+        // start's flush announces the `hs.resp` waits too ([flushOutbox], [announceWaitsLocked]).
         announcedEndMs = 0L
-        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> announceEnd(until) }
+        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> announceEnd(until, stopSeq) }
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
@@ -1839,14 +1849,15 @@ class VaultDevice private constructor(
         for (e in earlier) {
             if (!mayDeposit(e, seq)) continue // held by the gate: it stays for the next flush the gate admits
             try {
-                if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e)
+                if (e.type == HsTypes.CONFIRM) deliverConfirm(e, seq) else deliver(e, seq)
             } catch (_: IOException) {
                 // still waiting: it stays, and [entry] waits behind it ([awaitQuota])
             }
         }
-        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it. Not the stop count: the
-        // send's own entry (a `call.end`) must not be kept silently while the send reports success.
-        if (mayDeposit(entry, null)) deliver(entry)
+        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it. Not held by the stop
+        // count: the send's own entry (a `call.end`) must not be kept silently while the send reports success. Its deposit carries
+        // the send's count all the same, so a quota refusal after a stop with no start is announced under it.
+        if (mayDeposit(entry, null)) deliver(entry, seq)
     }
 
     /**
@@ -1872,7 +1883,7 @@ class VaultDevice private constructor(
      * transport failure, 429, 5xx and a stale or replayed signature (`timestamp_stale`, `replay_detected`: the relay
      * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
      */
-    private suspend fun deliver(e: OutboxEntry, onRefused: (RelayException) -> Unit = {}) {
+    private suspend fun deliver(e: OutboxEntry, seq: Long? = null, onRefused: (RelayException) -> Unit = {}) {
         checkLive()
         awaitQuota(e)
         try {
@@ -1890,7 +1901,7 @@ class VaultDevice private constructor(
                 throw x
             }
             if (x.code == RelayException.QUOTA_EXCEEDED) {
-                quotaRefused(e, x)
+                quotaRefused(e, x, seq)
                 throw x
             }
             countRefusal(x, e.mailbox, e.token)
@@ -1920,15 +1931,23 @@ class VaultDevice private constructor(
      *   backoff (§8.6), from
      *   [QUOTA_BACKOFF_MIN] doubling to [QUOTA_BACKOFF_MAX], in memory; a deposit the relay takes ends it.
      */
-    private fun quotaRefused(e: OutboxEntry, x: RelayException) {
+    private fun quotaRefused(e: OutboxEntry, x: RelayException, seq: Long?) {
         e.attempts++
         if (x.quota == RelayException.QUOTA_TOKEN) {
             e.quotaToken = e.token
         } else {
             val prev = quotaBackoff[e.mailbox]?.second ?: 0L
             val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
-            quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
-            announceWaitsLocked()
+            // The backoff and the stop count it is announced at, taken together under the monitor [stop] and [start] hold: a
+            // start either sees this backoff (and announces its rest under its own count) or comes after this announcement. A
+            // refusal of a flush asked for at [seq] that lands after a stop with no start since is announced under [seq]: the
+            // owner's flush when it ends then deposits nothing (nothing goes after a stop no flush was asked for since), and a
+            // later start announces the rest under its own count. After a stop and a start, under the current count. What is
+            // announced is the soonest wait still running ([announceWaitsLocked]).
+            synchronized(this) {
+                quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+                announceWaitsLocked(seq)
+            }
         }
         save()
     }
@@ -2038,14 +2057,15 @@ class VaultDevice private constructor(
                     // lock or a stop that comes while the flush runs holds what is left.
                     if (!mayDeposit(e, seq)) return@withLock
                     if (e.id in unsaved) save() // written first, sent after; a failed save leaves it for the next flush
-                    if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e) // hs.confirm's time follows a refusal for good
+                    // hs.confirm's time follows a refusal for good
+                    if (e.type == HsTypes.CONFIRM) deliverConfirm(e, seq) else deliver(e, seq)
                 }
             } catch (_: IOException) {
                 // retried at the next flush
             }
         }
         // What still waits after it is announced again, so its end has a flush of its own ([announceWaitsLocked]).
-        lock.withLock { if (!forgotten) announceWaitsLocked() }
+        lock.withLock { if (!forgotten) announceWaitsLocked(seq) }
     }
 
     /**
@@ -2730,19 +2750,22 @@ class VaultDevice private constructor(
      * `hs.resp`'s wait. The owner keeps one flush, for the last length announced, so the soonest is announced, and
      * [flushOutbox] announces again what is left after it: no wait's end is left without a flush. Under [lock].
      */
-    private fun announceWaitsLocked() {
+    private fun announceWaitsLocked(seq: Long? = null) = synchronized(this) {
         val now = cfg.elapsedMs()
         val ends = quotaBackoff.values.map { it.first } + awaiting.map { it.waitUntilMs }
-        ends.filter { it > now }.minOrNull()?.let { if (it != announcedEndMs) announceEnd(it) }
+        ends.filter { it > now }.minOrNull()?.let { end ->
+            // The stop count as [quotaRefused] takes it: a flush's [seq] after a stop with no start since, else the current one.
+            if (end != announcedEndMs) announceEnd(end, if (seq != null && seq != stopSeq && collector == null) seq else stopSeq)
+        }
     }
 
     /** The end (elapsed clock) last announced on [quotaBackoffSet]: the one the owner's flush is set for. */
     @Volatile
     private var announcedEndMs = 0L
 
-    private fun announceEnd(end: Long) {
+    private fun announceEnd(end: Long, at: Long) {
         announcedEndMs = end
-        quotaBackoffs.tryEmit((end - cfg.elapsedMs()).coerceAtLeast(0))
+        quotaBackoffs.tryEmit(QuotaBackoff((end - cfg.elapsedMs()).coerceAtLeast(0), at))
     }
 
     /**
@@ -2981,7 +3004,8 @@ class VaultDevice private constructor(
         resendRespsLocked()
         // Queued whatever the gate says (its time is kept); deposited only while the gate admits it. The stop count is compared
         // with itself: a stop during it cancels the collection start that runs this (it relies on that cancellation).
-        tickConfirmLocked(t, save = true)?.let { if (mayDeposit(it, stopSeq)) deliverConfirm(it) }
+        val seq = stopSeq
+        tickConfirmLocked(t, save = true)?.let { if (mayDeposit(it, seq)) deliverConfirm(it, seq) }
     }
 
     /**
@@ -2990,12 +3014,12 @@ class VaultDevice private constructor(
      * retried at most once a minute and never on every message; and never over the time of a newer `hs.confirm` still
      * waiting in the outbox. A retryable refusal and `quota_exceeded` keep the entry, and so its time.
      */
-    internal suspend fun deliverConfirm(e: OutboxEntry) {
+    internal suspend fun deliverConfirm(e: OutboxEntry, seq: Long? = null) {
         var readdressed = false
         try {
             // The floor goes into the same write as the entry's removal: a crash between two writes would leave no
             // hs.confirm and the old time, 12 days away.
-            deliver(e) { x ->
+            deliver(e, seq) { x ->
                 if (isTerminal(x) && !confirmQueued()) {
                     st.vault?.confirmAtMs = now().toEpochMilli() - CONFIRM_RESEND.minus(RECONFIRM_EVERY).toMillis()
                     // (Fable L1) Queued under a token the vault has since replaced (a `relay.token.issued` handled after it,
@@ -3036,12 +3060,13 @@ class VaultDevice private constructor(
             // What a vault message brought (the refresh answer, `device.features`, an `hs.confirm`) waits in the outbox while
             // the gate is shut (a lock pending): the next flush it admits sends it. The stop count is compared with itself: this
             // runs at the end of a handling, which a stop cancels with the collection (it relies on that cancellation).
-            if (!mayDeposit(e, stopSeq)) continue
+            val seq = stopSeq
+            if (!mayDeposit(e, seq)) continue
             if (e.type == HsTypes.CONFIRM) {
-                deliverConfirm(e)
+                deliverConfirm(e, seq)
             } else {
                 try {
-                    deliver(e)
+                    deliver(e, seq)
                 } catch (_: IOException) {
                     // retried at the next flush
                 }

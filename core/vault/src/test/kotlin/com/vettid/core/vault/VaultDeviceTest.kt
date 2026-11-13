@@ -110,6 +110,11 @@ class VaultDeviceTest {
     private var depositGate: java.util.concurrent.CountDownLatch? = null
     private val depositsStarted = java.util.concurrent.atomic.AtomicInteger()
 
+    /** When set, a refused deposit waits for it before its answer (a refusal in flight); [refusalsStarted] counts arrivals. */
+    @Volatile
+    private var refuseGate: java.util.concurrent.CountDownLatch? = null
+    private val refusalsStarted = java.util.concurrent.atomic.AtomicInteger()
+
     /** Deposits the relay refused (any code). */
     private val refused = java.util.concurrent.atomic.AtomicInteger()
 
@@ -274,6 +279,8 @@ class VaultDeviceTest {
                         MockResponse.Builder().code(401).body("""{"code":"token_expired","message":""}""").build()
                     }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
+                        refusalsStarted.incrementAndGet()
+                        refuseGate?.await(10, TimeUnit.SECONDS)
                         refused.incrementAndGet()
                         refusedTokens.add(request.headers["Authorization"].orEmpty().removePrefix("VettID-Deposit "))
                         runCatching { refusedBodies.add(StrictJson.parseObject(request.body!!.toByteArray()).base64("payload")) }
@@ -1158,7 +1165,7 @@ class VaultDeviceTest {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             val ini = v.rekeyInit(d)
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
@@ -1296,7 +1303,7 @@ class VaultDeviceTest {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
@@ -1329,7 +1336,7 @@ class VaultDeviceTest {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             val ini = v.rekeyInit(d)
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
@@ -2292,7 +2299,7 @@ class VaultDeviceTest {
             val store = InMemoryDeviceStateStore()
             val (d, _) = pairedDevice(this, store)
             val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
-            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it.ms } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
@@ -2313,34 +2320,161 @@ class VaultDeviceTest {
     }
 
     /**
-     * (Show held as held) A stop and a start while a quota backoff runs (a reconnect) announce what is left of it again, so the
-     * owner's flush at its end, asked for under the new stop count, deposits the held `call.end`; a stop with no start announces
-     * nothing.
+     * (Show held as held) Each quota backoff is announced with the stop count it is announced at, taken together: a flush asked
+     * for under an announcement's count deposits nothing after a stop since; a start during the backoff (a reconnect) announces
+     * what is left of it under its own count, and a flush asked for under that one deposits the held `call.end`; a stop with no
+     * start announces nothing. Stop, start and the backoff's end are interleaved here step by step.
      */
     @Test
     fun aRestartDuringAQuotaBackoffAnnouncesItAgain() = runBlocking<Unit> {
         withTimeout(30_000) {
             val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
-            val seen = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
             val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
             refuseDeposits = RelayException.QUOTA_EXCEEDED
             refuseStatus = 429
             refuseQuota = RelayException.QUOTA_MAILBOX
             assertTrue(runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) }.isFailure)
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            val c0 = d.stopCount
+            assertEquals(listOf(VaultDevice.QuotaBackoff(min, c0)), seen.toList())
+            elapsed += min / 3
+            d.stop()
+            assertEquals("a stop alone announces nothing", 1, seen.size)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            d.start(scope)
+            val c1 = d.stopCount
+            assertTrue(c1 != c0)
+            assertEquals("the rest, under the new count", VaultDevice.QuotaBackoff(min - min / 3, c1), seen[1])
+            scope.cancel()
+            d.stop() // no collection in the way of the steps below
+            val c2 = d.stopCount
+            // A refusal now is announced under the count of its moment.
+            elapsed += min
+            d.flushOutbox(c2)
+            assertEquals(VaultDevice.QuotaBackoff(min * 2, c2), seen.last())
             refuseDeposits = null
             refuseQuota = null
             refuseStatus = 403
+            elapsed += min * 2
+            d.flushOutbox(c0)
+            d.flushOutbox(c1)
+            assertNull("asked for before a stop: nothing", deposits.poll(300, TimeUnit.MILLISECONDS))
+            d.flushOutbox(seen.last().stopCount)
+            assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
+            watcher.cancel()
+        }
+    }
+
+    /** A `call.end` held in the outbox, and the relay set to refuse the next deposit for a mailbox quota once [refuseGate] opens. */
+    private suspend fun heldCallEndAndAQuotaRefusalInFlight(d: VaultDevice) {
+        d.sendGate = VaultDevice.SendGate { false }
+        d.send("call.end", buildJsonObject { put("call_id", "c1") })
+        d.sendGate = VaultDevice.SendGate { true }
+        refuseDeposits = RelayException.QUOTA_EXCEEDED
+        refuseStatus = 429
+        refuseQuota = RelayException.QUOTA_MAILBOX
+        refuseGate = java.util.concurrent.CountDownLatch(1)
+        refusalsStarted.set(0)
+    }
+
+    /**
+     * (Show held as held) A flush asked for at count c0 whose deposit is in flight when the device is stopped, and refused for a
+     * mailbox quota after the stop, with no start since: its backoff is announced under c0, so the owner's flush when it ends
+     * deposits nothing (nothing goes after a stop that no flush was asked for since).
+     */
+    @Test
+    fun aQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            heldCallEndAndAQuotaRefusalInFlight(d)
+            val c0 = d.stopCount
+            val flush = async(Dispatchers.IO) { d.flushOutbox(c0) }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
+            d.stop() // the deposit is out at the relay
+            refuseGate!!.countDown()
+            flush.await()
+            refuseGate = null
             val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
-            val asked = d.stopCount
-            elapsed += min / 3
+            assertEquals(VaultDevice.QuotaBackoff(min, c0), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            elapsed += min
+            d.flushOutbox(seen.last().stopCount) // the owner's flush when the backoff ends
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            watcher.cancel()
+        }
+    }
+
+    /**
+     * As [aQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds], driven by a send: its own `call.end`'s deposit is in flight
+     * when the device is stopped and refused for a quota after it, with no start since. The backoff is announced under the
+     * send's count, so the owner's flush when it ends deposits nothing.
+     */
+    @Test
+    fun aSendsQuotaRefusalAfterAStopWithNoStartSendsNothingWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            refuseDeposits = RelayException.QUOTA_EXCEEDED
+            refuseStatus = 429
+            refuseQuota = RelayException.QUOTA_MAILBOX
+            refuseGate = java.util.concurrent.CountDownLatch(1)
+            refusalsStarted.set(0)
+            val c0 = d.stopCount
+            val send = async(Dispatchers.IO) { runCatching { d.send("call.end", buildJsonObject { put("call_id", "c1") }) } }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
+            d.stop() // the send's deposit is out at the relay
+            refuseGate!!.countDown()
+            assertTrue("the send says it waits", send.await().isFailure)
+            refuseGate = null
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(VaultDevice.QuotaBackoff(min, c0), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
+            elapsed += min
+            d.flushOutbox(seen.last().stopCount) // the owner's flush when the backoff ends
+            assertNull("nothing after the stop", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals(1, d.outboxEntries.size)
+            watcher.cancel()
+        }
+    }
+
+    /**
+     * The same refusal after a stop and a start (a reconnect) is announced under the current count: the owner's flush when it
+     * ends deposits the held `call.end` (the stop and the start came before the refusal, and the start had no backoff to
+     * announce).
+     */
+    @Test
+    fun aQuotaRefusalAfterAStopAndAStartGoesWhenItEnds() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, InMemoryDeviceStateStore())
+            val seen = java.util.concurrent.CopyOnWriteArrayList<VaultDevice.QuotaBackoff>()
+            val watcher = launch(kotlinx.coroutines.Dispatchers.Unconfined) { d.quotaBackoffSet.collect { seen += it } }
+            heldCallEndAndAQuotaRefusalInFlight(d)
+            val c0 = d.stopCount
+            val flush = async(Dispatchers.IO) { d.flushOutbox(c0) }
+            while (refusalsStarted.get() == 0) kotlinx.coroutines.delay(10)
             d.stop()
-            assertEquals("a stop alone announces nothing", listOf(min), seen.toList())
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             d.start(scope)
-            assertEquals("what is left, again", listOf(min, min - min / 3), seen.toList())
-            assertTrue("a new stop count for the flush asked now", d.stopCount != asked)
+            val c1 = d.stopCount
+            refuseGate!!.countDown()
+            flush.await()
+            refuseGate = null
+            val min = VaultDevice.QUOTA_BACKOFF_MIN.toMillis()
+            assertEquals(VaultDevice.QuotaBackoff(min, c1), seen.last())
+            refuseDeposits = null
+            refuseQuota = null
+            refuseStatus = 403
             elapsed += min
-            d.flushOutbox(d.stopCount)
+            d.flushOutbox(seen.last().stopCount)
             assertEquals("""{"call_id":"c1"}""", String(v.open(nextDeposit().second).body))
             scope.cancel()
             watcher.cancel()
