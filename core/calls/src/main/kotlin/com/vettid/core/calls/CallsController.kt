@@ -2,14 +2,23 @@ package com.vettid.core.calls
 
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.CallOutcome
+import com.vettid.core.data.calls.CallPermissions
+import com.vettid.core.data.calls.ConnectionCalls
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.CallReason
+import com.vettid.core.vault.CallLimits
+import com.vettid.core.vault.CallList
 import com.vettid.core.vault.CallRecord
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -42,8 +51,20 @@ interface CallVault {
     /** The fingerprint of [connectionId]'s pinned identity key, as the connection's details show it; null if unknown. */
     suspend fun fingerprint(connectionId: String): String?
 
+    /** (C2) This device's id in the vault (its own `device.list` entry): the stale sweep's own calls. */
+    suspend fun deviceId(): String? = null
+
+    /**
+     * (C2) [connectionId]'s pinned identity key itself (32 bytes), the key [fingerprint] is of; null if unknown. A form 2
+     * call names it (VAULT-MESSAGING 0.88.16).
+     */
+    suspend fun identityKey(connectionId: String): ByteArray? = null
+
     /** The name the app shows for [connectionId] on its screens; null if it has none. */
     fun name(connectionId: String): String?
+
+    /** (C2) The connection's first name, for the lines that name it so ("Calls with <First> are off."); null if none. */
+    fun firstName(connectionId: String): String? = null
 
     /**
      * The name for [connectionId] in a notification: [name], or null when the member's notifications show no names
@@ -73,7 +94,10 @@ interface CallVault {
 /** What was held back for the microphone permission: a call to [call], or (null) the answer to the ringing call. */
 data class MicrophoneRequest(val call: String?)
 
-/** What is known beyond one call, for the diagnostics view and the phone tests. Counts only. */
+/**
+ * What is known beyond one call, for the diagnostics view and the phone tests: counts, and the call ids of skipped
+ * `call.list` entries ([listSkippedIds]), cleared at every lock. Prints its counts only.
+ */
 data class CallsDiagnostics(
     /** Offers and answers that failed their checks since the process started. */
     val refused: Int = 0,
@@ -88,7 +112,17 @@ data class CallsDiagnostics(
     val errors: Int = 0,
     /** How often the listening to the vault's call events had to be started again (expected: 0). */
     val listenRestarts: Int = 0,
-)
+    /**
+     * (GC #7718) The `call.list` entries the last read skipped (they did not read), and the call ids of those whose id read
+     * (at most [CallsController.SKIPPED_IDS_KEPT]): kept in memory only, never logged, nothing else of an entry.
+     */
+    val listSkipped: Int = 0,
+    val listSkippedIds: List<String> = emptyList(),
+) {
+    override fun toString(): String =
+        "CallsDiagnostics(refused=$refused, droppedForTime=$droppedForTime, staleEnded=$staleEnded, errors=$errors, " +
+            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size})"
+}
 
 /**
  * Calls in the app: the one [CallMachine] of the process and what goes on around a call (CALLS-PLAN 0.1.1 C1).
@@ -124,7 +158,7 @@ class CallsController(
 ) : CallAccess, CallServiceHost {
     init {
         // What the app starts with is never a test configuration: those are switched on by hand, after the checks.
-        check(!config.dtlsPqcTrial && !config.faults.any) { "no test configuration by default" }
+        check(config.plain) { "no test configuration by default" }
     }
 
     @Volatile
@@ -145,8 +179,8 @@ class CallsController(
 
     /** Changes how the next call's engine is set up. Throws unless [testsAllowed] (or [c] is the plain configuration). */
     fun setMediaConfig(c: MediaConfig) {
-        val plain = !c.dtlsPqcTrial && !c.faults.any
-        check(plain || testsAllowedFlow.value) { "the post-quantum DTLS trial and the test faults are for the phone tests only" }
+        val plain = c.plain
+        check(plain || testsAllowedFlow.value) { "the DTLS trial, the test faults and relay only are for the phone tests only" }
         mediaConfigValue = c
     }
 
@@ -157,16 +191,42 @@ class CallsController(
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing; none comes: it does not ring.
         mayRing = { !vault.updateShowing && (open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null) },
+        peerKey = vault::identityKey,
+        vaultIsC2 = { vaultC2 },
     )
     private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig })
 
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
     val callDiagnostics: StateFlow<CallDiagnostics> = machine.diagnostics
+
+    /** (C5) Direct or relayed, per call that connected since the process started. */
+    val callPaths: StateFlow<CallPaths> = machine.paths
     val audioState: StateFlow<AudioState> = audio.state
 
     private val availabilityFlow = MutableStateFlow(CallAvailability.UNKNOWN)
     override val availability: StateFlow<CallAvailability> = availabilityFlow.asStateFlow()
+
+    private val permissionsFlow = MutableStateFlow(CallPermissions())
+    override val permissions: StateFlow<CallPermissions> = permissionsFlow.asStateFlow()
+
+    /** Reads of `call.permission.list` asked for, one at a time; asks that come while one runs make one more. */
+    private val permissionReads = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Bumped at every lock: a read or a change begun before it writes nothing after it. The bump with its clear, and each
+     * check with its write, are made under [permissionLock], so no write lands between a lock's bump and its clear.
+     */
+    private var permissionEpoch = 0L
+    private val permissionLock = Any()
+
+    /**
+     * Bumped by each change the member made here ([setAllowed]), under [permissionLock]: a read begun before it holds
+     * the list as it was and is dropped (the read the change asks for follows it), so the switch never flips back.
+     */
+    private var ownChanges = 0L
+
+    private fun permissionEpochNow(): Long = synchronized(permissionLock) { permissionEpoch }
 
     private val diagnosticsFlow = MutableStateFlow(CallsDiagnostics())
     val diagnostics: StateFlow<CallsDiagnostics> = diagnosticsFlow.asStateFlow()
@@ -179,6 +239,13 @@ class CallsController(
     /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
     @Volatile
     private var supported: Boolean? = null
+
+    /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
+    @Volatile
+    private var vaultC2 = false
+
+    /** (C2) The keep-alives of the active call, one loop per call id. */
+    private var keepalive: Pair<String, Job>? = null
 
     @Volatile
     private var open = false
@@ -199,6 +266,13 @@ class CallsController(
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
         scope.launch { vault.recheck.collect { if (open && supported == null) opened() } }
+        scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2) permissionReads.trySend(Unit) } }
+        scope.launch {
+            while (true) {
+                permissionReads.receive()
+                readPermissions()
+            }
+        }
         scope.launch {
             vault.droppedForTime.collect { type ->
                 if (type.startsWith("call.")) diagnosticsFlow.update { it.copy(droppedForTime = it.droppedForTime + 1) }
@@ -236,6 +310,9 @@ class CallsController(
 
     /** The connection's name for the call screens. */
     fun screenName(connectionId: String): String? = vault.name(connectionId)
+
+    /** The connection's first name for the call screens' lines that use it. */
+    fun screenFirstName(connectionId: String): String? = vault.firstName(connectionId)
 
     // --- the vault ---
 
@@ -276,11 +353,75 @@ class CallsController(
                 delay(PROBE_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
+            vaultC2 = records.formTwo
             supported = true
             publish()
-            endStale(records)
+            // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
+            if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
+            noteSkipped(records)
+            if (records.formTwo) endStaleC2(records) else endStale(records.calls)
             if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
             return
+        }
+    }
+
+    /** A read's skipped entries, in the diagnostics (this phone's own record of them). */
+    private fun noteSkipped(list: CallList) {
+        val ids = list.skipped.mapNotNull { it.callId }.take(SKIPPED_IDS_KEPT)
+        diagnosticsFlow.update { it.copy(listSkipped = list.skipped.size, listSkippedIds = ids) }
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Liveness") The call's device sends `call.keepalive` to its own vault as soon as the
+     * call is active on it ([CallState.Live.answerThrough]: the callee once its `call.answer` is with its vault, the
+     * caller once it took the answer; one sent before is answered `call.end{unavailable}`), then every 30 s until it
+     * ends. Only to a C2 vault (an S10 vault answers an unknown type): one the probe found C2, or a call in form 2,
+     * which proves it for that call even before the probe has answered.
+     */
+    private fun keepAlive(live: CallState.Live?) {
+        val id = live?.callId?.takeIf { (vaultC2 || live.formTwo) && live.answerThrough }
+        if (id == keepalive?.first) return
+        keepalive?.second?.cancel()
+        keepalive = id?.let {
+            it to scope.launch {
+                while (true) {
+                    try {
+                        signalling.keepalive(it)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {
+                        // One lost keep-alive is not an end: the next goes in 30 s, within the vault's window.
+                    }
+                    delay(CallLimits.KEEPALIVE_EVERY.toMillis())
+                }
+            }
+        }
+    }
+
+    /**
+     * (C2) The stale sweep against a C2 vault: by `device_id`, `exp` and the vault's `now`, never this phone's clock,
+     * and only this device's own calls (other devices' are left alone). A live active call of this device ends
+     * `failed`; its own outgoing call still ringing past `exp` ends `timeout`.
+     */
+    private suspend fun endStaleC2(list: CallList) {
+        val me = vault.deviceId()
+        val vaultNow = list.now
+        if (machine.state.value is CallState.Live || me == null || vaultNow == null) return
+        for (r in list.calls) {
+            val reason = staleReasonC2(r, me, vaultNow) ?: continue
+            runCatching { vault.gateway.end(r.callId, reason) }
+                .onSuccess { diagnosticsFlow.update { it.copy(staleEnded = it.staleEnded + 1) } }
+        }
+    }
+
+    /** The end of [r] by the C2 rule, or null when it is not this device's or not stale by the vault's [vaultNow]. */
+    private fun staleReasonC2(r: CallRecord, me: String, vaultNow: Instant): String? {
+        val pastExp = r.exp?.let(::time)?.let { !vaultNow.isBefore(it) } ?: false
+        return when {
+            r.deviceId != me -> null
+            r.state == STATE_ACTIVE -> CallReason.FAILED
+            r.state == STATE_RINGING && r.direction == DIRECTION_OUT && pastExp -> CallReason.TIMEOUT
+            else -> null
         }
     }
 
@@ -311,13 +452,77 @@ class CallsController(
         }
     }
 
+    /**
+     * (C2) Reads `call.permission.list` into [permissions]: what was read before stays while a read fails (it is tried
+     * again a few times); a read begun before a lock writes nothing after it.
+     */
+    @Suppress("ReturnCount") // each way a read ends: locked meanwhile, refused, read
+    private suspend fun readPermissions() {
+        val epoch = permissionEpochNow()
+        val changes = synchronized(permissionLock) { ownChanges }
+        repeat(PROBE_ATTEMPTS) { attempt ->
+            if (!open || !vaultC2 || epoch != permissionEpochNow()) return
+            val list = try {
+                vault.gateway.permissions()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: VaultOpException) {
+                // `unsupported_type` from a vault the probe called C2 cannot happen; any refusal leaves things as they are.
+                if (e.code == UNSUPPORTED) {
+                    synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
+                }
+                return
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                delay(PROBE_RETRY.toMillis() * (attempt + 1))
+                return@repeat
+            }
+            val read = CallPermissions(
+                supported = true,
+                known = true,
+                differing = list.associate { it.connectionId to ConnectionCalls(it.allowed, it.limited) }
+                    .filterValues { it != ConnectionCalls() },
+            )
+            synchronized(permissionLock) {
+                if (epoch == permissionEpoch && changes == ownChanges && open) permissionsFlow.value = read
+            }
+            return
+        }
+    }
+
+    override suspend fun setAllowed(connectionId: String, allowed: Boolean) {
+        val epoch = permissionEpochNow()
+        vaultGuard {
+            if (!open || !vaultC2) throw VaultFailure(FailureKind.OTHER, CODE_NO_PERMISSION)
+            vault.gateway.setPermission(connectionId, allowed)
+        }
+        synchronized(permissionLock) {
+            ownChanges++
+            if (epoch == permissionEpoch) {
+                permissionsFlow.update { p ->
+                    val now = p.of(connectionId).copy(allowed = allowed)
+                    p.copy(differing = if (now == ConnectionCalls()) p.differing - connectionId else p.differing + (connectionId to now))
+                }
+            }
+        }
+        // The vault's own word follows (also its sync.event): turning calls on may not end a limit.
+        permissionReads.trySend(Unit)
+    }
+
     private fun locked() {
+        synchronized(permissionLock) {
+            permissionEpoch++
+            permissionsFlow.value = CallPermissions()
+        }
         supported = null
+        vaultC2 = false
         testsAllowedFlow.value = false
         machine.vaultLocking()
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
         // included, which nobody can see behind the unlock screen) would show then, long after.
         machine.dismiss()
+        // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
+        // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
+        diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
         publish()
     }
 
@@ -343,6 +548,7 @@ class CallsController(
         } else {
             audio.stop()
         }
+        keepAlive(live)
         if (live?.phase == CallPhase.ACTIVE) {
             if (longCall == null) {
                 // The vault stops counting a call as live 12 hours after its answer; the frame cipher's nonce must
@@ -358,8 +564,8 @@ class CallsController(
         }
     }
 
-    override suspend fun history(connectionId: String): List<CallHistoryEntry> {
-        val records = if (supported == true) {
+    override suspend fun history(connectionId: String): CallHistory {
+        val list = if (supported == true) {
             try {
                 vault.gateway.list(HISTORY_LIMIT)
             } catch (e: CancellationException) {
@@ -370,12 +576,29 @@ class CallsController(
         } else {
             null
         }
-        val t = now()
-        return records.orEmpty().filter { it.connectionId == connectionId }.mapNotNull { entry(it, t) }
+        list?.let(::noteSkipped)
+        return historyOf(list, connectionId, now())
     }
 
     companion object {
         const val HISTORY_LIMIT = 200
+
+        /** (C2) The calls permission was asked for while the vault is locked or has none. */
+        const val CODE_NO_PERMISSION = "calls_permission_unavailable"
+
+        /** How many skipped call ids [CallsDiagnostics.listSkippedIds] keeps. */
+        const val SKIPPED_IDS_KEPT = 20
+
+        /**
+         * (GC #7718) The conversation's calls of [list]: the entries that read, and whether some could not be shown (one
+         * skipped for this connection, or whose connection did not read, or one of its own without a readable start).
+         */
+        internal fun historyOf(list: CallList?, connectionId: String, now: Instant): CallHistory {
+            val mine = list?.calls.orEmpty().filter { it.connectionId == connectionId }
+            val entries = mine.mapNotNull { entry(it, now) }
+            val skipped = list?.skipped.orEmpty().any { it.connectionId == null || it.connectionId == connectionId }
+            return CallHistory(entries, someNotShown = skipped || entries.size < mine.size)
+        }
         val MAX_CALL: Duration = Duration.ofHours(12)
 
         /**

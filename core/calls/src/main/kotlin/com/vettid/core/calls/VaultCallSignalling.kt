@@ -57,7 +57,16 @@ internal class VaultCallSignalling(
      * vault: it rings only once it does, never over the unlock screen.
      */
     private val mayRing: suspend () -> Boolean = { true },
+    /**
+     * (C2) The connection's identity key as this device's vault gives it (`connection.get`), for a form 2 start: the
+     * callee this device names in `m2`, fixed for the call (VAULT-MESSAGING 0.88.16). Null for no such connection.
+     */
+    private val peerKey: suspend (connectionId: String) -> ByteArray? = { null },
+    /** (C2) Whether the vault is C2, as the `call.list` probe found it. */
+    private val vaultIsC2: () -> Boolean = { false },
 ) : CallSignalling {
+    override val formTwo: Boolean get() = vaultIsC2()
+
     private val lock = Any()
     private val placed = LinkedHashMap<String, OutgoingCall>()
     private val ringing = LinkedHashMap<String, IncomingCall>()
@@ -86,7 +95,7 @@ internal class VaultCallSignalling(
                 is CallEvent.Ice -> SignalEvent.Ice(e.ice.callId, e.ice.candidates)
                 is CallEvent.Ended -> {
                     forget(e.callId)
-                    SignalEvent.End(e.callId, e.reason)
+                    SignalEvent.End(e.callId, e.reason, e.supersededBy)
                 }
             }
         },
@@ -126,13 +135,17 @@ internal class VaultCallSignalling(
             ringing[call.callId] = call
             while (ringing.size > MAX_KEPT) ringing.remove(ringing.keys.first())
         }
-        return SignalEvent.Offer(call.callId, call.connectionId, call.sdp, call.exp, call.ringFor, call.ice.servers, call.negotiated.chosen)
+        return SignalEvent.Offer(
+            call.callId, call.connectionId, call.sdp, call.exp, call.ringFor, call.ice.servers, call.negotiated.chosen, call.formTwo,
+        )
     }
 
     /** Rule 2. */
     private suspend fun answer(e: CallEvent.Answer): SignalEvent? {
+        // Taken out under the lock: one answer is checked per call, and a duplicate finds nothing (it cannot end a
+        // call another answer was accepted for).
         val call = synchronized(lock) {
-            placed[e.callId] ?: run {
+            placed.remove(e.callId) ?: run {
                 // The vault can pass the answer on before its answer to `call.start` has been read here.
                 if (starting > 0 && heldAnswers.size < MAX_KEPT) heldAnswers += e
                 null
@@ -148,7 +161,7 @@ internal class VaultCallSignalling(
             SignalEvent.AnswerRejected(call.callId)
         } finally {
             // Answered or refused, the ephemeral key has done its work (rule 3).
-            forget(call.callId)
+            call.destroy()
         }
     }
 
@@ -170,7 +183,14 @@ internal class VaultCallSignalling(
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
         val call = try {
-            gateway.start(connectionId, sdp, suites).also { c ->
+            // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
+            // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
+            val peerIk = if (formTwo) {
+                peerKey(connectionId) ?: throw CallSecurityException("C2 vault without the connection's identity key: no call placed")
+            } else {
+                null
+            }
+            gateway.start(connectionId, sdp, suites, peerIk).also { c ->
                 synchronized(lock) {
                     placed[c.callId] = c
                     while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
@@ -189,7 +209,7 @@ internal class VaultCallSignalling(
         }
         // An answer that overtook the vault's answer to `call.start`: checked now, as any answer.
         for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
-        return PlacedCall(call.callId, call.exp, call.ice.servers)
+        return PlacedCall(call.callId, call.exp, call.ice.servers, call.formTwo)
     }
 
     override suspend fun answer(callId: String, sdp: String, suites: List<MediaSuite>): MediaKeys {
@@ -197,13 +217,16 @@ internal class VaultCallSignalling(
         // The suite was fixed when the offer was checked; an engine that cannot do it must not answer.
         if (call.negotiated.chosen !in suites) throw CallSecurityException("the engine cannot do the negotiated suite")
         return try {
-            handOver(gateway.answer(call, sdp))
+            // An offer in form 2 proves the vault C2 for this call, whatever the probe has found yet.
+            handOver(gateway.answer(call, sdp, keepalive = formTwo || call.formTwo))
         } catch (e: CallMessageException) {
             throw CallSecurityException("call.answer", e)
         }
     }
 
     override suspend fun ringing(callId: String) = gateway.ringing(callId)
+
+    override suspend fun keepalive(callId: String) = gateway.keepalive(callId)
 
     override suspend fun ice(callId: String, candidates: List<CallCandidate>) = gateway.ice(callId, candidates)
 

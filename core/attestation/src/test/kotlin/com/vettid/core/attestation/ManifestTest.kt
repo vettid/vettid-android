@@ -226,4 +226,124 @@ class ManifestTest {
         assertThrows(AttestationException.Stale::class.java) { ev.verifyEnclave(desc, att, m7, true, t0.plus(day)) }
         assertThrows(AttestationException.Stale::class.java) { ev.verifyEnclave(desc, att, m7, true, t0.plus(day).plusSeconds(1)) }
     }
+
+    // --- ANDROID-PLAN 0.1.124: the record of each check ---
+
+    private val etk = com.vettid.core.crypto.hpke.KemPrivateKey.generate().publicKey
+    private val t0 = Instant.parse("2026-10-02T12:00:00Z")
+
+    private fun desc(id: String = "i-test-1", pcr0: String = "cd".repeat(48), notAfter: Instant = t0.plus(Duration.ofHours(24))) =
+        com.vettid.core.crypto.altchan.Descriptor.marshal(id, etk, pcr0, notAfter)
+
+    private fun ud(d: ByteArray) = com.vettid.core.crypto.altchan.AltChannel.etkUserData(d)
+
+    /** [passed] lines passed (line 1, the manifest, included), the next one failed, every later one not run. */
+    private fun assertStopsAt(r: EnclaveRecord, passed: Int) {
+        EnclaveCheck.entries.forEach {
+            val want = when {
+                it.ordinal < passed -> CheckResult.PASSED
+                it.ordinal == passed -> CheckResult.FAILED
+                else -> CheckResult.NOT_RUN
+            }
+            assertEquals("${it.name} of a run stopped at line ${passed + 1}", want, r.result(it))
+        }
+    }
+
+    @Test
+    fun aPassRecordsEveryCheckAndTheValues() {
+        val nsm = FakeNsm(pcr0 = "cd".repeat(48))
+        val ev = EnclaveVerifier(NitroVerifier(listOf(nsm.ca.root)))
+        val m7 = verifier.verify(serve(manifest(7, r3, r4)))
+        assertEquals(key.keyId, m7.keyId)
+        val d = desc()
+        val v = ev.verify(d, nsm.attest(t0, userData = ud(d)), m7, enroll = false, now = t0.plusSeconds(60))
+        val r = v.record
+        assertTrue(r.allPassed)
+        assertEquals(4L, v.enclave().release.number)
+        assertEquals(key.keyId, r.manifestKeyId)
+        assertEquals(7L, r.manifestSerial)
+        assertEquals("cd".repeat(48), r.pcr0)
+        assertEquals("11".repeat(48), r.pcr1)
+        assertEquals("22".repeat(48), r.pcr2)
+        assertEquals(t0, r.attestedAt)
+        assertEquals(t0.plus(Duration.ofHours(24)), r.notAfter)
+        assertEquals(4L, r.releaseNumber)
+        assertEquals(com.vettid.core.attestation.manifest.ReleaseStatus.ACTIVE, r.releaseStatus)
+        assertNull(r.refusal)
+    }
+
+    @Test
+    fun aFailureAtEachCheckIsRecordedThereAndTheRestNotRun() {
+        val nsm = FakeNsm(pcr0 = "cd".repeat(48))
+        val ev = EnclaveVerifier(NitroVerifier(listOf(nsm.ca.root)))
+        val m7 = verifier.verify(serve(manifest(7, r3, r4)))
+        val d = desc()
+        val good = nsm.attest(t0, userData = ud(d))
+        fun run(desc: ByteArray, att: ByteArray, now: Instant = t0, m: ReleaseManifest = m7) = ev.verify(desc, att, m, false, now).record
+
+        // Line 2: the document's format (not a COSE_Sign1), a non-ES384 algorithm, a chain to another root.
+        assertStopsAt(run(d, byteArrayOf(1, 2, 3)), 1)
+        assertStopsAt(run(d, nsm.attest(t0, userData = ud(d), alg = -7)), 1)
+        val other = FakeNsm(pcr0 = "cd".repeat(48))
+        assertStopsAt(run(d, other.attest(t0, userData = ud(d))), 1)
+        // Line 3: signed by another key than the chain's leaf.
+        val forged = nsm.attest(t0, userData = ud(d), signer = ecKeyPair())
+        val r3 = run(d, forged)
+        assertStopsAt(r3, 2)
+        assertNull("no values from a document that did not verify", r3.pcr0)
+        // Line 4: a descriptor that does not parse, and user_data over other bytes.
+        assertStopsAt(run(byteArrayOf(9, 9), good), 3)
+        val r4 = run(desc("i-test-2"), good)
+        assertStopsAt(r4, 3)
+        assertTrue("the PCRs rest on lines 2 and 3, which passed", r4.verified(EnclaveCheck.CHAIN, EnclaveCheck.SIGNATURE))
+        assertTrue("Valid until rests on line 4 too", !r4.verified(EnclaveCheck.CHAIN, EnclaveCheck.SIGNATURE, EnclaveCheck.KEY))
+        // Line 5: too old, and too far ahead.
+        assertStopsAt(run(d, good, t0.plus(Duration.ofHours(27))), 4)
+        assertStopsAt(run(d, good, t0.minus(Duration.ofMinutes(6))), 4)
+        // Line 6: debug PCRs.
+        val dbg = FakeNsm(nsm.ca, pcr0 = "00".repeat(48), pcr1 = "00".repeat(48), pcr2 = "00".repeat(48))
+        // (The descriptor names a real release: the debug check comes before line 7's comparison.)
+        assertStopsAt(run(d, dbg.attest(t0, userData = ud(d))), 5)
+        // Line 7: the descriptor names another release.
+        val dOther = desc(pcr0 = "ef".repeat(48))
+        assertStopsAt(run(dOther, nsm.attest(t0, userData = ud(dOther))), 6)
+        // Line 8: valid for longer than 24 h + 5 min.
+        val dLong = desc(notAfter = t0.plus(Duration.ofHours(25)))
+        assertStopsAt(run(dLong, nsm.attest(t0, userData = ud(dLong))), 7)
+        // Line 9: not listed, and listed with other PCR1.
+        val nsmU = FakeNsm(nsm.ca, pcr0 = "12".repeat(48))
+        val dU = desc(pcr0 = "12".repeat(48))
+        val rU = run(dU, nsmU.attest(t0, userData = ud(dU)))
+        assertStopsAt(rU, 8)
+        assertNull("no release without line 9", rU.releaseNumber)
+        val nsmX = FakeNsm(nsm.ca, pcr0 = "cd".repeat(48), pcr1 = "99".repeat(48))
+        assertStopsAt(run(d, nsmX.attest(t0, userData = ud(d))), 8)
+    }
+
+    /** Every check passed and the release is refused after them: not active, for an enrollment. */
+    @Test
+    fun aReleaseNotActiveForAnEnrollmentIsRefusedAfterEveryCheck() {
+        val nsm = FakeNsm(pcr0 = "ab".repeat(48))
+        val ev = EnclaveVerifier(NitroVerifier(listOf(nsm.ca.root)))
+        val m7 = verifier.verify(serve(manifest(7, r3, r4)))
+        val d = desc(pcr0 = "ab".repeat(48))
+        val v = ev.verify(d, nsm.attest(t0, userData = ud(d)), m7, enroll = true, now = t0)
+        assertTrue(v.record.allPassed)
+        assertEquals(EnclaveRefusal.NOT_ACTIVE, v.record.refusal)
+        assertThrows(AttestationException.Release::class.java) { v.enclave() }
+    }
+
+    /** A refused manifest: line 1 failed, nothing else checked, no key id or serial. */
+    @Test
+    fun aRefusedManifestRecordsOnlyLineOne() {
+        val r = EnclaveRecord.manifestFailed(t0)
+        assertStopsAt(r, 0)
+        assertNull(r.manifestKeyId)
+        assertNull(r.manifestSerial)
+    }
+
+    @Test
+    fun theRootFingerprintIsThePinnedRoots() {
+        assertEquals(com.vettid.core.attestation.nitro.NitroRoot.SHA256_HEX, com.vettid.core.attestation.nitro.NitroRoot.fingerprint)
+    }
 }

@@ -182,7 +182,7 @@ fun CallScreen(state: CallUiState, actions: CallActions, modifier: Modifier = Mo
             Spacer(Modifier.height(Spacing.s))
             when (val call = state.call) {
                 is CallState.Live -> LiveCall(call, state, name, actions, now)
-                is CallState.Ended -> EndedCall(call, name, actions.onDismiss)
+                is CallState.Ended -> EndedCall(call, endedName(call, state, name), actions.onDismiss)
                 CallState.Idle -> Unit
             }
         }
@@ -261,6 +261,10 @@ private fun elapsed(since: Instant?, now: () -> Instant): String {
     }
     return CallTexts.clock(seconds)
 }
+
+/** (C2) "Calls with <First> are off." takes the first name, as the owner approved it; every other ending the full one. */
+internal fun endedName(call: CallState.Ended, state: CallUiState, name: String): String =
+    if (call.reason == CallEnd.CALLS_OFF) AccountNames.isolateOrNull(state.firstName) ?: name else name
 
 @Composable
 private fun ColumnScope.EndedCall(call: CallState.Ended, name: String, onDismiss: () -> Unit) {

@@ -697,8 +697,13 @@ class SocialManager internal constructor(
 
     private suspend fun onConnectionEvent(b: JsonObject) {
         val conn = VaultJson.str(b, "connection_id") ?: return
+        val event = VaultJson.str(b, "event")
+        // (GC #7478; VAULT-MESSAGING 0.88.7 §3.4.1 "Stale is not final") A rekey or reconnect makes a `stale` connection
+        // active again: shown so at once, before the re-read below, which confirms it (or corrects it, if the vault still
+        // says `stale`).
+        if (event == EVENT_REKEYED || event == EVENT_RECONNECTED) activeAgain(conn)
         runCatching { refresh() }
-        when (VaultJson.str(b, "event")) {
+        when (event) {
             "added" -> onAdded(conn, VaultJson.str(b, "pending_id") ?: conn)
             // An outgoing request ended without a connection other than by this member's decline (§6.4);
             // `reason: "declined"`: the inviter declined (0.10.5), told once with the sync.event that accompanies it.
@@ -712,6 +717,20 @@ class SocialManager internal constructor(
                 loadedFlow.update { it - conn }
                 pagingFlow.update { it - conn }
                 authFlow.update { it - conn }
+            }
+        }
+    }
+
+    /**
+     * [conn], held as `stale`, is active again (a `connection.event` `rekeyed` or `reconnected`); a connection in any other
+     * state is left as it is. Written only in the epoch the event was taken in ([currentEpoch]), as every event's write.
+     */
+    private suspend fun activeAgain(conn: String) {
+        val epoch = currentEpoch()
+        synchronized(localLock) {
+            if (epoch != lockEpoch.get()) return
+            connectionsFlow.update { l ->
+                l.map { if (it.id == conn && it.state == ConnectionState.STALE) it.copy(state = ConnectionState.ACTIVE) else it }
             }
         }
     }
@@ -2134,6 +2153,10 @@ class SocialManager internal constructor(
 
         /** Messages asked for per `message.list` page; the vault also stops at 131,072 bytes (§10.5.2). */
         private const val PAGE = 100
+
+        /** `connection.event` `event`s of a new epoch (§10.4): a `stale` connection is active again (0.88.7). */
+        private const val EVENT_REKEYED = "rekeyed"
+        private const val EVENT_RECONNECTED = "reconnected"
 
         /** `pending.list` entries asked for per page (§10.4.2: 1-100); the read stops at this many pages. */
         private const val PENDING_PAGE = 100

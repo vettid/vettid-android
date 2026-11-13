@@ -344,6 +344,18 @@ data class AttestationInfo(
     val bootKeyFingerprint: String?,
     val lastRelease: Long,
     val lastReleaseFingerprint: String?,
+    /** (ANDROID-PLAN 0.1.124) This app's version and build, "1.2.3 (45)". */
+    val appVersion: String = "",
+    /**
+     * (ANDROID-PLAN 0.1.124, VAULT-RELEASES) The signed tag's prefix of this build's channel, "release/prod/" or
+     * "release/staging/"; null where no tag names the vault's releases (the dev stack).
+     */
+    val releaseTagPrefix: String? = null,
+    /**
+     * (ANDROID-PLAN 0.1.124) SHA-256 of the Nitro root this build checks the chain against (built in, never from the network):
+     * the AWS root in production and staging, the dev stack's test root there.
+     */
+    val rootFingerprint: String = com.vettid.core.attestation.nitro.NitroRoot.fingerprint,
 )
 
 /** (A6 audit N1) A transfer to this phone waiting for the old phone's approval: its code, and when its `hs.init` went out. */
@@ -476,6 +488,13 @@ enum class FailureKind {
 
     /** The move to this phone did not finish (`transfer_incomplete`): the old phone approves it again. */
     TRANSFER_INCOMPLETE,
+
+    /**
+     * (VAULT-MESSAGING 0.88.17 §3.3, §11.4) `state_unreadable`: the part of a feature others call directly does not read,
+     * so the vault did not open. Nothing was written or lost, and it is not a PIN failure; the member is never told to set
+     * the vault up again. A later try (or a release that reads the part) opens it.
+     */
+    STATE_UNREADABLE,
 
     /**
      * (VAULT-MESSAGING 0.83.11 §11.14.10) `transfer_incomplete` to one of [VaultCodes.MOVE_GATED]: the move to this phone

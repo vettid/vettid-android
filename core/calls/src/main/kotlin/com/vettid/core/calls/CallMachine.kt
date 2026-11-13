@@ -55,6 +55,11 @@ internal class CallMachine(
     /** Measurements of the current (or last) call. */
     val diagnostics: StateFlow<CallDiagnostics> = diagnosticsFlow.asStateFlow()
 
+    private val pathsFlow = MutableStateFlow(CallPaths())
+
+    /** Each call that connected, counted once when it ends, by the last path the stack reported for it. */
+    val paths: StateFlow<CallPaths> = pathsFlow.asStateFlow()
+
     private val restartsFlow = MutableStateFlow(0)
 
     /** How often the listening to the vault's call events had to be started again (expected: 0). */
@@ -72,6 +77,12 @@ internal class CallMachine(
     /** Outgoing calls the member hung up before the vault had answered `call.start`: ended as soon as it does. */
     private val abandoned = mutableSetOf<Int>()
 
+    /**
+     * Glare winners that ended while this device's lost call waited for them: an offer for one of them that still
+     * arrives (late, or delivered again) is not rung or answered. A few ids, memory only.
+     */
+    private val endedWinners = ArrayDeque<String>()
+
     private sealed interface Msg {
         data class Call(val connectionId: String) : Msg
         data object Answer : Msg
@@ -87,9 +98,10 @@ internal class CallMachine(
         class Gathering(val seq: Int) : Msg
         class Failed(val seq: Int, val reason: CallEnd) : Msg
         class Timer(val seq: Int, val kind: TimerKind) : Msg
+        class Path(val seq: Int, val relayed: Boolean) : Msg
     }
 
-    private enum class TimerKind { RING_OUT, RING_IN, GATHER, CONNECT, ICE_FLUSH }
+    private enum class TimerKind { RING_OUT, RING_IN, GATHER, CONNECT, DECRYPT, ICE_FLUSH }
 
     /** One call's working state. Touched only by the loop, except [lane], which is a queue. */
     private class Session(
@@ -108,12 +120,38 @@ internal class CallMachine(
         var activeSince: Instant? = null
         var reconnecting = false
         var keysSet = false
+
+        /** (C2) The answering device's outgoing track is held until its receiver first decrypts a frame. */
+        var heldForDecrypt = false
+
+        /** (C2) The call is in form 2: placed in form 2, or answering a form 2 offer. */
+        var formTwo = false
         var remoteApplied = false
         var canSendIce = false
         var gathered = 0
         var iceMessages = 0
         var flushScheduled = false
         var answeredAtMs: Long? = null
+
+        /**
+         * (C2, VAULT-MESSAGING §10.10 "Glare") This outgoing call lost a glare to the connection's call with this id:
+         * the vault ended it (nothing more is sent for it) and rings for that call next, which this device answers
+         * without asking as soon as its offer is here ([glareOffer]); until then the call screen stays as it was, and
+         * the ring timer still bounds the wait (then it shows busy, as before C2).
+         */
+        var supersededBy: String? = null
+
+        /**
+         * This member ended the call here (a hang-up, a decline, a lock): the connection's held offer is then not rung,
+         * since a call rings only while the vault is open and the member has just said no.
+         */
+        var memberEnded = false
+
+        /** The connection's own offer that arrived while this outgoing call rang to it (a glare's winner, perhaps). */
+        var glareOffer: SignalEvent.Offer? = null
+
+        /** The last path the stack reported for this call (relayed or direct); null while it has said nothing. */
+        var relayed: Boolean? = null
 
         /** The answer's keys until the engine has them (it wipes them); wiped here if the call ends first. */
         var keys: MediaKeys? = null
@@ -184,7 +222,10 @@ internal class CallMachine(
         when (m) {
             is Msg.Call -> if (s == null) startOutgoing(m.connectionId)
             Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING) answerIncoming(s)
-            Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) finish(s, CallEnd.DECLINED_HERE, CallReason.DECLINE)
+            Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
+                s.memberEnded = true
+                finish(s, CallEnd.DECLINED_HERE, CallReason.DECLINE)
+            }
             is Msg.HangUp -> if (s != null) hangUp(s, m.reason)
             is Msg.Mute -> if (s != null) {
                 s.muted = m.muted
@@ -194,12 +235,14 @@ internal class CallMachine(
             Msg.Dismiss -> if (s == null) stateFlow.value = CallState.Idle
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
-            is Msg.Media -> if (s != null && s.seq == m.seq) onMedia(s, m.event)
+            // A call that lost a glare has let its media go: what its engine still reports is of no use.
+            is Msg.Media -> if (s != null && s.seq == m.seq && s.supersededBy == null) onMedia(s, m.event)
             is Msg.Answered -> if (s != null && s.seq == m.seq) onAnswered(s)
             is Msg.RemoteApplied -> if (s != null && s.seq == m.seq) s.remoteApplied = true
             is Msg.Gathering -> if (s != null && s.seq == m.seq && s.gathered == 0) timer(s, TimerKind.GATHER, timings.gather)
-            is Msg.Failed -> if (s != null && s.seq == m.seq) finish(s, m.reason, CallReason.FAILED)
+            is Msg.Failed -> if (s != null && s.seq == m.seq && s.supersededBy == null) finish(s, m.reason, CallReason.FAILED)
             is Msg.Timer -> if (s != null && s.seq == m.seq) onTimer(s, m.kind)
+            is Msg.Path -> if (s != null && s.seq == m.seq) s.relayed = m.relayed
         }
     }
 
@@ -289,6 +332,7 @@ internal class CallMachine(
 
     private fun refusal(code: String): CallEnd = when (code) {
         "busy" -> CallEnd.OWN_VAULT_BUSY
+        "calls_off" -> CallEnd.CALLS_OFF
         "not_found", "connection_unavailable" -> CallEnd.UNAVAILABLE
         "owner_check_required" -> CallEnd.OWNER_CHECK_REQUIRED
         "unsupported_type" -> CallEnd.NOT_SUPPORTED
@@ -304,6 +348,9 @@ internal class CallMachine(
         val early = s.early.toList()
         s.early.clear()
         s.callId = m.call.callId
+        // An offer held before the call had its id, that turns out to carry this very id, is no other call.
+        if (s.glareOffer?.callId == m.call.callId) s.glareOffer = null
+        s.formTwo = m.call.formTwo
         s.phase = CallPhase.CALLING
         s.canSendIce = true
         diagnosticsFlow.update { it.copy(tapToPlacedMs = m.atMs - s.tappedAtMs) }
@@ -329,6 +376,14 @@ internal class CallMachine(
             return
         }
         val engine = s.engine ?: return
+        // (C2, VAULT-MESSAGING "Key confirmation") A device answering a form 2 offer (it answers in form 2, whatever
+        // the vault probe has found yet) sends no media, microphone or camera, until its receiver first decrypts a
+        // frame: that proves the caller holds the same keys.
+        if (offer.formTwo) {
+            s.formTwo = true
+            s.heldForDecrypt = true
+            engine.setHeld(true)
+        }
         // The callee gathers no address before the member answers (CALLS-PLAN §2 step 6).
         s.lane.trySend {
             // The cryptors are made for the suite chosen when the offer was checked, the one the keys will be for.
@@ -351,6 +406,7 @@ internal class CallMachine(
 
     private fun onAnswered(s: Session) {
         s.keysSet = true
+        publish(s) // the answer is with the vault: keep-alives may go
         s.canSendIce = true
         timer(s, TimerKind.CONNECT, timings.connect)
         scheduleFlush(s, timings.iceBatch)
@@ -369,9 +425,10 @@ internal class CallMachine(
     }
 
     private fun hangUp(s: Session, reason: CallEnd) {
+        s.memberEnded = true
         when {
             s.phase == CallPhase.INCOMING -> finish(s, if (reason == CallEnd.HUNG_UP) CallEnd.DECLINED_HERE else reason, CallReason.DECLINE)
-            s.callId == null -> finish(s, reason, null)
+            s.callId == null || s.supersededBy != null -> finish(s, reason, null)
             else -> finish(s, reason, CallReason.HANGUP)
         }
     }
@@ -381,7 +438,12 @@ internal class CallMachine(
     @Suppress("CyclomaticComplexMethod")
     private fun onSignal(s: Session?, e: SignalEvent) {
         when (e) {
-            is SignalEvent.Offer -> if (s == null) ring(e)
+            is SignalEvent.Offer -> when {
+                e.callId in endedWinners -> Unit // a glare's winner that already ended
+                s == null -> ring(e)
+                glareWith(s, e) -> if (s.supersededBy == e.callId) takeGlare(s, e) else s.glareOffer = e
+                else -> Unit // busy here: the vault rings every device, and this one is in another call
+            }
             is SignalEvent.Ringing -> if (s != null && s.callId == e.callId && s.phase == CallPhase.CALLING) {
                 s.phase = CallPhase.RINGING
                 diagnosticsFlow.update { it.copy(tapToRingingMs = elapsedMs() - s.tappedAtMs) }
@@ -403,20 +465,101 @@ internal class CallMachine(
                     s.pendingRemote += e.candidates
                 }
             }
-            is SignalEvent.End -> if (s != null && s.callId == e.callId) finish(s, ended(s, e.reason), null)
+            is SignalEvent.End -> if (s != null) onEnd(s, e)
         }
     }
 
+    /** The vault's `call.end` for the call here, for its held glare offer, or for neither. */
+    private fun onEnd(s: Session, e: SignalEvent.End) {
+        if (s.glareOffer?.callId == e.callId) {
+            // The connection's held offer ended (its caller hung up): it is no longer one to ring or answer, and an
+            // offer for it delivered again is not either.
+            s.glareOffer = null
+            rememberEnded(e.callId)
+        } else if (s.supersededBy != null && s.supersededBy == e.callId) {
+            // The winner itself ended before its offer reached this device: there is nothing to answer, and the vault
+            // ended this device's own call already. A late offer for it is not answered or rung.
+            rememberEnded(e.callId)
+            finish(s, CallEnd.MISSED, null)
+        } else if (s.callId == e.callId && s.supersededBy == null) {
+            // (While a lost glare waits for its winner, X's own end came already: a second one changes nothing.)
+            if (superseded(s, e)) {
+                val by = e.supersededBy
+                val held = s.glareOffer
+                if (held != null && held.callId == by && now().isBefore(held.exp)) takeGlare(s, held) else lostGlare(s, by)
+            } else {
+                finish(s, ended(s, e.reason), null)
+            }
+        }
+    }
+
+    private fun rememberEnded(callId: String) {
+        endedWinners.addLast(callId)
+        if (endedWinners.size > MAX_ENDED_WINNERS) endedWinners.removeFirst()
+    }
+
+    /** [e] is the connection's own call while this device's outgoing call to it still rings: a glare, perhaps. */
+    private fun glareWith(s: Session, e: SignalEvent.Offer): Boolean =
+        s.direction == CallDirection.OUTGOING && s.connectionId == e.connectionId && e.callId != s.callId &&
+            s.supersededBy.let { it == null || it == e.callId } &&
+            (s.phase == CallPhase.STARTING || s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING)
+
+    /** The vault ended this device's ringing outgoing call because the connection's own call won a glare. */
+    private fun superseded(s: Session, e: SignalEvent.End): Boolean {
+        val by = e.supersededBy
+        val own = s.callId
+        // Both vaults let the lower call id win (its 26 ASCII bytes): a winner that is not lower is no glare's.
+        return by != null && own != null && by < own && e.reason == CallReason.BUSY && s.direction == CallDirection.OUTGOING &&
+            (s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING) && s.supersededBy == null
+    }
+
+    /**
+     * The winner's offer is not here yet: this call's media goes (the microphone is let go), its screen stays, and the
+     * offer is answered when it comes. Nothing is sent: the vault already ended this call.
+     */
+    private fun lostGlare(s: Session, by: String?) {
+        s.supersededBy = by
+        s.glareOffer = null
+        cancelTimer(s, TimerKind.GATHER)
+        cancelTimer(s, TimerKind.ICE_FLUSH)
+        s.canSendIce = false
+        s.pendingLocal.clear()
+        s.pendingRemote.clear()
+        // The lost call's queued engine work is dropped, not run on a closed engine.
+        s.lane.cancel()
+        s.engine?.close()
+        s.engine = null
+    }
+
+    /**
+     * (D21 a) The member asked for this call seconds ago: the winning call [offer] from the same connection is answered
+     * here without asking, as soon as this device's own lost call is let go (nothing is sent for it). Calls are audio
+     * only (C1-C3), so the answer never carries more media than the lost call did (VAULT-MESSAGING 0.88.14). A video
+     * offer does not reach the machine at all (`callIncoming` refuses anything but one audio section), so a video
+     * winner is not answered: the lost call shows busy at its ring timer. The table's audio-only answer to a video
+     * winner comes with video (C4).
+     */
+    private fun takeGlare(s: Session, offer: SignalEvent.Offer) {
+        release(s)
+        val y = incoming(offer)
+        answerIncoming(y)
+    }
+
     private fun ring(offer: SignalEvent.Offer) {
-        val s = newSession(offer.connectionId, CallDirection.INCOMING)
-        s.callId = offer.callId
-        s.offer = offer
-        s.phase = CallPhase.INCOMING
+        val s = incoming(offer)
         publish(s)
         s.launch { runCatching { signalling.ringing(offer.callId) } }
         // The caller's `call.end{timeout}` normally ends the ringing; this is for a caller that has gone.
         val ringFor = offer.ringFor.plus(timings.incomingGrace).coerceIn(timings.incomingGrace, timings.maxIncomingRing)
         timer(s, TimerKind.RING_IN, ringFor)
+    }
+
+    private fun incoming(offer: SignalEvent.Offer): Session {
+        val s = newSession(offer.connectionId, CallDirection.INCOMING)
+        s.callId = offer.callId
+        s.offer = offer
+        s.phase = CallPhase.INCOMING
+        return s
     }
 
     private fun takeAnswer(s: Session, e: SignalEvent.Answer) {
@@ -426,6 +569,8 @@ internal class CallMachine(
             return
         }
         cancelTimer(s, TimerKind.RING_OUT)
+        // Answered: an offer from the connection now is no glare, and is not rung after this call either.
+        s.glareOffer = null
         s.phase = CallPhase.CONNECTING
         s.answeredAtMs = elapsedMs()
         s.keysSet = true
@@ -441,8 +586,14 @@ internal class CallMachine(
         publish(s)
     }
 
-    /** What the other side's (or this member's other device's) `call.end` means here. */
-    private fun ended(s: Session, reason: String): CallEnd = when (s.phase) {
+    /**
+     * What the other side's (or this member's other device's) `call.end` means here. (C2) The caller's
+     * `call.end{failed}` while this device still holds its track for a first decrypted frame is the caller's wrong
+     * `confirm`: the same text as the 20 s rule's, "couldn't be encrypted" (VAULT-MESSAGING "Key confirmation").
+     */
+    private fun ended(s: Session, reason: String): CallEnd = if (s.heldForDecrypt && reason == CallReason.FAILED) {
+        CallEnd.NOT_ENCRYPTED
+    } else when (s.phase) {
         CallPhase.INCOMING -> RINGING_HERE[reason] ?: CallEnd.MISSED
         CallPhase.STARTING, CallPhase.CALLING, CallPhase.RINGING -> RINGING_THERE[reason] ?: CallEnd.FAILED
         CallPhase.CONNECTING, CallPhase.ACTIVE -> ANSWERED[reason] ?: CallEnd.PEER_HUNG_UP
@@ -463,7 +614,14 @@ internal class CallMachine(
             // alone decides NO_ADDRESS.
             is MediaEvent.GatheringDone -> Unit
             is MediaEvent.Connection -> onConnection(s, e.state)
-            is MediaEvent.Cryptor -> if (cryptorFailed(s, e)) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
+            is MediaEvent.Cryptor -> if (cryptorFailed(s, e)) {
+                finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
+            } else if (e.direction == MediaDirection.RECEIVE && e.state == CryptorState.OK && s.heldForDecrypt) {
+                // The first frame decrypted: the caller holds the same keys. The member's own mute still applies.
+                s.heldForDecrypt = false
+                cancelTimer(s, TimerKind.DECRYPT)
+                s.engine?.setHeld(false)
+            }
             is MediaEvent.Failed -> finish(s, CallEnd.FAILED, CallReason.FAILED)
         }
     }
@@ -484,6 +642,7 @@ internal class CallMachine(
     private fun connected(s: Session) {
         cancelTimer(s, TimerKind.CONNECT)
         cancelTimer(s, TimerKind.GATHER)
+        if (s.heldForDecrypt && TimerKind.DECRYPT !in s.timers) timer(s, TimerKind.DECRYPT, timings.decrypt)
         if (s.activeSince == null) {
             s.activeSince = now()
             s.answeredAtMs?.let { at -> diagnosticsFlow.update { it.copy(answerToMediaMs = elapsedMs() - at) } }
@@ -518,15 +677,24 @@ internal class CallMachine(
     }
 
     private fun onTimer(s: Session, kind: TimerKind) {
+        // A lost glare waits for its winner: only its ring timer still counts (a timer already queued is stale).
+        if (s.supersededBy != null && kind != TimerKind.RING_OUT) return
         when (kind) {
-            TimerKind.RING_OUT -> if (s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING) {
-                finish(s, CallEnd.NO_ANSWER, CallReason.TIMEOUT)
-            }
+            TimerKind.RING_OUT -> ringOutOver(s)
             // Nothing is sent: the missed call is recorded by this member's vault when the caller's timeout arrives.
             TimerKind.RING_IN -> if (s.phase == CallPhase.INCOMING) finish(s, CallEnd.MISSED, null)
             TimerKind.GATHER -> if (s.gathered == 0) finish(s, CallEnd.NO_ADDRESS, CallReason.FAILED)
             TimerKind.CONNECT -> if (s.phase == CallPhase.CONNECTING) finish(s, CallEnd.COULD_NOT_CONNECT, CallReason.FAILED)
+            TimerKind.DECRYPT -> if (s.heldForDecrypt) finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
             TimerKind.ICE_FLUSH -> flush(s)
+        }
+    }
+
+    private fun ringOutOver(s: Session) {
+        when {
+            // The glare's winner never came: busy, as before C2; the vault already ended this call.
+            s.supersededBy != null -> finish(s, CallEnd.BUSY, null)
+            s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING -> finish(s, CallEnd.NO_ANSWER, CallReason.TIMEOUT)
         }
     }
 
@@ -564,6 +732,7 @@ internal class CallMachine(
                 delay(timings.diagnosticsEvery.toMillis())
                 val media = runCatching { engine.diagnostics() }.getOrNull() ?: continue
                 diagnosticsFlow.update { it.copy(media = media) }
+                media.relayed?.let { r -> post(Msg.Path(s.seq, r)) }
                 // A second audio stream is RTP on an SSRC nobody announced, in the one section the call has: its
                 // frames go through the same decryption and are dropped, and the call does not go on beside it.
                 if (media.inboundAudioStreams > 1) post(Msg.Failed(s.seq, CallEnd.NOT_ENCRYPTED))
@@ -572,11 +741,44 @@ internal class CallMachine(
     }
 
     private fun publish(s: Session) {
-        stateFlow.value = CallState.Live(s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting)
+        stateFlow.value = CallState.Live(
+            s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting, s.keysSet, s.formTwo,
+        )
     }
 
     /** Ends the call here; [tell] is the `call.end` reason for the vault, or null when nothing is to be sent. */
     private fun finish(s: Session, reason: CallEnd, tell: String?) {
+        if (session !== s) return
+        val held = s.glareOffer
+        release(s)
+        val callId = s.callId
+        if (tell != null && callId != null) sendEnd(callId, tell)
+        if (s.direction == CallDirection.OUTGOING && callId == null) {
+            // `call.start` may still be answered: the call it placed is ended when it is (onPlaced).
+            abandoned.add(s.seq)
+            if (abandoned.size > MAX_ABANDONED) abandoned.remove(abandoned.min())
+        }
+        val duration = s.activeSince?.let { Duration.between(it, now()) }
+        if (duration != null) countPath(s)
+        stateFlow.value = CallState.Ended(s.connectionId, s.direction, reason, callId, duration)
+        // The connection's own call that arrived while this one rang to it is not lost when this one ended another way
+        // (the vault, the other side, a refusal of `call.start` such as `busy`, a failure): it rings. Never after this
+        // member's own end, a lock's above all: a call rings only while the vault is open on this phone, and a lock
+        // would decline it unseen.
+        if (held != null && !s.memberEnded && now().isBefore(held.exp)) ring(held)
+    }
+
+    /** A connected call ended: its path is counted, by the last one the stack reported (relayed, direct, or not said). */
+    private fun countPath(s: Session) = pathsFlow.update {
+        when (s.relayed) {
+            true -> it.copy(relayed = it.relayed + 1)
+            false -> it.copy(direct = it.direct + 1)
+            null -> it.copy(unknown = it.unknown + 1)
+        }
+    }
+
+    /** Lets the call go: its jobs, engine and keys. Publishes nothing and sends nothing. */
+    private fun release(s: Session) {
         if (session !== s) return
         session = null
         s.lane.close()
@@ -587,15 +789,7 @@ internal class CallMachine(
         s.early.clear()
         s.pendingRemote.clear()
         s.pendingLocal.clear()
-        val callId = s.callId
-        if (tell != null && callId != null) sendEnd(callId, tell)
-        if (s.direction == CallDirection.OUTGOING && callId == null) {
-            // `call.start` may still be answered: the call it placed is ended when it is (onPlaced).
-            abandoned.add(s.seq)
-            if (abandoned.size > MAX_ABANDONED) abandoned.remove(abandoned.min())
-        }
-        val duration = s.activeSince?.let { Duration.between(it, now()) }
-        stateFlow.value = CallState.Ended(s.connectionId, s.direction, reason, callId, duration)
+        s.glareOffer = null
     }
 
     /** `call.end` outlives the call: it is durable in the device's outbox once it has been handed over. */
@@ -603,7 +797,17 @@ internal class CallMachine(
         pendingEndsFlow.update { it + 1 }
         scope.launch {
             try {
-                runCatching { signalling.end(callId, reason) }
+                // A `call.end` is durable (the outbox keeps it until the relay has it): a failure here is not its loss. One
+                // held by a mailbox quota goes when the backoff ends; it is logged as held, with no member text (the other
+                // side's ring timer bounds the wait). Only the failure's type is logged.
+                runCatching { signalling.end(callId, reason) }.onFailure { e ->
+                    if (e is CancellationException) return@onFailure
+                    if (com.vettid.core.vault.VaultDevice.keptInOutbox(e)) {
+                        android.util.Log.i(TAG, "call.end held for the outbox's next flush (${e.javaClass.simpleName})")
+                    } else {
+                        android.util.Log.w(TAG, "call.end not sent (${e.javaClass.simpleName})")
+                    }
+                }
             } finally {
                 pendingEndsFlow.update { it - 1 }
             }
@@ -611,10 +815,12 @@ internal class CallMachine(
     }
 
     private companion object {
+        const val TAG = "CallMachine"
         const val NANOS_PER_MILLI = 1_000_000L
         const val MAX_PENDING_CANDIDATES = 256
         const val MAX_ABANDONED = 8
         const val MAX_EARLY = 64
+        const val MAX_ENDED_WINNERS = 8
 
         /** `call.end` reasons while an incoming call rings here; anything else is a missed call. */
         val RINGING_HERE = mapOf(CallReason.ANSWERED_ELSEWHERE to CallEnd.ANSWERED_ELSEWHERE, CallReason.DECLINE to CallEnd.DECLINED_HERE)

@@ -32,6 +32,8 @@
     <string name="data_failure_device_secret_scaled">This phone no longer holds the keys of your vault. That happens when the app\'s data was cleared or the phone was set up again from a backup. Nothing was disclosed. Whether you can get back into the vault depends on one of its settings. If its credential backup was on (the usual case), you can recover it: start a recovery on the account site. It takes %1$s to %2$s, and you need your PIN and your password. If you had turned credential backup off, this vault cannot be brought back; you can delete it on the account site and start a new one. If you still have a phone on which VettID works, use \'Move to a new phone\' there instead. The account site tells you which of these applies.</string>
     <string name="data_failure_move_not_finished">The move to this phone isn\'t finished. Use Finish the move on this phone, then try again.</string> <!-- Owner-approved 2026-11-04: VAULT-MESSAGING 0.83.11 §11.14.10 -->
     <string name="data_failure_transfer_incomplete">The move to this phone did not finish. Approve it again on your old phone.</string>
+    <!-- VAULT-MESSAGING 0.88.17 §11.4 state_unreadable at the unlock (approved by the owner 2026-11-11). -->
+    <string name="data_failure_state_unreadable">Your vault can\'t be opened right now. Nothing in it has been changed. Please try again later.</string>
     <string name="data_failure_busy">The service is busy right now. Nothing was used or changed. Try again in a minute.</string>
     <string name="data_failure_retry">The service was too slow just now. Nothing was used or changed. Try again.</string>
     <string name="data_failure_counter_unavailable">We cannot check the attempt record now. Nothing was used or changed. Try again later.</string>
@@ -144,6 +146,8 @@
     <string name="data_feed_connection_added">You are now connected with %1$s</string>
     <string name="data_feed_connection_removed">%1$s was removed</string>
     <string name="data_feed_connection_stale">%1$s has not been reachable</string>
+    <!-- VAULT-MESSAGING 0.88.7 §10.9 `connection.active_again`: a stale connection works again. Owner-approved 2026-11-10 (GC #7229), both apps. -->
+    <string name="data_feed_connection_active_again">Your connection with %1$s works again.</string> <!-- Owner-approved 2026-11-10 -->
     <string name="data_feed_asks_paused">%1$s’s requests are paused</string>
     <string name="data_feed_authenticate">%1$s asks you to confirm it is you</string>
     <!-- Owner-approved 2026-10-29: a challenge with a purpose, VAULT-MESSAGING 0.65.0 §10.4; as vettid-ios #154. -->

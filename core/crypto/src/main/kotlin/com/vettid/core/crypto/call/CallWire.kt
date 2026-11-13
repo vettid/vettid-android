@@ -15,6 +15,8 @@ import com.vettid.core.crypto.json.asObject
 import com.vettid.core.crypto.json.asString
 import com.vettid.core.crypto.kdf.Hkdf
 import java.time.Instant
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * The wire crypto of call signalling (VAULT-MESSAGING §10.10), the Kotlin counterpart of vettid-vault's
@@ -25,6 +27,9 @@ import java.time.Instant
  * by the device that made it and vouched for by that device's vault; the other device checks both signatures under
  * the connection's identity key before it uses the share.
  */
+// One object for the call's wire crypto, form 1 and form 2 together, as vettid-vault's `vms/callwire` is one package:
+// the two forms share labels, sizes and checks, and splitting them would hide that a form 2 call also carries form 1.
+@Suppress("TooManyFunctions")
 object CallWire {
     const val LABEL_CALL = "vettid/vms/2/call"
     const val LABEL_CALL_KEY = "vettid/vms/2/call-key"
@@ -34,6 +39,16 @@ object CallWire {
     const val MEDIA_SALT = "vettid-call-v1"
     const val ROLE_OFFER = "offer"
     const val ROLE_ANSWER = "answer"
+
+    /** (C2) Form 2's roles: the suites are signed with the share, and both members are named (0.88.16). */
+    const val ROLE_OFFER2 = "offer2"
+    const val ROLE_ANSWER2 = "answer2"
+
+    /** (C2) The salt of `k_confirm`. */
+    const val LABEL_CONFIRM = "vettid/vms/2/call-confirm"
+
+    /** (C2) `confirm`'s length. */
+    const val CONFIRM_SIZE = 32
     const val MEDIA_AUDIO = "audio"
     const val MEDIA_VIDEO = "video"
 
@@ -59,12 +74,38 @@ object CallWire {
     /** The calling device's ephemeral KEM key: its public half (`ek`, 1,216 bytes) goes into `call.start`. */
     fun newOfferKey(): KemPrivateKey = KemPrivateKey.generate()
 
-    /** `k_call = HKDF-SHA-256(ikm = K, salt = "vettid-call-v1", info = call_id, L = 32)`; [k] is wiped. */
-    private fun mediaKey(k: ByteArray, callId: String): ByteArray = try {
-        Hkdf.derive(k, ascii(MEDIA_SALT), callId.toByteArray(Charsets.UTF_8), KEY_SIZE)
+    /**
+     * `k_call = HKDF-SHA-256(ikm = K, salt = "vettid-call-v1", info, L = 32)`; [k] is wiped. [info] is `call_id`, and
+     * in form 2 `call_id || caller_ik || callee_ik` ([partiesInfo]).
+     */
+    private fun mediaKey(k: ByteArray, info: ByteArray): ByteArray = try {
+        Hkdf.derive(k, ascii(MEDIA_SALT), info, KEY_SIZE)
     } finally {
         Bytes.wipe(k)
     }
+
+    /**
+     * (C2, VAULT-MESSAGING 0.88.16) The two members of a call as form 2 names them: the calling and the called
+     * member's vault identity keys (32 bytes each). They travel in no message. This device fills them in from its own
+     * records: its own vault's key (the one its ICE configurations verify under) and the connection's key as its vault
+     * gives it (`peer_ik`, checked against the connection, rule 6). The calling device fixes them when it places the
+     * call and uses the same for the answer.
+     */
+    class Parties(caller: ByteArray, callee: ByteArray) {
+        val caller: ByteArray = caller.copyOf()
+        val callee: ByteArray = callee.copyOf()
+
+        init {
+            if (caller.size != Suite.ED25519_PUBLIC_SIZE || callee.size != Suite.ED25519_PUBLIC_SIZE) {
+                throw CryptoException.Key("call parties")
+            }
+        }
+
+        override fun toString(): String = "Parties"
+    }
+
+    private fun partiesInfo(callId: String, p: Parties): ByteArray =
+        Bytes.concat(callId.toByteArray(Charsets.UTF_8), p.caller, p.callee)
 
     /** What the answering device gets: [enc] for `call.answer` and [kCall], which stays on the device. */
     class Answered(val enc: ByteArray, val kCall: ByteArray)
@@ -76,14 +117,93 @@ object CallWire {
     fun answer(ek: ByteArray, callId: String): Answered {
         if (ek.size != Suite.EK_SIZE) throw CryptoException.Key("call ek size")
         val sender = HpkeSender.setup(KemPublicKey.parse(ek), callInfo(callId))
-        return Answered(sender.enc(), mediaKey(sender.export(LABEL_CALL_KEY, KEY_SIZE), callId))
+        return Answered(sender.enc(), mediaKey(sender.export(LABEL_CALL_KEY, KEY_SIZE), callId.toByteArray(Charsets.UTF_8)))
+    }
+
+    /**
+     * (C2) [answer] for a form 2 call: `k_call` names both members, `info = call_id || caller_ik || callee_ik`, so the
+     * two sides of a call that a third vault passes on derive different keys (0.88.16, the second lock).
+     */
+    fun answer2(ek: ByteArray, callId: String, parties: Parties): Answered {
+        if (ek.size != Suite.EK_SIZE) throw CryptoException.Key("call ek size")
+        val sender = HpkeSender.setup(KemPublicKey.parse(ek), callInfo(callId))
+        return Answered(sender.enc(), mediaKey(sender.export(LABEL_CALL_KEY, KEY_SIZE), partiesInfo(callId, parties)))
     }
 
     /** Run by the calling device on the answer's `enc` (1,120 bytes): the same `k_call`. */
     fun accept(offerKey: KemPrivateKey, enc: ByteArray, callId: String): ByteArray {
         if (enc.size != Suite.ENC_SIZE) throw CryptoException.Key("call enc size")
-        return mediaKey(HpkeRecipient.setup(enc, offerKey, callInfo(callId)).export(LABEL_CALL_KEY, KEY_SIZE), callId)
+        return mediaKey(
+            HpkeRecipient.setup(enc, offerKey, callInfo(callId)).export(LABEL_CALL_KEY, KEY_SIZE),
+            callId.toByteArray(Charsets.UTF_8),
+        )
     }
+
+    /** (C2) [accept] for a form 2 call: the `k_call` of [answer2], with the parties fixed when the call was placed. */
+    fun accept2(offerKey: KemPrivateKey, enc: ByteArray, callId: String, parties: Parties): ByteArray {
+        if (enc.size != Suite.ENC_SIZE) throw CryptoException.Key("call enc size")
+        return mediaKey(
+            HpkeRecipient.setup(enc, offerKey, callInfo(callId)).export(LABEL_CALL_KEY, KEY_SIZE),
+            partiesInfo(callId, parties),
+        )
+    }
+
+    /** (C2) `list(x)`: the numbers in decimal without leading zeros, joined by one space. */
+    fun suiteList(list: List<Int>): String = list.joinToString(" ")
+
+    private fun m2(role: String, callId: String, media: String, suites: String, parties: Parties, share: ByteArray): ByteArray {
+        val zero = byteArrayOf(0)
+        return Bytes.concat(
+            ascii(role), zero, callId.toByteArray(Charsets.UTF_8), zero, ascii(media), zero, ascii(suites), zero,
+            parties.caller, parties.callee, share,
+        )
+    }
+
+    /**
+     * (C2) A form 2 offer's signed bytes:
+     * `"offer2" || 0 || call_id || 0 || media || 0 || list(offered) || 0 || caller_ik || callee_ik || ek`.
+     */
+    fun offerMessage2(callId: String, media: String, offered: List<Int>, parties: Parties, ek: ByteArray): ByteArray =
+        m2(ROLE_OFFER2, callId, media, suiteList(offered), parties, ek)
+
+    /**
+     * (C2) A form 2 answer's signed bytes: `"answer2" || 0 || call_id || 0 || "" || 0 || chosen || 0 || list(offered)
+     * || 0 || caller_ik || callee_ik || enc`; [offered] is the caller's list as the answering device read it.
+     */
+    fun answerMessage2(callId: String, chosen: Int, offered: List<Int>, parties: Parties, enc: ByteArray): ByteArray =
+        m2(ROLE_ANSWER2, callId, "", "$chosen\u0000${suiteList(offered)}", parties, enc)
+
+    /** (C2) `k_confirm = HKDF-SHA-256(ikm = k_call, salt = "vettid/vms/2/call-confirm", info = call_id, L = 32)`. */
+    fun confirmKey(kCall: ByteArray, callId: String): ByteArray {
+        if (kCall.size != KEY_SIZE) throw CryptoException.Key("k_call size")
+        if (callId.isEmpty()) throw CryptoException.Key("call id")
+        return Hkdf.derive(kCall, ascii(LABEL_CONFIRM), callId.toByteArray(Charsets.UTF_8), KEY_SIZE)
+    }
+
+    /**
+     * (C2) `confirm = HMAC-SHA-256(k_confirm, chosen || 0x00 || list(offered) || 0x00 || call_id || caller_ik ||
+     * callee_ik)`, computed by the answering device.
+     */
+    fun confirm(kConfirm: ByteArray, chosen: Int, offered: List<Int>, callId: String, parties: Parties): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(kConfirm, "HmacSHA256"))
+        mac.update("$chosen\u0000${suiteList(offered)}\u0000$callId".toByteArray(Charsets.UTF_8))
+        mac.update(parties.caller)
+        mac.update(parties.callee)
+        return mac.doFinal()
+    }
+
+    /** (C2) The calling device's check of `confirm`, in constant time, before it sets any key. */
+    fun verifyConfirm(
+        kConfirm: ByteArray,
+        chosen: Int,
+        offered: List<Int>,
+        callId: String,
+        parties: Parties,
+        confirm: ByteArray?,
+    ): Boolean =
+        confirm != null && confirm.size == CONFIRM_SIZE &&
+            Bytes.constantTimeEquals(confirm(kConfirm, chosen, offered, callId, parties), confirm)
 
     /**
      * The signed bytes of a share: `role || 0x00 || call_id || 0x00 || media || 0x00 || share`. For [ROLE_OFFER] the

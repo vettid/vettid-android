@@ -291,6 +291,25 @@ class WalletsManager(
     /** A `wallet.list` was published since the vault opened (a created or imported wallet alone does not count). Under [lock]. */
     private var listRead = false
 
+    /**
+     * Each `wallet.list` read takes a number when it starts ([listReads]); a read whose number is below [listShown] is dropped
+     * when it ends. [listShown] is the number of the read whose list is shown, or one past every read begun before a change made
+     * here ([showLocal]). So a slow read never puts an older list (an older limit, a deleted wallet) back over a newer one
+     * or over a change made here. Reads are ordered by when they began, which assumes the vault answers them in the order they
+     * were sent. Under [lock].
+     */
+    private var listReads = 0L
+    private var listShown = 0L
+
+    /**
+     * The number of the last read begun ([listReads]) when a change was made here before the first list was shown; 0: none. A
+     * first list from a read that began no later than that change may hide it (a wallet created while the list was loading),
+     * so it is not shown: the list is read again first ([refresh]); a read begun after the change needs no second one. Its
+     * resets (in [clear] and when a list is shown) are hygiene: read numbers only grow, so an old value never matches a
+     * later read. Under [lock].
+     */
+    private var changedAt = 0L
+
     /** (wallet, network) pairs whose addresses were checked against the vault's this session, with the app's derivation. */
     private val checked = HashMap<Pair<String, Network>, Wallet>()
     private var pendingRefresh: Job? = null
@@ -387,6 +406,7 @@ class WalletsManager(
             availabilityFlow.value = WalletAvailability.UNKNOWN
             walletsFlow.value = emptyList()
             listRead = false
+            changedAt = 0L
             lookupsFlow.value = emptyMap()
             transactionsFlow.value = emptyMap()
             checked.clear()
@@ -445,28 +465,74 @@ class WalletsManager(
     }
 
     /**
+     * A change this phone made and the vault confirmed (a limit lowered or raised, a wallet created, imported or deleted, an
+     * address type): shown at once, and every list read that began before it is dropped when it ends, since its list is older
+     * than this change. Not before the first list was read: that read is what marks the wallets as listed ([listRead]).
+     */
+    private fun showLocal(change: (List<VaultWallet>) -> List<VaultWallet>) = synchronized(lock) {
+        // Every read begun so far is older than this change (a read is dropped when its number is below listShown).
+        if (listRead) listShown = listReads + 1 else changedAt = listReads
+        walletsFlow.update(change)
+    }
+
+    /**
      * Reads the wallets (`wallet.list`), only while the vault is open; a vault without them is [WalletAvailability.UNSUPPORTED]
      * until the next unlock.
      */
     suspend fun refresh() {
-        val g = synchronized(lock) { if (!open) return else generation }
+        val (g, seq) = synchronized(lock) { if (!open) return else generation to ++listReads }
         if (availabilityFlow.value == WalletAvailability.UNSUPPORTED) return
         val list = try {
             vaultGuard { ops().list() }
         } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED) publish(g) { availabilityFlow.value = WalletAvailability.UNSUPPORTED }
+            if (e.kind == FailureKind.NOT_SUPPORTED) {
+                publish(g) { if (seq >= listShown) availabilityFlow.value = WalletAvailability.UNSUPPORTED }
+            }
             throw e
         }
-        val published = publish(g) {
-            walletsFlow.value = list
-            availabilityFlow.value = WalletAvailability.AVAILABLE
-            listRead = true
-            // A wallet gone (deleted on another device): its look-up goes too.
-            lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-            transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
-        }
+        // The first list, from a read begun before a change made here, would hide that change: it is not shown. The list is
+        // read again and that read is shown; only if it fails is this one (fail secure: the change stays hidden until Try
+        // again or the next event). A change made during the second read makes it stale too, so local changes bound this.
+        var stale = staleFirstList(g, seq)
+        afterStaleCheck()
+        // A change made here between the check above and the show makes the list stale now: it is read again (once more at
+        // most: a stale show is never refused as stale).
+        var shown: Boolean?
+        do {
+            if (stale) attempt { refresh() }
+            shown = showList(g, seq, list, stale)
+            if (shown == null) stale = true
+        } while (shown == null)
         // A reset that came before the wallets were listed asks the ones listed now (and no wallet made after it).
-        if (published) flags.listed(list.map { it.id }.toSet())
+        if (shown) flags.listed(list.map { it.id }.toSet())
+    }
+
+    /** (Tests) Runs between the stale check of a read and its show: a change made here then must not be hidden. */
+    @androidx.annotation.VisibleForTesting
+    internal var afterStaleCheck: suspend () -> Unit = {}
+
+    /** Read [seq] of generation [g] is a first list begun no later than a change made here ([changedAt]). */
+    private fun staleFirstList(g: Long, seq: Long): Boolean =
+        synchronized(lock) { g == generation && seq >= listShown && !listRead && seq <= changedAt }
+
+    /**
+     * Shows [list], read [seq] of generation [g]: true. False: not shown, the generation moved on or a later read or a
+     * change made here is shown (a list the read after it showed included). Null: not shown, because a change made here
+     * since its stale check makes this first list stale now ([stale] false only). One check and one write under the lock:
+     * no later read can be shown between them.
+     */
+    private fun showList(g: Long, seq: Long, list: List<VaultWallet>, stale: Boolean): Boolean? = synchronized(lock) {
+        if (g != generation || seq < listShown) return@synchronized false
+        if (!stale && !listRead && seq <= changedAt) return@synchronized null
+        changedAt = 0L
+        listShown = seq
+        walletsFlow.value = list
+        availabilityFlow.value = WalletAvailability.AVAILABLE
+        listRead = true
+        // A wallet gone (deleted on another device): its look-up goes too.
+        lookupsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        transactionsFlow.update { m -> m.filterKeys { id -> list.any { it.id == id } } }
+        true
     }
 
     /** `sync.event` `wallet.changed`, `wallet.deleted`, `wallet.signed`: the list again, once the burst is over (only while open). */
@@ -479,7 +545,7 @@ class WalletsManager(
             if (!open || availabilityFlow.value != WalletAvailability.AVAILABLE) return
             if (kind == "wallet.deleted") {
                 VaultJson.str(body, "wallet_id")?.let { id ->
-                    walletsFlow.update { l -> l.filterNot { it.id == id } }
+                    showLocal { l -> l.filterNot { it.id == id } }
                     lookupsFlow.update { it - id }
                     transactionsFlow.update { it - id }
                     checked.keys.removeAll { it.first == id }
@@ -544,7 +610,7 @@ class WalletsManager(
             updateType(walletId, type)
         }
         publish(g) {
-            walletsFlow.update { l -> l.map { if (it.id == walletId) it.copy(addressType = type, version = version) else it } }
+            showLocal { l -> l.map { if (it.id == walletId) it.copy(addressType = type, version = version) else it } }
         }
     }
 
@@ -561,7 +627,7 @@ class WalletsManager(
     private suspend fun reload(walletId: String, g: Long) {
         try {
             val w = vaultGuard { ops().get(walletId) }
-            publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) w else it } } }
+            publish(g) { showLocal { l -> l.map { if (it.id == walletId) w else it } } }
         } catch (_: VaultFailure) {
             // Kept as it was.
         }
@@ -591,7 +657,7 @@ class WalletsManager(
         // The limit was chosen (or No limit) on the step before: a reset later does not ask this wallet's question again.
         flags.clearAskCaps(wallet.id)
         val kept = publish(g) {
-            walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
+            showLocal { l -> l.filterNot { it.id == wallet.id } + wallet }
             availabilityFlow.value = WalletAvailability.AVAILABLE
         }
         if (!kept) return Created(wallet, null, VaultFailure(FailureKind.OTHER, CLEARED), !saved, unsupported)
@@ -642,7 +708,7 @@ class WalletsManager(
         val recorded = flags.setBackedUp(wallet.id) || flags.setBackedUp(wallet.id)
         flagsChangedFlow.update { it + 1 }
         val kept = publish(g) {
-            walletsFlow.update { l -> l.filterNot { it.id == wallet.id } + wallet }
+            showLocal { l -> l.filterNot { it.id == wallet.id } + wallet }
             availabilityFlow.value = WalletAvailability.AVAILABLE
         }
         if (!kept) {
@@ -704,7 +770,7 @@ class WalletsManager(
             markDuplicate(walletId, false)
             withContext(NonCancellable) {
                 if (version != null) {
-                    publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
+                    publish(g) { showLocal { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
                 }
                 done(walletId, g)
             }
@@ -794,7 +860,7 @@ class WalletsManager(
             if (e.kind == FailureKind.CONFLICT) reload(walletId, g)
             throw e
         }
-        publish(g) { walletsFlow.update { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
+        publish(g) { showLocal { l -> l.map { if (it.id == walletId) withCaps(it, caps, version) else it } } }
     }
 
     /** The wallet's version and limits as this phone holds them now: what a raise form is chosen against ([raiseCaps]). */
@@ -850,7 +916,7 @@ class WalletsManager(
             throw e
         }
         publish(g) {
-            walletsFlow.update { l ->
+            showLocal { l ->
                 l.map {
                     if (it.id != walletId) {
                         it
@@ -921,7 +987,7 @@ class WalletsManager(
         withContext(NonCancellable) {
             vaultGuard { ops().delete(walletId, password) }
             publish(g) {
-                walletsFlow.update { l -> l.filterNot { it.id == walletId } }
+                showLocal { l -> l.filterNot { it.id == walletId } }
                 lookupsFlow.update { it - walletId }
                 transactionsFlow.update { it - walletId }
                 checked.keys.removeAll { it.first == walletId }

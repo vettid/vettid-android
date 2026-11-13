@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import com.vettid.app.BuildConfig
+import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Suite
 import com.vettid.app.di.AppScope
 import com.vettid.core.calls.AndroidCallAudio
 import com.vettid.core.calls.AndroidCallTones
@@ -92,7 +94,15 @@ object CallsModule {
 
         override suspend fun fingerprint(connectionId: String): String? = connection(connectionId)?.keyFingerprint
 
+        /** The key the fingerprint is of, from the same record: a form 2 call names it. */
+        override suspend fun identityKey(connectionId: String): ByteArray? =
+            connection(connectionId)?.ik?.let { runCatching { Base64s.decodeStd(it, Suite.ED25519_PUBLIC_SIZE) }.getOrNull() }
+
+        override suspend fun deviceId(): String? = runCatching { m.vaultApi().device.deviceId }.getOrNull()
+
         override fun name(connectionId: String): String? = connection(connectionId)?.let(::callName)
+
+        override fun firstName(connectionId: String): String? = connection(connectionId)?.let { AccountNames.cleaned(it.firstName) }
 
         override fun notificationName(connectionId: String): String? = if (showNames.value) name(connectionId) else null
 

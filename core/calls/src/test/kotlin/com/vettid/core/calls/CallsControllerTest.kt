@@ -33,6 +33,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -41,32 +42,60 @@ import java.time.Duration
 import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One class: every test shares the fakes and the helpers.
 class CallsControllerTest {
     private class Gateway : CallGateway {
         val channel = Channel<CallEvent>(Channel.UNLIMITED)
         override val events: Flow<CallEvent> = channel.receiveAsFlow()
         val sent = mutableListOf<String>()
         var list: () -> List<CallRecord> = { emptyList() }
+
+        /** The entries of `call.list` that did not read (GC #7718). */
+        var skipped: List<com.vettid.core.vault.SkippedCall> = emptyList()
+
+        /** (C2) The list's `v` and `now`: a C2 vault with both set. */
+        var version: Int? = null
+        var vaultNow: Instant? = null
         var listGate: suspend () -> Unit = {}
 
-        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>): OutgoingCall {
-            sent += "start($connectionId)"
+        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+            sent += "start($connectionId)" + (if (peerIk != null) " form2" else "")
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             return OutgoingCall(CALL_ID, connectionId, "audio", T0.plusSeconds(45), ice, listOf(1), KemPrivateKey.generate())
         }
 
         var incoming = false
+
+        /** (C2) The members of a form 2 offer; null: the offer is form 1. */
+        var incomingParties: CallWire.Parties? = null
         var endGate: Channel<Unit>? = null
 
         override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall {
             check(incoming) { "unused" }
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             val n = com.vettid.core.crypto.call.CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1))
-            return IncomingCall(CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216))
+            return IncomingCall(
+                CALL_ID, "conn-1", "audio", "v=0", T0.plusSeconds(45), Duration.ofSeconds(45), ice, n, ByteArray(1216), incomingParties,
+            )
         }
 
-        override suspend fun answer(call: IncomingCall, sdp: String): CallKeys =
-            CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        /** Answers and keep-alives, in the order they went out. */
+        val order = mutableListOf<String>()
+
+        val answeredWithKeepalive = mutableListOf<Boolean>()
+
+        override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+            synchronized(order) { order += "answer" }
+            answeredWithKeepalive += keepalive
+            return CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        }
+
+        val keepalives = mutableListOf<String>()
+
+        override suspend fun keepalive(callId: String) {
+            synchronized(keepalives) { keepalives += callId }
+            synchronized(order) { order += "keepalive" }
+        }
 
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
             AcceptedCall(call.callId, "v=0", CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
@@ -80,10 +109,35 @@ class CallsControllerTest {
             sent += "end($callId, $reason)"
         }
 
-        override suspend fun list(limit: Int): List<CallRecord> {
+        override suspend fun list(limit: Int): com.vettid.core.vault.CallList {
             sent += "list($limit)"
             listGate()
-            return list()
+            return com.vettid.core.vault.CallList(list(), skipped, version, vaultNow)
+        }
+        /** (C2) What `call.permission.list` answers; [permissionFailure] is thrown instead when set. */
+        var permissionList: List<com.vettid.core.vault.CallPermission> = emptyList()
+        var permissionFailure: Exception? = null
+        var permissionReads = 0
+        val permissionSets = mutableListOf<Pair<String, Boolean>>()
+        val changes = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
+        override val permissionChanges: Flow<String> = changes
+
+        var permissionGate: suspend () -> Unit = {}
+
+        override suspend fun permissions(): List<com.vettid.core.vault.CallPermission> {
+            permissionReads++
+            val asItWas = permissionList // the vault's answer as of when the read began
+            permissionGate()
+            permissionFailure?.let { throw it }
+            return asItWas
+        }
+
+        var setGate: suspend () -> Unit = {}
+
+        override suspend fun setPermission(connectionId: String, allowed: Boolean) {
+            setGate()
+            permissionFailure?.let { throw it }
+            permissionSets += connectionId to allowed
         }
     }
 
@@ -103,6 +157,12 @@ class CallsControllerTest {
         }
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
+
+        override suspend fun identityKey(connectionId: String): ByteArray? = ByteArray(32) { 9 }
+
+        var me: String? = "dev-me"
+
+        override suspend fun deviceId(): String? = me
 
         var showNames = true
 
@@ -185,7 +245,7 @@ class CallsControllerTest {
         c.call("conn-1")
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
-        assertTrue(c.history("conn-1").isEmpty())
+        assertTrue(c.history("conn-1").entries.isEmpty())
     }
 
     @Test
@@ -298,6 +358,358 @@ class CallsControllerTest {
         assertEquals(CallState.Idle, c.state.value)
     }
 
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Liveness") Against a C2 vault the sweep ends only this device's own calls, judged by
+     * `exp` and the vault's `now`, never this phone's clock: an active one `failed`, its own outgoing call still ringing
+     * past `exp` `timeout`. Another device's calls, and its own ringing call not yet past `exp`, are left alone.
+     */
+    @Test
+    fun aC2VaultIsSweptByDeviceIdAndTheVaultsClock() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0.plusSeconds(3600) // the phone's clock says T0: only the vault's counts
+        fun rec(id: String, state: String, dir: String, device: String?, exp: Instant? = null) =
+            CallRecord(id, "conn-1", dir, "audio", state, null, T0.toString(), exp = exp?.toString(), deviceId = device)
+        vault.gateway.list = {
+            listOf(
+                rec("A", "active", "in", "dev-me"),
+                rec("B", "ringing", "out", "dev-me", exp = T0.plusSeconds(3000)), // past exp by the vault's clock
+                rec("C", "ringing", "out", "dev-me", exp = T0.plusSeconds(3700)), // still ringing
+                rec("D", "active", "out", "dev-other"), // another device's call
+                rec("E", "ringing", "in", null), // an incoming call ringing has no device
+            )
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(listOf("list(200)", "end(A, failed)", "end(B, timeout)"), vault.gateway.sent)
+        assertEquals(2, c.diagnostics.value.staleEnded)
+    }
+
+    /**
+     * (C2, VAULT-MESSAGING §10.10 "Permission and limits") A C2 vault's `call.permission.list` is read after the unlock and
+     * again on each `sync.event{call.permission}`; an older vault has none (no switch); a lock forgets it.
+     */
+    @Test
+    fun thePermissionIsReadAfterTheUnlockAndOnEachChange() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(1, vault.gateway.permissionReads)
+        assertTrue(c.permissions.value.supported && c.permissions.value.known)
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(allowed = false), c.permissions.value.of("conn-1"))
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(), c.permissions.value.of("conn-2"))
+
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-2", allowed = true, limited = true))
+        vault.gateway.changes.emit("conn-2")
+        runCurrent()
+        assertEquals(2, vault.gateway.permissionReads)
+        assertEquals(com.vettid.core.data.calls.ConnectionCalls(), c.permissions.value.of("conn-1"))
+        assertTrue(c.permissions.value.of("conn-2").limited)
+
+        // A read that fails keeps what was read.
+        vault.gateway.permissionFailure = java.io.IOException("relay")
+        vault.gateway.changes.emit("conn-2")
+        runCurrent()
+        assertTrue(c.permissions.value.of("conn-2").limited)
+        vault.gateway.permissionFailure = null
+
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("nothing written after the lock", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** A read in flight across a lock and an unlock writes nothing: the read after the unlock does. */
+    @Test
+    fun aReadBegunBeforeALockWritesNothingAfterIt() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { gate.await() }
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(1, vault.gateway.permissionReads)
+        vault.unlocked.value = false
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("the read from before the lock wrote nothing", com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** A change interrupted by a lock writes nothing after it. */
+    @Test
+    fun aChangeInterruptedByALockWritesNothing() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.setGate = { gate.await() }
+        val set = backgroundScope.launch { runCatching { c.setAllowed("conn-1", false) } }
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        gate.complete(Unit)
+        runCurrent()
+        set.join()
+        assertEquals(com.vettid.core.data.calls.CallPermissions(), c.permissions.value)
+    }
+
+    /** A read that began before the member's own change does not flip the switch back; the read after it does count. */
+    @Test
+    fun aReadOlderThanTheMembersChangeIsDropped() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { gate.await() }
+        vault.gateway.permissionList = emptyList() // the old read answers: allowed
+        vault.gateway.changes.emit("conn-1") // a read starts, and waits
+        runCurrent()
+        val reads = vault.gateway.permissionReads
+        c.setAllowed("conn-1", false)
+        assertFalse(c.permissions.value.of("conn-1").allowed)
+        vault.gateway.permissionList = listOf(com.vettid.core.vault.CallPermission("conn-1", allowed = false, limited = false))
+        // The read the change asks for is held too, so that only the old read can have written in between.
+        val next = kotlinx.coroutines.CompletableDeferred<Unit>()
+        vault.gateway.permissionGate = { next.await() }
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse("the old read did not flip it back", c.permissions.value.of("conn-1").allowed)
+        assertTrue("the read the change asked for followed", vault.gateway.permissionReads > reads)
+        next.complete(Unit)
+        runCurrent()
+        assertFalse(c.permissions.value.of("conn-1").allowed)
+    }
+
+    @Test
+    fun aVaultBeforeC2HasNoPermission() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        assertEquals(0, vault.gateway.permissionReads)
+        assertFalse(c.permissions.value.supported)
+        vault.gateway.changes.emit("conn-1")
+        runCurrent()
+        assertEquals(0, vault.gateway.permissionReads)
+        assertThrows(com.vettid.core.data.vault.VaultFailure::class.java) { kotlinx.coroutines.runBlocking { c.setAllowed("conn-1", false) } }
+        assertTrue(vault.gateway.permissionSets.isEmpty())
+    }
+
+    /** Turning calls off is sent, shown at once, and read again from the vault; a refusal is a VaultFailure and changes nothing. */
+    @Test
+    fun turningCallsOffIsSentAndShown() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.setAllowed("conn-1", false)
+        assertEquals(listOf("conn-1" to false), vault.gateway.permissionSets)
+        assertFalse(c.permissions.value.of("conn-1").allowed)
+        runCurrent()
+        assertEquals("read again", 2, vault.gateway.permissionReads)
+
+        vault.gateway.permissionFailure = com.vettid.core.vault.VaultOpException("call.permission.set", "not_found")
+        val e = runCatching { c.setAllowed("conn-2", false) }.exceptionOrNull()
+        assertTrue(e is com.vettid.core.data.vault.VaultFailure)
+        assertTrue(c.permissions.value.of("conn-2").allowed)
+    }
+
+    /** (C2) The call's device sends `call.keepalive` once the answer is in, then every 30 s, and stops with the call. */
+    @Test
+    fun keepAlivesWhileTheCallLastsOnAC2Vault() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue("the start names the connection's key", vault.gateway.sent.contains("start(conn-1) form2"))
+        assertTrue("none while it rings", vault.gateway.keepalives.isEmpty())
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+        advanceTimeBy(30_001)
+        assertEquals(2, vault.gateway.keepalives.size)
+        c.hangUp()
+        runCurrent()
+        advanceTimeBy(90_000)
+        assertEquals(2, vault.gateway.keepalives.size)
+    }
+
+    /**
+     * The answering device's first keep-alive goes only after its `call.answer` is with the vault: one before it is
+     * answered `call.end{unavailable}` by a vault that still has the call ringing, which would end the call. The
+     * engine takes its time over the offer, as the real one does.
+     */
+    @Test
+    fun theCalleesKeepAlivesFollowItsAnswer() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        engines.onCreate = { (it as FakeEngine).acceptOfferMs = 500 }
+        c.answer()
+        runCurrent()
+        advanceTimeBy(100)
+        assertTrue("nothing before the answer", vault.gateway.keepalives.isEmpty())
+        advanceTimeBy(1_000)
+        assertEquals(listOf("answer", "keepalive"), vault.gateway.order)
+        assertEquals(listOf(CALL_ID), vault.gateway.keepalives)
+    }
+
+    /**
+     * (C2) An offer in form 2 proves the vault C2 for that call, whatever the probe found (here an S10 answer, as from
+     * a probe that has not read the vault's level yet): the callee answers with `keepalive` and its keep-alives go.
+     */
+    @Test
+    fun aFormTwoOfferStartsKeepAlivesBeforeTheProbeKnows() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.incomingParties = CallWire.Parties(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        val offer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T62", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1","call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(offer)))
+        runCurrent()
+        c.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        runCurrent()
+        assertTrue(c.state.value.toString(), c.state.value is CallState.Live)
+        advanceTimeBy(30_001)
+        assertEquals(listOf(CALL_ID, CALL_ID), vault.gateway.keepalives)
+        assertEquals(listOf(true), vault.gateway.answeredWithKeepalive)
+    }
+
+    /** What the probe found is forgotten at the lock: the next unlock's probe decides again. */
+    @Test
+    fun theVaultsLevelIsForgottenAtLock() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        vault.gateway.version = null
+        vault.gateway.vaultNow = null
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.toString(), vault.gateway.sent.contains("start(conn-1)"))
+    }
+
+    /** The C2 sweep leaves alone a call that is live on this phone, even one the vault lists as this device's. */
+    @Test
+    fun theC2SweepLeavesALiveCallAlone() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        var asks = 0
+        vault.gateway.list = {
+            if (asks++ == 0) emptyList() else listOf(CallRecord(CALL_ID, "conn-1", "out", "audio", "active", null, T0.toString(), deviceId = "dev-me"))
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        c.forgetProbeForTest()
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(2, asks)
+        assertTrue(vault.gateway.sent.none { it.startsWith("end(") })
+    }
+
+    /** Against an S10 vault: form 1 and no keep-alive (it would answer an unknown type). */
+    @Test
+    fun noKeepAliveToAnS10Vault() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.contains("start(conn-1)"))
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        advanceTimeBy(60_000)
+        assertTrue(vault.gateway.keepalives.isEmpty())
+    }
+
+    /** (C5) Each call that connected is counted once, direct or relayed by the stack's last report; one that never did is not. */
+    @Test
+    fun eachConnectedCallIsCountedDirectOrRelayed() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        suspend fun connectedCall(relayed: Boolean?) {
+            c.call("conn-1")
+            runCurrent()
+            engines.last.relayed = relayed
+            engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+            val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+            vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+            runCurrent()
+            engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+            runCurrent()
+            advanceTimeBy(1_500) // a diagnostics round
+            c.hangUp()
+            runCurrent()
+            c.dismiss()
+            runCurrent()
+        }
+        connectedCall(relayed = true)
+        connectedCall(relayed = false)
+        connectedCall(relayed = null)
+        // A call that never connected is not counted.
+        c.call("conn-1")
+        runCurrent()
+        c.hangUp()
+        runCurrent()
+        assertEquals(CallPaths(direct = 1, relayed = 1, unknown = 1), c.callPaths.value)
+
+        // A call the vault's lock ends (its hang-up and the dismiss handled back to back) is counted too, and by the
+        // last path the stack reported even if the last report said nothing.
+        c.call("conn-1")
+        runCurrent()
+        engines.last.relayed = true
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        engines.last.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
+        runCurrent()
+        advanceTimeBy(1_500)
+        engines.last.relayed = null
+        advanceTimeBy(1_000)
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(CallPaths(direct = 1, relayed = 2, unknown = 1), c.callPaths.value)
+    }
+
     @Test
     fun aCallEndsTwelveHoursAfterItWasAnswered() = runTest {
         val c = controller()
@@ -346,6 +758,9 @@ class CallsControllerTest {
         assertTrue(!test.testsAllowed.value)
         assertEquals(MediaConfig(), test.mediaConfig)
         assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        // (C5) Relay only is a test option too.
+        assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(relayOnly = true)) }
+        assertThrows(IllegalStateException::class.java) { controller(MediaConfig(relayOnly = true), testBuild = true) }
         test.setMediaConfig(MediaConfig()) // the plain configuration can always be set
     }
 
@@ -369,6 +784,7 @@ class CallsControllerTest {
         assertTrue(!c.testsAllowed.value)
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(faulty) }
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
+        assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(relayOnly = true)) }
     }
 
     /**
@@ -597,5 +1013,70 @@ class CallsControllerTest {
         )
         for ((r, want) in expected) assertEquals(r.callId, want, outcome(r).outcome)
         assertNull(CallsController.entry(record("N", "ended").copy(startedAt = "yesterday"), now))
+    }
+
+    /**
+     * (GC #7718) A conversation's calls when `call.list` had entries that did not read: the good ones shown and the line
+     * said (one skipped for this connection, or whose connection did not read, or one of its own without a start); none
+     * skipped, no line.
+     */
+    @Test
+    fun skippedEntriesLeaveTheRestAndSaySomeCouldNotBeShown() {
+        val now = T0.plusSeconds(3600)
+        val good = listOf(record("A", "ended", reason = "hangup"), record("B", "ended", reason = "busy"))
+        fun h(skipped: List<com.vettid.core.vault.SkippedCall>, calls: List<CallRecord> = good) =
+            CallsController.historyOf(com.vettid.core.vault.CallList(calls, skipped), "conn-1", now)
+        val clean = h(emptyList())
+        assertEquals(listOf("A", "B"), clean.entries.map { it.callId })
+        assertFalse("none bad: no line", clean.someNotShown)
+        val one = h(listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000000", "conn-1")))
+        assertEquals("the good ones shown", listOf("A", "B"), one.entries.map { it.callId })
+        assertTrue("the line", one.someNotShown)
+        assertTrue("its connection not read", h(listOf(com.vettid.core.vault.SkippedCall(null, null))).someNotShown)
+        assertFalse("another connection's", h(listOf(com.vettid.core.vault.SkippedCall(null, "conn-2"))).someNotShown)
+        val all = h(listOf(com.vettid.core.vault.SkippedCall(null, "conn-1"), com.vettid.core.vault.SkippedCall(null, "conn-1")), emptyList())
+        assertTrue("every entry bad", all.entries.isEmpty() && all.someNotShown)
+        val noStart = h(emptyList(), good + record("N", "ended").copy(startedAt = "yesterday"))
+        assertEquals(listOf("A", "B"), noStart.entries.map { it.callId })
+        assertTrue("one of its own without a start", noStart.someNotShown)
+    }
+
+    /** (GC #7718) A list with a skipped entry still means calls, and the skipped ids are in the diagnostics only. */
+    @Test
+    fun aListWithASkippedEntryStillMeansCallsAndIsAuditedLocally() = runTest {
+        vault.gateway.list = { listOf(record("A", "ended", reason = "hangup")) }
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000000", "conn-1"), com.vettid.core.vault.SkippedCall(null, null))
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        assertEquals(2, c.diagnostics.value.listSkipped)
+        assertEquals(listOf("01JXBAD0000000000000000000"), c.diagnostics.value.listSkippedIds)
+        val h = c.history("conn-1")
+        assertEquals(listOf("A"), h.entries.map { it.callId })
+        assertTrue(h.someNotShown)
+    }
+
+    /**
+     * (Review of 0470e984, L1 and L3) History's read updates the diagnostics too, at most [CallsController.SKIPPED_IDS_KEPT]
+     * ids are kept, the diagnostics print no id, and a lock clears them.
+     */
+    @Test
+    fun skippedIdsAreCappedUpdatedByHistoryAndClearedAtLock() = runTest {
+        vault.gateway.list = { listOf(record("A", "ended", reason = "hangup")) }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(0, c.diagnostics.value.listSkipped)
+        val ids = (10..34).map { "01JXBAD00000000000000000$it" }
+        vault.gateway.skipped = ids.map { com.vettid.core.vault.SkippedCall(it, "conn-1") }
+        c.history("conn-1")
+        assertEquals("history's read is noted", 25, c.diagnostics.value.listSkipped)
+        assertEquals("at most 20 ids", ids.take(20), c.diagnostics.value.listSkippedIds)
+        assertFalse("no id printed", c.diagnostics.value.toString().contains("01JXBAD"))
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(0, c.diagnostics.value.listSkipped)
+        assertEquals(emptyList<String>(), c.diagnostics.value.listSkippedIds)
     }
 }

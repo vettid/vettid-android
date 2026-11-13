@@ -70,6 +70,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -94,6 +95,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.CoroutineContext
 
 /** The device's own keys (§3.2), unwrapped from the Keystore (`:core:keystore` DeviceKeys) for the device's lifetime. */
 class DeviceSecrets(
@@ -209,6 +211,16 @@ class OpTypeTag(val type: String) : Exception("op $type")
 val Throwable.opType: String?
     get() = (this as? VaultStateException)?.type ?: suppressed.filterIsInstance<OpTypeTag>().firstOrNull()?.type
 
+/**
+ * (ANDROID-PLAN §4 "While pending") Whether this failure, or one it was caused by, is a send the device's lock gate held
+ * ([VaultDevice.CODE_LOCK_PENDING]): a first send, so nothing of that request was sent.
+ */
+val Throwable.heldByLockGate: Boolean
+    get() = generateSequence(this) { it.cause }.take(CAUSE_DEPTH)
+        .any { it is VaultStateException && it.code == VaultDevice.CODE_LOCK_PENDING }
+
+private const val CAUSE_DEPTH = 8
+
 /** Runs the send of a request of [type]; an I/O failure leaves it tagged (same exception, same class). */
 private inline fun <T> tagged(type: String, block: () -> T): T = try {
     block()
@@ -218,7 +230,7 @@ private inline fun <T> tagged(type: String, block: () -> T): T = try {
 }
 
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
-class VaultStateException(message: String, val type: String? = null) : IOException("vault client: $message")
+class VaultStateException(message: String, val type: String? = null, val code: String? = null) : IOException("vault client: $message")
 
 /**
  * The owner rejected this device's pairing or transfer on their phone after its
@@ -389,6 +401,16 @@ class VaultDevice private constructor(
      */
     val vaultRefusals: StateFlow<Int> = refusalCount.asStateFlow()
 
+    /**
+     * (Show held as held, Android) A mailbox's quota backoff was set: its length in milliseconds. Whoever owns this device
+     * flushes the outbox when it ends ([flushOutbox]), behind its own lock gate, so a held entry (a `call.end`) goes as soon
+     * as the relay allows rather than at some later, unrelated flush. Nothing is shown to the member for it: messages and
+     * actions are requests, never outbox entries (a refusal is the caller's and is shown), and the outbox's only
+     * member-facing entry, `call.end`, waits at most the backoff, which the other side's ring timer bounds. A [start] while a
+     * backoff runs (a restart after a [stop]) announces what is left of it again.
+     */
+    val quotaBackoffSet: SharedFlow<Long> get() = quotaBackoffs.asSharedFlow()
+
     private val ownerCheckRefusals =
         MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
@@ -407,6 +429,9 @@ class VaultDevice private constructor(
     /** The scope of the last [start], until [stop]: where [ensureCollecting] starts the collection again. */
     private var collectScope: CoroutineScope? = null
     private val collectorEnd = MutableStateFlow<String?>(null)
+    // replay = 1: the session's observer subscribes after the collection started, whose first flush may already have
+    // been refused for a quota; the last backoff then still reaches it (a stale one only makes one gated flush).
+    private val quotaBackoffs = MutableSharedFlow<Long>(replay = 1, extraBufferCapacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
@@ -652,6 +677,9 @@ class VaultDevice private constructor(
         collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
+        // (Show held as held) A quota backoff still running is announced again with what is left of it: the owner's flush when
+        // it ends was asked for under the stop count before this start, which a stop since makes deposit nothing.
+        quotaBackoff.values.maxOfOrNull { it.first }?.let { until -> quotaBackoffs.tryEmit((until - cfg.elapsedMs()).coerceAtLeast(0)) }
         // This collection's number: a round of an older one that ends late (its `finally` runs after a stop() and a new
         // start()) must not clear the new round's request or count as the new collection's round ending.
         val gen = ++collectGen
@@ -708,6 +736,7 @@ class VaultDevice private constructor(
     @Suppress("TooGenericExceptionCaught")
     internal suspend fun startChores(tick: suspend () -> Unit = { tickConfirm() }) {
         // Each on its own: a failed 12-day check does not hold back the entries the outbox already holds (Fable N2).
+        // The flush takes the stop count as it runs: a stop cancels this collection start, so none comes between.
         for (chore in listOf(tick, { flushOutbox() })) {
             try {
                 chore()
@@ -737,6 +766,8 @@ class VaultDevice private constructor(
      * shared storage). Returns the relay's `blob_id`.
      */
     suspend fun uploadBlobToVault(blob: ByteArray): String {
+        // (ANDROID-PLAN §4 "While pending") Not while the lock gate holds it: nothing is uploaded.
+        lock.withLock { if (!maySend(TYPE_BLOB_PUT)) throw heldByGate(TYPE_BLOB_PUT) }
         checkLive()
         val v = requireVault()
         if (v.token.isEmpty()) throw VaultStateException("no token for the vault")
@@ -768,9 +799,60 @@ class VaultDevice private constructor(
         return true
     }
 
+    /**
+     * (ANDROID-PLAN §4 "While pending") What the owner of this device lets out of the outbox now, by entry type: while a
+     * lock is pending nothing is sent to the vault but the lock and a pending `call.end` ([UNGATED_TYPES]). Asked under the
+     * device lock right before each deposit of an outbox entry, by every flush ([flushOutbox]: the manager's, the
+     * foreground's, the collection start's) and by what a handling queued ([deliverQueued], the 12-day `hs.confirm`). A held
+     * entry stays in the outbox for the next flush the gate admits. Not asked for a rekey's `hs.resp` (owner decision
+     * 2026-11-12, a: it would hold the vault's rekeys until the handshake expires), nor for the handshakes' other deposits
+     * (pairing, transfer, recovery). Asked too before every send of a request ([maySend]): its first send and its re-sends
+     * ([request], [requestWithId], [requestOnce], [sendOnce]), a kept change's sends ([sendKept]) and the token renewal
+     * ([renewIssuedToken]), unless the call runs under [LockTimeSend]: a client handed out before a lock began sends nothing
+     * new after it. Everything by default. A lock that starts while an admitted entry is being deposited
+     * follows that deposit (the lock's own request needs the device lock).
+     */
+    fun interface SendGate {
+        fun admits(type: String): Boolean
+    }
+
+    @Volatile
+    var sendGate: SendGate = SendGate { true }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") Marks a call made for the lock itself (the owner's lock-time uses: the lock and the one
+     * `vault.status` of "Lock it now"): what the device would send again for it is not held by [sendGate].
+     */
+    object LockTimeSend : CoroutineContext.Element, CoroutineContext.Key<LockTimeSend> {
+        override val key: CoroutineContext.Key<*> get() = this
+    }
+
+    /** Counts [stop]s: a flush asked for before a stop deposits nothing after it (the stop wins). */
+    @Volatile
+    private var stopSeq = 0L
+
+    /** The count of [stop]s now: taken where a flush is asked for ([flushOutbox]), so that a stop after the ask wins. */
+    val stopCount: Long get() = stopSeq
+
+    /**
+     * Whether [e] may be deposited now by a flush asked for at stop count [seq] (null: not a flush, no stop to compare). Under
+     * [lock]. The gate is asked first: a stop that comes while it is being asked still wins.
+     */
+    private fun mayDeposit(e: OutboxEntry, seq: Long?): Boolean = !forgotten && sendGate.admits(e.type) && (seq == null || stopSeq == seq)
+
+    /**
+     * Whether the device may send a request of [type] now (a first send, a re-send, a repeat, a renewal): what the gate says,
+     * or always for a lock-time call ([LockTimeSend]). Asked under [lock].
+     */
+    private suspend fun maySend(type: String): Boolean = currentCoroutineContext()[LockTimeSend] != null || sendGate.admits(type)
+
+    /** A first send the gate holds ([maySend]): nothing was sent. Its code is the manager's for a pending lock. */
+    private fun heldByGate(type: String) = VaultStateException("$type: held while a lock is pending", type, CODE_LOCK_PENDING)
+
     /** Stops collecting. */
     @Synchronized
     fun stop() {
+        stopSeq++
         collectScope = null
         collectGen++ // what the stopped collection's rounds still report is theirs, not the next one's
         // A request that is out at the relay is cut by this; the cancelled round counts it (once) as lost.
@@ -1526,9 +1608,15 @@ class VaultDevice private constructor(
      * (a `device.paired` behind it) must still be handled. The settlement window's caller bounds it by its wait plus a
      * transport bound, and waits for the collection's round ([awaitCollectorRound]) outside that bound: a message the
      * round leased is invisible to this collect until the round ended. [callTimeout] bounds each attempt, the body read
-     * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4).
+     * included (a coroutine timeout cannot cut a read that is blocked: #336 review, item 4). [deadline]: the whole request's
+     * bound, the relay client's retries and their waits included (none by default).
      */
-    suspend fun collectOnce(wait: Duration = Duration.ZERO, callTimeout: Duration? = null, max: Int = Int.MAX_VALUE): Int {
+    suspend fun collectOnce(
+        wait: Duration = Duration.ZERO,
+        callTimeout: Duration? = null,
+        max: Int = Int.MAX_VALUE,
+        deadline: Duration? = null,
+    ): Int {
         if (forgotten) return 0 // (#335, Opus Low-1) a forgotten device acks nothing unread, as [start]
         val attemptSent = java.util.concurrent.atomic.AtomicLong(cfg.elapsedMs())
         val msgs = own.collect(
@@ -1540,6 +1628,7 @@ class VaultDevice private constructor(
                 noteSend(wait.toMillis(), at)
             },
             callTimeout = callTimeout,
+            deadline = deadline,
         )
         for (m in msgs) {
             try {
@@ -1554,11 +1643,18 @@ class VaultDevice private constructor(
 
     /**
      * The transfer's settlement window's collect ([collectOnce]): a batch of at most [SETTLE_COLLECT_MAX] (so a backlog on a
-     * slow link still arrives within the bound; the rest is left for the next look), each attempt within its wait +
-     * [transport] (a coroutine timeout cannot cut a blocked body read: #336 review, item 4).
+     * slow link still arrives within the bound; the rest is left for the next look), within its wait + [transport] (a
+     * coroutine timeout cannot cut a blocked body read: #336 review, item 4).
+     *
+     * (GC #6847, #336's Opus L1 and the review of 4de9019c, High 1) The relay client's retries are kept (the window counts on
+     * them: a 429 or a stale 401 reaches it only after them, and its final look has one extra for a refusal), under a
+     * deadline for the whole request: the attempts and their backoff and `retry_after` waits together never run past the
+     * same bound, so a first attempt that failed fast cannot stretch the request by one more bound.
      */
-    suspend fun settleCollect(wait: Duration, transport: Duration = SETTLE_TRANSPORT): Int =
-        collectOnce(wait, callTimeout = wait.plus(transport), max = SETTLE_COLLECT_MAX)
+    suspend fun settleCollect(wait: Duration, transport: Duration = SETTLE_TRANSPORT): Int {
+        val bound = wait.plus(transport)
+        return collectOnce(wait, callTimeout = bound, max = SETTLE_COLLECT_MAX, deadline = bound)
+    }
 
     @Suppress("TooGenericExceptionCaught") // whatever the ack hits, the batch goes on
     private suspend fun ackBestEffort(msgId: String) {
@@ -1607,7 +1703,10 @@ class VaultDevice private constructor(
         type: String,
         body: JsonObject = EMPTY,
         id: String? = null,
-    ): String = lock.withLock { sendLocked(id, type, body, null, null, null) }
+    ): String = lock.withLock {
+        checkLive() // a forgotten device sends nothing: said, not kept silently
+        sendLocked(id, type, body, null, null, null)
+    }
 
     /**
      * Seals a message and hands it to the relay client **once**: it is never written to the outbox, so it is not
@@ -1619,6 +1718,7 @@ class VaultDevice private constructor(
      * and `call.ringing` are ephemeral and carry [exp]). Returns the inner id.
      */
     suspend fun sendOnce(type: String, body: JsonObject = EMPTY, exp: Instant? = null): String = lock.withLock {
+        if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
         sendOnceLocked(Ulid.new(now()), type, body, exp)
     }
 
@@ -1647,7 +1747,12 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            tagged(type) { lock.withLock { sendOnceLocked(id, type, body, exp) } }
+            tagged(type) {
+                lock.withLock {
+                    if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
+                    sendOnceLocked(id, type, body, exp)
+                }
+            }
             return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
                 ?: throw VaultStateException("$type: no response", type)
         } finally {
@@ -1683,11 +1788,35 @@ class VaultDevice private constructor(
             id = iid, type = type, ts = t, re = re, status = status, exp = exp, body = VaultJson.bytes(body), features = DeviceFeatures.ALL,
         )
         val env = ep.seal(inner)
-        val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env))
+        val entry = OutboxEntry(iid, type, v.relayUrl, v.mailbox, v.token, Base64s.encodeStd(env), re = re)
         addToOutbox(entry)
         save()
-        deliver(entry)
+        deliverInOrder(entry)
         return iid
+    }
+
+    /**
+     * (The review of 4de9019c, Low 1; its re-check, Low 2; #345's blind reviews, item 1) [entry], new, after every older entry
+     * of its mailbox still in the outbox while the mailbox waits for a quota: they are tried first, in order; one still there
+     * after its try holds [entry] for the next flush ([awaitQuota], which [deliver] checks for every entry: a flush, the
+     * deposits queued by a handling and a re-queued `hs.confirm` alike), so a new entry never overtakes one queued before it,
+     * marked or not. [entry]'s own failure (or wait) is thrown, as [deliver]'s.
+     */
+    private suspend fun deliverInOrder(entry: OutboxEntry) {
+        val waiting = quotaWaiting(entry.mailbox)
+        val earlier = if (waiting) st.outbox.takeWhile { it !== entry }.filter { it.mailbox == entry.mailbox } else emptyList()
+        val seq = stopSeq
+        for (e in earlier) {
+            if (!mayDeposit(e, seq)) continue // held by the gate: it stays for the next flush the gate admits
+            try {
+                if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e)
+            } catch (_: IOException) {
+                // still waiting: it stays, and [entry] waits behind it ([awaitQuota])
+            }
+        }
+        // Held by the gate: it stays in the outbox (saved), and the next flush the gate admits sends it. Not the stop count: the
+        // send's own entry (a `call.end`) must not be kept silently while the send reports success.
+        if (mayDeposit(entry, null)) deliver(entry)
     }
 
     /**
@@ -1715,8 +1844,10 @@ class VaultDevice private constructor(
      */
     private suspend fun deliver(e: OutboxEntry, onRefused: (RelayException) -> Unit = {}) {
         checkLive()
+        awaitQuota(e)
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
+            quotaBackoff.remove(e.mailbox)
             st.outbox.remove(e)
             // (M1) An entry an earlier app version queued (no exp): sent now, the vault acts on it in its next batch; from
             // here it is settled like a request with an exp of now + 10 minutes, unless it is answered first.
@@ -1726,6 +1857,10 @@ class VaultDevice private constructor(
             if (x.retryable) {
                 e.attempts++
                 save()
+                throw x
+            }
+            if (x.code == RelayException.QUOTA_EXCEEDED) {
+                quotaRefused(e, x)
                 throw x
             }
             countRefusal(x, e.mailbox, e.token)
@@ -1738,6 +1873,81 @@ class VaultDevice private constructor(
             throw x
         }
     }
+
+    /**
+     * (GC #6847; VAULT-MESSAGING 0.88.6 §8.6 `quota_exceeded`, RELAY-PROTOCOL §7.1) An outbox entry refused for a quota is
+     * kept and never sent again unchanged:
+     * - the **token**'s (`quota: token`): it waits, and so does every entry under that token, the refresh too (nothing is
+     *   sent under a token known to be spent), until the device holds another standing token for the vault (the vault's
+     *   re-mint: `relay.token.issued`, an unlock result), and is then sent once under it. The device asks for no fresh
+     *   token and reconnects to nothing: §7.2 lets a
+     *   **peer vault** refresh after `quota_exceeded`, a device's standing token carries no quota (§7.1's table), a
+     *   refresh would go under the spent token itself, and a device does not reconnect (its way back is the unlock
+     *   exchange, or pairing again, §7.2);
+     * - the **mailbox**'s (`quota: mailbox`, and (the review of 4de9019c, Medium 1) a `quota_exceeded` without `quota`, from a
+     *   relay before 0.9.2: §8.6 reads that as the token's the first time, but a device's token has none, so for a device it
+     *   is the mailbox's; read as the token's it would hold every entry, the device's own refresh included): retried with
+     *   backoff (§8.6), from
+     *   [QUOTA_BACKOFF_MIN] doubling to [QUOTA_BACKOFF_MAX], in memory; a deposit the relay takes ends it.
+     */
+    private fun quotaRefused(e: OutboxEntry, x: RelayException) {
+        e.attempts++
+        if (x.quota == RelayException.QUOTA_TOKEN) {
+            e.quotaToken = e.token
+        } else {
+            val prev = quotaBackoff[e.mailbox]?.second ?: 0L
+            val next = if (prev == 0L) QUOTA_BACKOFF_MIN.toMillis() else minOf(prev * 2, QUOTA_BACKOFF_MAX.toMillis())
+            quotaBackoff[e.mailbox] = (cfg.elapsedMs() + next) to next
+            quotaBackoffs.tryEmit(next)
+        }
+        save()
+    }
+
+    /**
+     * Before [deliver]'s deposit: an entry under a token whose quota is spent ([OutboxEntry.quotaToken], its own or an
+     * earlier entry's) waits for another standing token for its mailbox, and is re-addressed to it; a mailbox in its quota
+     * backoff waits. Waiting is [QuotaWait] (an [IOException], kept for the next flush).
+     */
+    private fun awaitQuota(e: OutboxEntry) {
+        // (#345's blind reviews, item 2) Never a deposit under a token known to be spent (one an entry waits on): an entry
+        // under one waits with it, `relay.token.refresh` included, and one is re-addressed only to a held token not known
+        // to be spent. So a `relay.token.refresh` under a spent token waits for the vault's own re-mint (`relay.token.issued`,
+        // which the vault sends once the held token has under 10 days left). That is fine: a device's vault token has no quota
+        // (VAULT-MESSAGING §7.1), so a device token is never spent by its quota and this wait never holds a device's refresh.
+        val spentTokens = st.outbox.mapNotNullTo(HashSet()) { it.quotaToken }
+        if (e.quotaToken == null && e.token in spentTokens) {
+            e.quotaToken = e.token
+            save()
+        }
+        val spent = e.quotaToken
+        if (spent != null) {
+            val v = st.vault
+            val held = v?.token?.takeIf { it.isNotEmpty() && v.mailbox == e.mailbox && v.relayUrl == e.relayUrl }
+            if (held == null || held in spentTokens) throw QuotaWait()
+            e.token = held
+            e.quotaToken = null
+            save()
+        }
+        // (Item 1) While its mailbox waits for a quota, an entry goes only after every earlier entry of that mailbox has
+        // gone: one still in the outbox holds it for the next flush (which takes them in order). The refresh is never held
+        // behind another entry this way (the review of 4de9019c, Medium 1): it asks for the token the others may need.
+        // An earlier entry the lock gate holds is not "earlier" here: it is not being sent, and a pending `call.end` must not
+        // wait behind it.
+        val behindEarlier = st.outbox.takeWhile { it !== e }.any { it.mailbox == e.mailbox && sendGate.admits(it.type) }
+        if (e.type != TYPE_TOKEN_REFRESH && behindEarlier && quotaWaiting(e.mailbox)) throw QuotaWait()
+        val until = quotaBackoff[e.mailbox]?.first
+        if (until != null && cfg.elapsedMs() < until) throw QuotaWait()
+    }
+
+    /** [mailbox] waits for a quota: an entry to it waits for a fresh token, or its backoff has not ended with a deposit. */
+    private fun quotaWaiting(mailbox: String): Boolean =
+        quotaBackoff.containsKey(mailbox) || st.outbox.any { it.mailbox == mailbox && it.quotaToken != null }
+
+    /** An outbox entry waits for a quota (a fresh token, or the mailbox's backoff): nothing was sent. */
+    internal class QuotaWait : IOException("waiting for a relay quota")
+
+    /** Per mailbox: the elapsed time before which nothing is deposited, and the last backoff (ms), after `quota: mailbox`. */
+    private val quotaBackoff = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Long>>()
 
     /**
      * A deposit to this device's vault under the vault's current token that the relay refused with `token_revoked`
@@ -1754,6 +1964,7 @@ class VaultDevice private constructor(
         checkLive()
         try {
             relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload, resendAfterSent)
+            quotaBackoff.remove(v.mailbox) // (the review of 4de9019c, Low 2) the mailbox takes deposits again
         } catch (x: RelayException) {
             countRefusal(x, v.mailbox, v.token)
             throw x
@@ -1772,13 +1983,19 @@ class VaultDevice private constructor(
         before - st.outbox.size
     }
 
-    /** Re-deposits what the outbox still holds (after a restart or a transport failure). */
-    suspend fun flushOutbox() {
+    /**
+     * Re-deposits what the outbox still holds (after a restart or a transport failure). [seq]: the stop count when the flush
+     * was asked for ([stopCount], taken by the caller before it launches the flush): nothing is deposited after a stop since.
+     */
+    suspend fun flushOutbox(seq: Long = stopSeq) {
         val entries = lock.withLock { st.outbox.toList() }
         for (e in entries) {
             try {
                 lock.withLock {
                     if (!st.outbox.contains(e)) return@withLock
+                    // The gate (a lock pending) and a stop since this flush was asked for: asked again for each entry, so a
+                    // lock or a stop that comes while the flush runs holds what is left.
+                    if (!mayDeposit(e, seq)) return@withLock
                     if (e.id in unsaved) save() // written first, sent after; a failed save leaves it for the next flush
                     if (e.type == HsTypes.CONFIRM) deliverConfirm(e) else deliver(e) // hs.confirm's time follows a refusal for good
                 }
@@ -1807,16 +2024,36 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            tagged(type) { lock.withLock { sendRequestLocked(id, type, body, null) } }
+            firstRequest(id, type, body, null)
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) tagged(type) { lock.withLock { sendRequestLocked(id, type, body, null) } }
+                if (attempt < APP_RETRIES) resendRequest(id, type, body, null)
             }
             throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN §4 "While pending") A request's re-send ([request], [requestWithId]): only while the gate admits it
+     * ([maySend], asked under the device lock). A held one is not sent and the request goes on waiting for an answer to
+     * the copy already out, as after a re-send the relay could not take (its id stays in [pending]); no answer by the end of
+     * the last wait fails it as before.
+     */
+    private suspend fun resendRequest(id: String, type: String, body: JsonObject, exp: Instant?) {
+        tagged(type) { lock.withLock { if (maySend(type)) sendRequestLocked(id, type, body, exp) } }
+    }
+
+    /** A request's first send ([request], [requestWithId]): held by the gate, nothing is sent and it fails ([heldByGate]). */
+    private suspend fun firstRequest(id: String, type: String, body: JsonObject, exp: Instant?) {
+        tagged(type) {
+            lock.withLock {
+                if (!maySend(type)) throw heldByGate(type)
+                sendRequestLocked(id, type, body, exp)
+            }
         }
     }
 
@@ -2089,8 +2326,7 @@ class VaultDevice private constructor(
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
-                val tok = mintForVault()
-                sendLocked(null, inner.type, standing(tok), inner.id, Inner.STATUS_OK, null)
+                answerRefreshLocked(inner)
             } else {
                 storeVaultToken(VaultJson.parseObject(inner.body))
             }
@@ -2108,6 +2344,23 @@ class VaultDevice private constructor(
         }
         maintain(t)
         resendRespsLocked()
+    }
+
+    /**
+     * Answers the vault's `relay.token.refresh` [inner] with a fresh standing token (§7.2). (ANDROID-PLAN §4 "While pending")
+     * While the gate holds the answers, only the newest waits: its token is the latest minted, and the older ones would all
+     * go at once when the gate opens. They go only once the new one is queued (a failure to queue it leaves them); the
+     * handling's save writes the removal.
+     */
+    private suspend fun answerRefreshLocked(inner: Inner) {
+        val tok = mintForVault()
+        val older = if (sendGate.admits(TYPE_TOKEN_REFRESH)) {
+            emptyList()
+        } else {
+            st.outbox.filter { it.type == TYPE_TOKEN_REFRESH && it.re != null }
+        }
+        sendLocked(null, inner.type, standing(tok), inner.id, Inner.STATUS_OK, null)
+        if (older.isNotEmpty()) st.outbox.removeAll { e -> older.any { it === e } }
     }
 
     /** An event left on the relay during a hold ([leaveForLater]). */
@@ -2349,7 +2602,8 @@ class VaultDevice private constructor(
         } catch (e: RelayException) {
             when {
                 // Not a refusal of this hs.resp: the mailbox (a device's token has no quota, §7.1) is full. It waits, then goes
-                // again, the same bytes (never at every message: [quotaHeld]).
+                // again, the same bytes (never at every message: [quotaHeld]). Matched before the refusal below: the relay client now
+                // counts `quota_exceeded` as not retryable, and it must not end the responder whose bytes are kept.
                 e.code == RelayException.QUOTA_EXCEEDED -> quotaWait(a)
                 !e.retryable -> respRefused(a, first)
             }
@@ -2455,6 +2709,8 @@ class VaultDevice private constructor(
      */
     suspend fun renewIssuedToken() {
         lock.withLock {
+            // (ANDROID-PLAN §4 "While pending") Not while the gate holds it: nothing is minted, dropped or sent.
+            if (!maySend(TYPE_TOKEN_ISSUED)) throw heldByGate(TYPE_TOKEN_ISSUED)
             // An older token still queued (a maintain() whose deposit failed) must not flush after this one and replace
             // the fresh 30 days at the vault: dropped first, under the same lock.
             if (st.outbox.removeAll { it.type == TYPE_TOKEN_ISSUED }) save()
@@ -2483,8 +2739,17 @@ class VaultDevice private constructor(
                 sendLocked(null, TYPE_TOKEN_ISSUED, standing(tok), null, null, null)
             }
             val exp = Instant.ofEpochMilli(v.tokenExpMs)
+            // Not while an own refresh is still in the outbox (held by the lock gate, or waiting for the next flush): it asks for
+            // the same, and one per handled message would pile up and all go at once.
+            val ownQueued = st.outbox.firstOrNull { it.type == TYPE_TOKEN_REFRESH && it.re == null }
             if (Duration.between(t, exp) < REFRESH_BEFORE && t.isBefore(exp)) {
-                sendLocked(null, "relay.token.refresh", EMPTY, null, null, null)
+                if (ownQueued == null) {
+                    sendLocked(null, TYPE_TOKEN_REFRESH, EMPTY, null, null, null)
+                } else if (sendGate.admits(TYPE_TOKEN_REFRESH) && ownQueued !in afterHandle) {
+                    // The one still queued (a deposit that failed) is tried again after this handling, as a new one was
+                    // before: once per handled message, never a second entry.
+                    afterHandle.add(ownQueued)
+                }
             }
         } catch (_: IOException) {
             // retried at the next message
@@ -2609,8 +2874,11 @@ class VaultDevice private constructor(
                 // pruned in memory; the next save writes it
             }
         }
+        // Not asked of the gate: a rekey's hs.resp is never held (owner decision 2026-11-12, a; [SendGate]).
         resendRespsLocked()
-        tickConfirmLocked(t, save = true)?.let { deliverConfirm(it) }
+        // Queued whatever the gate says (its time is kept); deposited only while the gate admits it. The stop count is compared
+        // with itself: a stop during it cancels the collection start that runs this (it relies on that cancellation).
+        tickConfirmLocked(t, save = true)?.let { if (mayDeposit(it, stopSeq)) deliverConfirm(it) }
     }
 
     /**
@@ -2642,7 +2910,10 @@ class VaultDevice private constructor(
         // own refusal under the same token re-addresses nothing, so this happens at most once per token. A failure to
         // queue leaves the floor.
         try {
-            deliverConfirm(queueConfirmLocked(now(), save = true))
+            // Queued again whatever the gate says; deposited only while it admits it (else it waits in the outbox). No stop
+            // count is threaded through here: the entry is gated, and after a stop it is only an entry kept in the outbox for
+            // the next flush, which compares its own count (harmless).
+            queueConfirmLocked(now(), save = true).let { if (mayDeposit(it, null)) deliverConfirm(it) }
         } catch (_: IOException) {
             // not queued: the floor stands
         } catch (_: CryptoException) {
@@ -2659,6 +2930,10 @@ class VaultDevice private constructor(
         val (waiting, ready) = queued.partition { it.id in unsaved }
         afterHandle.addAll(waiting)
         for (e in ready) {
+            // What a vault message brought (the refresh answer, `device.features`, an `hs.confirm`) waits in the outbox while
+            // the gate is shut (a lock pending): the next flush it admits sends it. The stop count is compared with itself: this
+            // runs at the end of a handling, which a stop cancels with the collection (it relies on that cancellation).
+            if (!mayDeposit(e, stopSeq)) continue
             if (e.type == HsTypes.CONFIRM) {
                 deliverConfirm(e)
             } else {
@@ -2819,12 +3094,12 @@ class VaultDevice private constructor(
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         try {
-            tagged(type) { lock.withLock { sendRequestLocked(id, type, body, exp) } }
+            firstRequest(id, type, body, exp)
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
                 ensureCollecting()
-                if (attempt < APP_RETRIES) tagged(type) { lock.withLock { sendRequestLocked(id, type, body, exp) } }
+                if (attempt < APP_RETRIES) resendRequest(id, type, body, exp)
             }
             throw VaultStateException("$type: no response", type)
         } finally {
@@ -2886,11 +3161,24 @@ class VaultDevice private constructor(
             k.answered()?.let { return it }
             // The vault drops a copy whose exp has passed, unanswered: nothing more to send.
             if (!vaultNow().isBefore(k.exp)) return k.answered()
+            var heldFirst = false
             try {
-                lock.withLock { sendOnceLocked(k.innerId, k.type, k.body, k.exp) }
+                lock.withLock {
+                    // (ANDROID-PLAN §4 "While pending") Only while the gate admits it. A held first send (the change never went)
+                    // fails: nothing was sent. A held repeat (the request went before, in this call or an earlier one) is not
+                    // sent and counts as a send that was not delivered: the wait below still runs, and the answer stays
+                    // awaited until [dropKept] ([pending] keeps [KeptChange.answer]).
+                    if (!maySend(k.type)) {
+                        heldFirst = !k.sent
+                        return@withLock
+                    }
+                    k.sent = true
+                    sendOnceLocked(k.innerId, k.type, k.body, k.exp)
+                }
             } catch (_: IOException) {
                 // Not delivered (a relay error, no session): no answer from this send.
             }
+            if (heldFirst) throw heldByGate(k.type)
             withTimeoutOrNull(timeout.toMillis()) { k.answer.await() }?.let { return VaultMessage(it) }
             ensureCollecting()
         }
@@ -2937,6 +3225,16 @@ class VaultDevice private constructor(
     }
 
     /**
+     * (ANDROID-PLAN §4 "While pending") [id] was never sent (its first send was held by the lock gate): neither unsettled nor a
+     * `wallet.sign` outstanding ([SignMark]).
+     */
+    internal suspend fun dropUnsent(id: String) = lock.withLock {
+        val a = st.unsettled.remove(id) != null
+        val b = st.unsettledSigns.remove(id) != null
+        if (a || b) save()
+    }
+
+    /**
      * No credential operation of this phone can still reach the vault: each was answered, or the newest `ts` the vault
      * stamped (never the phone's estimate) is more than [SETTLE_MARGIN] past its `exp`.
      */
@@ -2960,7 +3258,9 @@ class VaultDevice private constructor(
                 // expired by the phone's estimate, one request that is not a credential operation fetches a stamped one.
                 if (!probed && expiredByEstimate()) {
                     probed = true
+                    // (ANDROID-PLAN §4 "While pending") A probe the lock gate held is said as such, not as "unsettled".
                     runCatching { requestOnce("credential.version", timeout = cfg.requestTimeout) }
+                        .onFailure { if (it.heldByLockGate) throw it }
                     continue
                 }
                 kotlinx.coroutines.delay(SETTLE_POLL_MS)
@@ -3035,6 +3335,7 @@ class VaultDevice private constructor(
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
         private const val TYPE_TOKEN_ISSUED = "relay.token.issued"
+        private const val TYPE_TOKEN_REFRESH = "relay.token.refresh"
         internal const val TYPE_DEVICE_FEATURES = "device.features"
 
         /** How long the confirmed epoch keeps its rk and receive key while not current (§6.3.1 table). */
@@ -3045,6 +3346,22 @@ class VaultDevice private constructor(
 
         /** (0.88.1) `hs.confirm` again 12 days after the last one while the current epoch is unconfirmed. Not scaled (§11.10.8). */
         internal val CONFIRM_RESEND: Duration = Duration.ofDays(12)
+
+        /** (GC #6847) The first wait after `quota_exceeded` for the mailbox's quota, doubled at each refusal up to [QUOTA_BACKOFF_MAX]. */
+        internal val QUOTA_BACKOFF_MIN: Duration = Duration.ofMinutes(1)
+
+        /**
+         * Whether [e], thrown by a durable [send], left its entry in the outbox for a later flush: a quota wait or refusal, a
+         * relay error that keeps it (429, 5xx, a stale signature), or a transport failure. Not a terminal refusal (the entry
+         * was removed) nor a state failure from before anything was queued.
+         */
+        fun keptInOutbox(e: Throwable): Boolean = when (e) {
+            is QuotaWait -> true
+            is RelayException -> e.retryable || e.code == RelayException.QUOTA_EXCEEDED
+            is VaultStateException -> false
+            else -> e is java.io.IOException
+        }
+        internal val QUOTA_BACKOFF_MAX: Duration = Duration.ofHours(1)
 
         /** A relay answer that trying again will not cure (`quota_exceeded` and a retryable one are kept for a later flush). */
         internal fun isTerminal(x: RelayException): Boolean = !(x.retryable || x.code == RelayException.QUOTA_EXCEEDED)
@@ -3129,6 +3446,15 @@ class VaultDevice private constructor(
          * "Responder": "queues `hs.confirm` … durable"; §10.2).
          */
         internal val OUTBOX_TYPES = setOf("relay.token.issued", "relay.token.refresh", "call.end", HsTypes.CONFIRM, TYPE_DEVICE_FEATURES)
+
+        /** (ANDROID-PLAN §4 "While pending") The outbox types the lock gate lets out while a lock is pending. */
+        val UNGATED_TYPES: Set<String> = setOf("call.end")
+
+        /** [VaultStateException.code] of a send the lock gate held: the same as the manager's `lock_pending`. */
+        const val CODE_LOCK_PENDING = "lock_pending"
+
+        /** The lock gate's name for a blob upload to the vault's mailbox ([uploadBlobToVault]). */
+        const val TYPE_BLOB_PUT = "blob.put"
 
         /**
          * (A6 audit N2) A state written by an app version that put requests in the outbox: every entry that is not of
