@@ -11,7 +11,7 @@ import java.security.MessageDigest
 
 /*
  * The wallet requests the app uses in W1c (VAULT-MESSAGING §10.18; ANDROID-PLAN §4 "Wallet"), beside [VaultApi] rather than in
- * it, as the calls are. Not in production builds: nothing that ships in release may reach these (`walletMarkers` in
+ * it, as the calls' are in `CallApi.kt`. Not in production builds: nothing that ships in release may reach these (`walletMarkers` in
  * app/build.gradle.kts fails a release APK that carries their type names); `:core:wallet`, linked only where the wallet is, is
  * their one caller. A vault without wallets answers `unsupported_type`; a held vault `owner_check_required`. Requests and answers
  * carry addresses and account keys: nothing here logs.

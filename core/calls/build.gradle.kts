@@ -1,8 +1,7 @@
 // Calls (CALLS-PLAN 0.1.1 §4, §6.4; phase C1): the media stack behind an interface and the call state machine. No UI.
 //
-// NOT part of a production build yet: the app links this module into its debug, devStack and staging builds only
-// (app/build.gradle.kts, `vettidCallsInRelease`), and `:app:check<Variant>Calls` fails a release APK that carries any
-// of it. It is used by both distributions once calls are promoted: libwebrtc is BSD-3-Clause (with the patent grant),
+// In every build, release included (owner decision 2026-11-14): `:app:check<Variant>Calls` checks the media stack in
+// each APK against the pinned bytes. Both distributions have it: libwebrtc is BSD-3-Clause (with the patent grant),
 // the frame cryptor is LiveKit's (Apache-2.0), and nothing of Google Play services or Firebase is in the artifact
 // (`:app:checkFossReleaseApk` reads its classes and its native libraries).
 import java.security.MessageDigest

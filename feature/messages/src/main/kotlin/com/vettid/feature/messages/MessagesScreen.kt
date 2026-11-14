@@ -158,7 +158,6 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
                 onDismissError = vm::dismissError,
                 onDetails = { host.onOpenConnection(state.connectionId) },
                 onCall = vm::call,
-                onDismissCallNotice = vm::dismissCallNotice,
                 onLoadOlder = vm::loadOlder,
                 photos = PhotoActions(
                     onTakePhoto = vm::startCapture,
@@ -373,7 +372,6 @@ data class ConversationActions(
     val onDetails: () -> Unit = {},
     /** The call button (builds and vaults with calls). */
     val onCall: () -> Unit = {},
-    val onDismissCallNotice: () -> Unit = {},
     /** The list reached its top while older messages remain (§10.5.2). */
     val onLoadOlder: () -> Unit = {},
     /** Photo attachments (ANDROID-PLAN 0.1.39). */
@@ -453,15 +451,6 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
                     )
                     else -> MessageList(state, name, listState, actions)
                 }
-            }
-            if (state.callsNotAvailable) {
-                NoticeCard(
-                    kind = NoticeKind.INFO,
-                    title = stringResource(R.string.messages_call),
-                    body = stringResource(R.string.messages_call_not_in_vault),
-                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_call_notice"),
-                    actions = { TextButton(onClick = actions.onDismissCallNotice) { Text(stringResource(R.string.messages_ok)) } },
-                )
             }
             val error = state.error
             if (error != null) {

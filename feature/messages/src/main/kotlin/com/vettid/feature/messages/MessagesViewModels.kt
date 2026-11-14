@@ -153,8 +153,6 @@ data class ConversationUiState(
     val calls: List<CallHistoryEntry> = emptyList(),
     /** (GC #7718) Some of the vault's calls with this connection did not read: "Some calls couldn't be shown.". */
     val callsNotShown: Boolean = false,
-    /** The member tapped Call where the vault has no calls: say so. */
-    val callsNotAvailable: Boolean = false,
     /** (C2) Calls with this connection are off: the button is disabled, with where to turn them on under it. */
     val callsOff: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
@@ -186,10 +184,13 @@ data class ConversationUiState(
     val noComposer: Boolean get() = serviceRefused || connection?.service == true
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
 
-    /** A call button is shown: the connection is active and this build has calls that the vault was asked about. */
+    /**
+     * A call button is shown: the connection is active and the vault said it has calls. A vault without calls
+     * (`NOT_IN_VAULT`), or one not asked yet, shows no button (owner decision 2026-11-14: every build has calls, so
+     * a vault without them must show nothing new).
+     */
     val callShown: Boolean
-        get() = active && !noComposer &&
-            (call == CallAvailability.READY || call == CallAvailability.IN_CALL || call == CallAvailability.NOT_IN_VAULT)
+        get() = active && !noComposer && (call == CallAvailability.READY || call == CallAvailability.IN_CALL)
 
     /** Disabled while a call is going on, and while calls with this connection are off (owner decision 2026-11-12). */
     val callEnabled: Boolean get() = call != CallAvailability.IN_CALL && !callsOff
@@ -402,14 +403,8 @@ class ConversationViewModel @Inject constructor(
     /** The call button. The call screen follows from the call's state; here only the tap. */
     fun call() {
         val s = uiState.value
-        when {
-            !s.callShown || !s.callEnabled -> Unit
-            s.call == CallAvailability.NOT_IN_VAULT -> local.update { it.copy(callsNotAvailable = true) }
-            else -> calls.call(connectionId)
-        }
+        if (s.callShown && s.callEnabled) calls.call(connectionId)
     }
-
-    fun dismissCallNotice() = local.update { it.copy(callsNotAvailable = false) }
 
     // --- photos (ANDROID-PLAN 0.1.39) ---
 

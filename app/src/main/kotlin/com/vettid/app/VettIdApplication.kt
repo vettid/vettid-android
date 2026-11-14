@@ -79,8 +79,8 @@ class VettIdApplication : DistributionApplication() {
     lateinit var pushRegistrar: PushRegistrar
 
     /**
-     * Injected so that it exists from the start of the process: in a build with calls it is what listens for an
-     * incoming call (CALLS-PLAN C1); in a build without, an object that does nothing.
+     * Injected so that it exists from the start of the process: it is what listens for an incoming call (every build
+     * has calls since 2026-11-14; nothing of calls shows until the vault says it has them).
      */
     @Inject
     lateinit var calls: CallAccess

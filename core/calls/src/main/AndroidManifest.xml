@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Calls (CALLS-PLAN 0.1.1 phase C1). This manifest is merged only into builds that link :core:calls: debug,
-         devStack and staging. `:app:check<Variant>Calls` fails a production APK that has any of this. -->
+    <!-- Calls (CALLS-PLAN 0.1.1). This manifest is merged into every build, release included (owner decision
+         2026-11-14); `:app:check<Variant>Calls` fails a release-like APK that lacks the permissions or the service. -->
 
     <!-- The microphone, asked for when the member first calls or answers. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

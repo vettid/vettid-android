@@ -1,6 +1,6 @@
 // The call screens (CALLS-PLAN 0.1.1 §6.4, phase C1): outgoing, incoming, in call, the microphone prompt, and the
-// test screen of the two-phone tests. Like :core:calls, NOT part of a production build yet: the app links this
-// module into its debug, devStack and staging builds only (`:app:check<Variant>Calls`).
+// test screen of the two-phone tests. Like :core:calls, in every build, release included (owner decision 2026-11-14;
+// `:app:check<Variant>Calls`); the test screen is reached only in a call-test build (`BuildConfig.CALLS_TEST`).
 plugins {
     id("vettid.android.feature")
     id("vettid.hilt")

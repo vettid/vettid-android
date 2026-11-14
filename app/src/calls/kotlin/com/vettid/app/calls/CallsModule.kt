@@ -51,9 +51,8 @@ import javax.inject.Singleton
 internal fun callName(c: ConnectionInfo): String? = AccountNames.cleaned(c.accountName) ?: AccountNames.cleaned(c.name)
 
 /**
- * Calls in the builds that have them (debug, devStack, staging; CALLS-PLAN 0.1.1 phase C1): the one
- * [CallsController] of the process on the app's vault. Production builds have `src/noCalls` instead, and neither
- * `:core:calls` nor anything here.
+ * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
+ * app's vault. Nothing of calls shows until its `call.list` probe finds that the vault has calls.
  */
 @Module
 @InstallIn(SingletonComponent::class)
