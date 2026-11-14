@@ -62,6 +62,9 @@ class WalletLifecycleTest {
         val m = manager()
         m.follow(open, events)
         eventually("first read") { m.availability.value == WalletAvailability.AVAILABLE }
+        // The events are followed in a coroutine of their own: an emit before it subscribes is lost (no replay), as a
+        // loaded CI runner showed (#347). Wait for the subscriber, as the vault's own event flow has one from the start.
+        eventually("events followed") { events.subscriptionCount.value > 0 }
         val w = WalletFixtures.wallet()
         ops.wallets[w.id] = w
         events.emit("sync.event" to syncEvent("wallet.changed", w.id))
