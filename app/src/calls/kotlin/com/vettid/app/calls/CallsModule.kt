@@ -51,13 +51,18 @@ import javax.inject.Singleton
 internal fun callName(c: ConnectionInfo): String? = AccountNames.cleaned(c.accountName) ?: AccountNames.cleaned(c.name)
 
 /**
- * Calls in the builds that have them (debug, devStack, staging; CALLS-PLAN 0.1.1 phase C1): the one
- * [CallsController] of the process on the app's vault. Production builds have `src/noCalls` instead, and neither
- * `:core:calls` nor anything here.
+ * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
+ * app's vault. Nothing of calls shows until its `call.list` probe finds that the vault has calls.
  */
 @Module
 @InstallIn(SingletonComponent::class)
 object CallsModule {
+    /**
+     * Whether this build may switch on the call faults, the DTLS trial and relay only (the controller and the engines
+     * refuse them otherwise): the call-test builds alone. ReleaseCallGateTest holds it false in the release.
+     */
+    internal val TEST_BUILD: Boolean = BuildConfig.CALLS_TEST
+
     /** What the calls use of the vault manager: its phase, its typed client, and its connections as the app shows them. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
@@ -119,7 +124,7 @@ object CallsModule {
         @AppScope scope: CoroutineScope,
     ): CallsController = CallsController(
         vault = ManagerVault(manager, prefs, scope),
-        engines = WebRtcMediaEngine.factory(context, testBuild = BuildConfig.CALLS_TEST),
+        engines = WebRtcMediaEngine.factory(context, testBuild = TEST_BUILD),
         scope = scope,
         audio = AndroidCallAudio(context),
         tones = AndroidCallTones(context),
@@ -129,7 +134,7 @@ object CallsModule {
         // fault is ever on by default. Only a build made for the phone tests may change that (the controller
         // refuses it in any other): a debuggable build, or a staging build made with -PvettidCallsTest=true.
         config = MediaConfig(),
-        testBuild = BuildConfig.CALLS_TEST,
+        testBuild = TEST_BUILD,
     ).also { controller ->
         CallService.host = controller
         // The member's lock waits (two seconds at most) for a live call's hang-up to reach the vault.

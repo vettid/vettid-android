@@ -189,8 +189,9 @@ class CallsController(
         vault::fingerprint,
         engines.suites,
         vault::refreshConnections,
-        // An offer waits a moment for an unlock that is completing; none comes: it does not ring.
-        mayRing = { !vault.updateShowing && (open || withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { vault.unlocked.first { it } } != null) },
+        // An offer waits a moment for an unlock that is completing and for the probe's answer; it rings only where the
+        // vault said it has calls (every build has calls since 2026-11-14: the probe is the gate, for incoming calls too).
+        mayRing = { !vault.updateShowing && callsKnownWithin(UNLOCK_WAIT) },
         peerKey = vault::identityKey,
         vaultIsC2 = { vaultC2 },
     )
@@ -237,8 +238,21 @@ class CallsController(
     val microphoneNeeded: SharedFlow<MicrophoneRequest> = microphoneFlow.asSharedFlow()
 
     /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
-    @Volatile
-    private var supported: Boolean? = null
+    private val supportedFlow = MutableStateFlow<Boolean?>(null)
+    private var supported: Boolean?
+        get() = supportedFlow.value
+        set(v) {
+            supportedFlow.value = v
+        }
+
+    /**
+     * Whether, within [wait], the vault is open on this phone and its probe answered that it has calls. An answer of
+     * none, a refusal that leaves it unknown, or no answer in time: false.
+     */
+    private suspend fun callsKnownWithin(wait: Duration): Boolean = withTimeoutOrNull(wait.toMillis()) {
+        if (!open) vault.unlocked.first { it }
+        supportedFlow.first { it != null }
+    } == true
 
     /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
     @Volatile

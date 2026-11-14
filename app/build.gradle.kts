@@ -1,5 +1,7 @@
 import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.BuildConfigField
+import com.android.build.api.variant.HasHostTestsBuilder
+import com.android.build.api.variant.HostTestBuilder
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.result.ResolvedComponentResult
 import org.gradle.api.artifacts.result.ResolvedDependencyResult
@@ -112,16 +114,13 @@ android {
             buildConfigField("boolean", "WALLET_REGTEST", "true")
         }
         release {
-            // A release with calls linked in (`-PvettidCallsInRelease=true`, CI's F-Droid-with-calls step) is a
-            // check build and nothing else: under this id it cannot replace or pass for the production app, and no
-            // vault accepts its key attestation (a release names its Android package, §11.10.8).
-            // The same for a release with the wallet linked in (`-PvettidWalletInRelease=true`, W1).
-            if (providers.gradleProperty("vettidCallsInRelease").orNull == "true" ||
-                providers.gradleProperty("vettidWalletInRelease").orNull == "true"
-            ) {
-                applicationIdSuffix = ".callscheck"
+            // A release with the wallet linked in (`-PvettidWalletInRelease=true`, W1; CI's F-Droid-with-the-wallet
+            // step) is a check build and nothing else: under this id it cannot replace or pass for the production app,
+            // and no vault accepts its key attestation (a release names its Android package, §11.10.8).
+            if (providers.gradleProperty("vettidWalletInRelease").orNull == "true") {
+                applicationIdSuffix = ".walletcheck"
             }
-            // ARM only (owner decision 2026-11-05), both distributions and the check build with calls: x86 is for emulators.
+            // ARM only (owner decision 2026-11-05), both distributions and the wallet check build: x86 is for emulators.
             // Debug, devStack and staging keep every ABI (`check<Variant>Calls` pins staging's libraries for all four).
             ndk { abiFilters += AbiRules.RELEASE }
             isMinifyEnabled = true
@@ -226,11 +225,9 @@ android {
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
         getByName("release").kotlin.srcDir("src/noDebugTools/kotlin")
         getByName("staging").kotlin.srcDir("src/noDebugTools/kotlin")
-        // Calls (CALLS-PLAN C1): `src/calls` wires :core:calls into the builds that have it, `src/noCalls` binds
-        // "no calls" in the others (CallsModule in both; `callsInRelease` further down decides for release).
-        val releaseCalls = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
-        for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/calls/kotlin")
-        getByName("release").kotlin.srcDir(if (releaseCalls) "src/calls/kotlin" else "src/noCalls/kotlin")
+        // Calls: `src/calls` wires :core:calls into every build, release included (owner decision 2026-11-14). What a
+        // member sees is decided at run time: nothing of calls shows until the vault answers the `call.list` probe.
+        getByName("main").kotlin.srcDir("src/calls/kotlin")
         // Wallet (ANDROID-PLAN §4 "Wallet"): `src/wallet` wires :core:chain into the builds that link it (see walletInRelease).
         for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/wallet/kotlin")
         getByName("release").kotlin.srcDir(
@@ -690,14 +687,12 @@ abstract class WalletApkCheck : DefaultTask() {
 }
 
 /**
- * Calls (CALLS-PLAN 0.1.1, phase C1) are in the debug, devStack and staging builds only until they are promoted
- * (STAGING-DEVELOPMENT-PLAN §2.4). `check<Variant>Calls`, run by `checkReleaseApk`, `checkFossReleaseApk` and
- * `checkStagingApk`:
- * - **without calls** (a release build): the APK has no media stack (no `org.webrtc` class, no native library of
- *   it), no class of `:core:calls`, and the merged manifest none of the permissions calls need and no call component;
- * - **with calls** (staging; a release built with `-PvettidCallsInRelease=true`): the APK is universal (the media
- *   stack's native library for all four ABIs: no ABI split or filter, owner decision 2026-10-12) and each library is
- *   byte for byte the one in the pinned artifact (nothing stripped or rebuilt it), and the dex has the stack.
+ * Calls are in every build, release included (owner decision 2026-11-14). `check<Variant>Calls`, run by
+ * `checkReleaseApk`, `checkFossReleaseApk` and `checkStagingApk`: the media stack's native library is there for each
+ * of the build's ABIs (all four in staging, no split or filter, owner decision 2026-10-12; ARM only in a release,
+ * owner decision 2026-11-05) and no other, each byte for byte the one in the pinned artifact (nothing stripped or
+ * rebuilt it); the dex has the stack and `:core:calls`; and the merged manifest asks for the permissions calls need
+ * and has the call service. [expected] false is the old "no calls" check, kept for a build that must have none.
  */
 abstract class CallsApkCheck : DefaultTask() {
     @get:InputFiles
@@ -722,6 +717,11 @@ abstract class CallsApkCheck : DefaultTask() {
         val permissions = names("uses-permission").filter { it in PERMISSIONS }
         val components = listOf("activity", "activity-alias", "service", "receiver", "provider").flatMap { names(it) }
             .filter { it.contains(".calls.") }
+        // The call service as core/calls declares it: not exported, phoneCall|microphone.
+        val service = doc.getElementsByTagName("service").let { l -> (0 until l.length).map { l.item(it) as org.w3c.dom.Element } }
+            .firstOrNull { it.getAttributeNS(ns, "name") == SERVICE }
+        val serviceAsDeclared = service != null && service.getAttributeNS(ns, "exported") == "false" &&
+            service.getAttributeNS(ns, "foregroundServiceType") == "phoneCall|microphone"
         val apks = apkDir.get().asFile.listFiles { f -> f.name.endsWith(".apk") }.orEmpty()
         require(apks.isNotEmpty()) { "no APK in ${apkDir.get().asFile}" }
         for (apk in apks) {
@@ -745,11 +745,16 @@ abstract class CallsApkCheck : DefaultTask() {
                 if (expected.get()) {
                     val pinned = NATIVE_SHA256.filterKeys { it in abis.get() }
                     check(libs == pinned) { "${apk.name}: the media stack's native libraries are $libs, expected $pinned" }
-                    check(DEX[0] in classes) { "${apk.name}: calls are expected in this build, but the media stack's classes are missing" }
+                    check(DEX[0] in classes && DEX[2] in classes) { "${apk.name}: calls are expected in this build, but found only the classes $classes" }
+                    // Exactly these: another call permission (a Bluetooth prompt, a full-screen intent) is a change members see.
+                    check(permissions.toSet() == REQUIRED_PERMISSIONS.toSet()) { "${apk.name}: call permissions $permissions, expected exactly $REQUIRED_PERMISSIONS" }
+                    check(components == listOf(SERVICE) && serviceAsDeclared) {
+                        "${apk.name}: call components $components, expected only $SERVICE, not exported, phoneCall|microphone"
+                    }
                     logger.lifecycle("${apk.name}: calls: the media stack for ${libs.keys.sorted()}, each library as pinned")
                 } else {
                     check(libs.isEmpty() && classes.isEmpty() && permissions.isEmpty() && components.isEmpty()) {
-                        "${apk.name}: calls are not in production builds yet, but found: libraries ${libs.keys}, dex $classes, " +
+                        "${apk.name}: calls are not expected in this build, but found: libraries ${libs.keys}, dex $classes, " +
                             "permissions $permissions, components $components"
                     }
                     logger.lifecycle("${apk.name}: no calls: no media stack, no call permission or component")
@@ -760,6 +765,9 @@ abstract class CallsApkCheck : DefaultTask() {
 
     companion object {
         const val LIBRARY = "libjingle_peerconnection_so.so"
+
+        /** The one call component (core/calls' manifest). */
+        const val SERVICE = "com.vettid.core.calls.CallService"
 
         /** The four libraries inside `io.github.webrtc-sdk:android:150.7871.04` (AAR SHA-256 `1872dda4…c84c`, core/calls). */
         val NATIVE_SHA256 = mapOf(
@@ -772,7 +780,7 @@ abstract class CallsApkCheck : DefaultTask() {
         /** Type descriptors: the media stack's, and :core:calls' own. */
         val DEX = listOf("Lorg/webrtc/", "Lorg/jni_zero/", "Lcom/vettid/core/calls/", "Lcom/vettid/feature/calls/")
 
-        /** What calls will ask for (CALLS-PLAN §4); no build without calls declares any of them today. */
+        /** What calls may ask for (CALLS-PLAN §4): a build without calls declares none of them. */
         val PERMISSIONS = listOf(
             "android.permission.RECORD_AUDIO",
             "android.permission.MODIFY_AUDIO_SETTINGS",
@@ -781,6 +789,15 @@ abstract class CallsApkCheck : DefaultTask() {
             "android.permission.MANAGE_OWN_CALLS",
             "android.permission.BLUETOOTH_CONNECT",
             "android.permission.USE_FULL_SCREEN_INTENT",
+        )
+
+        /** What a build with calls asks for today (core/calls' manifest): the microphone, audio routing, the call service. */
+        val REQUIRED_PERMISSIONS = listOf(
+            "android.permission.RECORD_AUDIO",
+            "android.permission.MODIFY_AUDIO_SETTINGS",
+            "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+            "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+            "android.permission.MANAGE_OWN_CALLS",
         )
     }
 }
@@ -903,27 +920,17 @@ abstract class CallsTestCheck : DefaultTask() {
 }
 
 /**
- * Calls in a release build: off. `-PvettidCallsInRelease=true` links them in, for the one CI step that keeps the
- * F-Droid distribution building with them (`:app:assembleFossRelease :app:checkFossReleaseApk`: no Google code, the
- * media stack as pinned). Never for a build that is published before calls are promoted: such a build has the
- * application id `com.vettid.app.callscheck` (the release build type, above), which no vault accepts and which
- * cannot update the production app.
- */
-val callsInRelease = providers.gradleProperty("vettidCallsInRelease").orNull == "true"
-
-/**
  * The wallet (:core:chain, bitcoin-kmp) in a release build: off until the wallet is promoted (staging first,
  * STAGING-DEVELOPMENT-PLAN). `-PvettidWalletInRelease=true` links it in, for the one CI step that keeps the F-Droid
- * distribution building with it (`:app:assembleFossRelease :app:checkFossReleaseApk`). Like `callsInRelease`, such a build has the
- * application id `com.vettid.app.callscheck` and is never published.
+ * distribution building with it (`:app:assembleFossRelease :app:checkFossReleaseApk`). Such a build has the
+ * application id `com.vettid.app.walletcheck` and is never published.
  */
 val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
 
 /**
- * "No calls code in production" beyond the media stack: the call code of :core:crypto and :core:vault is compiled
- * into every variant and only R8 keeps it out of a release. These strings are in that code and nowhere else, and
- * R8 does not rename strings: a release dex that has one has call code that something reaches (for example a
- * `call.list` probe wired outside the build-type gate).
+ * Calls in every build (owner decision 2026-11-14): a release dex must reach the call code of :core:crypto and
+ * :core:vault, so it must keep these strings (they are in that code and nowhere else, and R8 does not rename strings).
+ * Their absence would mean R8 dropped calls, or the probe is no longer wired: the run-time gate would then never open.
  */
 val callsMarkers = listOf(
     "vettid/vms/2/call-media", "vettid/vms/2/call-frame", "vettid/vms/2/call-share", "vettid/vms/2/call-vouch", "vettid/vms/2/call-key",
@@ -978,6 +985,13 @@ androidComponents {
     // The `foss` distribution is built for release only (F-Droid); every other build type is `full`, as before
     // the distributions existed: no variant is built or tested twice.
     beforeVariants(selector().withFlavor("distribution" to "foss")) { it.enable = it.buildType == "release" }
+    // Unit tests of the `full` release too (AGP makes them for debug only): `src/testRelease` holds what must hold in
+    // the release's own configuration (ReleaseCallGateTest: calls are in every build, owner decision 2026-11-14). Only
+    // the package `com.vettid.app.release` runs there (the filter below): the app's other tests are written for the
+    // debug build and fail under release. A test in `src/testRelease` outside that package never runs.
+    beforeVariants(selector().withBuildType("release").withFlavor("distribution" to "full")) {
+        (it as HasHostTestsBuilder).hostTests[HostTestBuilder.UNIT_TEST_TYPE]?.enable = true
+    }
 
     // Google push's options in BuildConfig: the `full` distribution only.
     onVariants(selector().withFlavor("distribution" to "full")) { v ->
@@ -1017,7 +1031,7 @@ androidComponents {
                 applicationId.set(
                     when {
                         staging -> stagingApplicationId
-                        callsInRelease || walletInRelease -> "$releaseApplicationId.callscheck"
+                        walletInRelease -> "$releaseApplicationId.walletcheck"
                         else -> releaseApplicationId
                     },
                 )
@@ -1029,7 +1043,7 @@ androidComponents {
             tasks.register<CallsApkCheck>("check${name}Calls") {
                 apkDir.set(v.artifacts.get(SingleArtifact.APK))
                 manifest.set(v.artifacts.get(SingleArtifact.MERGED_MANIFEST))
-                expected.set(staging || callsInRelease)
+                expected.set(true)
                 abis.set(if (staging) AbiRules.ALL else AbiRules.RELEASE)
             }
         }
@@ -1056,10 +1070,9 @@ androidComponents {
                     // Each environment has its own Firebase project (PUSH-GATEWAY §10.4): never the other one's app.
                     forbidden.set(
                         stagingPins + devOnly + listOfNotNull(fcmOptions("staging")?.get("ApplicationId")) +
-                            (if (callsInRelease) emptyList() else callsMarkers) + CallsTestCheck.MARKER + "calltest_" +
-                            (if (walletInRelease) emptyList() else walletMarkers),
+                            CallsTestCheck.MARKER + "calltest_" + (if (walletInRelease) emptyList() else walletMarkers),
                     )
-                    required.set(productionPins + (if (walletInRelease) walletMarkersReached else emptyList()))
+                    required.set(productionPins + callsMarkers + (if (walletInRelease) walletMarkersReached else emptyList()))
                 }
                 if (foss) {
                     val runtime = configurations.named("${v.name}RuntimeClasspath")
@@ -1078,6 +1091,11 @@ androidComponents {
             }
         }
     }
+}
+
+// The release's unit tests: `src/testRelease` only (see the host tests enabled above).
+tasks.withType<Test>().matching { it.name == "testFullReleaseUnitTest" }.configureEach {
+    filter { includeTestsMatching("com.vettid.app.release.*") }
 }
 
 // The `full` distribution's per-variant tasks keep the names they had before the distributions (CI, the READMEs and
@@ -1112,11 +1130,9 @@ dependencies {
     implementation(projects.core.location)
     // The map is given the shared HTTP client (AppModule.locationRepository); the libraries are :core:map's.
     implementation(projects.core.map)
-    // Calls (CALLS-PLAN 0.1.1 phase C1): not in production builds until they are promoted (CallsApkCheck above).
-    for (type in listOf("debug", "devStack", "staging")) {
-        "${type}Implementation"(projects.core.calls)
-        "${type}Implementation"(projects.feature.calls)
-    }
+    // Calls: every build, release included (owner decision 2026-11-14; CallsApkCheck above).
+    implementation(projects.core.calls)
+    implementation(projects.feature.calls)
     // Wallet (ANDROID-PLAN §4 "Wallet", W1): not in production builds until it is promoted (see walletInRelease above).
     for (type in listOf("debug", "devStack", "staging")) {
         "${type}Implementation"(projects.core.chain)
@@ -1127,10 +1143,6 @@ dependencies {
         "releaseImplementation"(projects.core.chain)
         "releaseImplementation"(projects.core.wallet)
         "releaseImplementation"(projects.feature.wallet)
-    }
-    if (callsInRelease) {
-        "releaseImplementation"(projects.core.calls)
-        "releaseImplementation"(projects.feature.calls)
     }
     // Google push: the `full` distribution only. Looked up by path, not by accessor: an F-Droid build removes the
     // module's directory, and settings.gradle.kts then does not include it (the `foss` distribution never needs it).

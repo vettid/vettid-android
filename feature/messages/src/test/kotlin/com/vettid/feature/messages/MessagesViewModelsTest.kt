@@ -311,7 +311,7 @@ class MessagesViewModelsTest {
 
     @Test
     fun theCallButtonFollowsWhatTheBuildAndTheVaultHave() = runTest {
-        // A build without calls (every production build): no button, and the vault is never asked for its calls.
+        // A screen with no calls bound (NoCallAccess, the default): no button, and the vault is never asked for its calls.
         val plain = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, attachments)
         advanceUntilIdle()
         assertFalse(plain.uiState.value.callShown)
@@ -336,16 +336,13 @@ class MessagesViewModelsTest {
         vm.call()
         assertEquals(1, calls.called.size)
 
-        // A vault whose release has no calls: the tap says so and calls nobody.
+        // A vault whose release has no calls (every production vault today): no button, and a tap calls nobody.
         calls.availability.value = CallAvailability.NOT_IN_VAULT
         advanceUntilIdle()
+        assertFalse(vm.uiState.value.callShown)
         vm.call()
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.callsNotAvailable)
         assertEquals(1, calls.called.size)
-        vm.dismissCallNotice()
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.callsNotAvailable)
     }
 
     /** (GC #7718) Some of the vault's calls did not read: the conversation says so, with the rest; and drops it when calls go. */

@@ -225,7 +225,7 @@ fun VettIdApp(
                         composable<MainDest> {
                             // The tags' colours from the vault's registry, for every screen of the open app (ANDROID-PLAN 0.1.25).
                             // A call covers the open app's screens and nothing else: it is composed here, inside
-                            // the app lock and the unlocked destination (a build without calls: only the content).
+                            // the app lock and the unlocked destination.
                             CallsHost {
                                 TagColorsHost {
                                     // Only while the vault is open (ANDROID-PLAN §4 "The member's own profile"): otherwise the

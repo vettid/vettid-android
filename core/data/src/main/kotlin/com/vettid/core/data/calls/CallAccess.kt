@@ -7,7 +7,7 @@ import java.time.Instant
 
 /** Whether a conversation can show a call button, and why not. */
 enum class CallAvailability {
-    /** This build has no calls (every production build until calls are promoted): no button. */
+    /** This build has no calls ([NoCallAccess]: screens' defaults and tests; every app build has calls): no button. */
     NOT_IN_BUILD,
 
     /** The vault has not been asked yet (it is locked, or was just opened): no button. */
@@ -65,7 +65,7 @@ data class CallPermissions(
 /**
  * All that the screens of every build know of calls: whether to show a call button, the tap on it, and the calls a
  * conversation lists. Everything else of calls (the media stack, the state machine, the call screens) is in modules
- * that production builds do not have yet (CALLS-PLAN 0.1.1 phase C1); those builds bind [NoCallAccess].
+ * that the screens' modules do not depend on; the app binds `:core:calls`' controller, and [NoCallAccess] is the screens' default.
  */
 interface CallAccess {
     val availability: StateFlow<CallAvailability>

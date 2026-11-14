@@ -74,6 +74,33 @@ class ConnectionCallsTest {
         assertNull(vm.uiState.value.calls)
     }
 
+    /**
+     * Calls are in every build, release included (owner decision 2026-11-14): Call and the calls row follow what the
+     * vault said alone. A vault without calls, one not asked yet and a build without calls show neither (also checked in
+     * the release's configuration: ReleaseCallGateTest in `:app`).
+     */
+    @Test
+    fun callAndTheRowShowOnlyOnceTheVaultSaidItHasCalls() = runTest {
+        social.seed(listOf(FakeSocial.connection("c1", "Ada Lovelace")))
+        read()
+        val vm = vm()
+        val shown = CallAvailability.entries.associateWith { a ->
+            calls.availability.value = a
+            advanceUntilIdle()
+            vm.uiState.value.canCall to (vm.uiState.value.calls != null)
+        }
+        assertEquals(
+            mapOf(
+                CallAvailability.NOT_IN_BUILD to (false to false),
+                CallAvailability.UNKNOWN to (false to false),
+                CallAvailability.NOT_IN_VAULT to (false to false),
+                CallAvailability.READY to (true to true),
+                CallAvailability.IN_CALL to (false to true),
+            ),
+            shown,
+        )
+    }
+
     @Test
     fun neverForAService() = runTest {
         social.seed(listOf(ConnectionInfo("c1", "Example Cooperative", ConnectionState.ACTIVE, firstName = "Example", lastName = "Cooperative", service = true)))
