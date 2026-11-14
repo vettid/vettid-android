@@ -100,7 +100,11 @@ internal data class TransferCodeRecord(val relay: String, val claim: String)
  * not named: the app holds it, and only for a transfer ([DeviceConfig.transferDropped]).
  */
 @Serializable
-internal data class DroppedTransferRecord(val attestKeys: List<String> = emptyList())
+internal data class DroppedTransferRecord(
+    val attestKeys: List<String> = emptyList(),
+    /** (GC #6761 review, Low 1) The transfer's phone key ("", 1) goes too; false: a scan that made none, only [attestKeys]. */
+    val phoneKey: Boolean = true,
+)
 
 /**
  * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
@@ -125,6 +129,12 @@ internal data class TransferInRecord(
      */
     val codeRelay: String? = null,
     val codeClaim: String? = null,
+    /**
+     * (#344's blind reviews, item 2) This transfer's scan made the phone key ("", 1) its `hs.init`'s secret came from:
+     * false when it made none (a bundle before release R), so that its drop never deletes a ("", 1) key it did not make.
+     * True in a record written before this field (as those drops did).
+     */
+    val phoneKey: Boolean = true,
 )
 
 /** What the device knows about its vault. Keys are standard base64. */

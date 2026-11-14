@@ -172,7 +172,15 @@ class DeviceConfig(
  * A transfer to this phone that was dropped while unpaired ([DeviceConfig.transferDropped]): [attestKeys], the Keystore
  * aliases of the device attestation keys its `hs.init` carried, as the app named them at the scan.
  */
-class DroppedTransfer(val attestKeys: List<String>)
+class DroppedTransfer(
+    val attestKeys: List<String>,
+    /**
+     * (GC #6761 review, Low 1) Whether the app deletes the transfer phone key ("", 1) too: false for an `hs.init` that was not
+     * sent and whose scan made no key (a bundle before release R, or a failure before the key), so that a key this scan did
+     * not make (it may be a transferred vault's only unlock key) is never touched.
+     */
+    val phoneKey: Boolean = true,
+)
 
 /** A message from the vault: an event (no `re`) or a response. */
 class VaultMessage(val inner: Inner) {
@@ -955,12 +963,17 @@ class VaultDevice private constructor(
     }
 
     private fun setVault(pr: Principal) {
+        awaiting.forEach { it.resp.abort() }
+        pinVault(pr)
+    }
+
+    /** [setVault] without ending the rekeys awaiting `hs.fin`: a transfer's `hs.init` that may not go out puts them back. */
+    private fun pinVault(pr: Principal) {
         st.vault = VaultRecord(
             ik = Base64s.encodeStd(pr.ik()), kem = Base64s.encodeStd(pr.kem.bytes()), relayUrl = pr.relay.url,
             mailbox = pr.relay.mailbox, relayPk = Base64s.encodeStd(pr.relay.pk()),
         )
         keyring = Keyring()
-        awaiting.forEach { it.resp.abort() }
         awaiting.clear()
         unsavedAwaiting.clear()
     }
@@ -1282,8 +1295,8 @@ class VaultDevice private constructor(
          * scale this build does not accept (STAGING-TIME-SCALE §4 item 4) is refused before it is asked.
          *
          * Asked under the device's lock, after any earlier dropped transfer's keys were deleted ([settleDroppedTransfer]):
-         * the app's phone key for this secret is reused only for a retry of this same attempt (a key made and stored, and
-         * an `hs.init` that may or may not have gone out), never across a drop.
+         * the app makes a new phone key at every scan, and the keys of a scan whose `hs.init` is not sent are deleted as a
+         * dropped transfer's (GC #6761).
          */
         unlockSecretFor: suspend (traits: com.vettid.core.crypto.altchan.ReleaseTraits) -> ByteArray? = { null },
     ) {
@@ -1383,38 +1396,107 @@ class VaultDevice private constructor(
                 st.droppedTransfer = null
                 save() // let go durably: a later start must not delete the key this scan makes
             }
-            val unlockSecret = unlockSecretFor(traits)
-            // (The blind reviews of #334, Fable L3) What this scan pins is put back if its hs.init is not sent, so that the
-            // save at the scan's end ([endScan]) writes the device as it was, not a vault with no transfer.
-            val vaultBefore = st.vault
-            val vaultIdBefore = st.vaultId
-            val signerBefore = st.signerSeen
-            val issuedBefore = st.issuedExpMs // set by the hs.init's token when its deposit then fails (review L4)
-            val at = t.truncatedTo(ChronoUnit.MILLIS)
-            val id = Ulid.new(at)
-            var sent = false
+            var startedMs: Long? = null
+            var keyMade = false // (GC #6761 review, Low 1) the app made this scan's phone key: its secret came back
+            var attested = false // (#344, item 3) the attestation returned: its alias is this scan's key
             try {
-                setVault(b.vault)
-                st.vaultId = null
-                sasState.value = null
-                val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
-                st.signerSeen = false // a new attestation is a new key (§11.7.1)
-                val profile = JsonBuilder().string("name", st.name).bytes()
-                // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
-                startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
-                sent = true
+                startedMs = sendTransferInit(b, attester, unlockSecretFor(traits)?.also { keyMade = true }, t) { attested = true }
             } finally {
-                unlockSecret?.fill(0)
-                if (!sent) {
-                    st.vault = vaultBefore
-                    st.vaultId = vaultIdBefore
-                    st.signerSeen = signerBefore
-                    st.issuedExpMs = issuedBefore
-                }
+                // (GC #6761: #6574, #335's Opus L5) An hs.init that was not sent leaves no key behind: the phone key the app
+                // made for its epoch-1 secret and the key its attestation made are no transfer's, and go as a dropped
+                // transfer's do (recorded first, then deleted by the app, [settleDroppedTransfer]). Nothing live needs
+                // them: an earlier transfer was dropped above, and this one never went out. The phone key only if this
+                // scan made it (a secret came back): a ("", 1) key it did not make is never deleted from here.
+                if (startedMs == null) leaveNoTransferKeys(if (attested) attestedKey() else null, phoneKey = keyMade)
             }
-            st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
+            // (GC #6761, #335's Opus L4) The transfer is recorded in the same write that ends the scan; if that write fails,
+            // memory must not hold a transfer the file does not: the hs.init went out, but the transfer is dropped (its keys
+            // with it, [dropTransferOrStop]) and the failure is thrown.
+            val started = checkNotNull(startedMs) // set: a send that failed threw above
+            st.transferIn = TransferInRecord(
+                started, attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim, phoneKey = keyMade,
+            )
             st.scanCode = null // the code is the transfer's from here on
-            save()
+            var saved = false
+            try {
+                save()
+                saved = true
+            } finally {
+                if (!saved) dropTransferOrStop()
+            }
+        }
+    }
+
+    /**
+     * Pins the bundle's vault and sends the transfer's `hs.init`; its start (epoch ms) once it went out. If it does not, what
+     * it pinned is put back (the blind reviews of #334, Fable L3; GC #6761 N2: the keyring and the rekeys awaiting `hs.fin`
+     * too), so that the save at the scan's end ([endScan]) writes the device as it was. [unlockSecret] is zeroed either way.
+     */
+    private suspend fun sendTransferInit(
+        b: InviteBundle,
+        attester: Attester,
+        unlockSecret: ByteArray?,
+        t: Instant,
+        onAttested: () -> Unit,
+    ): Long {
+        val vaultBefore = st.vault
+        val vaultIdBefore = st.vaultId
+        val signerBefore = st.signerSeen
+        val issuedBefore = st.issuedExpMs // set by the hs.init's token when its deposit then fails (review L4)
+        val keyringBefore = keyring
+        val awaitingBefore = awaiting.toList()
+        val at = t.truncatedTo(ChronoUnit.MILLIS)
+        val id = Ulid.new(at)
+        var sent = false
+        try {
+            pinVault(b.vault)
+            st.vaultId = null
+            sasState.value = null
+            val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
+            onAttested()
+            st.signerSeen = false // a new attestation is a new key (§11.7.1)
+            val profile = JsonBuilder().string("name", st.name).bytes()
+            // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
+            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey, unlockSecret = unlockSecret)
+            sent = true
+        } finally {
+            unlockSecret?.fill(0)
+            if (sent) {
+                // Replaced for good: the earlier session's keys and answers are of no use any more. (#344, item 4) Nothing
+                // thrown here may make the sent hs.init look unsent (its keys would then be deleted).
+                awaitingBefore.forEach { runCatching { it.resp.abort() } }
+                if (keyringBefore !== keyring) runCatching { keyringBefore.destroy() }
+            } else {
+                st.vault = vaultBefore
+                st.vaultId = vaultIdBefore
+                st.signerSeen = signerBefore
+                st.issuedExpMs = issuedBefore
+                if (keyring !== keyringBefore) keyring.destroy() // a throw before the swap: the earlier keyring stays
+                keyring = keyringBefore
+                awaiting.clear()
+                awaiting.addAll(awaitingBefore)
+            }
+        }
+        return at.toEpochMilli()
+    }
+
+    /**
+     * (GC #6761) The keys of a transfer `hs.init` that was not sent go, as a dropped transfer's: recorded,
+     * saved, then deleted by the app ([settleDroppedTransfer]: the phone key of ("", 1) if this scan made it ([phoneKey]),
+     * and [attestKey]); nothing when it made neither. A save that
+     * fails keeps the record in memory for the next settle; a delete that fails keeps it for the next try.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // nothing of a failure here may hide the scan's own
+    private fun leaveNoTransferKeys(attestKey: String?, phoneKey: Boolean) {
+        if (st.deviceId != null) return // a paired device keeps its keys for life (never reached: checked before the scan)
+        if (attestKey == null && !phoneKey) return // this scan made no key
+        // No earlier record is left by now: the scan settled or let it go before it made its keys.
+        st.droppedTransfer = DroppedTransferRecord(listOfNotNull(attestKey), phoneKey)
+        try {
+            if (!forgotten) save()
+            settleDroppedTransfer()
+        } catch (_: Exception) {
+            // kept: the next handled message, start or scan settles it
         }
     }
 
@@ -1551,7 +1633,9 @@ class VaultDevice private constructor(
             save()
         } catch (e: Exception) {
             forgotten = true
-            dropNotSaved = true // the file still holds the transfer: a forget is guarded ([forgetIfTransferOpen])
+            // The file still holds the transfer, or (a failed save of the transfer's record, GC #6761 L4) the scan's open code
+            // that was to record it: a forget is guarded either way ([forgetIfTransferOpen]).
+            dropNotSaved = true
             stop()
             throw VaultStateException("the open transfer could not be dropped: this device was stopped").also { it.initCause(e) }
         }
@@ -1611,7 +1695,7 @@ class VaultDevice private constructor(
     private fun settleDroppedTransfer() {
         val drop = st.droppedTransfer ?: return
         val done = st.deviceId != null || try {
-            cfg.transferDropped(DroppedTransfer(drop.attestKeys))
+            cfg.transferDropped(DroppedTransfer(drop.attestKeys, drop.phoneKey))
         } catch (e: Exception) {
             false
         }
@@ -2555,6 +2639,9 @@ class VaultDevice private constructor(
 
     internal val currentEpochId: ByteArray? get() = keyring.current()?.id
 
+    /** Tests: the vault's rekeys this device answered that wait for their `hs.fin`. */
+    internal val awaitingCount: Int get() = awaiting.size
+
     /** Tests: the outbox in memory. */
     internal val outboxEntries: List<OutboxEntry> get() = st.outbox.toList()
 
@@ -2574,7 +2661,8 @@ class VaultDevice private constructor(
         val tr = st.transferIn ?: return
         if (st.deviceId != null || tr.paired) return
         val keys = (st.droppedTransfer?.attestKeys.orEmpty() + listOfNotNull(tr.attestKey)).distinct()
-        st.droppedTransfer = DroppedTransferRecord(keys)
+        // (#344, item 2) The phone key only if this transfer's scan made it, or an earlier record still names it.
+        st.droppedTransfer = DroppedTransferRecord(keys, phoneKey = tr.phoneKey || st.droppedTransfer?.phoneKey == true)
     }
 
     /**
@@ -3590,6 +3678,42 @@ class VaultDevice private constructor(
         if (st.deviceId != null || !open) return@withLock false
         forgetLocked()
         true
+    }
+
+    /** What [forgetIfStaleUnpaired] did. */
+    enum class StaleForget {
+        /** The device was unpaired and stale: it is forgotten. */
+        FORGOT,
+
+        /** Paired, or holding nothing stale: left as it is. */
+        KEPT,
+
+        /** Unpaired and stale, but its forget failed (the file could not be cleared). */
+        FORGET_FAILED,
+
+        /** A transfer it holds is waiting for its approval or settlement ([pinned]): left as it is, nothing forgotten. */
+        PINNED,
+    }
+
+    /**
+     * (GC #6761, #335's re-check Nit-1) The app's "a device that holds nothing yet but carries something stale starts afresh",
+     * decided and done in one call under [lock], so that no message or forget can change the device between the decision
+     * and the forget (a `device.paired` applied in between must never be forgotten). Stale: a pinned vault, a vault id, an
+     * outstanding enrollment, or a stopped device. [pinned] (the app's settlement rule) is asked under the lock too, with
+     * the transfer as it stands then; a throw from it is passed on, nothing forgotten. A failure of the forget is
+     * [StaleForget.FORGET_FAILED] (the review of 226903bf, Nit 2).
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // any failure of the forget is reported, not thrown
+    suspend fun forgetIfStaleUnpaired(pinned: (TransferInState?, String?) -> Boolean): StaleForget = lock.withLock {
+        if (pinned(transferInPending, st.deviceId)) return@withLock StaleForget.PINNED
+        val stale = st.vault != null || st.vaultId != null || alt().pendingEnroll != null || forgotten
+        if (st.deviceId != null || !stale) return@withLock StaleForget.KEPT
+        try {
+            forgetLocked()
+            StaleForget.FORGOT
+        } catch (_: Exception) {
+            StaleForget.FORGET_FAILED
+        }
     }
 
     /**

@@ -2590,6 +2590,9 @@ class VaultDeviceTest {
         @Volatile
         var key: ByteArray? = null
         val drops = java.util.concurrent.CopyOnWriteArrayList<List<String>>()
+
+        /** Each drop's [DroppedTransfer.phoneKey]. */
+        val phoneKeys = java.util.concurrent.CopyOnWriteArrayList<Boolean>()
         val events = java.util.concurrent.CopyOnWriteArrayList<String>()
 
         /** "throw" (a crash right after the drop's save), "false" (the app's delete did not hold), or null: it works. */
@@ -2621,7 +2624,8 @@ class VaultDeviceTest {
                 "false" -> return false
             }
             drops += d.attestKeys
-            key = null
+            phoneKeys += d.phoneKey
+            if (d.phoneKey) key = null
             return true
         }
     }
@@ -2725,28 +2729,348 @@ class VaultDeviceTest {
     }
 
     /**
-     * A scan whose `hs.init` deposit failed is not a drop (no transfer was recorded): the device asks for no delete. The
-     * app makes a new key at the next scan anyway (`newTransferPhoneKey`); with the old reuse the key would stay the same.
+     * (GC #6761: #6574, #335's Opus L5) A scan whose `hs.init` deposit failed leaves no key behind: no transfer was recorded,
+     * so its phone key (the epoch-1 secret's) and its attested key are no transfer's and are deleted as a drop's are, after
+     * the save; and the retry sends a new secret (the vault may hold the first one: a refused deposit may have gone through).
      */
     @Test
-    fun aFailedDepositIsNotADrop() = runBlocking<Unit> {
+    fun aFailedDepositLeavesNoKeyBehind() = runBlocking<Unit> {
         withTimeout(30_000) {
             val store = InMemoryDeviceStateStore()
             val phone = PhoneKeyStandIn(store)
             val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
             val v = FakeVault()
             val link = transferLink(v, Ulid.new())
-            val key = run {
-                refuseDeposits = "denied"
-                assertTrue(runCatching { d.startTransfer(link, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() } }.isFailure)
-                refuseDeposits = null
-                phone.key!!.copyOf()
-            }
-            // The retry: the old phone's code again (the claim was taken by the first try).
+            refuseDeposits = "denied"
+            assertTrue(runCatching { d.startTransfer(link, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() } }.isFailure)
+            refuseDeposits = null
+            assertEquals("both keys named once", listOf(listOf("att-1")), phone.drops.toList())
+            assertNull("the phone key deleted", phone.key)
+            assertEquals("after the save", listOf("secret", "drop:saved"), phone.events.toList())
+            assertFalse("nothing left to delete", d.droppedTransferPending)
+            // The retry: the old phone's code again (the claim was taken by the first try), with a new key.
             d.scan(v, phone, "att-2")
             v.secretIn(nextDeposit().second)
-            assertArrayEquals("the same key: the same secret", key, phone.key)
-            assertTrue("no drop", phone.drops.isEmpty())
+            assertEquals("the retry's keys are kept", 1, phone.drops.size)
+            assertNotNull(d.transferInPending)
+            d.stop()
+        }
+    }
+
+    /**
+     * (GC #6761, #335's Opus L5) An attestation that fails sends nothing: the phone key the app made for the scan (asked
+     * before the attestation) is deleted; no attested key is named, since none was made.
+     */
+    @Test
+    fun aFailedAttestationLeavesNoPhoneKeyBehind() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val failing = object : com.vettid.core.altchan.Attester {
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest =
+                    throw java.io.IOException("keystore busy")
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            val link = transferLink(FakeVault(), Ulid.new())
+            assertTrue(runCatching { d.startTransfer(link, failing, attestedKey = { null }) { phone.secret() } }.isFailure)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+            assertEquals("the delete asked once, no attested key", listOf(emptyList<String>()), phone.drops.toList())
+            assertNull("the phone key deleted", phone.key)
+            assertFalse(d.droppedTransferPending)
+            assertFalse("and so saved", VaultDevice.load(config(store), appSecrets())!!.droppedTransferPending)
+            d.stop()
+        }
+    }
+
+    /**
+     * (GC #6761 review, Low 1) A scan that made no phone key (a bundle before release R: no secret asked back, or a
+     * failure before the key was made) never asks for the ("", 1) key to go: it may be one this scan did not make.
+     */
+    @Test
+    fun anUnsentScanThatMadeNoPhoneKeyLeavesThePhoneKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            phone.secret() // a ("", 1) key this scan does not make
+            val held = phone.key!!.copyOf()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            // No secret: only the attested key goes.
+            refuseDeposits = "denied"
+            assertTrue(
+                runCatching { d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester(), attestedKey = { "att-1" }) { null } }
+                    .isFailure,
+            )
+            refuseDeposits = null
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            assertEquals("not the phone key", listOf(false), phone.phoneKeys.toList())
+            assertArrayEquals("the key stays", held, phone.key)
+            // The phone key's making failed: no key made, none attested: nothing asked at all.
+            val r = runCatching {
+                d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester(), attestedKey = { null }) {
+                    throw java.io.IOException("keystore busy")
+                }
+            }
+            assertTrue(r.isFailure)
+            assertEquals("no second delete", 1, phone.drops.size)
+            assertArrayEquals(held, phone.key)
+            assertFalse(d.droppedTransferPending)
+            d.stop()
+        }
+    }
+
+    /** A delete that fails after an unsent `hs.init` stays recorded, in the file too, and is asked again at the next scan. */
+    @Test
+    fun aFailedDeleteAfterAnUnsentInitIsKeptForTheNextScan() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            val v = FakeVault()
+            phone.failWith = "false"
+            refuseDeposits = "denied"
+            assertTrue(runCatching { d.scan(v, phone, "att-1") }.isFailure)
+            refuseDeposits = null
+            assertTrue("kept", d.droppedTransferPending)
+            assertTrue("in the file", VaultDevice.load(config(store), secrets)!!.droppedTransferPending)
+            phone.failWith = null
+            d.scan(v, phone, "att-2")
+            assertEquals("deleted before the next scan made its key", listOf(listOf("att-1")), phone.drops.toList())
+            assertFalse(d.droppedTransferPending)
+            d.stop()
+        }
+    }
+
+    /**
+     * (GC #6761, #335's Opus L4) The write that records the transfer fails after its `hs.init` went out: memory and the file
+     * agree (no transfer, no code left open), the failure is thrown, and the transfer's keys are deleted as a drop's.
+     */
+    @Test
+    fun aFailedSaveOfTheTransferLeavesMemoryAndFileAgreeing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            val store = object : DeviceStateStore {
+                @Volatile var armed = true
+                override fun load(): ByteArray? = inner.load()
+                override fun save(state: ByteArray) {
+                    if (armed && "\"transferIn\":{" in String(state)) {
+                        armed = false
+                        throw java.io.IOException("disk full")
+                    }
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val phone = PhoneKeyStandIn(inner)
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            val v = FakeVault()
+            val link = transferLink(v, Ulid.new())
+            val r = runCatching { d.startTransfer(link, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() } }
+            assertTrue("the failure is thrown", r.isFailure)
+            assertFalse("the save failed once", store.armed)
+            assertNotNull("the hs.init went out", deposits.poll(5, TimeUnit.SECONDS))
+            assertNull("no transfer in memory", d.transferInPending)
+            assertFalse("no code left open", d.isOpenTransferCode(link))
+            assertFalse("no scan open", d.transferScanOpen)
+            assertEquals("the keys deleted", listOf(listOf("att-1")), phone.drops.toList())
+            assertFalse(d.droppedTransferPending)
+            d.stop()
+            val reloaded = VaultDevice.load(config(store), secrets)!!
+            assertNull("nor in the file", reloaded.transferInPending)
+            assertFalse(reloaded.transferScanOpen)
+            assertFalse(reloaded.droppedTransferPending)
+            reloaded.stop()
+        }
+    }
+
+    /**
+     * (#344's blind reviews, item 5) A transfer scan whose `hs.init` is not sent puts back the device's session as it was:
+     * the keyring (not destroyed: its epoch still opens and its rekey still completes) and the vault's rekey awaiting its
+     * `hs.fin`. Here an enrolled device not yet paired (a session, no device id) that answered a rekey.
+     */
+    @Test
+    fun anUnsentTransferInitPutsBackTheKeyringAndTheAwaitedRekey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            val enrolling = async(Dispatchers.IO) { runCatching { d.completeEnrollment(java.time.Duration.ofSeconds(20)) } }
+            d.handle(v.respond(nextDeposit().second, d))
+            v.fin(nextDeposit().second, d)
+            assertNull("not paired", d.deviceId)
+            val before = d.currentEpochId!!
+            val ini = v.rekeyInit(d)
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
+            assertEquals(1, d.awaitingCount)
+            val failing = object : com.vettid.core.altchan.Attester {
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest =
+                    throw java.io.IOException("keystore busy")
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            assertTrue(runCatching { d.startTransfer(transferLink(FakeVault(), Ulid.new()), failing) }.isFailure)
+            assertArrayEquals("the keyring put back", before, d.currentEpochId)
+            assertNotNull("and not destroyed", d.keptEpoch(before, Instant.now()))
+            assertEquals("the awaited rekey put back", 1, d.awaitingCount)
+            d.handle(v.msg(res.fin)) // and it still completes
+            assertArrayEquals(res.epoch.id, d.currentEpochId)
+            enrolling.cancel()
+            d.stop()
+        }
+    }
+
+    /**
+     * (#344, item 5) A device stale only because it stopped (an unpaired transfer whose drop could not be saved: no vault
+     * pinned any more) is forgotten by the app's stale rule.
+     */
+    @Test
+    fun aDeviceStaleOnlyThroughAnUnsavedDropIsForgotten() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = FlakyStore()
+            val d = VaultDevice.create(config(store), appSecrets())
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester())
+            nextDeposit()
+            store.failNext = true
+            assertTrue(runCatching { d.abandonTransfer() }.isFailure)
+            assertTrue(d.stopped)
+            assertFalse("no vault pinned: stale only as stopped", d.hasVault)
+            assertNull(d.vaultId)
+            assertEquals(VaultDevice.StaleForget.FORGOT, d.forgetIfStaleUnpaired { _, _ -> false })
+        }
+    }
+
+    /**
+     * (#344, item 5; GC #6761 L4) The record's save fails after the `hs.init` went out, and the drop's own save fails too:
+     * the device stops (nothing more saved or sent), the failure is thrown, the file holds the scan's open code and no
+     * transfer, and a forget is guarded as for an open transfer. Nothing is deleted (the drop is not on disk): the keys are
+     * the next start's.
+     */
+    @Test
+    fun aFailedRecordSaveWhoseDropCannotBeSavedEitherStopsTheDevice() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            val store = object : DeviceStateStore {
+                @Volatile var failing = false
+                override fun load(): ByteArray? = inner.load()
+                override fun save(state: ByteArray) {
+                    if ("\"transferIn\":{" in String(state)) failing = true
+                    if (failing) throw java.io.IOException("disk full")
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val phone = PhoneKeyStandIn(inner)
+            val secrets = appSecrets()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            val link = transferLink(FakeVault(), Ulid.new())
+            assertTrue(runCatching { d.startTransfer(link, RecordingAttester(), attestedKey = { "att-1" }) { phone.secret() } }.isFailure)
+            assertNotNull("the hs.init went out", deposits.poll(5, TimeUnit.SECONDS))
+            assertTrue("stopped", d.stopped)
+            assertNull(d.transferInPending)
+            assertTrue("nothing deleted: the drop is not on disk", phone.drops.isEmpty())
+            val raw = String(inner.load()!!)
+            assertTrue("the file holds no transfer", "\"transferIn\":null" in raw)
+            assertTrue("but the scan's open code", "\"scanCode\":{" in raw)
+            assertTrue("a forget is guarded as for an open transfer", d.forgetIfTransferOpen())
+        }
+    }
+
+    /**
+     * (#344, item 2) A transfer that went out but whose scan made no phone key (a bundle before release R) never asks for
+     * the ("", 1) key to go when it is dropped later.
+     */
+    @Test
+    fun aSentTransferWhoseScanMadeNoKeyLeavesThePhoneKeyAtItsDrop() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            phone.secret() // a ("", 1) key this scan does not make
+            val held = phone.key!!.copyOf()
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            d.startTransfer(transferLink(FakeVault(), Ulid.new()), RecordingAttester(), attestedKey = { "att-1" }) { null }
+            nextDeposit()
+            d.abandonTransfer()
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            assertEquals("not the phone key", listOf(false), phone.phoneKeys.toList())
+            assertArrayEquals(held, phone.key)
+            d.stop()
+        }
+    }
+
+    /**
+     * (#344, item 3) An attestation that throws names no attested key, even if the app's alias was already chosen (it may
+     * be a reused one): only what an attestation that returned made is deleted.
+     */
+    @Test
+    fun aFailedAttestationNamesNoAttestedKey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val failing = object : com.vettid.core.altchan.Attester {
+                override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest =
+                    throw java.io.IOException("keystore busy")
+
+                override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+            }
+            assertTrue(
+                runCatching {
+                    d.startTransfer(transferLink(FakeVault(), Ulid.new()), failing, attestedKey = { "att-chosen" }) { phone.secret() }
+                }.isFailure,
+            )
+            assertEquals("the phone key only", listOf(emptyList<String>()), phone.drops.toList())
+            assertEquals(listOf(true), phone.phoneKeys.toList())
+            d.stop()
+        }
+    }
+
+    /** (GC #6761 Nit-1) The app's stale rule, decided and done under the device's lock. */
+    @Test
+    fun forgetIfStaleUnpairedForgetsOnlyAnUnpairedStaleDevice() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val fresh = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            assertEquals("nothing stale", VaultDevice.StaleForget.KEPT, fresh.forgetIfStaleUnpaired { _, _ -> false })
+            assertFalse(fresh.stopped)
+            fresh.stop()
+
+            val enrolled = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            enrolled.handle(FakeVault().enrolled(enrolled))
+            assertNotNull(enrolled.vaultId)
+            var asked: Pair<TransferInState?, String?>? = null
+            assertEquals(
+                "pinned by the app's rule: kept",
+                VaultDevice.StaleForget.PINNED,
+                enrolled.forgetIfStaleUnpaired { t, id -> asked = t to id; true },
+            )
+            assertEquals(null to null, asked)
+            assertFalse(enrolled.stopped)
+            assertThrows("a throw of the app's rule is passed on", IllegalStateException::class.java) {
+                runBlocking { enrolled.forgetIfStaleUnpaired { _, _ -> error("rule") } }
+            }
+            assertFalse("nothing forgotten", enrolled.stopped)
+            assertEquals("stale and unpaired", VaultDevice.StaleForget.FORGOT, enrolled.forgetIfStaleUnpaired { _, _ -> false })
+            assertTrue(enrolled.stopped)
+
+            val unclearable = object : DeviceStateStore {
+                val inner = InMemoryDeviceStateStore()
+                override fun load(): ByteArray? = inner.load()
+                override fun save(state: ByteArray) = inner.save(state)
+                override fun clear() = throw java.io.IOException("disk")
+            }
+            val stuck = VaultDevice.create(config(unclearable), DeviceSecrets.generate())
+            stuck.handle(FakeVault().enrolled(stuck))
+            assertEquals("its forget failed", VaultDevice.StaleForget.FORGET_FAILED, stuck.forgetIfStaleUnpaired { _, _ -> false })
+
+            val (paired, _) = pairedDevice(this)
+            assertEquals("paired: kept", VaultDevice.StaleForget.KEPT, paired.forgetIfStaleUnpaired { _, _ -> false })
+            assertFalse(paired.stopped)
+            assertEquals("dev-1", paired.deviceId)
+            paired.stop()
         }
     }
 

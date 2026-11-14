@@ -56,7 +56,8 @@ internal class TransferKeyDrop(
     @Suppress("TooGenericExceptionCaught") // any failure of a step: logged, the next step still runs
     fun dropped(drop: DroppedTransfer): Boolean {
         val before = phone()
-        val transferKey = before.keyVault == TRANSFER_KEY_VAULT && before.epoch <= 1L
+        // (GC #6761 review, Low 1) Only when the drop names the phone key: an unsent scan that made none leaves it alone.
+        val transferKey = drop.phoneKey && before.keyVault == TRANSFER_KEY_VAULT && before.epoch <= 1L
         var reset = false
         if (transferKey && before.epoch == 1L) {
             reset = try {
@@ -92,6 +93,38 @@ internal class TransferKeyDrop(
     companion object {
         /** A transfer's phone key is made for "" (the vault id is not known yet, [PhoneSecretState.keyVault]). */
         const val TRANSFER_KEY_VAULT = ""
+
+        /**
+         * (#344's blind reviews, item 1) The epoch-1 secret of the transfer key [make] has just made (and recorded as
+         * ("", 1)). If the secret cannot be had, that key is undone here, the record reset ([resetPhone]) and the key
+         * deleted, and the failure thrown: so "the secret came back" is "this scan made the key and it stands", and a scan
+         * whose secret did not come back leaves no key behind for the device to infer. A failure of [make] itself is
+         * thrown with nothing undone: no key of this scan is known to exist.
+         */
+        @Suppress("TooGenericExceptionCaught") // any failure of the secret undoes the key; the failure is thrown
+        fun secretOfNewKey(
+            phoneSecrets: PhoneSecrets,
+            resetPhone: () -> Boolean,
+            log: (String) -> Unit,
+            make: () -> PhoneSecretState,
+        ): ByteArray {
+            val phone = make()
+            return try {
+                phoneSecrets.secret(phone)
+            } catch (e: Exception) {
+                try {
+                    resetPhone()
+                } catch (r: Exception) {
+                    log("the phone key's record could not be reset: ${r.javaClass.simpleName}")
+                }
+                try {
+                    phoneSecrets.deleteKey(TRANSFER_KEY_VAULT)
+                } catch (d: Exception) {
+                    log("the phone key ${PhoneSecrets.alias(TRANSFER_KEY_VAULT)} could not be deleted: ${d.javaClass.simpleName}")
+                }
+                throw e
+            }
+        }
 
         /**
          * The record's reset ([resetPhone]'s write, under the record's lock): `("", 1)` becomes `("", 0)`; any other record

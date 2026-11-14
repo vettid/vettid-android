@@ -66,9 +66,11 @@ class TransferInSameCodeTest {
         // Every key step is in dropSessionLocked, which only dropSession calls.
         assertTrue(code.count { it.contains("dropSessionLocked(") } == 3)
         assertFalse(code.any { it.contains("forgetOpenTransferOrStop") })
-        // (#335's re-check) A device stopped by an unsaved drop is stale: a new scan drops it through the guard.
+        // (#335's re-check; GC #6761 Nit-1) The stale rule (a stopped device included) is decided and the device forgotten in
+        // one call under the device's lock (VaultDevice.forgetIfStaleUnpaired, tested in VaultDeviceTest).
         val fresh = body("private suspend fun freshDeviceIfUnpaired() {")
-        assertTrue(fresh.any { it.startsWith("val stale = ") && it.endsWith("|| d.stopped") })
+        assertTrue(fresh.any { it.startsWith("when (d.forgetIfStaleUnpaired(") })
+        assertFalse("no read of the device without its lock", fresh.any { it.startsWith("val stale = ") })
         for (sig in listOf("private suspend fun freshDeviceIfUnpaired() {", "override suspend fun forgetSetupCode() {")) {
             assertTrue("$sig goes through the guard", body(sig).any { it.contains("dropSession(forget = true)") })
         }
