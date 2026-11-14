@@ -100,7 +100,11 @@ class CallsControllerTest {
         override suspend fun accept(call: OutgoingCall, event: VaultMessage, pinnedFingerprint: String): AcceptedCall =
             AcceptedCall(call.callId, "v=0", CallKeys(MediaSuite.AES_128_GCM, ByteArray(32) { 5 }, ByteArray(32) { 6 }))
 
-        override suspend fun ringing(callId: String) = Unit
+        val ringings = mutableListOf<String>()
+
+        override suspend fun ringing(callId: String) {
+            ringings += callId
+        }
 
         override suspend fun ice(callId: String, candidates: List<CallCandidate>) = Unit
 
@@ -816,6 +820,59 @@ class CallsControllerTest {
         advanceTimeBy(10_001)
         assertEquals(CallState.Idle, c.state.value)
         assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /**
+     * Calls are in every build (owner decision 2026-11-14): an offer rings only where the probe said the vault has
+     * calls. A vault that answered `unsupported_type` (every production vault today) never rings, sends no
+     * `call.ringing` and asks for no microphone.
+     */
+    @Test
+    fun anOfferDoesNotRingWhereTheVaultSaidItHasNoCalls() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "unsupported_type") }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.NOT_IN_VAULT, c.availability.value)
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T70", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(10_001)
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(!audio.ringtone)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+
+        // A refusal that leaves it unknown (the daily check due): no ring either.
+        vault.unlocked.value = false
+        runCurrent()
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T71", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(10_001)
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(2, c.diagnostics.value.refused)
+    }
+
+    /** An offer that arrives while the probe is out waits for its answer, and rings once the vault said it has calls. */
+    @Test
+    fun anOfferWaitsForTheProbesAnswer() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T72", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(3_000)
+        assertEquals("not before the probe answered", CallState.Idle, c.state.value)
+        gate.send(Unit)
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertEquals(listOf(CALL_ID), vault.gateway.ringings)
     }
 
     /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */

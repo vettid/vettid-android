@@ -4,7 +4,6 @@ import androidx.lifecycle.SavedStateHandle
 import com.vettid.app.BuildConfig
 import com.vettid.app.calls.CallsModule
 import com.vettid.core.calls.CallsController
-import com.vettid.core.calls.MediaConfig
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
 import com.vettid.core.data.calls.CallPermissions
@@ -56,7 +55,9 @@ class ReleaseCallGateTest {
         // The release's CallAccess is the controller (src/calls), not NoCallAccess: this compiles only where it is.
         @Suppress("UNUSED_VARIABLE")
         val binding: (CallsController) -> CallAccess = CallsModule::callAccess
-        assertFalse(MediaConfig().dtlsPqcTrial)
+        // What keeps the DTLS trial, the faults and relay only off: the controller and the engines are made with this,
+        // and a controller made with false refuses them (CallsControllerTest, the non-test build's refusal).
+        assertFalse(CallsModule.TEST_BUILD)
     }
 
     @Test

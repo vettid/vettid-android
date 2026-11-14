@@ -118,7 +118,7 @@ android {
             // step) is a check build and nothing else: under this id it cannot replace or pass for the production app,
             // and no vault accepts its key attestation (a release names its Android package, §11.10.8).
             if (providers.gradleProperty("vettidWalletInRelease").orNull == "true") {
-                applicationIdSuffix = ".callscheck"
+                applicationIdSuffix = ".walletcheck"
             }
             // ARM only (owner decision 2026-11-05), both distributions and the wallet check build: x86 is for emulators.
             // Debug, devStack and staging keep every ABI (`check<Variant>Calls` pins staging's libraries for all four).
@@ -923,7 +923,7 @@ abstract class CallsTestCheck : DefaultTask() {
  * The wallet (:core:chain, bitcoin-kmp) in a release build: off until the wallet is promoted (staging first,
  * STAGING-DEVELOPMENT-PLAN). `-PvettidWalletInRelease=true` links it in, for the one CI step that keeps the F-Droid
  * distribution building with it (`:app:assembleFossRelease :app:checkFossReleaseApk`). Such a build has the
- * application id `com.vettid.app.callscheck` and is never published.
+ * application id `com.vettid.app.walletcheck` and is never published.
  */
 val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
 
@@ -1031,7 +1031,7 @@ androidComponents {
                 applicationId.set(
                     when {
                         staging -> stagingApplicationId
-                        walletInRelease -> "$releaseApplicationId.callscheck"
+                        walletInRelease -> "$releaseApplicationId.walletcheck"
                         else -> releaseApplicationId
                     },
                 )

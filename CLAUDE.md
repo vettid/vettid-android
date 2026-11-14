@@ -204,7 +204,9 @@ The A2 exit test:
   whose dex lacks the stack or `:core:calls`, or whose merged manifest lacks the call permissions or `CallService`;
   `checkReleaseApk` requires the `callsMarkers` strings in the dex (R8 kept the call code the probe reaches). **What a member
   sees is gated at run time**: nothing of calls shows until the `call.list` probe says the vault has calls (`READY`); a
-  vault without calls (`NOT_IN_VAULT`) or not yet answered shows no conversation button, no Call, no calls row (owner
+  vault without calls (`NOT_IN_VAULT`) or not yet answered shows no conversation button, no Call, no calls row, and an
+  incoming offer rings only once the probe said the vault has calls (`CallsController.callsKnownWithin`, inside the
+  offer's 10 s `UNLOCK_WAIT`; otherwise it is refused, no `call.ringing`, no microphone) (owner
   decision 2026-11-14 for the conversation, replacing 2026-10-12's button with the "not available" notice, whose string
   `messages_call_not_in_vault` stays unused). `CALLS_TEST` is false in every release, and `CallsTestCheck.MARKER` is
   among `checkReleaseApk`'s forbidden strings. The post-quantum DTLS field trial (`MediaConfig.dtlsPqcTrial`) is off; only a debug switch may set it.
