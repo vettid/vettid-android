@@ -41,7 +41,7 @@ internal class WaitingAsksRun(
     private suspend fun tryOnce(): Boolean? {
         if (!open()) return false
         if (!feedLoaded()) attempt(readFeed)
-        if (!listed() && !unsupported()) attempt(readList)
+        if (open() && !listed() && !unsupported()) attempt(readList)
         return when {
             !open() -> false // a read that ended with the session counts for nothing
             !listed() && unsupported() -> false

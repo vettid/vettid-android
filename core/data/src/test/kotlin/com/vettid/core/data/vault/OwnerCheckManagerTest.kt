@@ -119,6 +119,9 @@ class OwnerCheckManagerTest {
 
     private val read = mutableListOf<String>()
 
+    /** Runs once, at the next look at the clock (something that happens between two steps of the manager). */
+    private var nowHook: (() -> Unit)? = null
+
     /** The member API's `state` as the probe reads it (null: no answer), and how many times it found the vault locked. */
     private var memberState: String? = null
 
@@ -133,7 +136,7 @@ class OwnerCheckManagerTest {
         persist = { stored = it },
         onPassed = { passedCalls++ },
         readNotices = { read += it },
-        now = { now },
+        now = { nowHook?.also { nowHook = null }?.invoke(); now },
         memberState = { memberGate?.await(); memberState },
         onFoundLocked = { foundLocked++ },
     )
@@ -515,6 +518,87 @@ class OwnerCheckManagerTest {
         assertEquals("a vault.held from before the later pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
         m.onRequired(now.plusSeconds(7200))
         assertTrue("a refusal from after it gates", m.ownerCheck.value!!.state != OwnerCheckState.OK)
+    }
+
+    /** With no view yet, another device's pass is still recorded: a held status sent before it is dropped. */
+    @Test
+    fun anotherDevicesPassWithNoViewStillDropsAStaleRead() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        assertEquals(null, m.ownerCheck.value)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = gate
+        val stale = this.async(Dispatchers.Default) { m.refreshOwnerCheck() }
+        awaitReads(ops, 1)
+        ops.statusGate = null
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T12:00:00Z"}"""))
+        gate.complete(Unit)
+        stale.await()
+        assertTrue("not held: ${m.ownerCheck.value}", m.ownerCheck.value?.gated(now) != true)
+    }
+
+    /** A `vault.held` or a refusal whose ts is the pass's own time is kept (only one strictly before it is over). */
+    @Test
+    fun aHeldAtThePassTimeIsKept() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // passed at 12:00 = now
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now))
+        assertEquals(OwnerCheckState.HELD, m.ownerCheck.value!!.state)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        m.onRequired(now)
+        assertTrue(m.ownerCheck.value!!.state != OwnerCheckState.OK)
+    }
+
+    /** A pass that lands between the held's first look and its publish: the look under the lock drops it. */
+    @Test
+    fun aPassDuringTheHeldsHandlingWins() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = false) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        // The held looks at the clock (its hold-off) after its first test: another device's later pass arrives then.
+        nowHook = {
+            m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(60)))
+        }
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now))
+        assertEquals(null, nowHook)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        assertEquals(Instant.parse("2026-10-07T13:00:00Z"), m.ownerCheck.value!!.deadline)
+    }
+
+    /** The latest pass only moves forward (an older one arriving late does not move it back), and a wipe forgets it. */
+    @Test
+    fun thePassTimeOnlyMovesForwardAndAWipeForgetsIt() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(3600)))
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(60)))
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.plusSeconds(1800)))
+        assertEquals("before the newer pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        m.clear()
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.minusSeconds(60)))
+        assertEquals("after a wipe it is taken", OwnerCheckState.HELD, m.ownerCheck.value!!.state)
+    }
+
+    /** A dropped stale read leaves the count alone: the pass's full count stands, not the failures read before it. */
+    @Test
+    fun aDroppedReadLeavesTheEstimate() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true, failures = 8) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = gate
+        val stale = this.async(Dispatchers.Default) { m.refreshOwnerCheck() }
+        awaitReads(ops, 2)
+        ops.statusGate = null
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        gate.complete(Unit)
+        stale.await()
+        ops.statusDown = true
+        ops.checkThrows = com.vettid.core.vault.VaultStateException("no response")
+        assertEquals("10 from the pass, less this one", 9, (m.check("975310", "pw") as OwnerCheckOutcome.Failed).estimatedLeft)
     }
 
     /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */

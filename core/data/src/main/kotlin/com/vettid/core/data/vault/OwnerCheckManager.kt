@@ -378,7 +378,6 @@ class OwnerCheckManager(
         // A device keeps the newest by ts (§3.6.3); one from before the latest pass (here or on another device) is over.
         val prev = heldTs
         if (prev != null && m.ts.isBefore(prev) || before(m.ts)) return
-        heldTs = m.ts
         val counts = n.waiting.toCounts()
         val base = view.value ?: unknownHeld()
         val state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD
@@ -388,7 +387,8 @@ class OwnerCheckManager(
                 // (Release L) A vault.held from a release before L says nothing of the idle lock: what was read stays.
                 idleLockAt = instant(n.idleLockAt) ?: base.idleLockAt,
             ),
-            stale = { before(m.ts) },
+            // Its ts is kept only when it is taken (in the step that publishes it, before it is saved).
+            stale = { before(m.ts).also { over -> if (!over) heldTs = m.ts } },
         )
     }
 
@@ -586,8 +586,12 @@ class OwnerCheckManager(
                     hold = r.hold,
                     holdOffUntil = instant(r.holdOffUntil),
                 ),
-                // When it passed, on the vault's clock: its deadline less its interval (unknown without both).
-                Pass(counts = !unlocksOwn, at = r.intervalSeconds?.let { deadline?.minusSeconds(it) }),
+                // When it passed, on the vault's clock: its deadline less its interval as it runs on this vault (a staging time
+                // scale divides it; unknown without both).
+                Pass(
+                    counts = !unlocksOwn,
+                    at = r.intervalSeconds?.let { deadline?.minusSeconds(TimeScales.divide(it, lastTimeScale)) },
+                ),
             )
             onPassed()
             OwnerCheckOutcome.Passed
@@ -793,7 +797,13 @@ class OwnerCheckManager(
         OwnerCheckView(OwnerCheckState.HELD, null, OwnerCheckView.MAX_INTERVAL_S, 0, hold = true, holdOffUntil = null)
 
     private fun update(pass: Pass? = null, f: (OwnerCheckView) -> OwnerCheckView) {
-        view.value?.let { set(f(it), pass) }
+        val v = view.value
+        if (v != null) {
+            set(f(v), pass)
+        } else if (pass != null) {
+            // Nothing to show yet, but the pass is still known: a status read sent before it is dropped all the same.
+            synchronized(setLock) { notePass(pass) }
+        }
     }
 
     /**
@@ -828,10 +838,7 @@ class OwnerCheckManager(
     private fun set(v: OwnerCheckView, pass: Pass? = null, stale: () -> Boolean = { false }): Boolean {
         synchronized(setLock) {
             if (stale()) return false
-            if (pass != null) {
-                checkPasses.incrementAndGet()
-                pass.at?.let { at -> if (passedAt?.isAfter(at) != true) passedAt = at }
-            }
+            if (pass != null) notePass(pass)
             val passes = if (pass?.counts == true) passCount.incrementAndGet() else passCount.get()
             view.value = v.copy(passes = passes)
         }
@@ -846,6 +853,12 @@ class OwnerCheckManager(
         )
         runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
         return true
+    }
+
+    /** Under [setLock]: [pass] happened; [passedAt] only ever moves forward. */
+    private fun notePass(pass: Pass) {
+        checkPasses.incrementAndGet()
+        pass.at?.let { at -> if (passedAt?.isAfter(at) != true) passedAt = at }
     }
 
     private fun restore(): Saved? = try {
