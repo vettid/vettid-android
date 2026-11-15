@@ -195,6 +195,15 @@ class SocialManager internal constructor(
 
     /** A `pending.list` was merged since the unlock: it is authoritative for sessions and approvals, so none is made from a feed item. */
     private val listReadFlow = MutableStateFlow(false)
+
+    /** How many `pending.list` answers were merged in this process: a merge after a moment is a list read since then. */
+    private val pendingMerges = java.util.concurrent.atomic.AtomicInteger()
+
+    /** [pendingMerges] now (ANDROID-PLAN 0.1.132: the waiting asks are judged on a list merged after the check). */
+    internal val pendingMergeCount: Int get() = pendingMerges.get()
+
+    /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
+    internal val pendingUnsupported: Boolean get() = pending.isUnsupported
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */
@@ -206,6 +215,12 @@ class SocialManager internal constructor(
         combine(storedFlow, listedFlow, requestsFlow, connectionsFlow, nowFlow) { stored, listed, requests, cs, now ->
             merge(stored, listed + requests, cs, now)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * The asks as the vault's lists and events have them now, read at once (not through the flows): no entry made from a
+     * feed item alone, so what it holds is what the vault said is waiting (owner decision a, 2026-11-15).
+     */
+    internal fun listedNow(): List<Approval> = merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now())
 
     /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
     private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
@@ -1596,6 +1611,7 @@ class SocialManager internal constructor(
             val plan = pending.merge(ticket, ts, listed) ?: return@edit l
             merged = true
             listReadFlow.value = true
+            pendingMerges.incrementAndGet()
             val at = now().toEpochMilli()
             val (gone, kept) = l.events.partition { e ->
                 e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
