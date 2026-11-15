@@ -702,5 +702,4 @@ class VaultDeletionTest {
         p.value = AppPhase.Locked
         assertEquals(AppPhase.Locked, p.value)
     }
-
 }

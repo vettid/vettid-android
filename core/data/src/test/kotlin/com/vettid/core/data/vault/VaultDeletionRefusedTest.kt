@@ -16,15 +16,18 @@ class VaultDeletionRefusedTest {
     private val min = 60_000L
 
     // A "gone" the app refused (a 410-only marker came meanwhile, or the attempt ended) is not reported as GONE: the watch
-    // keeps its timer and "Check again" concludes nothing.
+    // keeps its timer, "Check again" concludes nothing, and "still finishing" (with Remove) still comes at the bound.
     @Test
     fun aRefusedGoneIsNotGone() = runTest {
         var reads = 0
         var asked = 0
+        val said = mutableListOf<DeletingMarker>()
+        val m = DeletingMarker("v", 0, 10 * min)
         val w = DeletionWatch(
-            backgroundScope, { currentTime }, read = { reads++; DeletionCheck.GONE }, onGone = { asked++; false }, onSlow = {},
+            backgroundScope, { currentTime }, read = { reads++; DeletionCheck.GONE }, onGone = { asked++; false },
+            onSlow = { said += it },
         )
-        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        w.start(m, readNow = false)
         assertEquals(DeletionCheck.UNCONFIRMED, w.check())
         assertEquals(1, asked)
         // The timer still runs past a refused GONE (reads at 5, 15, 45 and 105 s): a GONE taken as gone would stop it at
@@ -33,23 +36,42 @@ class VaultDeletionRefusedTest {
         runCurrent()
         assertTrue("the watch kept reading: $reads", reads >= 5)
         assertEquals(reads, asked)
+        assertTrue("no still finishing before the bound", said.isEmpty())
+        // The bound's timer was not taken away by the refusals.
+        advanceTimeBy(5 * min + 1)
+        runCurrent()
+        assertEquals(listOf(m), said)
         w.stop()
     }
 
-    // The vault's own word with no "being deleted" up starts it only while this phone still has its vault.
+    // An accepted GONE is gone: no "still finishing" after it.
+    @Test
+    fun anAcceptedGoneEndsStillFinishing() = runTest {
+        val said = mutableListOf<DeletingMarker>()
+        val w = DeletionWatch(
+            backgroundScope, { currentTime }, read = { DeletionCheck.GONE }, onGone = { true }, onSlow = { said += it },
+        )
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        assertEquals(DeletionCheck.GONE, w.check())
+        advanceTimeBy(11 * min)
+        runCurrent()
+        assertTrue(said.isEmpty())
+    }
+
+    // The vault's word with no "being deleted" up starts it only while this phone still has its vault and its record is
+    // open; once "being deleted" is up it erases only with a 410 marker standing.
     @Test
     fun theVaultsWordStartsOnlyWithAVault() {
-        fun starts(p: AppPhase, id: String = "v", closed: Boolean = false, api: Boolean = false) =
-            VaultDeletion.vaultWordStarts(p, id, closed, api)
+        fun starts(p: AppPhase, id: String = "v", closed: Boolean = false) = VaultDeletion.vaultWordStarts(p, id, closed)
         assertTrue(starts(AppPhase.Locked))
         assertTrue(starts(AppPhase.Unlocked))
         assertTrue(starts(AppPhase.Starting))
+        assertTrue("as startDeleting, in any phase with a vault", starts(AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)))
         assertFalse("no vault id", starts(AppPhase.Locked, id = ""))
         assertFalse("after a wipe", starts(AppPhase.SignedOut))
-        assertFalse(starts(AppPhase.Setup(SetupStage.NEW_VAULT)))
-        assertFalse("already up", starts(AppPhase.Deleting()))
         assertFalse("a wipe runs (still Locked)", starts(AppPhase.Locked, closed = true))
         assertFalse("an erase that failed", starts(AppPhase.Unreachable(FailureKind.ERASE_FAILED), closed = true))
-        assertFalse("a 410-only marker stands", starts(AppPhase.Locked, api = true))
+        assertTrue("the 410 stands: erase", VaultDeletion.vaultWordErases(apiHeld = true))
+        assertFalse("this phone's own deletion is up: a second word does nothing", VaultDeletion.vaultWordErases(apiHeld = false))
     }
 }

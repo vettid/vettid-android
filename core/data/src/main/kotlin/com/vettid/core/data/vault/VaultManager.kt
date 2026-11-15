@@ -3199,13 +3199,16 @@ class VaultManager(
             save = { io { VaultDeletion.saveMarker { record.update(rec) { it.copy(deletedApi = null) } } } },
             onEnd = { saved ->
                 if (!saved) android.util.Log.w("VaultManager", "the deletion's marker could not be cleared")
-                // Not if something ended the state while the save ran (a wipe): its own end stands.
-                if (deletedApiMarker != expected || !phaseFlow.deleting) return@clear
-                // Under the lock evaluate publishes "being deleted" under: it cannot publish it again after this end. The
-                // watch first: a read then runs under the marker (API_ONLY) or under no attempt (concludes nothing).
+                // Under the lock evaluate publishes "being deleted" under: it cannot publish it again after this end. Not if
+                // something ended the state while the save ran, or is ending it (a wipe: the record is shut): its own end
+                // stands. The watch first: a read then runs under the marker (API_ONLY) or under no attempt (concludes nothing).
                 synchronized(deletedApiLock) {
+                    if (deletedApiMarker != expected || !phaseFlow.deleting || record.closed) return@clear
                     deletionWatch.stop()
                     deletedApiMarker = null
+                    deleteExpMs = null
+                    // What was on its way (a refresh that read "being deleted") publishes nothing after this.
+                    record.bumpGeneration()
                     phaseFlow.endDeleting(AppPhase.Locked)
                 }
             },
@@ -3220,28 +3223,23 @@ class VaultManager(
 
     /**
      * The vault is gone: what the app does when a vault is gone (its keys and local data forgotten, a fresh app key), the
-     * marker deleted with the record, "no vault", and the one-time notice.
-     */
-    /**
-     * The vault is gone: true when this erased. [watched]: a watch's "gone", for that deletion only; null: the vault's own
-     * word (its event, or the answer to this phone's `vault.delete`).
+     * marker deleted with the record, "no vault", and the one-time notice; true when this erased. [watched]: a watch's
+     * "gone", for that deletion only; null: the vault's own word with a 410 standing (its event, or the answer to this
+     * phone's `vault.delete`), which erases only while a 410 marker still stands (ANDROID-PLAN §4 point 3).
      */
     private suspend fun finishDeleted(watched: DeletingMarker? = null): Boolean = deletionEnd.withLock {
-        if (!phaseFlow.deleting) {
+        val erases = if (watched == null) {
+            vaultWordNow()
+        } else {
+            // A watch's "gone" erases only for the vault's own deletion it was made for, while no 410-only marker stands.
+            phaseFlow.deleting && VaultDeletion.watchErases(deletedApiMarker != null, deletingMarker ?: local.deleting, watched)
+        }
+        if (!erases) {
             // A stray watch ends with the state; looked at again under the lock, so a deletion that started meanwhile (its
             // own route, not under this mutex) keeps its watch.
             synchronized(deletedApiLock) { if (!phaseFlow.deleting) deletionWatch.stop() }
-            // The vault's own word, after a clear ended a 410-only state meanwhile (its status listed the vault): the word
-            // is not lost; "being deleted" starts from it, as it would have without the 410 (not during or after a wipe).
-            val starts = VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed, deletedApiMarker != null)
-            if (watched == null && starts) startDeleting()
             // A watch's "gone" after the vault's own word already erased: gone all the same.
             return@withLock watched != null && phaseFlow.value == AppPhase.SignedOut && local.deletedNotice
-        }
-        // A watch's "gone" ([watched]) erases only for the vault's own deletion it was made for, while no 410-only marker
-        // stands; the vault's own word comes with no [watched].
-        if (watched != null && !VaultDeletion.watchErases(deletedApiMarker != null, deletingMarker ?: local.deleting, watched)) {
-            return@withLock false
         }
         // The device stopped for the deletion is forgotten (its keys and stored state); then what a gone vault leaves.
         deletingDevice?.let { d -> runCatching { d.forget() } }
@@ -3254,9 +3252,27 @@ class VaultManager(
             deletionWatch.stop()
             deletingMarker = null
             deletedApiMarker = null
+            // What was on its way (a refresh that read "being deleted") publishes nothing after this.
+            record.bumpGeneration()
             phaseFlow.endDeleting(AppPhase.SignedOut)
         }
         true
+    }
+
+    /**
+     * The vault's own word (with a 410 standing when it was taken), decided under [deletedApiLock]: true to erase now (a
+     * 410 marker stands, so "being deleted" is up); else, with nothing up (a clear ended the 410-only state meanwhile),
+     * "being deleted" starts from it as it would have without the 410; with this phone's own deletion up, nothing (a second
+     * word: the event after the `{}` answer). Under [deletionEnd].
+     */
+    private fun vaultWordNow(): Boolean {
+        val start = synchronized(deletedApiLock) {
+            if (phaseFlow.deleting) return VaultDeletion.vaultWordErases(deletedApiMarker != null)
+            VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed)
+        }
+        // startDeleting decides again under the lock (a 410 that lands meanwhile erases through it).
+        if (start) startDeleting() else android.util.Log.w("VaultManager", "the vault's word came with no vault to delete")
+        return false
     }
 
     override suspend fun checkDeletion(): DeletionCheck = if (phaseFlow.deleting) deletionWatch.check() else DeletionCheck.GONE

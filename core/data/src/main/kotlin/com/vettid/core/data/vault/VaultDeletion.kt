@@ -276,14 +276,16 @@ object VaultDeletion {
     internal fun watchErases(apiHeld: Boolean, own: DeletingMarker?, watched: DeletingMarker): Boolean = !apiHeld && own == watched
 
     /**
-     * Whether the vault's own word, arriving with no "being deleted" up, starts it: only while this phone still has its vault
-     * ([vaultId] held, not signed out or in set-up) and its record is open ([recordClosed]: no wipe running, no erase that
-     * failed), and no 410-only marker stands ([apiHeld]: its own route erases). A clear that ended a 410-only state just
+     * Whether the vault's own word, arriving with no "being deleted" up, starts it, as the word starts it without a 410
+     * (`startDeleting`, in any phase): only while this phone still has its vault ([vaultId] held, not signed out) and its
+     * record is open ([recordClosed]: no wipe running, no erase that failed). A clear that ended a 410-only state just
      * before the word must not lose it.
      */
-    internal fun vaultWordStarts(phase: AppPhase, vaultId: String, recordClosed: Boolean, apiHeld: Boolean): Boolean =
-        vaultId.isNotEmpty() && !recordClosed && !apiHeld &&
-            phase !is AppPhase.SignedOut && phase !is AppPhase.Setup && phase !is AppPhase.Deleting
+    internal fun vaultWordStarts(phase: AppPhase, vaultId: String, recordClosed: Boolean): Boolean =
+        vaultId.isNotEmpty() && !recordClosed && phase !is AppPhase.SignedOut
+
+    /** What the vault's own word does (the 410's route: its event, or a `vault.delete` answer) once "being deleted" is up. */
+    internal fun vaultWordErases(apiHeld: Boolean): Boolean = apiHeld
 
     /** Whether a close step starts the watch of [marker]: only while "being deleted" holds and [held] is still that marker. */
     internal fun <M : Any> watchesAttempt(deleting: Boolean, held: M?, marker: M): Boolean = deleting && held == marker
@@ -385,17 +387,17 @@ internal class DeletionWatch(
             // deletion the watch no longer holds (stopped, or replaced by a later one) acts on nothing: a 410-only attempt
             // is erased only by its own reads.
             // A read made while the watch held no attempt (before a start, or after a stop) is no attempt's: it erases nothing.
-            val current = synchronized(this) {
-                (m != null && marker == m).also { held ->
-                    if (held) {
-                        boundTimer?.cancel()
-                        slowSaid = true
-                    }
+            val current = synchronized(this) { m != null && marker == m }
+            // An ended attempt's answer concludes nothing; nor does a "gone" the app refused (a 410-only marker came meanwhile,
+            // or the attempt ended): the watch keeps reading, and "Check again" says nothing was confirmed. Only an erase
+            // takes "still finishing" away: a refused "gone" keeps the bound's timer, so Remove still comes at the bound.
+            if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
+            synchronized(this) {
+                if (marker == m) {
+                    boundTimer?.cancel()
+                    slowSaid = true
                 }
             }
-            // An ended attempt's answer concludes nothing; nor does a "gone" the app refused (a 410-only marker came meanwhile,
-            // or the attempt ended): the watch keeps reading, and "Check again" says nothing was confirmed.
-            if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
         }
         return r
     }
