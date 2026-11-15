@@ -268,6 +268,13 @@ object VaultDeletion {
     internal fun slowFor(d: AppPhase.Deleting, m: DeletingMarker, own: DeletingMarker?): Boolean =
         if (d.apiOnly) d.removeFromMs == m.untilMs else own == m
 
+    /**
+     * Whether a watch's "gone" for [watched] erases: only for the vault's own deletion that is still this process's ([own])
+     * and while no 410-only marker stands ([apiHeld]). A watch left over from an ended attempt erases nothing, whatever
+     * attempt started since (the vault's own word, an event, keeps its own route).
+     */
+    internal fun watchErases(apiHeld: Boolean, own: DeletingMarker?, watched: DeletingMarker): Boolean = !apiHeld && own == watched
+
     /** Whether a close step starts the watch of [marker]: only while "being deleted" holds and [held] is still that marker. */
     internal fun <M : Any> watchesAttempt(deleting: Boolean, held: M?, marker: M): Boolean = deleting && held == marker
 }
@@ -288,7 +295,8 @@ internal class DeletionWatch(
     private val scope: CoroutineScope,
     private val nowMs: () -> Long,
     private val read: suspend () -> DeletionCheck,
-    private val onGone: suspend () -> Unit,
+    /** The vault is gone, read for [DeletingMarker] (the attempt the read was made for). */
+    private val onGone: suspend (DeletingMarker) -> Unit,
     private val onSlow: (DeletingMarker) -> Unit,
 ) {
     private var timer: Job? = null
@@ -375,8 +383,8 @@ internal class DeletionWatch(
                     }
                 }
             }
-            if (!current) return DeletionCheck.UNCONFIRMED // an ended attempt's answer concludes nothing for the caller
-            onGone()
+            if (!current || m == null) return DeletionCheck.UNCONFIRMED // an ended attempt's answer concludes nothing
+            onGone(m)
         }
         return r
     }

@@ -98,7 +98,7 @@ class DeletionGuardsTest {
             held = "m2" // m1 cleared and a new 410 while the read was out
             DeletionCheck.LISTED
         }) { m ->
-            launch { clear.clear(m, { held }, save = { true }, onCleared = { cleared += m }, onSaveFailed = {}) }
+            launch { clear.clear(m, { held }, save = { true }, onEnd = { cleared += m }) }
         }
         r.read()
         advanceUntilIdle()
@@ -117,7 +117,7 @@ class DeletionGuardsTest {
         val saved = CompletableDeferred<Boolean>()
         var cleared = 0
         val job = launch {
-            clear.clear("m1", { held }, save = { saved.await() }, onCleared = { held = null; cleared++ }, onSaveFailed = {})
+            clear.clear("m1", { held }, save = { saved.await() }, onEnd = { held = null; cleared++ })
         }
         runCurrent()
         assertEquals(DeletionCheck.API_ONLY, ResolvedRead({ held }, { DeletionCheck.GONE }) {}.read())
@@ -129,28 +129,29 @@ class DeletionGuardsTest {
         assertFalse(clear.mayWrite("m1", held))
     }
 
-    // A failed save leaves everything as it was: the marker stands, nothing ends, and the next listed status can clear it.
+    // A failed save still ends the state (a listed vault is never left behind "Your vault was deleted"), and says it failed;
+    // the marker stood until then.
     @Test
-    fun aClearWhoseSaveFailsChangesNothing() = runTest {
+    fun aClearWhoseSaveFailsStillEndsTheState() = runTest {
         var held: String? = "m1"
         val clear = ApiMarkerClear<String>()
-        var cleared = 0
-        var failed = 0
-        assertFalse(clear.clear("m1", { held }, save = { false }, onCleared = { held = null; cleared++ }, onSaveFailed = { failed++ }))
-        assertEquals(0, cleared)
-        assertEquals(1, failed)
-        assertEquals("m1", held)
-        assertEquals(DeletionCheck.API_ONLY, ResolvedRead({ held }, { DeletionCheck.GONE }) {}.read())
-        assertTrue(clear.mayWrite("m1", held))
-        assertTrue(clear.clear("m1", { held }, save = { true }, onCleared = { held = null; cleared++ }, onSaveFailed = {}))
-        assertEquals(1, cleared)
+        val ends = mutableListOf<Boolean>()
+        assertTrue(
+            clear.clear("m1", { held }, save = {
+                assertEquals("the marker stands while the record is written", "m1", held)
+                false
+            }, onEnd = { saved -> ends += saved; held = null }),
+        )
+        assertEquals(listOf(false), ends)
+        assertNull(held)
+        assertTrue("no write is held off once the clear is over", clear.mayWrite("m2", "m2"))
     }
 
     @Test
     fun aClearOfAMarkerNoLongerHeldDoesNothing() = runTest {
         var saves = 0
         val clear = ApiMarkerClear<String>()
-        assertFalse(clear.clear("m1", { "m2" }, save = { saves++; true }, onCleared = {}, onSaveFailed = {}))
+        assertFalse(clear.clear("m1", { "m2" }, save = { saves++; true }, onEnd = {}))
         assertEquals(0, saves)
         assertTrue(clear.mayWrite("m2", "m2"))
         assertFalse(clear.mayWrite("m1", "m2"))

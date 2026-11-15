@@ -565,6 +565,27 @@ class VaultDeletionTest {
         assertFalse(VaultDeletion.slowFor(AppPhase.Deleting(), m, own = null))
     }
 
+    // A watch left over from a cleared 410-only attempt erases nothing on a later attempt (Opus's probe): its "gone" names
+    // its own marker, and only the vault's own deletion still held, with no 410-only marker standing, erases.
+    @Test
+    fun aStaleWatchOfAClearedApiAttemptDoesNotEraseANewApiAttempt() = runTest {
+        val a = DeletingMarker("v", 0, 10 * min)
+        val named = mutableListOf<DeletingMarker>()
+        var held: String? = null // A cleared: no 410-only marker for a moment
+        val read = ResolvedRead({ held }, { DeletionCheck.GONE }) {}
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = { read.read() }, onGone = { named += it }, onSlow = {})
+        w.start(a, readNow = false)
+        assertEquals(DeletionCheck.GONE, w.check()) // the read took "no 410 marker" as the vault's word
+        assertEquals("the watch names the attempt it read for", listOf(a), named)
+        held = "B" // a new 410 B stands when finishDeleted decides
+        assertFalse(VaultDeletion.watchErases(apiHeld = true, own = null, watched = a))
+        // No 410 marker, but A is no deletion of this process.
+        assertFalse(VaultDeletion.watchErases(apiHeld = false, own = null, watched = a))
+        assertTrue("the vault's own deletion, still held", VaultDeletion.watchErases(apiHeld = false, own = a, watched = a))
+        assertFalse("not while a 410-only marker stands", VaultDeletion.watchErases(apiHeld = true, own = a, watched = a))
+        assertFalse(VaultDeletion.watchErases(apiHeld = false, own = DeletingMarker("v", 1, 2), watched = a))
+    }
+
     @Test
     fun aCloseStepWatchesOnlyAnAttemptStillHeld() {
         val m = DeletingMarker("v", 0, 10 * min)

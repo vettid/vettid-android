@@ -47,30 +47,22 @@ internal class ResolvedRead<M : Any>(
 
 /**
  * The clear of a 410-only marker when the status lists the vault again. The marker stands (so a 410 is never the vault's
- * word, and the event observer keeps its 410 rules) until the record has dropped it; a close step's write of the same
- * marker is held off meanwhile ([mayWrite]), so it cannot write it back. Callers hold one lock around [clear].
+ * word, and the event observer keeps its 410 rules) while the record is written; a close step's write of the same marker
+ * is held off meanwhile ([mayWrite]), so it cannot write it back. Then [onEnd] ends the state whatever the write did: a
+ * listed vault is never left behind "Your vault was deleted" (a record that kept the marker reopens it at the next start,
+ * and the next listed status clears it again). Callers hold one lock around [clear].
  */
 internal class ApiMarkerClear<M : Any> {
     @Volatile
     private var clearing: M? = null
 
-    /**
-     * Clears [expected] if it is still [held]: [save] drops it from the record; only then [onCleared] (memory, watch, phase).
-     * A failed save leaves everything as it was (the next listed status clears it again) and calls [onSaveFailed].
-     */
-    suspend fun clear(
-        expected: M,
-        held: () -> M?,
-        save: suspend () -> Boolean,
-        onCleared: () -> Unit,
-        onSaveFailed: suspend () -> Unit,
-    ): Boolean {
+    /** Clears [expected] if it is still [held]: [save] drops it from the record, then [onEnd] with whether it did. */
+    suspend fun clear(expected: M, held: () -> M?, save: suspend () -> Boolean, onEnd: (saved: Boolean) -> Unit): Boolean {
         if (held() != expected) return false
         clearing = expected
         try {
-            val saved = save()
-            if (saved) onCleared() else onSaveFailed()
-            return saved
+            onEnd(save())
+            return true
         } finally {
             clearing = null
         }
