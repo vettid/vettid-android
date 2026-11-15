@@ -17,7 +17,7 @@ import java.time.Instant
 
 /**
  * (Owner decision a, 2026-11-15) After a hold ended by a passed check, each ask still waiting is notified once: a
- * sign-in, a device session, a held approval, a pairing; never an expired one, a decided one or anything else.
+ * sign-in, a device session, a held approval; never an expired one, a decided one, a pairing or anything else.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class WaitingAsksTest {
@@ -33,12 +33,12 @@ class WaitingAsksTest {
     )
 
     @Test
-    fun theFourAsksStillWaitingAndNothingElse() {
+    fun theThreeAsksStillWaitingAndNothingElse() {
         val items = listOf(
             item("1", WaitingAsks.SIGN_IN),
             item("2", WaitingAsks.SESSION),
             item("3", WaitingAsks.HELD),
-            item("4", WaitingAsks.PAIRING, minutesAgo = 3),
+            item("4", "device.pair.pending", minutesAgo = 3), // left out: cannot be told waiting from done
             item("5", "message.received"), // not an ask: never replayed
             item("6", "connection.request"), // an ask that does not expire: as before (0.1.23)
         )
@@ -47,7 +47,7 @@ class WaitingAsksTest {
             device(WaitingAsks.SESSION, "r2", now.plusSeconds(300)),
             device(WaitingAsks.HELD, "r3", null), // no exp: waiting while listed
         )
-        assertEquals(setOf("1", "2", "3", "4"), WaitingAsks.of(items, approvals, now).map { it.itemId }.toSet())
+        assertEquals(setOf("1", "2", "3"), WaitingAsks.of(items, approvals, now).map { it.itemId }.toSet())
     }
 
     @Test
@@ -57,7 +57,7 @@ class WaitingAsksTest {
             item("2", WaitingAsks.SESSION), // no longer listed: decided or gone
             item("3", WaitingAsks.HELD, status = "read"), // seen in Notifications
             item("4", WaitingAsks.HELD, status = "archived"),
-            item("5", WaitingAsks.PAIRING, minutesAgo = 11), // past its 10 minutes
+            item("5", "device.pair.pending", minutesAgo = 1), // a pairing, even a fresh one
             item("6", WaitingAsks.SIGN_IN, ref = ""), // no ref: nothing to match
         )
         val approvals = listOf(
