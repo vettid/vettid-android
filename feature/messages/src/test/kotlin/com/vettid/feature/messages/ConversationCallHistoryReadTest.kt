@@ -9,6 +9,7 @@ import com.vettid.core.testing.FakeCalls
 import com.vettid.core.testing.FakeSocial
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,5 +67,41 @@ class ConversationCallHistoryReadTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.calls.isEmpty())
         assertFalse(vm.uiState.value.callsNotShown)
+    }
+
+    /** The realistic case: the read at a call's end works, the one a moment later does not; the first read's lines stay. */
+    @Test
+    fun onlyTheSecondReadFailing() = runTest {
+        val t = Instant.parse("2026-10-12T10:00:00Z")
+        val calls = FakeCalls()
+        val vm = conversation(calls)
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        calls.entries = listOf(CallHistoryEntry("k1", "c2", true, CallOutcome.TALKED, t, Duration.ofSeconds(30)))
+        calls.availability.value = CallAvailability.READY
+        runCurrent() // the first read works
+        assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
+        calls.historyFails = true
+        advanceUntilIdle() // the read a moment later fails
+        assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
+    }
+
+    /** A lock after failed reads still clears the lines (nothing of the vault's history in memory while locked). */
+    @Test
+    fun aLockAfterFailedReadsStillClearsTheLines() = runTest {
+        val calls = FakeCalls()
+        calls.entries = listOf(CallHistoryEntry("k1", "c2", true, CallOutcome.TALKED, Instant.parse("2026-10-12T10:00:00Z")))
+        val vm = conversation(calls)
+        advanceUntilIdle()
+        calls.historyFails = true
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.READY
+        advanceUntilIdle()
+        assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
+        calls.availability.value = CallAvailability.UNKNOWN // locked
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.calls.isEmpty())
     }
 }

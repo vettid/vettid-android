@@ -250,6 +250,7 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
         assertTrue(c.history("conn-1").entries.isEmpty())
+        assertFalse("a vault without calls has an empty history, not a failed one", c.history("conn-1").failed)
     }
 
     @Test
@@ -1209,6 +1210,7 @@ class CallsControllerTest {
         assertTrue(h.failed)
         assertTrue(h.entries.isEmpty())
         assertFalse(h.someNotShown)
+        assertEquals("counted in the diagnostics", 1, c.diagnostics.value.historyFailed)
     }
 
     /** (GC #7718) A list with a skipped entry still means calls, and the skipped ids are in the diagnostics only. */
