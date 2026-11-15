@@ -875,6 +875,30 @@ class CallsControllerTest {
         assertEquals(listOf(CALL_ID), vault.gateway.ringings)
     }
 
+    /**
+     * The call events are handled in order, also while an offer waits for the probe: a hang-up that arrives during the
+     * wait is handled after its offer, so the call does not ring on after the caller gave up. (Nothing else is held up
+     * that matters: no call can be live on this phone before the probe answered, CallAvailability.READY.)
+     */
+    @Test
+    fun aHangUpThatArrivesWhileItsOfferWaitsEndsTheRing() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T73", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
+        advanceTimeBy(1_000)
+        assertEquals(CallState.Idle, c.state.value)
+        gate.send(Unit)
+        runCurrent()
+        assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value !is CallState.Live)
+        assertTrue(!audio.ringtone)
+    }
+
     /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */
     @Test
     fun anOfferDoesNotRingWhileTheReleaseUpdateScreenShows() = runTest {

@@ -191,6 +191,8 @@ class CallsController(
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing and for the probe's answer; it rings only where the
         // vault said it has calls (every build has calls since 2026-11-14: the probe is the gate, for incoming calls too).
+        // The call events wait with it, on purpose: the offer's candidates and hang-up stay behind it, and nothing else
+        // can be held up, since no call is live on this phone while it is locked or the probe has not answered.
         mayRing = { !vault.updateShowing && callsKnownWithin(UNLOCK_WAIT) },
         peerKey = vault::identityKey,
         vaultIsC2 = { vaultC2 },

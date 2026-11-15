@@ -1097,6 +1097,11 @@ androidComponents {
 tasks.withType<Test>().matching { it.name == "testFullReleaseUnitTest" }.configureEach {
     filter { includeTestsMatching("com.vettid.app.release.*") }
 }
+// AGP adds `src/test` to every variant's unit tests; the release's run none of them, so they are not compiled either.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().matching { it.name == "compileFullReleaseUnitTestKotlin" }.configureEach {
+    val shared = project.layout.projectDirectory.dir("src/test").asFile.path + File.separator
+    exclude { it.file.path.startsWith(shared) }
+}
 
 // The `full` distribution's per-variant tasks keep the names they had before the distributions (CI, the READMEs and
 // devstack/README.md use them): `:app:testDebugUnitTest` is `:app:testFullDebugUnitTest`, and so on. Without these,
