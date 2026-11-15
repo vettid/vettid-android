@@ -40,8 +40,14 @@ data class CallHistoryEntry(
 /**
  * (GC #7718) A conversation's calls: [entries], newest first, and [someNotShown] when the vault's list had entries for it
  * (or for a connection it could not tell) that did not read: the list then says "Some calls couldn't be shown.".
+ * [failed]: the vault has calls but its list could not be read this time (a hiccup, the network): that is not an empty
+ * history, so a conversation keeps the calls it already shows.
  */
-data class CallHistory(val entries: List<CallHistoryEntry> = emptyList(), val someNotShown: Boolean = false)
+data class CallHistory(
+    val entries: List<CallHistoryEntry> = emptyList(),
+    val someNotShown: Boolean = false,
+    val failed: Boolean = false,
+)
 
 /**
  * (C2, VAULT-MESSAGING §10.10 "Permission and limits") Calls with one connection: [allowed] false when the member turned

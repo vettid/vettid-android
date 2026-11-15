@@ -118,10 +118,13 @@ data class CallsDiagnostics(
      */
     val listSkipped: Int = 0,
     val listSkippedIds: List<String> = emptyList(),
+    /** Reads of a conversation's calls whose `call.list` did not read (the lines shown were kept), since the process started. */
+    val historyFailed: Int = 0,
 ) {
     override fun toString(): String =
         "CallsDiagnostics(refused=$refused, droppedForTime=$droppedForTime, staleEnded=$staleEnded, errors=$errors, " +
-            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size})"
+            "listenRestarts=$listenRestarts, listSkipped=$listSkipped, listSkippedIds=${listSkippedIds.size}, " +
+            "historyFailed=$historyFailed)"
 }
 
 /**
@@ -593,19 +596,20 @@ class CallsController(
     }
 
     override suspend fun history(connectionId: String): CallHistory {
-        val list = if (supported == true) {
-            try {
-                vault.gateway.list(HISTORY_LIMIT)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                null
-            }
-        } else {
-            null
+        // A vault without calls (or not known to have them) has no history; one with calls whose list does not read this
+        // time says so ([CallHistory.failed]), so that a conversation keeps what it shows rather than emptying it.
+        if (supported != true) return historyOf(null, connectionId, now())
+        return try {
+            val list = vault.gateway.list(HISTORY_LIMIT)
+            // Not after a lock that came while the list was out: nothing of the history is kept while locked.
+            if (supported == true) noteSkipped(list)
+            historyOf(list, connectionId, now())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+            diagnosticsFlow.update { it.copy(historyFailed = it.historyFailed + 1) }
+            CallHistory(failed = true)
         }
-        list?.let(::noteSkipped)
-        return historyOf(list, connectionId, now())
     }
 
     companion object {

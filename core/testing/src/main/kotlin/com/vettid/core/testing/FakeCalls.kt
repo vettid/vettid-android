@@ -22,8 +22,12 @@ class FakeCalls(availability: CallAvailability = CallAvailability.READY) : CallA
         called += connectionId
     }
 
+    /** While true, [history] answers as a vault with calls whose list did not read. */
+    var historyFails = false
+
     override suspend fun history(connectionId: String): CallHistory {
         historyReads++
+        if (historyFails) return CallHistory(failed = true)
         return CallHistory(entries.filter { it.connectionId == connectionId }, someNotShown)
     }
 
