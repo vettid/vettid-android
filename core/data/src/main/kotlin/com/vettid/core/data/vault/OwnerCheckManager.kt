@@ -794,10 +794,17 @@ class OwnerCheckManager(
     /** Checks passed with the vault open in this process ([OwnerCheckView.passes]). */
     private val passCount = java.util.concurrent.atomic.AtomicInteger()
 
-    /** [passed]: [v] is the OK of a check that passed with the vault open; it counts before [v] is published. */
+    private val setLock = Any()
+
+    /**
+     * [passed]: [v] is the OK of a check that passed with the vault open; it counts before [v] is published. The count is
+     * read and published in one step, so a value built earlier (a slow status read) never publishes a lower one.
+     */
     private fun set(v: OwnerCheckView, passed: Boolean = false) {
-        val passes = if (passed) passCount.incrementAndGet() else passCount.get()
-        view.value = v.copy(passes = passes)
+        synchronized(setLock) {
+            val passes = if (passed) passCount.incrementAndGet() else passCount.get()
+            view.value = v.copy(passes = passes)
+        }
         // Before the deadline the idle lock's time is the deadline plus the value in force (§3.6.8).
         val d = v.deadline
         if (v.state == OwnerCheckState.OK && d != null && now().isBefore(d)) v.idleAfterSeconds?.let { idleAfterKnown = it }

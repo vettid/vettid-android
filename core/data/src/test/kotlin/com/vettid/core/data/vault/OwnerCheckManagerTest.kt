@@ -339,8 +339,10 @@ class OwnerCheckManagerTest {
         m.refreshOwnerCheck()
         assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // an earlier pass, then the vault locks
         val before = m.ownerCheck.value!!.passes
-        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+        // The probe's path: the status says OK, but the phone's clock is past its deadline, so the unlock checks.
+        ops.status = OwnerCheckStatus("ok", now.minusSeconds(60).toString(), 86_400)
         m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertEquals("the unlock checked", 2, ops.checks.size)
         assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
         assertEquals("the unlock's own check", before, m.ownerCheck.value!!.passes)
         ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)

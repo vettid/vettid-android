@@ -1189,8 +1189,8 @@ class VaultManager(
                 val at = java.time.Instant.now()
                 // The previous value looked at again now: a deadline that passed with no new value was a pause (location's clocks).
                 val lifted = pauseLifted(previous, v, at)
-                // The previous value as it stands now: also the due state known only from the clock (the feed's gate).
-                val wasGatedNow = previous?.gated(at) == true
+                // The value just before, for the waiting-asks replay (ANDROID-PLAN 0.1.132).
+                val before = previous
                 previous = v
                 // Presence is sent only while the check is neither due nor held: the probe is asked again when that ends.
                 val gated = v?.gated(at) == true
@@ -1199,15 +1199,12 @@ class VaultManager(
                 // Kept first: nothing that throws below leaves it wrong for the next value.
                 val wasHeld = held
                 held = now
-                // (ANDROID-PLAN 0.1.132) A check passed with the vault open (not the one an unlock makes: the mark is set
-                // at its source) ended the held or due state, also one known only from the clock: the asks still waiting
+                // (ANDROID-PLAN 0.1.132) A check passed with the vault open (counted at its source; never the one an
+                // unlock makes) ended the held or due state, also one known only from the clock: the asks still waiting
                 // are notified once, judged on a pending.list merged after now. The window opens here, before any launch.
-                val gateEnded = (wasHeld || wasGatedNow) && !now && !gated
-                val passedSince = v != null && gatePasses?.let { v.passes > it } == true
-                val replayGen = record.generation.takeIf { gateEnded && passedSince && phaseFlow.value == AppPhase.Unlocked }
-                // The pass count of the latest gated value: a later rise is a check passed with the vault open (an
-                // unlock's own check never counts, so an earlier pass cannot be taken for it).
-                gatePasses = if (now || gated) v?.passes else null
+                val replayGen = record.generation.takeIf {
+                    WaitingAsksReplay.due(before, v, at, unlocked = phaseFlow.value == AppPhase.Unlocked)
+                }
                 val mergesBefore = social.pendingMergeCount
                 val replayToken = if (replayGen != null) feed.startReplayWindow() else 0
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
@@ -3177,10 +3174,6 @@ class VaultManager(
      * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
      * Not at an unlock: only here.
      */
-    /** The collector's: the [OwnerCheckView.passes] of the latest gated value it saw; null while not gated. */
-    @Volatile
-    private var gatePasses: Int? = null
-
     private suspend fun afterHoldPassed(gen: Int?, mergesBefore: Int, token: Int) {
         runCatching { feed.refresh() }
         // Nothing for a held or due state not ended by a check passed with the vault open (gen null: an unlock's own
