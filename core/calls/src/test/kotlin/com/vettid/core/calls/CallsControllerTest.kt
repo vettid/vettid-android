@@ -872,7 +872,9 @@ class CallsControllerTest {
         gate.send(Unit)
         runCurrent()
         assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
-        assertEquals(listOf(CALL_ID), vault.gateway.ringings)
+        // Its `call.ringing` is sent from the call's session (CallMachine.ring), which the hang-up ends in the same pass:
+        // here it is cancelled before it goes; on a phone it may go just before. Never more than the one.
+        assertTrue(vault.gateway.ringings.size <= 1 && vault.gateway.ringings.all { it == CALL_ID })
     }
 
     /**
@@ -898,6 +900,9 @@ class CallsControllerTest {
         // It rang (the offer was let through), then the hang-up ended it: Idle would mean it never rang.
         assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value is CallState.Ended)
         assertEquals(0, c.diagnostics.value.refused)
+        // Its `call.ringing` is sent from the call's session (CallMachine.ring), which the hang-up ends in the same pass:
+        // here it is cancelled before it goes; on a phone it may go just before. Never more than the one.
+        assertTrue(vault.gateway.ringings.size <= 1 && vault.gateway.ringings.all { it == CALL_ID })
         assertTrue(!audio.ringtone)
     }
 
@@ -936,6 +941,30 @@ class CallsControllerTest {
         vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
         runCurrent()
         assertTrue("the live call's hang-up was not held up: ${c.state.value}", c.state.value !is CallState.Live)
+        // The second offer did not ring: refused at once, as the vault had not said again that it has calls.
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** A lock that comes while an offer waits for the probe: no ring, and nothing is sent for it. */
+    @Test
+    fun anOfferDoesNotRingWhenTheVaultLocksWhileItWaits() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T76", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        val sent = vault.gateway.sent.size
+        vault.unlocked.value = false
+        gate.send(Unit)
+        advanceTimeBy(10_001)
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(sent, vault.gateway.sent.size)
+        assertEquals(1, c.diagnostics.value.refused)
     }
 
     /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */

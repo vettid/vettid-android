@@ -257,12 +257,13 @@ class CallsController(
     /**
      * Whether an offer may ring. The call events wait with it, on purpose: the offer's candidates and hang-up stay behind
      * it. No call is live on this phone while it is locked or the probe has not answered, so nothing else is held up;
-     * during a live call (an offer then is answered busy) it does not wait at all, so that call's events never wait.
-     * The update screen is looked at after the wait: one that came up during it is not rung over.
+     * during a live call it does not wait at all, so that call's events never wait (the phone drops such an offer, busy
+     * in another call, and the vault rings the member's other devices). The vault's lock and the update screen are
+     * looked at again after the wait: a lock or an update screen that came during it is not rung over.
      */
     private suspend fun mayRing(): Boolean {
         val known = if (machine.state.value is CallState.Live) open && supported == true else callsKnownWithin(UNLOCK_WAIT)
-        return known && !vault.updateShowing
+        return known && open && !vault.updateShowing
     }
 
     /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
