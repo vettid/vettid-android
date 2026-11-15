@@ -639,12 +639,8 @@ class VaultManager(
         nowMs = System::currentTimeMillis,
         read = { resolvedRead.read() },
         onGone = { finishDeleted() },
-        onSlow = {
-            if (phaseFlow.deleting) {
-                val api = deletedApiMarker
-                phaseFlow.deleting(AppPhase.Deleting(slow = true, apiOnly = api != null, removeFromMs = api?.untilMs))
-            }
-        },
+        // One step under the phase's lock, from what is held (its apiOnly and bound): never after the hold ended.
+        onSlow = { phaseFlow.updateDeleting { it.copy(slow = true) } },
     )
 
     private val resolvedRead = ResolvedRead(

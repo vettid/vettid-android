@@ -268,6 +268,10 @@ object VaultDeletion {
  * "still finishing" ([onSlow]); after it nothing starts a new timer or a new bound. [read] reads the status once; [onGone]
  * moves the app to "no vault" (it may be called more than once and must act once). One read at a time: a [check] while
  * one runs waits for it.
+ *
+ * (owner decision 2026-11-15) The screen names the bound's time, so "still finishing" (and with it "Remove from this
+ * phone") does not wait for a read: every read, the timer's at the bound and those of a start, a return to the
+ * foreground and "Check again", first publishes it when the bound has passed. [onSlow] is called once per marker.
  */
 internal class DeletionWatch(
     private val scope: CoroutineScope,
@@ -279,9 +283,19 @@ internal class DeletionWatch(
     private var timer: Job? = null
     private var inFlight: Deferred<DeletionCheck>? = null
 
+    /** The marker watched, for the bound of every read; null once stopped. */
+    private var marker: DeletingMarker? = null
+
+    /** [onSlow] was called for [marker]. */
+    private var slowSaid = false
+
     /** The timer runs for [m] (from a start: [readNow] reads at once too). A watch that already runs is left as it is. */
     @Synchronized
     fun start(m: DeletingMarker, readNow: Boolean) {
+        if (m != marker) {
+            marker = m
+            slowSaid = false
+        }
         if (timer?.isActive == true) return
         timer = scope.launch { run(m, readNow) }
     }
@@ -291,6 +305,18 @@ internal class DeletionWatch(
     fun stop() {
         timer?.cancel()
         timer = null
+        marker = null
+    }
+
+    /** "Still finishing", once, when [marker]'s bound has passed. */
+    private fun slowIfPast() {
+        val past = synchronized(this) {
+            val m = marker ?: return
+            if (slowSaid || !VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return
+            slowSaid = true
+            true
+        }
+        if (past) onSlow()
     }
 
     /** One read now, or the one that runs. */
@@ -302,6 +328,7 @@ internal class DeletionWatch(
     }
 
     private suspend fun readOnce(): DeletionCheck {
+        slowIfPast()
         val r = read()
         if (r == DeletionCheck.GONE) onGone()
         return r
@@ -311,14 +338,15 @@ internal class DeletionWatch(
     private suspend fun run(m: DeletingMarker, readNow: Boolean) {
         if (readNow && check() == DeletionCheck.GONE) return
         // Past the bound (a start after it): "still finishing" at once, with no timer.
-        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
+        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast()
         while (true) {
             val now = nowMs()
             // Capped: a clock that moved back must not make the wait as long as the move.
             delay((minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now).coerceIn(0L, VaultDeletion.THEN_EVERY_MS))
             if (check() == DeletionCheck.GONE) return
-            // At the bound: still listed (or not reachable) is "still finishing", and nothing more runs on a timer.
-            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return onSlow()
+            // At the bound: "still finishing" was published before this read (or now, if the bound passed during it), and
+            // nothing more runs on a timer.
+            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast()
         }
     }
 }
@@ -389,6 +417,20 @@ internal class PhaseHolder(initial: AppPhase) {
     fun deleting(d: AppPhase.Deleting) {
         held = d
         publish(d)
+    }
+
+    /**
+     * The held "being deleted" changed by [change], checked and published as one step under this holder's lock: after
+     * [endDeleting] nothing is published (a "still finishing" racing the end of a 410-only state cannot bring it back).
+     * False when nothing was held.
+     */
+    @Synchronized
+    fun updateDeleting(change: (AppPhase.Deleting) -> AppPhase.Deleting): Boolean {
+        val d = held ?: return false
+        val next = change(d)
+        held = next
+        publish(next)
+        return true
     }
 
     /** The hold ends with [next] ("no vault"). */

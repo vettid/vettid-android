@@ -20,7 +20,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -98,6 +97,9 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
     /** The phase's `removeFromMs` (the root passes it on). */
     fun setRemoveFrom(ms: Long?) = state.update { it.copy(removeFromMs = ms) }
 
+    /** The phase's `apiOnly` and `removeFromMs` in one step, so the screen never shows the one without the other. */
+    fun setApi(apiOnly: Boolean, removeFromMs: Long?) = state.update { it.copy(apiOnly = apiOnly, removeFromMs = removeFromMs) }
+
     override fun checkAgain() {
         if (state.value.checking) return
         state.update { it.copy(checking = true, lastCheck = null) }
@@ -137,8 +139,7 @@ fun VaultDeletingRoute(
     viewModel: VaultDeletingViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(slow) { viewModel.setSlow(slow) }
-    LaunchedEffect(apiOnly) { viewModel.setApiOnly(apiOnly) }
-    LaunchedEffect(removeFromMs) { viewModel.setRemoveFrom(removeFromMs) }
+    LaunchedEffect(apiOnly, removeFromMs) { viewModel.setApi(apiOnly, removeFromMs) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     VaultDeletingContent(state, viewModel, onOpenAccountSite)
 }
@@ -180,7 +181,8 @@ private fun bodyText(state: VaultDeletingUiState): String {
     if (res != R.string.vault_deleted_api_body || at == null) return stringResource(res)
     val context = LocalContext.current
     // Rounded up to the minute: the clock shows no seconds, and the text must never name a minute before the removal.
-    val time = remember(at, context) { DateFormat.getTimeFormat(context).format(Date(roundUpToMinute(at))) }
+    // Formatted at each composition, so a changed 12/24-hour setting or time zone shows at once.
+    val time = DateFormat.getTimeFormat(context).format(Date(roundUpToMinute(at)))
     return stringResource(res, time)
 }
 

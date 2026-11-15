@@ -371,6 +371,74 @@ class VaultDeletionTest {
         assertEquals(1, r.gone)
     }
 
+    // (owner decision 2026-11-15) The screen names the bound's time: "still finishing", and with it Remove, comes at the
+    // bound itself, before the read there answers (a slow or unreachable member API cannot hold it back).
+    @Test
+    fun atTheBoundRemoveIsOfferedBeforeTheReadAnswers() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var slow = 0
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = {
+            if (currentTime >= 10 * min) gate.await()
+            DeletionCheck.LISTED
+        }, onGone = {}, onSlow = { slow++ })
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        advanceTimeBy(10 * min - 1)
+        assertEquals(0, slow)
+        advanceTimeBy(2)
+        assertEquals(1, slow) // the read at the bound is still waiting
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(1, slow) // once per marker, not again after the read
+    }
+
+    // A timer stalled past the bound (its delay runs on uptime, which stops in deep sleep): a return to the foreground or
+    // "Check again" publishes "still finishing" before its read, and never twice.
+    @Test
+    fun aCheckPastTheBoundIsStillFinishingBeforeItsRead() = runTest {
+        var clock = 0L
+        val gate = CompletableDeferred<Unit>()
+        var slow = 0
+        var reads = 0
+        val w = DeletionWatch(backgroundScope, { clock }, read = {
+            reads++
+            if (reads == 1) gate.await()
+            DeletionCheck.UNREACHABLE
+        }, onGone = {}, onSlow = { slow++ })
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        runCurrent()
+        val before = async { w.check() } // before the bound: nothing
+        runCurrent()
+        assertEquals(0, slow)
+        gate.complete(Unit)
+        before.await()
+        clock = 10 * min + 1_000 // the phone slept past the bound; the timer has not fired
+        val c = async { w.check() }
+        runCurrent()
+        assertEquals(1, slow)
+        c.await()
+        w.check()
+        assertEquals(1, slow)
+    }
+
+    // A new marker (a new deletion) is told apart: its own bound, its own "still finishing"; a stopped watch says nothing.
+    @Test
+    fun stillFinishingIsOncePerMarkerAndNotAfterAStop() = runTest {
+        advanceTimeBy(30 * min)
+        val r = Reads(ArrayDeque())
+        val w = watch(r)
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = true)
+        runCurrent()
+        assertEquals(1, r.slow)
+        w.check()
+        assertEquals(1, r.slow)
+        w.stop()
+        w.check()
+        assertEquals(1, r.slow)
+        w.start(DeletingMarker("v", 5 * min, 15 * min), readNow = true)
+        runCurrent()
+        assertEquals(2, r.slow)
+    }
+
     @Test
     fun aSecondCheckWaitsForTheFirst() = runTest {
         val gate = CompletableDeferred<Unit>()
@@ -387,6 +455,43 @@ class VaultDeletionTest {
         assertEquals(DeletionCheck.UNREACHABLE, a.await())
         assertEquals(DeletionCheck.UNREACHABLE, b.await())
         assertEquals(1, reads)
+    }
+
+    // "Still finishing" is published from what is held, and never after the hold ended (a LISTED answer that cleared a
+    // 410-only state racing the bound's onSlow).
+    @Test
+    fun stillFinishingKeepsWhatIsHeldAndIsNeverPublishedAfterTheEnd() {
+        val p = PhaseHolder(AppPhase.Locked)
+        p.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = 600_000L))
+        assertTrue(p.updateDeleting { it.copy(slow = true) })
+        assertEquals(AppPhase.Deleting(slow = true, apiOnly = true, removeFromMs = 600_000L), p.value)
+        p.endDeleting(AppPhase.Locked)
+        assertFalse(p.updateDeleting { it.copy(slow = true) })
+        assertEquals(AppPhase.Locked, p.value)
+        assertFalse(p.deleting)
+    }
+
+    @Test
+    fun stillFinishingRacingTheEndNeverOutlivesIt() {
+        repeat(200) {
+            val p = PhaseHolder(AppPhase.Locked)
+            p.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = 1L))
+            val start = java.util.concurrent.CountDownLatch(1)
+            val slow = List(4) {
+                Thread {
+                    start.await()
+                    repeat(50) { p.updateDeleting { d -> d.copy(slow = true) } }
+                }.apply { start() }
+            }
+            val end = Thread {
+                start.await()
+                p.endDeleting(AppPhase.Locked)
+            }.apply { start() }
+            start.countDown()
+            (slow + end).forEach { t -> t.join() }
+            assertEquals(AppPhase.Locked, p.value)
+            assertFalse(p.deleting)
+        }
     }
 
     @Test
