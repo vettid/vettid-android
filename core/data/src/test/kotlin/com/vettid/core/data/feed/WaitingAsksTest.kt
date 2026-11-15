@@ -69,6 +69,18 @@ class WaitingAsksTest {
         assertTrue(WaitingAsks.of(items, approvals, now).isEmpty())
     }
 
+    /** Exactly the three kinds: another ask listed with its approval (a grant request, a pairing) is still left out. */
+    @Test
+    fun anotherListedKindIsLeftOut() {
+        val items = listOf(item("1", "grant.request"), item("2", "device.pair.pending"), item("3", WaitingAsks.SIGN_IN))
+        val approvals = listOf(
+            Approval.GrantRequest("r1", "c1", emptyList(), null, null, null, now.minusSeconds(60), now.plusSeconds(300)),
+            device("device.pair.pending", "r2", now.plusSeconds(300)),
+            signIn("r3", now.plusSeconds(300)),
+        )
+        assertEquals(listOf("3"), WaitingAsks.of(items, approvals, now).map { it.itemId })
+    }
+
     private class Ops(val items: List<FeedItem>) : FeedOps {
         override suspend fun list(afterSeq: Long, limit: Int) =
             if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })

@@ -29,8 +29,7 @@ internal object WaitingAsks {
     }
 
     private fun waiting(item: FeedItem, byKey: Map<String, Approval>, now: Instant): Boolean {
-        val ref = item.ref?.takeIf { it.isNotEmpty() } ?: return false
-        val key = if (item.kind == SIGN_IN) "auth:$ref" else "device:${item.kind}:$ref"
-        return byKey[key]?.let { ask -> ask.exp?.isAfter(now) ?: true } == true
+        val ask = FeedAsks.approvalKey(item.kind, item.ref)?.let { byKey[it] }
+        return ask != null && ask.exp?.isAfter(now) ?: true
     }
 }

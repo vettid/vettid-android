@@ -164,6 +164,7 @@ class FeedManager(
     /** Forgets everything: the vault locked, was held or wiped. */
     fun clear() {
         synchronized(lock) {
+            arrivedSince = null
             generation++
             byId = emptyMap()
             cursor = 0
@@ -295,6 +296,11 @@ class FeedManager(
         synchronized(lock) { arrivedSince = mutableSetOf() }
     }
 
+    /** The replay will not run: what arrives is no longer noted. */
+    fun endReplayWindow() {
+        synchronized(lock) { arrivedSince = null }
+    }
+
     /**
      * (Owner decision a, 2026-11-15) A hold ended by a passed check: each ask still waiting ([WaitingAsks], against
      * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does, and an
@@ -306,7 +312,7 @@ class FeedManager(
             if (gated() || loadState.value != ListLoad.LOADED) return
             WaitingAsks.of(byId.values, approvals, now).filterNot { seen != null && it.itemId in seen }
         }
-        waiting.forEach { emitArrival(it) }
+        waiting.forEach { emitArrival(it.copy(replayed = true)) }
     }
 
     /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */

@@ -195,6 +195,12 @@ class SocialManager internal constructor(
 
     /** A `pending.list` was merged since the unlock: it is authoritative for sessions and approvals, so none is made from a feed item. */
     private val listReadFlow = MutableStateFlow(false)
+
+    /** How many `pending.list` answers were merged in this process: a merge after a moment is a list read since then. */
+    private val pendingMerges = java.util.concurrent.atomic.AtomicInteger()
+
+    /** [pendingMerges] now (ANDROID-PLAN 0.1.132: the waiting asks are judged on a list merged after the check). */
+    internal val pendingMergeCount: Int get() = pendingMerges.get()
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */
@@ -1602,6 +1608,7 @@ class SocialManager internal constructor(
             val plan = pending.merge(ticket, ts, listed) ?: return@edit l
             merged = true
             listReadFlow.value = true
+            pendingMerges.incrementAndGet()
             val at = now().toEpochMilli()
             val (gone, kept) = l.events.partition { e ->
                 e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }

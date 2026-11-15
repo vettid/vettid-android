@@ -307,6 +307,48 @@ class OwnerCheckManagerTest {
         CredentialRequired.clear()
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.132) A check passed with the vault open marks its OK (the waiting asks are replayed for it), and
+     * later OKs keep the mark until the state leaves OK; the check an unlock makes and a status read never mark.
+     */
+    @Test
+    fun onlyACheckPassedWithTheVaultOpenMarksItsOk() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertFalse(m.ownerCheck.value!!.passedByCheck)
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertTrue("a check passed here", m.ownerCheck.value!!.passedByCheck)
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertTrue("kept by a later OK (a status read)", m.ownerCheck.value!!.passedByCheck)
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
+        m.refreshOwnerCheck()
+        assertFalse("cleared off OK", m.ownerCheck.value!!.passedByCheck)
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertFalse("a status read alone never marks", m.ownerCheck.value!!.passedByCheck)
+        // Another device's pass (sync.event{owner_check}) marks.
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+        m.refreshOwnerCheck()
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-08T12:00:00Z"}"""))
+        assertTrue(m.ownerCheck.value!!.passedByCheck)
+    }
+
+    @Test
+    fun theCheckAnUnlockMakesDoesNotMark() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        assertFalse(m.ownerCheck.value!!.passedByCheck)
+        // A later, separate check passed with the vault open still marks.
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertTrue(m.ownerCheck.value!!.passedByCheck)
+    }
+
     /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */
     @Test
     fun theUnlocksCheckRaisesCredentialRequired() = runTest {
