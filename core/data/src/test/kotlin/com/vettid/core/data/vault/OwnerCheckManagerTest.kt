@@ -307,6 +307,50 @@ class OwnerCheckManagerTest {
         CredentialRequired.clear()
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.132) Only a check passed with the vault open counts in [OwnerCheckView.passes] (the waiting asks are
+     * replayed for a rise since the last gated value): here, or another device's pass; never a status read.
+     */
+    @Test
+    fun onlyAChecksPassedWithTheVaultOpenCount() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val gatedAt = m.ownerCheck.value!!.passes
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertEquals("a check passed here counts", gatedAt + 1, m.ownerCheck.value!!.passes)
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertEquals("a status read does not", gatedAt + 1, m.ownerCheck.value!!.passes)
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+        m.refreshOwnerCheck()
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-08T12:00:00Z"}"""))
+        assertEquals("another device's pass counts", gatedAt + 2, m.ownerCheck.value!!.passes)
+    }
+
+    /**
+     * The check an unlock makes never counts, also after an earlier pass (the review's probe: a pass, a lock, then an unlock
+     * whose clock says due runs its own check; that must not read as a new pass). A later, separate check does count.
+     */
+    @Test
+    fun theCheckAnUnlockMakesNeverCounts() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // an earlier pass, then the vault locks
+        val before = m.ownerCheck.value!!.passes
+        // The probe's path: the status says OK, but the phone's clock is past its deadline, so the unlock checks.
+        ops.status = OwnerCheckStatus("ok", now.minusSeconds(60).toString(), 86_400)
+        m.afterUnlock("975310", "pw", m.foregroundGeneration)
+        assertEquals("the unlock checked", 2, ops.checks.size)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        assertEquals("the unlock's own check", before, m.ownerCheck.value!!.passes)
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertEquals("a later, separate check", before + 1, m.ownerCheck.value!!.passes)
+    }
+
     /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */
     @Test
     fun theUnlocksCheckRaisesCredentialRequired() = runTest {

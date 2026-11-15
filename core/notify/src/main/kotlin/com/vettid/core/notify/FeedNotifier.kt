@@ -158,6 +158,7 @@ class FeedNotifier(
         recheckCover()
         // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
         if (item.quietRepost && !synchronized(lock) { stillShowing(item) }) return
+        clearForReplay(item)
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
         val covered = source.coveredNow()
         if (item.kind == VOTE_RESULT && !covered) {
@@ -296,6 +297,18 @@ class FeedNotifier(
             false
         }
     } == true
+
+    /**
+     * A waiting ask notified again after a passed check (ANDROID-PLAN 0.1.132): a notification still posted for it goes
+     * first, so that it comes as a new arrival. Nothing for any other item.
+     */
+    private fun clearForReplay(item: FeedItem) {
+        if (!item.replayed) return
+        synchronized(lock) {
+            posted.remove(item.itemId)
+            poster.cancel(item.itemId)
+        }
+    }
 
     /** Under [lock]: the notification [item] had is still showing (not dismissed). */
     private fun stillShowing(item: FeedItem): Boolean = item.itemId in posted.keys && poster.isPosted(item.itemId)
