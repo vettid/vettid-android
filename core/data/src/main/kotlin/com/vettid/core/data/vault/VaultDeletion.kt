@@ -355,7 +355,8 @@ internal class DeletionWatch(
     private fun slowIfPast(m: DeletingMarker? = null) {
         val said = synchronized(this) {
             marker?.takeIf { held ->
-                (m == null || m == held) && !slowSaid && VaultDeletion.pastBound(held.sinceMs, held.untilMs, nowMs())
+                (m == null || m == held) && !slowSaid &&
+                    VaultDeletion.pastBound(held.sinceMs, held.untilMs, nowMs())
             }?.also { slowSaid = true }
         }
         said?.let(onSlow)
@@ -382,24 +383,27 @@ internal class DeletionWatch(
         val m = synchronized(this) { marker }
         slowIfPast()
         val r = read()
-        if (r == DeletionCheck.GONE) {
-            // Gone: no "still finishing" for this deletion any more, from the bound's timer or a later read. A read of a
-            // deletion the watch no longer holds (stopped, or replaced by a later one) acts on nothing: a 410-only attempt
-            // is erased only by its own reads.
-            // A read made while the watch held no attempt (before a start, or after a stop) is no attempt's: it erases nothing.
-            val current = synchronized(this) { m != null && marker == m }
-            // An ended attempt's answer concludes nothing; nor does a "gone" the app refused (a 410-only marker came meanwhile,
-            // or the attempt ended): the watch keeps reading, and "Check again" says nothing was confirmed. Only an erase
-            // takes "still finishing" away: a refused "gone" keeps the bound's timer, so Remove still comes at the bound.
-            if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
-            synchronized(this) {
-                if (marker == m) {
-                    boundTimer?.cancel()
-                    slowSaid = true
-                }
+        return if (r == DeletionCheck.GONE) decideGone(m) else r
+    }
+
+    /**
+     * Gone: a read of a deletion the watch no longer holds (stopped, or replaced by a later one) acts on nothing, so a
+     * 410-only attempt is erased only by its own reads; nor does a read made while the watch held no attempt (before a
+     * start, or after a stop). A "gone" the app refused (a 410-only marker came meanwhile, or the attempt ended) concludes
+     * nothing either: the watch keeps reading and "Check again" says nothing was confirmed. Only an erase takes "still
+     * finishing" away, so after a refusal (or an erase that failed) Remove still comes at the bound. "Still finishing" does
+     * not wait for the decision: the bound's own timer says it at `until` (owner decision 2026-11-15), whatever is in flight.
+     */
+    private suspend fun decideGone(m: DeletingMarker?): DeletionCheck {
+        val current = synchronized(this) { m != null && marker == m }
+        if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
+        synchronized(this) {
+            if (marker == m) {
+                boundTimer?.cancel()
+                slowSaid = true
             }
         }
-        return r
+        return DeletionCheck.GONE
     }
 
     @Suppress("ReturnCount") // gone, past the bound, and at the bound
