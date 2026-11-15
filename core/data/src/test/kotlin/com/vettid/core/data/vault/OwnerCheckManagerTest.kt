@@ -582,6 +582,57 @@ class OwnerCheckManagerTest {
         assertEquals("after a wipe it is taken", OwnerCheckState.HELD, m.ownerCheck.value!!.state)
     }
 
+    /**
+     * On a vault with a time scale (staging, 24), the pass time is the deadline less the interval as it runs there
+     * (ceil(86,400 / 24) = 3,600 s): a held just before it is over, one at it is kept.
+     */
+    @Test
+    fun thePassTimeUsesTheScaledInterval() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // deadline 2026-10-07T12:00Z: passed at 11:00Z
+        val passAt = Instant.parse("2026-10-07T11:00:00Z")
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = passAt.minusSeconds(1)))
+        assertEquals("just before the pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = passAt))
+        assertEquals("at the pass", OwnerCheckState.HELD, m.ownerCheck.value!!.state)
+    }
+
+    /** With no view, another device's pass records its time too, not only the count: a held from before it is over. */
+    @Test
+    fun anotherDevicesPassWithNoViewRecordsItsTime() = runTest {
+        val m = manager(Ops())
+        assertEquals(null, m.ownerCheck.value)
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(3600)))
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.plusSeconds(1800)))
+        assertEquals("dropped: no view made from it", null, m.ownerCheck.value)
+    }
+
+    /**
+     * A held dropped under the lock (a pass landed while it was handled) does not move the newest held's `ts`: after a
+     * restart (the pass time is not kept, the `ts` is), an earlier held that is not over is still taken.
+     */
+    @Test
+    fun aDroppedHeldLeavesTheHeldTs() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = false) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        nowHook = {
+            m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(60)))
+        }
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now))
+        assertEquals(null, nowHook)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        m.refreshOwnerCheck() // saved again, with the held's ts as it stands
+        val again = manager(ops)
+        again.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.minusSeconds(30)))
+        assertTrue("taken (due: no hold)", again.ownerCheck.value!!.state != OwnerCheckState.OK)
+    }
+
     /** A dropped stale read leaves the count alone: the pass's full count stands, not the failures read before it. */
     @Test
     fun aDroppedReadLeavesTheEstimate() = runTest {

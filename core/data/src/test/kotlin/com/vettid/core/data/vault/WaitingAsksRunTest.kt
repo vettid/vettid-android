@@ -114,6 +114,29 @@ class WaitingAsksRunTest {
         assertEquals(1, f.listReads)
     }
 
+    /** A lock during the feed read: the list is not read after it. */
+    @Test
+    fun aLockDuringTheFeedReadSkipsTheListRead() = runTest {
+        val f = Fake().apply { feedLoaded = false }
+        val run = WaitingAsksRun(
+            open = { f.open },
+            feedLoaded = { f.feedLoaded },
+            readFeed = {
+                f.feedReads++
+                f.open = false
+            },
+            listed = { f.listed },
+            unsupported = { f.unsupported },
+            readList = { f.listReads++ },
+            replay = { true },
+            end = { f.ended++ },
+        )
+        assertFalse(run.run())
+        assertEquals(1, f.feedReads)
+        assertEquals(0, f.listReads)
+        assertEquals(1, f.ended)
+    }
+
     /** A lock between tries ends the run at the next one, without a read. */
     @Test
     fun aLockBetweenTriesEndsTheRun() = runTest {
