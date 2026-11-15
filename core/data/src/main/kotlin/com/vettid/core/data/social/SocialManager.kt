@@ -208,8 +208,11 @@ class SocialManager internal constructor(
      */
     internal fun pendingReadMark(): Long = pending.lastIssued
 
-    /** A `pending.list` read begun after [mark] was merged, and what it listed is published ([listedNow] has it). */
-    internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > mark
+    /**
+     * A `pending.list` read begun after [mark] was merged, and what it listed is published ([listedNow] has it). Not one
+     * whose list a hold or a lock dropped since: only a read begun after that counts.
+     */
+    internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
     /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
     internal val pendingUnsupported: Boolean get() = pending.isUnsupported

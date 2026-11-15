@@ -57,6 +57,9 @@ internal class PendingAsks {
     /** The ticket of the latest read begun (0 before one): a read that begins from now on has a higher one. */
     val lastIssued: Long get() = synchronized(lock) { issued }
 
+    /** The last ticket before the latest [reset] (a lock or a hold): a read up to it merged into what was dropped. */
+    val resetAt: Long get() = synchronized(lock) { floor }
+
     /** Whether the read of [ticket] is still current: no lock since it began and no later-started read has merged. */
     fun current(ticket: Long): Boolean = synchronized(lock) { ticket > floor && ticket >= merged }
 

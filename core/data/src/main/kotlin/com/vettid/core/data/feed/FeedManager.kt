@@ -300,6 +300,9 @@ class FeedManager(
         ++replayToken
     }
 
+    /** The replay [token] still owns an open window: no later replay replaced it, and no clear (a lock, a hold) closed it. */
+    fun replayOwns(token: Int): Boolean = synchronized(lock) { token == replayToken && arrivedSince != null }
+
     /** The replay [token] will not run: what arrives is no longer noted (unless a later replay owns the window). */
     fun endReplayWindow(token: Int) {
         synchronized(lock) { if (token == replayToken) arrivedSince = null }

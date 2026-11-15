@@ -444,6 +444,79 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckState.HELD, m.ownerCheck.value!!.state)
     }
 
+    /** The check right after a cancelled recovery is an unlock's own too: its pass never counts (the replay is not due). */
+    @Test
+    fun theCheckAfterACancelledRecoveryNeverCounts() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val gated = m.ownerCheck.value!!
+        m.afterCancelledRecovery("975310", "pw")
+        assertEquals("it checked", 1, ops.checks.size)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        assertEquals("the cancel-recovery unlock's own pass", gated.passes, m.ownerCheck.value!!.passes)
+        assertFalse(WaitingAsksReplay.due(gated, m.ownerCheck.value, now, unlocked = true))
+    }
+
+    /** Another device's pass counts as a pass for a status read sent before it: its held answer is dropped. */
+    @Test
+    fun aHeldStatusSentBeforeAnotherDevicesPassIsDropped() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = gate
+        val stale = this.async(Dispatchers.Default) { m.refreshOwnerCheck() }
+        awaitReads(ops, 2)
+        ops.statusGate = null
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T12:00:00Z"}"""))
+        val passed = m.ownerCheck.value!!
+        gate.complete(Unit)
+        stale.await()
+        assertEquals("the pass stands", passed, m.ownerCheck.value)
+    }
+
+    /** Only a held or due answer is dropped: an OK status sent before a pass and answered after it is taken. */
+    @Test
+    fun anOkStatusSentBeforeAPassIsTaken() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = gate
+        val read = this.async(Dispatchers.Default) { m.refreshOwnerCheck() }
+        awaitReads(ops, 2)
+        ops.statusGate = null
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T13:00:00Z", 86_400, hold = true)
+        gate.complete(Unit)
+        read.await()
+        assertEquals(Instant.parse("2026-10-07T13:00:00Z"), m.ownerCheck.value!!.deadline)
+    }
+
+    /**
+     * An `owner_check_required` answer and a `vault.held` from before the latest pass (the vault's clock: the answer's `ts`,
+     * the pass's deadline less its interval, or another device's event `ts`) change no state; later ones do.
+     */
+    @Test
+    fun aRefusalOrAHeldFromBeforeThePassChangesNothing() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // passed at 12:00, the vault's clock
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+        m.onRequired(now.minusSeconds(60))
+        assertEquals("a refusal from before the pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.minusSeconds(60)))
+        assertEquals("a vault.held from before the pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        // Another device's later pass moves the time on: a held sent between the two is over too.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(3600)))
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.plusSeconds(1800)))
+        assertEquals("a vault.held from before the later pass", OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        m.onRequired(now.plusSeconds(7200))
+        assertTrue("a refusal from after it gates", m.ownerCheck.value!!.state != OwnerCheckState.OK)
+    }
+
     /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */
     @Test
     fun theUnlocksCheckRaisesCredentialRequired() = runTest {

@@ -146,7 +146,7 @@ class WaitingAsksTest {
      */
     @Test
     fun aFailedFeedReadKeepsTheWindow() = runTest {
-        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1))
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1), item("2", WaitingAsks.SIGN_IN, seq = 2))
         var down = true
         val m = FeedManager(this, ops = { Ops(items) { down } }, now = { now })
         val arrived = mutableListOf<FeedItem>()
@@ -155,15 +155,40 @@ class WaitingAsksTest {
         runCatching { m.refresh() }
         advanceUntilIdle()
         assertEquals(ListLoad.FAILED, m.load.value)
-        assertFalse("not done", m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        val asks = listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200)))
+        assertFalse("not done", m.replayWaitingAsks(token, asks, now))
         assertTrue(arrived.isEmpty())
+        assertTrue("the window is kept", m.replayOwns(token))
+        // An ask that arrives live meanwhile is noted in the kept window.
+        m.onEvent(
+            com.vettid.core.vault.VaultMessage(
+                com.vettid.core.crypto.envelope.Inner(
+                    id = com.vettid.core.crypto.envelope.Ulid.new(), type = "feed.event", ts = now,
+                    body = com.vettid.core.vault.VaultJson.json.encodeToString(FeedItem.serializer(), items[1].copy(seq = 3)).toByteArray(),
+                ),
+            ),
+        )
+        assertEquals(listOf("2"), arrived.map { it.itemId })
         down = false
         m.refresh()
         advanceUntilIdle()
         assertTrue(m.loaded)
-        assertTrue(m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
-        assertEquals(listOf("1"), arrived.map { it.itemId })
+        assertTrue(m.replayWaitingAsks(token, asks, now))
+        assertEquals("the live one not twice", listOf("2", "1"), arrived.map { it.itemId })
         job.cancel()
+    }
+
+    /** A replay no longer owns its window once a later one starts or a clear (a lock, a hold) closes it. */
+    @Test
+    fun aReplayIsOvertakenByALaterOneOrAClear() = runTest {
+        val m = FeedManager(this, ops = { Ops(listOf(item("1", WaitingAsks.SIGN_IN))) }, now = { now })
+        val first = m.startReplayWindow()
+        assertTrue(m.replayOwns(first))
+        val second = m.startReplayWindow()
+        assertFalse(m.replayOwns(first))
+        assertTrue(m.replayOwns(second))
+        m.clear()
+        assertFalse(m.replayOwns(second))
     }
 
     /** Two replays overlapping: the earlier one sends nothing, the later one owns the window. */

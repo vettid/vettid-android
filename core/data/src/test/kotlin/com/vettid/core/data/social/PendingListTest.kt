@@ -99,6 +99,31 @@ class PendingListTest {
         assertEquals(listOf("auth:r2"), m.listedNow().map { it.key })
     }
 
+    /** A read that fails, or one not merged (its `ts` is older than the list already merged), sets no stamp. */
+    @Test
+    fun noStampWithoutAMerge() = runTest {
+        val m = manager()
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r1"))) }
+        val mark = m.pendingReadMark()
+        runCatching { m.refreshPendingFrom { throw VaultFailure(FailureKind.NETWORK) } }
+        assertTrue("a failed read", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r2"))) }
+        assertTrue("a list older than the cut is not merged", !m.pendingListedSince(mark))
+    }
+
+    /** A hold (or a lock) drops what a read merged: that read no longer counts, only one begun after the hold. */
+    @Test
+    fun aHoldDropsTheStamp() = runTest {
+        val m = manager()
+        val mark = m.pendingReadMark()
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
+        assertTrue(m.pendingListedSince(mark))
+        m.forgetPending()
+        assertTrue("dropped with the hold", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r2"))) }
+        assertTrue(m.pendingListedSince(mark))
+    }
+
     @Test
     fun everyPageIsReadAndOnlyTheFirstTsIsTheCut() = runTest {
         val m = manager()

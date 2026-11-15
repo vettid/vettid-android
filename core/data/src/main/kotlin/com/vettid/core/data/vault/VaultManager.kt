@@ -1219,20 +1219,27 @@ class VaultManager(
                     steps.step { social.forgetPending() } // pending approvals and requests: memory only, not while held
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
-                // After the clears (a feed clear closes the window), before any read is launched: the window notes what
-                // arrives from here on, and only a `pending.list` read begun from here on counts.
-                val listMark = social.pendingReadMark()
-                val replayToken = if (replayGen != null) feed.startReplayWindow() else 0
+                // A step after the clears (a feed clear closes the window), before any read is launched: the window notes
+                // what arrives from here on, and only a `pending.list` read begun from here on counts. If it fails, no replay.
+                var listMark = 0L
+                var replayToken = 0
+                var windowOpen = false
+                steps.step {
+                    listMark = social.pendingReadMark()
+                    if (replayGen != null) replayToken = feed.startReplayWindow()
+                    windowOpen = true
+                }
+                val replayFor = replayGen?.takeIf { windowOpen }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
-                    steps.step { scope.launch { afterHoldPassed(replayGen, listMark, replayToken) } }
+                    steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
-                } else if (replayGen != null) {
+                } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
-                    steps.step { scope.launch { afterHoldPassed(replayGen, listMark, replayToken) } }
+                    steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
                 }
                 // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
                 if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
@@ -1736,7 +1743,7 @@ class VaultManager(
             launch { s.device.credentialKeyChanges.collectSurviving("credential key") { k ->
                 credentialKeyFlow.tryEmit(k?.let { CredentialKeyFingerprint.formatB64(it) }) // unreadable: not known
             } }
-            launch { s.device.ownerCheckRequired.collectSurviving("owner check required") { ownerCheck.onRequired() } }
+            launch { s.device.ownerCheckRequired.collectSurviving("owner check required") { ownerCheck.onRequired(it.ts) } }
             // A vault.locking or vault.held arrives here (onEvent): one failure on one event never ends the observer.
             s.device.events.collectSurviving("event") { m ->
                 // (0.1.78) A 410 without the vault's word: only the vault's own `vault_deleted` is taken, and it erases at once.
@@ -3268,7 +3275,8 @@ class VaultManager(
         // loaded; both are tried again until they are had, a lock (and so an unlock) or a new hold ([WaitingAsksRun]).
         if (gen == null) return
         WaitingAsksRun(
-            open = { sameOpenSession(gen) },
+            // Also ended when a later replay replaced this one (it reads for both).
+            open = { sameOpenSession(gen) && feed.replayOwns(token) },
             feedLoaded = { feed.loaded },
             readFeed = { feed.refresh() },
             listed = { social.pendingListedSince(listMark) },
@@ -5326,7 +5334,6 @@ class VaultManager(
     }
 
     companion object {
-        /** The waits before each look for a `pending.list` merged after the check (a read of its own if none): 2, 5, 15, 60 s. */
         /** How often a same-code re-scan looks at the open transfer while its `hs.resp` is not in. */
         private const val SAME_CODE_POLL_MS = 250L
         /** The lock record's seal: the app's Keystore file key, purpose `lock-record`. */
