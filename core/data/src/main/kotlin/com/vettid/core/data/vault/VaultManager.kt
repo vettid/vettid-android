@@ -1200,6 +1200,9 @@ class VaultManager(
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
+                    // The lock generation the hold began under, while open: a hold that began locked, or a lock since
+                    // (and so an unlock), replays nothing at its end (only a check passed in this open session does).
+                    holdOpenGen = if (phaseFlow.value == AppPhase.Unlocked) record.generation else null
                     steps.step { feed.clear() }
                     steps.step { devices.clear() }
                     steps.step { votes.clear() }
@@ -1210,7 +1213,9 @@ class VaultManager(
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the asks still waiting are notified once (owner decision a, 2026-11-15).
-                    steps.step { scope.launch { afterHoldPassed() } }
+                    val gen = holdOpenGen?.takeIf { it == record.generation }
+                    holdOpenGen = null
+                    steps.step { scope.launch { afterHoldPassed(gen) } }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
@@ -3161,11 +3166,20 @@ class VaultManager(
      * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
      * Not at an unlock: only here.
      */
-    private suspend fun afterHoldPassed() {
+    /** [afterHoldPassed]'s lock generation of the hold now under way, when it began with the vault open; null otherwise. */
+    @Volatile
+    private var holdOpenGen: Int? = null
+
+    private suspend fun afterHoldPassed(gen: Int?) {
+        if (gen != null) feed.startReplayWindow()
         runCatching { feed.refresh() }
-        runCatching { social.refreshApprovals() }
-        if (phaseFlow.value != AppPhase.Unlocked || OwnProfileStep.held(ownerCheck.ownerCheck.value)) return
-        feed.replayWaitingAsks(social.approvals.value, java.time.Instant.now())
+        val listed = runCatching { social.refreshApprovals() }.isSuccess
+        // Nothing when the vault's list was not read (nothing is known to be waiting), when the hold did not begin and end
+        // in this open session (gen), or when a lock (and an unlock) or a new hold came during the reads.
+        val sameSession = gen != null && record.generation == gen
+        val stillOpen = phaseFlow.value == AppPhase.Unlocked && !OwnProfileStep.held(ownerCheck.ownerCheck.value)
+        if (!sameSession || !listed || !stillOpen) return
+        feed.replayWaitingAsks(social.listedNow(), java.time.Instant.now())
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */

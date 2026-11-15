@@ -287,21 +287,31 @@ class FeedManager(
 
     private fun byIdNow(id: String): FeedItem? = synchronized(lock) { byId[id] }
 
-    /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
+    /** Items that arrived since [startReplayWindow] (live or a catch-up): the replay does not send them again. */
+    private var arrivedSince: MutableSet<String>? = null
+
+    /** Before the read of a hold's end: what arrives from here on is noted, so that [replayWaitingAsks] skips it. */
+    fun startReplayWindow() {
+        synchronized(lock) { arrivedSince = mutableSetOf() }
+    }
+
     /**
      * (Owner decision a, 2026-11-15) A hold ended by a passed check: each ask still waiting ([WaitingAsks], against
-     * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does.
+     * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does, and an
+     * ask that already arrived since [startReplayWindow] (live, during the reads) is not sent twice.
      */
     fun replayWaitingAsks(approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant) {
-        if (gated()) return
         val waiting = synchronized(lock) {
-            if (loadState.value != ListLoad.LOADED) return
-            WaitingAsks.of(byId.values, approvals, now)
+            val seen = arrivedSince.also { arrivedSince = null }
+            if (gated() || loadState.value != ListLoad.LOADED) return
+            WaitingAsks.of(byId.values, approvals, now).filterNot { seen != null && it.itemId in seen }
         }
         waiting.forEach { emitArrival(it) }
     }
 
+    /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
     private fun emitArrival(item: FeedItem) {
+        synchronized(lock) { arrivedSince?.add(item.itemId) }
         if (!FeedKinds.historyOnly(item.kind)) arrivalFlow.tryEmit(item)
     }
 

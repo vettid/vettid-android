@@ -99,4 +99,29 @@ class WaitingAsksTest {
         assertEquals(1, arrived.size)
         job.cancel()
     }
+
+    /** An ask that arrived live while the hold's reads ran is not sent again by the replay. */
+    @Test
+    fun anAskThatArrivedDuringTheReadsIsNotSentTwice() = runTest {
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1), item("2", WaitingAsks.SIGN_IN, seq = 2))
+        val m = FeedManager(this, ops = { Ops(items) }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.startReplayWindow()
+        m.refresh()
+        advanceUntilIdle()
+        val live = items[1].copy(seq = 3)
+        m.onEvent(
+            com.vettid.core.vault.VaultMessage(
+                com.vettid.core.crypto.envelope.Inner(
+                    id = com.vettid.core.crypto.envelope.Ulid.new(), type = "feed.event", ts = now,
+                    body = com.vettid.core.vault.VaultJson.json.encodeToString(FeedItem.serializer(), live).toByteArray(),
+                ),
+            ),
+        )
+        assertEquals(listOf("2"), arrived.map { it.itemId })
+        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200))), now)
+        assertEquals("only the one not already sent", listOf("2", "1"), arrived.map { it.itemId })
+        job.cancel()
+    }
 }

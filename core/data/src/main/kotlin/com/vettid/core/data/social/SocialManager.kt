@@ -207,6 +207,12 @@ class SocialManager internal constructor(
             merge(stored, listed + requests, cs, now)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /**
+     * The asks as the vault's lists and events have them now, read at once (not through the flows): no entry made from a
+     * feed item alone, so what it holds is what the vault said is waiting (owner decision a, 2026-11-15).
+     */
+    internal fun listedNow(): List<Approval> = merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now())
+
     /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
     private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
 
