@@ -27,23 +27,29 @@ class VaultDeletionRefusedTest {
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         assertEquals(DeletionCheck.UNCONFIRMED, w.check())
         assertEquals(1, asked)
-        // The timer still runs: the next timed read asks again.
+        // The timer still runs past a refused GONE (reads at 5, 15, 45 and 105 s): a GONE taken as gone would stop it at
+        // the first timed read.
         advanceTimeBy(5 * min)
         runCurrent()
-        assertTrue("the watch kept reading", reads > 1)
-        assertTrue(asked > 1)
+        assertTrue("the watch kept reading: $reads", reads >= 5)
+        assertEquals(reads, asked)
         w.stop()
     }
 
     // The vault's own word with no "being deleted" up starts it only while this phone still has its vault.
     @Test
     fun theVaultsWordStartsOnlyWithAVault() {
-        assertTrue(VaultDeletion.vaultWordStarts(AppPhase.Locked, "v"))
-        assertTrue(VaultDeletion.vaultWordStarts(AppPhase.Unlocked, "v"))
-        assertTrue(VaultDeletion.vaultWordStarts(AppPhase.Starting, "v"))
-        assertFalse("no vault id", VaultDeletion.vaultWordStarts(AppPhase.Locked, ""))
-        assertFalse("after a wipe", VaultDeletion.vaultWordStarts(AppPhase.SignedOut, "v"))
-        assertFalse(VaultDeletion.vaultWordStarts(AppPhase.Setup(SetupStage.NEW_VAULT), "v"))
-        assertFalse("already up", VaultDeletion.vaultWordStarts(AppPhase.Deleting(), "v"))
+        fun starts(p: AppPhase, id: String = "v", closed: Boolean = false, api: Boolean = false) =
+            VaultDeletion.vaultWordStarts(p, id, closed, api)
+        assertTrue(starts(AppPhase.Locked))
+        assertTrue(starts(AppPhase.Unlocked))
+        assertTrue(starts(AppPhase.Starting))
+        assertFalse("no vault id", starts(AppPhase.Locked, id = ""))
+        assertFalse("after a wipe", starts(AppPhase.SignedOut))
+        assertFalse(starts(AppPhase.Setup(SetupStage.NEW_VAULT)))
+        assertFalse("already up", starts(AppPhase.Deleting()))
+        assertFalse("a wipe runs (still Locked)", starts(AppPhase.Locked, closed = true))
+        assertFalse("an erase that failed", starts(AppPhase.Unreachable(FailureKind.ERASE_FAILED), closed = true))
+        assertFalse("a 410-only marker stands", starts(AppPhase.Locked, api = true))
     }
 }

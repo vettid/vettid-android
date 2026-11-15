@@ -277,11 +277,13 @@ object VaultDeletion {
 
     /**
      * Whether the vault's own word, arriving with no "being deleted" up, starts it: only while this phone still has its vault
-     * ([vaultId] held, not signed out or in set-up, i.e. not after a wipe). A clear that ended a 410-only state just before
-     * the word must not lose it.
+     * ([vaultId] held, not signed out or in set-up) and its record is open ([recordClosed]: no wipe running, no erase that
+     * failed), and no 410-only marker stands ([apiHeld]: its own route erases). A clear that ended a 410-only state just
+     * before the word must not lose it.
      */
-    internal fun vaultWordStarts(phase: AppPhase, vaultId: String): Boolean =
-        vaultId.isNotEmpty() && phase !is AppPhase.SignedOut && phase !is AppPhase.Setup && phase !is AppPhase.Deleting
+    internal fun vaultWordStarts(phase: AppPhase, vaultId: String, recordClosed: Boolean, apiHeld: Boolean): Boolean =
+        vaultId.isNotEmpty() && !recordClosed && !apiHeld &&
+            phase !is AppPhase.SignedOut && phase !is AppPhase.Setup && phase !is AppPhase.Deleting
 
     /** Whether a close step starts the watch of [marker]: only while "being deleted" holds and [held] is still that marker. */
     internal fun <M : Any> watchesAttempt(deleting: Boolean, held: M?, marker: M): Boolean = deleting && held == marker
