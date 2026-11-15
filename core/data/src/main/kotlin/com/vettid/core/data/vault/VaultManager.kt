@@ -3187,7 +3187,9 @@ class VaultManager(
      */
     private suspend fun clearApiDeleted(expected: DeletedApiMarker): Unit = deletionEnd.withLock {
         if (!phaseFlow.deleting) {
-            deletionWatch.stop() // a stray watch ends with the state
+            // A stray watch ends with the state; looked at again under the lock, so a deletion that started meanwhile (its
+            // own route, not under this mutex) keeps its watch.
+            synchronized(deletedApiLock) { if (!phaseFlow.deleting) deletionWatch.stop() }
             return@withLock
         }
         val rec = record.recordGeneration
@@ -3226,13 +3228,15 @@ class VaultManager(
      */
     private suspend fun finishDeleted(watched: DeletingMarker? = null): Boolean = deletionEnd.withLock {
         if (!phaseFlow.deleting) {
-            deletionWatch.stop() // a stray watch ends with the state
+            // A stray watch ends with the state; looked at again under the lock, so a deletion that started meanwhile (its
+            // own route, not under this mutex) keeps its watch.
+            synchronized(deletedApiLock) { if (!phaseFlow.deleting) deletionWatch.stop() }
             // The vault's own word, after a clear ended a 410-only state meanwhile (its status listed the vault): the word
             // is not lost; "being deleted" starts from it, as it would have without the 410 (not during or after a wipe).
             val starts = VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed, deletedApiMarker != null)
             if (watched == null && starts) startDeleting()
             // A watch's "gone" after the vault's own word already erased: gone all the same.
-            return@withLock watched != null && local.deletedNotice
+            return@withLock watched != null && phaseFlow.value == AppPhase.SignedOut && local.deletedNotice
         }
         // A watch's "gone" ([watched]) erases only for the vault's own deletion it was made for, while no 410-only marker
         // stands; the vault's own word comes with no [watched].
