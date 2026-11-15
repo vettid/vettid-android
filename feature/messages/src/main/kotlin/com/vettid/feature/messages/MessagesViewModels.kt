@@ -267,14 +267,16 @@ class ConversationViewModel @Inject constructor(
             // (the availability goes from "in a call" back to "ready").
             calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
+                    // A read that failed (the vault has calls, its list did not read this time) keeps the calls shown:
+                    // it is not an empty history. With none read yet, nothing is shown, as before.
                     val h = calls.history(connectionId)
-                    local.update { it.copy(calls = h.entries, callsNotShown = h.someNotShown) }
+                    if (!h.failed) local.update { it.copy(calls = h.entries, callsNotShown = h.someNotShown) }
                     // Read at the moment a call ends, the vault may not have taken its `call.end` yet: the call
                     // would stay "in a call" in the list. Once more, a moment later (collectLatest: not if the
                     // availability changed meanwhile).
                     delay(HISTORY_AGAIN_MS)
                     val later = calls.history(connectionId)
-                    local.update { it.copy(calls = later.entries, callsNotShown = later.someNotShown) }
+                    if (!later.failed) local.update { it.copy(calls = later.entries, callsNotShown = later.someNotShown) }
                 } else if (a != CallAvailability.IN_CALL) {
                     // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
                     // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.

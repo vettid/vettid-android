@@ -250,6 +250,7 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
         assertTrue(c.history("conn-1").entries.isEmpty())
+        assertFalse("a vault without calls has an empty history, not a failed one", c.history("conn-1").failed)
     }
 
     @Test
@@ -1193,6 +1194,23 @@ class CallsControllerTest {
         val noStart = h(emptyList(), good + record("N", "ended").copy(startedAt = "yesterday"))
         assertEquals(listOf("A", "B"), noStart.entries.map { it.callId })
         assertTrue("one of its own without a start", noStart.someNotShown)
+    }
+
+    /** A vault with calls whose list does not read this time: the history says it failed, not that it is empty. */
+    @Test
+    fun aFailedHistoryReadIsNotAnEmptyHistory() = runTest {
+        vault.gateway.list = { listOf(record("A", "ended", reason = "hangup")) }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallAvailability.READY, c.availability.value)
+        assertFalse(c.history("conn-1").failed)
+        vault.gateway.list = { throw VaultOpException("call.list", "internal") }
+        val h = c.history("conn-1")
+        assertTrue(h.failed)
+        assertTrue(h.entries.isEmpty())
+        assertFalse(h.someNotShown)
+        assertEquals("counted in the diagnostics", 1, c.diagnostics.value.historyFailed)
     }
 
     /** (GC #7718) A list with a skipped entry still means calls, and the skipped ids are in the diagnostics only. */
