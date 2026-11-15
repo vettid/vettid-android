@@ -490,6 +490,17 @@ private fun CallsNotShownLine() {
     )
 }
 
+/** (Owner-approved 2026-11-15) The last read of the calls failed: the lines shown may be out of date. */
+@Composable
+private fun CallsStaleLine() {
+    Text(
+        stringResource(R.string.messages_calls_stale),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("calls_stale"),
+    )
+}
+
 @Suppress("CyclomaticComplexMethod") // messages, calls and photo bubbles of one list
 @Composable
 private fun MessageList(state: ConversationUiState, name: String, listState: LazyListState, actions: ConversationActions) {
@@ -551,6 +562,8 @@ private fun MessageList(state: ConversationUiState, name: String, listState: Laz
                 )
             }
         }
+        // The newest end of the list, just above the composer, where the newest call would be (both apps).
+        if (state.callsStale) item(key = "calls_stale") { CallsStaleLine() }
     }
 }
 
