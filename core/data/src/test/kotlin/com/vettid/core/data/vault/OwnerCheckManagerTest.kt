@@ -308,45 +308,45 @@ class OwnerCheckManagerTest {
     }
 
     /**
-     * (ANDROID-PLAN 0.1.132) A check passed with the vault open marks its OK (the waiting asks are replayed for it), and
-     * later OKs keep the mark until the state leaves OK; the check an unlock makes and a status read never mark.
+     * (ANDROID-PLAN 0.1.132) Only a check passed with the vault open counts in [OwnerCheckView.passes] (the waiting asks are
+     * replayed for a rise since the last gated value): here, or another device's pass; never a status read.
      */
     @Test
-    fun onlyACheckPassedWithTheVaultOpenMarksItsOk() = runTest {
+    fun onlyAChecksPassedWithTheVaultOpenCount() = runTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
         val m = manager(ops)
         m.refreshOwnerCheck()
-        assertFalse(m.ownerCheck.value!!.passedByCheck)
+        val gatedAt = m.ownerCheck.value!!.passes
         assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
-        assertTrue("a check passed here", m.ownerCheck.value!!.passedByCheck)
+        assertEquals("a check passed here counts", gatedAt + 1, m.ownerCheck.value!!.passes)
         ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
         m.refreshOwnerCheck()
-        assertTrue("kept by a later OK (a status read)", m.ownerCheck.value!!.passedByCheck)
-        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
-        m.refreshOwnerCheck()
-        assertFalse("cleared off OK", m.ownerCheck.value!!.passedByCheck)
-        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400)
-        m.refreshOwnerCheck()
-        assertFalse("a status read alone never marks", m.ownerCheck.value!!.passedByCheck)
-        // Another device's pass (sync.event{owner_check}) marks.
+        assertEquals("a status read does not", gatedAt + 1, m.ownerCheck.value!!.passes)
         ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
         m.refreshOwnerCheck()
         m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-08T12:00:00Z"}"""))
-        assertTrue(m.ownerCheck.value!!.passedByCheck)
+        assertEquals("another device's pass counts", gatedAt + 2, m.ownerCheck.value!!.passes)
     }
 
+    /**
+     * The check an unlock makes never counts, also after an earlier pass (the review's probe: a pass, a lock, then an unlock
+     * whose clock says due runs its own check; that must not read as a new pass). A later, separate check does count.
+     */
     @Test
-    fun theCheckAnUnlockMakesDoesNotMark() = runTest {
+    fun theCheckAnUnlockMakesNeverCounts() = runTest {
         val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
         val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // an earlier pass, then the vault locks
+        val before = m.ownerCheck.value!!.passes
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
         m.afterUnlock("975310", "pw", m.foregroundGeneration)
         assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
-        assertFalse(m.ownerCheck.value!!.passedByCheck)
-        // A later, separate check passed with the vault open still marks.
+        assertEquals("the unlock's own check", before, m.ownerCheck.value!!.passes)
         ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
         m.refreshOwnerCheck()
         assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
-        assertTrue(m.ownerCheck.value!!.passedByCheck)
+        assertEquals("a later, separate check", before + 1, m.ownerCheck.value!!.passes)
     }
 
     /** The check an unlock sends before the app opens (§3.6.5): its `credential_required` raises the full screen too. */

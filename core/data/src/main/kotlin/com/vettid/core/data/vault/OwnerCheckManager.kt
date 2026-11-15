@@ -787,16 +787,17 @@ class OwnerCheckManager(
         view.value?.let { set(f(it), passed) }
     }
 
-    /** An unlock's own check runs ([afterUnlock], [afterCancelledRecovery]): its pass does not mark [OwnerCheckView.passedByCheck]. */
+    /** An unlock's own check runs ([afterUnlock], [afterCancelledRecovery]): its pass does not count in [OwnerCheckView.passes]. */
     @Volatile
     private var inUnlock = false
 
-    /** [passed]: [v] is the OK of a check that passed with the vault open; kept by later OKs, cleared off OK. */
+    /** Checks passed with the vault open in this process ([OwnerCheckView.passes]). */
+    private val passCount = java.util.concurrent.atomic.AtomicInteger()
+
+    /** [passed]: [v] is the OK of a check that passed with the vault open; it counts before [v] is published. */
     private fun set(v: OwnerCheckView, passed: Boolean = false) {
-        val prev = view.value
-        val marked = v.state == OwnerCheckState.OK &&
-            (passed || (prev?.state == OwnerCheckState.OK && prev.passedByCheck))
-        view.value = v.copy(passedByCheck = marked)
+        val passes = if (passed) passCount.incrementAndGet() else passCount.get()
+        view.value = v.copy(passes = passes)
         // Before the deadline the idle lock's time is the deadline plus the value in force (§3.6.8).
         val d = v.deadline
         if (v.state == OwnerCheckState.OK && d != null && now().isBefore(d)) v.idleAfterSeconds?.let { idleAfterKnown = it }

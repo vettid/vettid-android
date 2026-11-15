@@ -291,14 +291,18 @@ class FeedManager(
     /** Items that arrived since [startReplayWindow] (live or a catch-up): the replay does not send them again. */
     private var arrivedSince: MutableSet<String>? = null
 
+    /** The replay that owns [arrivedSince]: a later one replaces it, and an earlier one then sends nothing. */
+    private var replayToken = 0
+
     /** Before the read of a hold's end: what arrives from here on is noted, so that [replayWaitingAsks] skips it. */
-    fun startReplayWindow() {
-        synchronized(lock) { arrivedSince = mutableSetOf() }
+    fun startReplayWindow(): Int = synchronized(lock) {
+        arrivedSince = mutableSetOf()
+        ++replayToken
     }
 
-    /** The replay will not run: what arrives is no longer noted. */
-    fun endReplayWindow() {
-        synchronized(lock) { arrivedSince = null }
+    /** The replay [token] will not run: what arrives is no longer noted (unless a later replay owns the window). */
+    fun endReplayWindow(token: Int) {
+        synchronized(lock) { if (token == replayToken) arrivedSince = null }
     }
 
     /**
@@ -306,8 +310,9 @@ class FeedManager(
      * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does, and an
      * ask that already arrived since [startReplayWindow] (live, during the reads) is not sent twice.
      */
-    fun replayWaitingAsks(approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant) {
+    fun replayWaitingAsks(token: Int, approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant) {
         val waiting = synchronized(lock) {
+            if (token != replayToken) return // a later replay owns the window and sends what is waiting
             val seen = arrivedSince.also { arrivedSince = null }
             if (gated() || loadState.value != ListLoad.LOADED) return
             WaitingAsks.of(byId.values, approvals, now).filterNot { seen != null && it.itemId in seen }

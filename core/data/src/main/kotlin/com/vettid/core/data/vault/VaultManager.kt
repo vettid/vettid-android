@@ -1202,11 +1202,14 @@ class VaultManager(
                 // (ANDROID-PLAN 0.1.132) A check passed with the vault open (not the one an unlock makes: the mark is set
                 // at its source) ended the held or due state, also one known only from the clock: the asks still waiting
                 // are notified once, judged on a pending.list merged after now. The window opens here, before any launch.
-                val replayGen = record.generation.takeIf {
-                    (wasHeld || wasGatedNow) && !now && !gated && phaseFlow.value == AppPhase.Unlocked && v?.passedByCheck == true
-                }
+                val gateEnded = (wasHeld || wasGatedNow) && !now && !gated
+                val passedSince = v != null && gatePasses?.let { v.passes > it } == true
+                val replayGen = record.generation.takeIf { gateEnded && passedSince && phaseFlow.value == AppPhase.Unlocked }
+                // The pass count of the latest gated value: a later rise is a check passed with the vault open (an
+                // unlock's own check never counts, so an earlier pass cannot be taken for it).
+                gatePasses = if (now || gated) v?.passes else null
                 val mergesBefore = social.pendingMergeCount
-                if (replayGen != null) feed.startReplayWindow()
+                val replayToken = if (replayGen != null) feed.startReplayWindow() else 0
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
@@ -1220,14 +1223,14 @@ class VaultManager(
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
-                    steps.step { scope.launch { afterHoldPassed(replayGen, mergesBefore) } }
+                    steps.step { scope.launch { afterHoldPassed(replayGen, mergesBefore, replayToken) } }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
                 } else if (replayGen != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
-                    steps.step { scope.launch { afterHoldPassed(replayGen, mergesBefore) } }
+                    steps.step { scope.launch { afterHoldPassed(replayGen, mergesBefore, replayToken) } }
                 }
                 // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
                 if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
@@ -3174,7 +3177,11 @@ class VaultManager(
      * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
      * Not at an unlock: only here.
      */
-    private suspend fun afterHoldPassed(gen: Int?, mergesBefore: Int) {
+    /** The collector's: the [OwnerCheckView.passes] of the latest gated value it saw; null while not gated. */
+    @Volatile
+    private var gatePasses: Int? = null
+
+    private suspend fun afterHoldPassed(gen: Int?, mergesBefore: Int, token: Int) {
         runCatching { feed.refresh() }
         // Nothing for a held or due state not ended by a check passed with the vault open (gen null: an unlock's own
         // check, a status read). The first `pending.list` merged after the check counts (the hold's end reads it too, so
@@ -3184,12 +3191,14 @@ class VaultManager(
         val merged = { social.pendingMergeCount > mergesBefore }
         WAITING_ASKS_READS.any { wait ->
             kotlinx.coroutines.delay(wait)
-            !sameOpenSession(gen) || merged() || runCatching { social.refreshApprovals() }.isSuccess && merged()
+            // An older vault without `pending.list` (unsupported_type): nothing to wait for.
+            !sameOpenSession(gen) || merged() || social.pendingUnsupported ||
+                runCatching { social.refreshApprovals() }.isSuccess && merged()
         }
         if (merged() && sameOpenSession(gen)) {
-            feed.replayWaitingAsks(social.listedNow(), java.time.Instant.now())
+            feed.replayWaitingAsks(token, social.listedNow(), java.time.Instant.now())
         } else {
-            feed.endReplayWindow()
+            feed.endReplayWindow(token)
         }
     }
 

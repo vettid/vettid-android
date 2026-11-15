@@ -48,11 +48,11 @@ data class OwnerCheckView(
      */
     val idleLockAt: Instant? = null,
     /**
-     * (ANDROID-PLAN 0.1.132) This OK came from a check that passed with the vault open (here, or on another device), not
-     * from the check an unlock makes nor from a status read; kept by every later OK and cleared when the state leaves OK.
-     * The asks still waiting are notified once only for such a pass. Memory only.
+     * (ANDROID-PLAN 0.1.132) How many checks had passed with the vault open (here, or on another device; never the check
+     * an unlock makes, nor a status read) when this value was published, in this process. A rise since the last gated
+     * value is a check that ended the held or due state: the asks still waiting are notified once. Memory only.
      */
-    val passedByCheck: Boolean = false,
+    val passes: Int = 0,
 ) {
     /**
      * How long past the deadline the vault locks itself, as it last said ([idleLockAt] − [deadline], on the vault's

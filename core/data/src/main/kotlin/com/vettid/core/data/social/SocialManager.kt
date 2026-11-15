@@ -201,6 +201,9 @@ class SocialManager internal constructor(
 
     /** [pendingMerges] now (ANDROID-PLAN 0.1.132: the waiting asks are judged on a list merged after the check). */
     internal val pendingMergeCount: Int get() = pendingMerges.get()
+
+    /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
+    internal val pendingUnsupported: Boolean get() = pending.isUnsupported
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */

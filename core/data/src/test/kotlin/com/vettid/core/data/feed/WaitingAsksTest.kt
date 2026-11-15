@@ -104,10 +104,10 @@ class WaitingAsksTest {
         advanceUntilIdle()
         assertEquals(ListLoad.LOADED, m.load.value)
         assertTrue("a full read notifies nothing", arrived.isEmpty())
-        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200))), now)
+        m.replayWaitingAsks(0, listOf(signIn("r1", now.plusSeconds(200))), now)
         assertEquals(listOf("1"), arrived.map { it.itemId })
         gated = true // held again: nothing replays
-        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200))), now)
+        m.replayWaitingAsks(0, listOf(signIn("r1", now.plusSeconds(200))), now)
         assertEquals(1, arrived.size)
         job.cancel()
     }
@@ -119,7 +119,7 @@ class WaitingAsksTest {
         val m = FeedManager(this, ops = { Ops(items) }, now = { now })
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
-        m.startReplayWindow()
+        val token = m.startReplayWindow()
         m.refresh()
         advanceUntilIdle()
         val live = items[1].copy(seq = 3)
@@ -132,8 +132,26 @@ class WaitingAsksTest {
             ),
         )
         assertEquals(listOf("2"), arrived.map { it.itemId })
-        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200))), now)
+        m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200))), now)
         assertEquals("only the one not already sent", listOf("2", "1"), arrived.map { it.itemId })
+        job.cancel()
+    }
+
+    /** Two replays overlapping: the earlier one sends nothing, the later one owns the window. */
+    @Test
+    fun anEarlierReplayGivesWayToALaterOne() = runTest {
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1))
+        val m = FeedManager(this, ops = { Ops(items) }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val first = m.startReplayWindow()
+        val second = m.startReplayWindow()
+        m.refresh()
+        advanceUntilIdle()
+        m.replayWaitingAsks(first, listOf(signIn("r1", now.plusSeconds(200))), now)
+        assertTrue(arrived.isEmpty())
+        m.replayWaitingAsks(second, listOf(signIn("r1", now.plusSeconds(200))), now)
+        assertEquals(listOf("1"), arrived.map { it.itemId })
         job.cancel()
     }
 }
