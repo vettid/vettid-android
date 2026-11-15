@@ -191,7 +191,7 @@ class CallsController(
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing and for the probe's answer; it rings only where the
         // vault said it has calls (every build has calls since 2026-11-14: the probe is the gate, for incoming calls too).
-        mayRing = { !vault.updateShowing && callsKnownWithin(UNLOCK_WAIT) },
+        mayRing = { mayRing() },
         peerKey = vault::identityKey,
         vaultIsC2 = { vaultC2 },
     )
@@ -253,6 +253,20 @@ class CallsController(
         if (!open) vault.unlocked.first { it }
         supportedFlow.first { it != null }
     } == true
+
+    /**
+     * Whether an offer may ring. The call events wait with it, on purpose: the offer's candidates and hang-up stay behind
+     * it. No call is live on this phone while it is locked or the probe has not answered, so nothing else is held up;
+     * during a live call it does not wait at all, so that call's events never wait (the phone drops such an offer, busy
+     * in another call, and the vault rings the member's other devices). The vault's lock and the update screen are
+     * looked at again after the wait: a lock or an update screen that came during it is not rung over. (A lock also sets
+     * the probe's answer back to unknown, which ends the wait without it: the look at [open] is defence in depth for a
+     * lock between the answer and the resumption, which no test reaches.)
+     */
+    private suspend fun mayRing(): Boolean {
+        val known = if (machine.state.value is CallState.Live) open && supported == true else callsKnownWithin(UNLOCK_WAIT)
+        return known && open && !vault.updateShowing
+    }
 
     /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
     @Volatile

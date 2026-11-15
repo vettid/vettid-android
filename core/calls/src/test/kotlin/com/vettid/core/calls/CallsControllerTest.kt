@@ -875,6 +875,103 @@ class CallsControllerTest {
         assertEquals(listOf(CALL_ID), vault.gateway.ringings)
     }
 
+    /**
+     * The call events are handled in order, also while an offer waits for the probe: a hang-up that arrives during the
+     * wait is handled after its offer, so the call does not ring on after the caller gave up. (Nothing else is held up
+     * that matters: no call can be live on this phone before the probe answered, CallAvailability.READY.)
+     */
+    @Test
+    fun aHangUpThatArrivesWhileItsOfferWaitsEndsTheRing() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T73", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
+        advanceTimeBy(1_000)
+        assertEquals(CallState.Idle, c.state.value)
+        gate.send(Unit)
+        runCurrent()
+        // It rang (the offer was let through), then the hang-up ended it: Idle would mean it never rang.
+        assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value is CallState.Ended)
+        assertEquals(0, c.diagnostics.value.refused)
+        // Its `call.ringing` goes from the call's session (CallMachine.ring), which the hang-up ends in the same pass
+        // here, before it is sent (on a phone it may go just before the hang-up is handled).
+        assertEquals(emptyList<String>(), vault.gateway.ringings)
+        assertTrue(!audio.ringtone)
+    }
+
+    /** The update screen is looked at after the wait: one that came up while the offer waited for the probe is not rung over. */
+    @Test
+    fun anOfferDoesNotRingOverAnUpdateScreenThatCameUpWhileItWaited() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T75", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        vault.updateShowing = true
+        gate.send(Unit)
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /**
+     * During a live call an offer does not wait (the phone, busy in another call, drops it and the vault rings the
+     * member's other devices): that call's own events are never held behind it.
+     */
+    @Test
+    fun anOfferDuringALiveCallHoldsNothingUp() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(c.state.value is CallState.Live)
+        // A state the controller does not reach today (the probe is not asked again while a call is live): if it ever
+        // did, an offer would otherwise wait for the answer with the live call's events behind it.
+        c.forgetProbeForTest()
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T74", type = "call.offer", ts = T0, body = """{"connection_id":"conn-2"}""".toByteArray()))))
+        vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
+        runCurrent()
+        assertTrue("the live call's hang-up was not held up: ${c.state.value}", c.state.value !is CallState.Live)
+        // The second offer did not ring: refused at once, as the vault had not said again that it has calls.
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /**
+     * A lock that comes while an offer waits for the probe: no ring, and nothing is sent for it. (The lock sets the probe's
+     * answer back to unknown, so the wait ends without it; mayRing's own look at the lock after the wait is defence in
+     * depth that no test here reaches.)
+     */
+    @Test
+    fun anOfferDoesNotRingWhenTheVaultLocksWhileItWaits() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T76", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        val sent = vault.gateway.sent.size
+        vault.unlocked.value = false
+        gate.send(Unit)
+        advanceTimeBy(10_001)
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(sent, vault.gateway.sent.size)
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
     /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */
     @Test
     fun anOfferDoesNotRingWhileTheReleaseUpdateScreenShows() = runTest {
