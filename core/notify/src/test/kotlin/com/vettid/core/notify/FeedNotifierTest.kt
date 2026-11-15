@@ -143,6 +143,17 @@ class FeedNotifierTest {
         assertTrue(poster.shown.isEmpty())
     }
 
+    /** (ANDROID-PLAN 0.1.132) A waiting ask notified again after a passed check: one still posted goes first, then it comes anew. */
+    @Test
+    fun aReplayedAskCancelsWhatIsPostedAndComesAsANewArrival() = runTest {
+        notifier()
+        arrive(item("f1"))
+        poster.log.clear()
+        arrive(item("f1").copy(replayed = true))
+        assertEquals(listOf("cancel:f1", "post:f1"), poster.log)
+        assertTrue(poster.isPosted("f1"))
+    }
+
     // --- the app lock's cover (owner request 2026-11-02): nothing past the lock names anything ---
 
     @Test

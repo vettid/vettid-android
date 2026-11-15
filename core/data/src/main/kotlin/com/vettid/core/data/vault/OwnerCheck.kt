@@ -47,6 +47,12 @@ data class OwnerCheckView(
      * deadline.
      */
     val idleLockAt: Instant? = null,
+    /**
+     * (ANDROID-PLAN 0.1.132) How many checks had passed with the vault open (here, or on another device; never the check
+     * an unlock makes, nor a status read) when this value was published, in this process. A rise since the last gated
+     * value is a check that ended the held or due state: the asks still waiting are notified once. Memory only.
+     */
+    val passes: Int = 0,
 ) {
     /**
      * How long past the deadline the vault locks itself, as it last said ([idleLockAt] − [deadline], on the vault's
@@ -345,3 +351,13 @@ fun ownerCheckDue(view: OwnerCheckView?, locked: Boolean, causeUnknown: Boolean,
  */
 fun pauseLifted(previous: OwnerCheckView?, next: OwnerCheckView?, now: Instant): Boolean =
     previous?.gated(now) == true && next?.gated(now) != true
+
+/**
+ * (ANDROID-PLAN 0.1.132; owner decisions of 2026-11-15) Whether the asks still waiting are notified once: [v] ends the held
+ * or due state of [previous] (also one known only from the clock, looked at [at]), the vault open ([unlocked]), and a check
+ * passed with the vault open since [previous] (its [OwnerCheckView.passes] rose: the check an unlock makes never counts).
+ */
+internal object WaitingAsksReplay {
+    fun due(previous: OwnerCheckView?, v: OwnerCheckView?, at: java.time.Instant, unlocked: Boolean): Boolean =
+        unlocked && previous != null && v != null && previous.gated(at) && !v.gated(at) && v.passes > previous.passes
+}

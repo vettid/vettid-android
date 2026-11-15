@@ -400,6 +400,11 @@ data class FeedItem(
     @kotlinx.serialization.Transient val closeAt: java.time.Instant? = null,
     /** Never on the wire: a re-post after a withdrawal. It is quiet, and not shown again if the member dismissed it. */
     @kotlinx.serialization.Transient val quietRepost: Boolean = false,
+    /**
+     * Never on the wire: an ask notified again after a passed check (ANDROID-PLAN 0.1.132); a notification still posted
+     * for it is removed first, so it comes as a new arrival.
+     */
+    @kotlinx.serialization.Transient val replayed: Boolean = false,
 )
 
 @Serializable
