@@ -74,7 +74,7 @@ interface VaultDeletingActions {
 
     fun dismissRemove()
 
-    /** The confirmed removal: the existing local erase (`eraseThisPhone`). */
+    /** The confirmed removal: the existing local erase, only while the vault is still being deleted (`removeDeletedVault`). */
     fun confirmRemove()
 }
 
@@ -116,7 +116,7 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
         state.update { it.copy(removeConfirm = false, removing = true) }
         viewModelScope.launch {
             try {
-                account.eraseThisPhone()
+                account.removeDeletedVault()
             } finally {
                 state.update { it.copy(removing = false) }
             }

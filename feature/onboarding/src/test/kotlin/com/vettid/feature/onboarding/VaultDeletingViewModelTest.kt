@@ -65,7 +65,7 @@ class VaultDeletingViewModelTest {
             advanceUntilIdle()
         }
         assertEquals(AppPhase.Deleting(slow = true), vault.phase.value)
-        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+        assertTrue(vault.calls.none { it == "removeDeletedVault" })
     }
 
     @Test
@@ -78,11 +78,11 @@ class VaultDeletingViewModelTest {
         assertTrue(vm.uiState.value.removeConfirm)
         vm.dismissRemove()
         advanceUntilIdle()
-        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+        assertTrue(vault.calls.none { it == "removeDeletedVault" })
         vm.askRemove()
         vm.confirmRemove()
         advanceUntilIdle()
-        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
+        assertEquals(1, vault.calls.count { it == "removeDeletedVault" })
     }
 
     @Test
@@ -90,7 +90,7 @@ class VaultDeletingViewModelTest {
         val vm = VaultDeletingViewModel(vault)
         vm.confirmRemove()
         advanceUntilIdle()
-        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+        assertTrue(vault.calls.none { it == "removeDeletedVault" })
     }
 
     @Test
@@ -106,13 +106,13 @@ class VaultDeletingViewModelTest {
         advanceUntilIdle()
         assertEquals(DeletionCheck.API_ONLY, vm.uiState.value.lastCheck)
         assertEquals(AppPhase.Deleting(apiOnly = true), api.phase.value)
-        assertTrue(api.calls.none { it == "eraseThisPhone" })
+        assertTrue(api.calls.none { it == "removeDeletedVault" })
         vm.setSlow(true)
         vm.askRemove()
         assertTrue(vm.uiState.value.removeConfirm)
         vm.confirmRemove()
         advanceUntilIdle()
-        assertEquals(1, api.calls.count { it == "eraseThisPhone" })
+        assertEquals(1, api.calls.count { it == "removeDeletedVault" })
     }
 
     @Test
@@ -124,5 +124,20 @@ class VaultDeletingViewModelTest {
         vm.setApi(false, null)
         assertFalse(vm.uiState.value.apiOnly)
         assertNull(vm.uiState.value.removeFromMs)
+    }
+
+    /** A Remove confirmed after the state ended (the vault's word erased, or the vault is listed again) erases nothing. */
+    @Test
+    fun aRemovalAfterTheStateEndedErasesNothing() = runTest {
+        val vm = VaultDeletingViewModel(vault)
+        vm.setSlow(true)
+        vm.askRemove()
+        vault.phase.value = AppPhase.Locked
+        vm.confirmRemove()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "removeDeletedVault" })
+        assertEquals(AppPhase.Locked, vault.phase.value)
+        assertTrue(vault.calls.none { it == "eraseThisPhone" })
+        assertFalse(vm.uiState.value.removing)
     }
 }

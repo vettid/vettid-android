@@ -201,6 +201,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.SignedOut
     }
 
+    override suspend fun removeDeletedVault() {
+        call("removeDeletedVault")
+        if (phase.value !is AppPhase.Deleting) return
+        account.value = null
+        phase.value = AppPhase.SignedOut
+    }
+
     // --- ANDROID-PLAN 0.1.54 ---
 
     /** The stored marker of an unconfirmed release move, as a test sets it. */
