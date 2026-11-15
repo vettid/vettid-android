@@ -3039,8 +3039,9 @@ class VaultManager(
     override suspend fun deleteVault(pin: String, password: String) {
         // ANDROID-PLAN 0.1.54: the deletion's bound is at least this request's `exp` plus 2 minutes (a credential
         // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
-        deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
+        // Counted first: a clear that runs between the two never takes the bound from under this request.
         deletesInFlight.incrementAndGet()
+        deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
         try {
             guard { session().openApi.deleteVault(pin, password) }
         } catch (e: VaultFailure) {
@@ -5028,7 +5029,13 @@ class VaultManager(
      * state, the relay mailbox, the member session, the social state, the account record, the Keystore keys,
      * the files, the preferences and the notifications ([LocalWipe]); the app then shows the welcome screen.
      */
-    private suspend fun wipeThisPhone() {
+    /**
+     * Under [deletionEnd]: a vault gone or a clear decided meanwhile runs before or after the wipe, never beside it (an
+     * erase of a gone vault would make keys behind the wipe's back, or write its notice into the fresh record).
+     */
+    private suspend fun wipeThisPhone() = deletionEnd.withLock { wipeUnderDeletionEnd() }
+
+    private suspend fun wipeUnderDeletionEnd() {
         // Release R (§11.14.10): an old phone that removes its keys at the end of a kept transfer (the new phone finished
         // the move, or the 7 days are over) says so on the welcome screen; the reason is in the wipe's marker, so that a
         // wipe a crash interrupted still leaves the notice when it is finished at the next start.
@@ -5062,6 +5069,7 @@ class VaultManager(
                 accountFlow.value = null
                 // A wipe ends "being deleted" too (its marker went with the record), under the lock the starts publish under.
                 deletingDevice = null
+                deleteExpMs = null // an answer taken while the wipe ran left it: no later deletion's bound comes from it
                 deletedNoticeFlow.value = false
                 synchronized(deletedApiLock) {
                     deletionWatch.stop()

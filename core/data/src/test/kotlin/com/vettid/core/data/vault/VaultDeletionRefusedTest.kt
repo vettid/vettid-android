@@ -1,9 +1,14 @@
 package com.vettid.core.data.vault
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -104,5 +109,33 @@ class VaultDeletionRefusedTest {
             assertEquals(if (erases) emptyList() else listOf(m), said)
             w.stop()
         }
+    }
+
+    // An erase that fails (onGone throws) after the bound fell while it was decided: "still finishing" is said all the same,
+    // by the decision itself (the read's own loop ends with the exception).
+    @Test
+    fun aGoneWhoseEraseFailsStillSaysTheBound() = runTest {
+        val said = mutableListOf<DeletingMarker>()
+        val gate = CompletableDeferred<Unit>()
+        val m = DeletingMarker("v", 0, 10 * min)
+        // Its own scope: the timer's loop ends with the failure, which is reported there and not to the test.
+        val scope = CoroutineScope(
+            StandardTestDispatcher(testScheduler) + SupervisorJob() + CoroutineExceptionHandler { _, _ -> },
+        )
+        val w = DeletionWatch(
+            scope, { currentTime }, read = { DeletionCheck.GONE },
+            onGone = { gate.await(); error("the erase failed") }, onSlow = { said += it },
+        )
+        w.start(m, readNow = false) // the timer's first read (at 5 s) decides
+        advanceTimeBy(6_000)
+        runCurrent()
+        advanceTimeBy(10 * min) // the bound falls while onGone waits
+        runCurrent()
+        assertTrue(said.isEmpty())
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf(m), said)
+        w.stop()
+        scope.cancel()
     }
 }
