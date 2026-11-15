@@ -4,8 +4,10 @@ import kotlinx.coroutines.Job
 
 /**
  * (ANDROID-PLAN 0.1.54) The deletion's bound from this phone's own `vault.delete` requests: when the latest one expires
- * ([expMs], epoch ms, memory only), and how many are still out. Every change is made under [lock] (the one the deletion's
- * starts and ends run under), so a clear never takes the bound from under a request whose answer still needs it.
+ * ([expMs], epoch ms, memory only), and how many are still out. "Out" counts the requests and every vault word
+ * being decided with a 410 standing ([hold]), whichever route brought it (an answer or the `device.unlinked` event).
+ * Every change is made under [lock] (the one the deletion's starts and ends run under), so a clear never takes the bound
+ * from under a request whose answer still needs it.
  *
  * A request is out from [begin] to [end]; an answer that hands its decision to another coroutine (the vault's word with a
  * 410 standing) stays out until that coroutine has decided, so the bound is still there if it starts "being deleted".
@@ -17,7 +19,7 @@ internal class DeleteBound(private val lock: Any, private val now: () -> Long = 
     /** When this phone's latest `vault.delete` expires, or null when no bound is kept. */
     val expMs: Long? get() = synchronized(lock) { exp }
 
-    /** How many of this phone's requests are out. */
+    /** How many of this phone's requests, and of the words being decided ([hold]), are out. */
     val requestsOut: Int get() = synchronized(lock) { out }
 
     /** A request is sent: counted, and its `exp` is the bound (ChangeTypes.EXP after it is sent, on this phone's clock). */

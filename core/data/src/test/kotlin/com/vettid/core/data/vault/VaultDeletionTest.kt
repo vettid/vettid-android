@@ -148,16 +148,20 @@ class VaultDeletionTest {
         assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = false, apiStanding = true))
         assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = false))
         assertTrue(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = true))
+        // a mailbox-only session is for a standing 410 alone, whatever the state
+        assertFalse(VaultDeletion.allowsSession(deleting = false, mailboxOnly = true, apiStanding = false))
+        assertTrue(VaultDeletion.allowsSession(deleting = false, mailboxOnly = true, apiStanding = true))
     }
 
     @Test
     fun a410StartsTheStateOnlyOnAPhoneWithAVaultAndNotTwice() {
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false))
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Starting, deleting = false))
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.FINISHING), deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.NEW_VAULT), deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.SignedOut, deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = true))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false, vaultId = "v"))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Starting, deleting = false, vaultId = "v"))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.FINISHING), deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.NEW_VAULT), deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.SignedOut, deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = true, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false, vaultId = ""))
     }
 
     @Test

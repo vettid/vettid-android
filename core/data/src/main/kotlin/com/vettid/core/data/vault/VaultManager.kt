@@ -3129,7 +3129,9 @@ class VaultManager(
                     null
                 }
                 // An answer that arrived after this phone was signed out or wiped (no vault on it any more): nothing starts.
-                !VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed) -> {
+                // The vault id as the marker below takes it: the open session's first (a transfer to this phone writes it
+                // to the record only at its end).
+                !VaultDeletion.vaultWordStarts(phaseFlow.value, session?.device?.vaultId ?: local.vaultId, record.closed) -> {
                     android.util.Log.w("VaultManager", "the vault's word with no vault on this phone: nothing starts")
                     null
                 }
@@ -3207,9 +3209,11 @@ class VaultManager(
         val marker = synchronized(deletedApiLock) {
             // A wipe runs or an erase failed: its own screen stands (its "Try again" erases), never "Your vault was deleted".
             if (record.closed) return
-            plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting) ?: return
+            // No vault on this phone (signed out, or a wipe that has just reopened the fresh record): nothing to mark.
+            val vaultId = session?.device?.vaultId ?: local.vaultId
+            plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting, vaultId) ?: return
             val since = System.currentTimeMillis()
-            DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
+            DeletedApiMarker(vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
                 record.bumpGeneration()
                 deletedApiMarker = it
                 phaseFlow.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = it.untilMs))
@@ -5153,7 +5157,8 @@ class VaultManager(
                     deletingMarker = null
                     deletedApiMarker = null
                     // The record reopened before this end (WipeRun: endWipe, then onEnd): a refresh that began in between
-                    // publishes nothing after it. (A 410 taken in between is ended here too.)
+                    // publishes nothing after it. A 410 is not taken in between (no vault is on the phone then); the
+                    // markers cleared here are memory only.
                     record.bumpGeneration()
                     phaseFlow.endDeleting(phase)
                 }
