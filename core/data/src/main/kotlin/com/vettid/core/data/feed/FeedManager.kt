@@ -288,6 +288,19 @@ class FeedManager(
     private fun byIdNow(id: String): FeedItem? = synchronized(lock) { byId[id] }
 
     /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
+    /**
+     * (Owner decision a, 2026-11-15) A hold ended by a passed check: each ask still waiting ([WaitingAsks], against
+     * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does.
+     */
+    fun replayWaitingAsks(approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant) {
+        if (gated()) return
+        val waiting = synchronized(lock) {
+            if (loadState.value != ListLoad.LOADED) return
+            WaitingAsks.of(byId.values, approvals, now)
+        }
+        waiting.forEach { emitArrival(it) }
+    }
+
     private fun emitArrival(item: FeedItem) {
         if (!FeedKinds.historyOnly(item.kind)) arrivalFlow.tryEmit(item)
     }

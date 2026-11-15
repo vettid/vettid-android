@@ -1,0 +1,102 @@
+package com.vettid.core.data.feed
+
+import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.social.Approval
+import com.vettid.core.vault.FeedItem
+import com.vettid.core.vault.FeedPage
+import com.vettid.core.vault.VaultOpException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.time.Instant
+
+/**
+ * (Owner decision a, 2026-11-15) After a hold ended by a passed check, each ask still waiting is notified once: a
+ * sign-in, a device session, a held approval, a pairing; never an expired one, a decided one or anything else.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class WaitingAsksTest {
+    private val now = Instant.parse("2026-11-15T14:13:00Z")
+
+    private fun item(id: String, kind: String, ref: String = "r$id", minutesAgo: Long = 1, status: String = "active", seq: Long = 1) =
+        FeedItem(id, seq, kind, now.minusSeconds(minutesAgo * 60).toString(), status, ref = ref)
+
+    private fun signIn(ref: String, exp: Instant?) = Approval.Authentication(ref, "c1", null, now.minusSeconds(60), exp)
+
+    private fun device(kind: String, ref: String, exp: Instant?) = Approval.DeviceRequest(
+        type = kind, id = ref, deviceName = null, role = null, requestType = null, receivedAt = now.minusSeconds(60), exp = exp,
+    )
+
+    @Test
+    fun theFourAsksStillWaitingAndNothingElse() {
+        val items = listOf(
+            item("1", WaitingAsks.SIGN_IN),
+            item("2", WaitingAsks.SESSION),
+            item("3", WaitingAsks.HELD),
+            item("4", WaitingAsks.PAIRING, minutesAgo = 3),
+            item("5", "message.received"), // not an ask: never replayed
+            item("6", "connection.request"), // an ask that does not expire: as before (0.1.23)
+        )
+        val approvals = listOf(
+            signIn("r1", now.plusSeconds(200)),
+            device(WaitingAsks.SESSION, "r2", now.plusSeconds(300)),
+            device(WaitingAsks.HELD, "r3", null), // no exp: waiting while listed
+        )
+        assertEquals(setOf("1", "2", "3", "4"), WaitingAsks.of(items, approvals, now).map { it.itemId }.toSet())
+    }
+
+    @Test
+    fun anExpiredDecidedOrUnlistedAskIsNotReplayed() {
+        val items = listOf(
+            item("1", WaitingAsks.SIGN_IN), // expired
+            item("2", WaitingAsks.SESSION), // no longer listed: decided or gone
+            item("3", WaitingAsks.HELD, status = "read"), // seen in Notifications
+            item("4", WaitingAsks.HELD, status = "archived"),
+            item("5", WaitingAsks.PAIRING, minutesAgo = 11), // past its 10 minutes
+            item("6", WaitingAsks.SIGN_IN, ref = ""), // no ref: nothing to match
+        )
+        val approvals = listOf(
+            signIn("r1", now.minusSeconds(1)),
+            device(WaitingAsks.HELD, "r3", now.plusSeconds(100)),
+            device(WaitingAsks.HELD, "r4", now.plusSeconds(100)),
+            signIn("", now.plusSeconds(100)),
+        )
+        assertTrue(WaitingAsks.of(items, approvals, now).isEmpty())
+    }
+
+    private class Ops(val items: List<FeedItem>) : FeedOps {
+        override suspend fun list(afterSeq: Long, limit: Int) =
+            if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })
+
+        override suspend fun update(itemId: String, status: String): FeedItem = throw VaultOpException("feed.update", "not_found")
+
+        override suspend fun delete(itemId: String) = Unit
+
+        override suspend fun retentionDays(): Int? = null
+    }
+
+    /** The full read notifies nothing; the replay after the passed check makes each waiting ask arrive, once. */
+    @Test
+    fun theReplayMakesOnlyTheWaitingAsksArrive() = runTest {
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1), item("2", "message.received", seq = 2))
+        var gated = false
+        val m = FeedManager(this, ops = { Ops(items) }, gated = { gated }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.refresh()
+        advanceUntilIdle()
+        assertEquals(ListLoad.LOADED, m.load.value)
+        assertTrue("a full read notifies nothing", arrived.isEmpty())
+        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200))), now)
+        assertEquals(listOf("1"), arrived.map { it.itemId })
+        gated = true // held again: nothing replays
+        m.replayWaitingAsks(listOf(signIn("r1", now.plusSeconds(200))), now)
+        assertEquals(1, arrived.size)
+        job.cancel()
+    }
+}

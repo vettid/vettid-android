@@ -1209,7 +1209,8 @@ class VaultManager(
                     steps.step { attachments.clear() } // held or due: no photo or thumbnail kept (ANDROID-PLAN 0.1.39)
                 }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
-                    steps.step { feed.open() }
+                    // The feed's full read, then the asks still waiting are notified once (owner decision a, 2026-11-15).
+                    steps.step { scope.launch { afterHoldPassed() } }
                     steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
@@ -3153,6 +3154,18 @@ class VaultManager(
         deletedApiMarker = null
         io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = null) } } }
         phaseFlow.endDeleting(AppPhase.Locked)
+    }
+
+    /**
+     * A hold ended by a passed check, the vault open (owner decision a, 2026-11-15): the feed is read again in full (as at
+     * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
+     * Not at an unlock: only here.
+     */
+    private suspend fun afterHoldPassed() {
+        runCatching { feed.refresh() }
+        runCatching { social.refreshApprovals() }
+        if (phaseFlow.value != AppPhase.Unlocked || OwnProfileStep.held(ownerCheck.ownerCheck.value)) return
+        feed.replayWaitingAsks(social.approvals.value, java.time.Instant.now())
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */
