@@ -639,8 +639,14 @@ class VaultManager(
         nowMs = System::currentTimeMillis,
         read = { resolvedRead.read() },
         onGone = { finishDeleted() },
-        onSlow = { if (phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = true, apiOnly = deletedApiMarker != null)) },
+        // One step under the phase's lock, from what is held (its apiOnly and bound): never after the hold ended, and only
+        // for the deletion [m] belongs to (a watch of an earlier one marks nothing).
+        onSlow = { m -> phaseFlow.updateDeleting { d -> if (slowFor(d, m)) d.copy(slow = true) else d } },
     )
+
+    /** Whether [m] is the marker of the deletion [d] shows: the 410's by its bound, the vault's own by its marker. */
+    private fun slowFor(d: AppPhase.Deleting, m: DeletingMarker): Boolean =
+        if (d.apiOnly) d.removeFromMs == m.untilMs else (deletingMarker ?: local.deleting) == m
 
     private val resolvedRead = ResolvedRead(
         apiStanding = { deletedApiMarker != null },
@@ -692,7 +698,7 @@ class VaultManager(
         // first read of the phase, [evaluate]).
         local.deleting?.let { m -> phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m))) }
             ?: local.deletedApi?.let { m ->
-                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true))
+                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
             }
     }
 
@@ -1932,7 +1938,9 @@ class VaultManager(
             // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start and the
             // mailbox keeps being collected (the vault's event can still arrive there).
             deletedApiMarker = m
-            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true))
+            if (!phaseFlow.deleting) {
+                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
+            }
             deletionWatch.start(m.watch(), readNow = true)
             scope.launch { runCatching { session(mailboxOnly = true).device.ensureCollecting() } }
             return@guard phaseFlow.value
@@ -3077,7 +3085,8 @@ class VaultManager(
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
-        steps.step { deletionWatch.start(marker, readNow = false) }
+        // Not for an attempt that already ended (the vault gone, a wipe): its watch would mark a later one.
+        steps.step { if (phaseFlow.deleting && deletingMarker == marker) deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
 
@@ -3095,7 +3104,7 @@ class VaultManager(
             DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
                 record.bumpGeneration()
                 deletedApiMarker = it
-                phaseFlow.deleting(AppPhase.Deleting(apiOnly = true))
+                phaseFlow.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = it.untilMs))
             }
         }
         releaseUpdate.close()
@@ -3131,7 +3140,8 @@ class VaultManager(
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
-        steps.step { deletionWatch.start(marker.watch(), readNow = false) }
+        // Not for an attempt that already ended (listed again, the vault gone, a wipe): its watch would mark a later one.
+        steps.step { if (phaseFlow.deleting && deletedApiMarker == marker) deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
     }
