@@ -1949,6 +1949,8 @@ class VaultManager(
         // The marker read, "being deleted" published and the watch started in one step, under the lock the ends (a clear,
         // the vault gone) drop the marker and end the state under: an end that came first leaves nothing to publish.
         synchronized(deletedApiLock) {
+            // A wipe that runs or failed (during this refresh too): its own phase stands, never "being deleted" over it.
+            if (record.closed) return@guard phaseFlow.value
             (deletingMarker ?: local.deleting)?.also { m ->
                 // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
                 if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m)))
@@ -1958,6 +1960,7 @@ class VaultManager(
         // The record's marker only when this process holds none (a start), adopted in one step with the 410's own write: a
         // marker cleared or replaced meanwhile is never brought back over it.
         synchronized(deletedApiLock) {
+            if (record.closed) return@guard phaseFlow.value
             (deletedApiMarker ?: local.deletedApi?.also { deletedApiMarker = it })?.also { m ->
                 // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start
                 // and the mailbox keeps being collected (the vault's event can still arrive there).
@@ -3039,21 +3042,29 @@ class VaultManager(
     override suspend fun deleteVault(pin: String, password: String) {
         // ANDROID-PLAN 0.1.54: the deletion's bound is at least this request's `exp` plus 2 minutes (a credential
         // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
-        // Counted first: a clear that runs between the two never takes the bound from under this request.
-        deletesInFlight.incrementAndGet()
-        deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
+        // Counted and set in one step under the lock a clear's end looks at the count under: a clear never takes the bound
+        // from under this request. The count goes down only after "being deleted" started from the answer (which reads it).
+        synchronized(deletedApiLock) {
+            deletesInFlight.incrementAndGet()
+            deleteExpMs = System.currentTimeMillis() + com.vettid.core.vault.ChangeTypes.EXP.toMillis()
+        }
         try {
-            guard { session().openApi.deleteVault(pin, password) }
-        } catch (e: VaultFailure) {
-            // Not answered or refused: no deletion of this phone's to bound (the vault's own event still starts one).
-            if (!phaseFlow.deleting) deleteExpMs = null
-            throw e
+            try {
+                guard { session().openApi.deleteVault(pin, password) }
+            } catch (e: VaultFailure) {
+                // Not answered or refused: no deletion of this phone's to bound (the vault's own event still starts one),
+                // unless another of this phone's requests is still out.
+                synchronized(deletedApiLock) {
+                    if (deletesInFlight.get() == 1 && !phaseFlow.deleting) deleteExpMs = null
+                }
+                throw e
+            }
+            // The vault's `{}` follows its step 1 (§12.5), as `device.unlinked{vault_deleted}` does: "being deleted" until
+            // the member API no longer lists the vault; then the welcome screen (a new vault needs a new setup code).
+            startDeleting()
         } finally {
             deletesInFlight.decrementAndGet()
         }
-        // The vault's `{}` follows its step 1 (§12.5), as `device.unlinked{vault_deleted}` does: "being deleted" until
-        // the member API no longer lists the vault; then the welcome screen (a new vault needs a new setup code).
-        startDeleting()
     }
 
     // --- a vault being deleted (ANDROID-PLAN 0.1.54) ---
@@ -3074,7 +3085,10 @@ class VaultManager(
                 return
             }
             // A wipe runs or an erase failed: its own screen stands (its "Try again" erases).
-            if (phaseFlow.deleting || record.closed) return
+            if (phaseFlow.deleting || record.closed) {
+                if (record.closed) android.util.Log.w("VaultManager", "the vault's word while the record is shut: the wipe's screen stands")
+                return
+            }
             val since = System.currentTimeMillis()
             DeletingMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.untilMs(since, deleteExpMs)).also {
                 // What was on its way (a refresh, the end of an unlock) publishes nothing after this.
@@ -3282,12 +3296,15 @@ class VaultManager(
      * phone's `vault.delete`), which erases only while a 410 marker still stands (ANDROID-PLAN §4 point 3).
      */
     private suspend fun finishDeleted(watched: DeletingMarker? = null): Boolean = deletionEnd.withLock {
-        val erases = if (watched == null) {
+        val decided = if (watched == null) {
             vaultWordNow()
         } else {
             // A watch's "gone" erases only for the vault's own deletion it was made for, while no 410-only marker stands.
             phaseFlow.deleting && VaultDeletion.watchErases(deletedApiMarker != null, deletingMarker ?: local.deleting, watched)
-        } && !record.closed // a wipe runs or an erase failed: the wipe erases, and its end (or its failure) stands
+        }
+        // A wipe runs or an erase failed: the wipe erases, and its end (or its failure) stands.
+        val erases = decided && !record.closed
+        if (decided && !erases) android.util.Log.w("VaultManager", "the vault is gone while the record is shut: the wipe erases")
         if (!erases) {
             // A stray watch ends with the state; looked at again under the lock, so a deletion that started meanwhile (its
             // own route, not under this mutex) keeps its watch.
@@ -3311,6 +3328,9 @@ class VaultManager(
                 // What was on its way (a refresh that read "being deleted") publishes nothing after this.
                 record.bumpGeneration()
                 phaseFlow.endDeleting(AppPhase.SignedOut)
+            } else {
+                // Not possible while the wipe takes this mutex; kept as a guard: a wipe's end ends the state to its own phase.
+                android.util.Log.w("VaultManager", "the erase ended with no state up or the record shut: the wipe's end stands")
             }
         }
         true

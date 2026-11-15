@@ -4,9 +4,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.currentTime
@@ -82,37 +82,24 @@ class VaultDeletionRefusedTest {
         assertFalse("this phone's own deletion is up: a second word does nothing", VaultDeletion.vaultWordErases(apiHeld = false))
     }
 
-    // While the app decides a "gone" (onGone waits on the deletion's lock), a bound that falls shows no "still finishing":
-    // an erase takes it away at once; a refusal says it then.
+    // "Still finishing" (and with it Remove) comes at the bound on its own timer, whatever is in flight: a "gone" whose
+    // decision hangs holds nothing back (owner decision 2026-11-15).
     @Test
-    fun theBoundWaitsWhileAGoneIsDecided() = runTest {
-        for (erases in listOf(true, false)) {
-            val said = mutableListOf<DeletingMarker>()
-            val gate = CompletableDeferred<Unit>()
-            val base = currentTime // each pass on its own clock
-            val m = DeletingMarker("v", base, base + 10 * min)
-            val w = DeletionWatch(
-                backgroundScope, { currentTime }, read = {
-                    if (currentTime - base >= 9 * min) DeletionCheck.GONE else DeletionCheck.LISTED
-                }, onGone = { gate.await(); erases }, onSlow = { said += it },
-            )
-            w.start(m, readNow = false)
-            advanceTimeBy(9 * min)
-            val out = async { w.check() }
-            runCurrent()
-            advanceTimeBy(2 * min) // the bound falls while onGone waits
-            runCurrent()
-            assertTrue("no still finishing while deciding ($erases)", said.isEmpty())
-            gate.complete(Unit)
-            assertEquals(if (erases) DeletionCheck.GONE else DeletionCheck.UNCONFIRMED, out.await())
-            runCurrent()
-            assertEquals(if (erases) emptyList() else listOf(m), said)
-            w.stop()
-        }
+    fun theBoundComesWhileAGoneHangs() = runTest {
+        val said = mutableListOf<DeletingMarker>()
+        val m = DeletingMarker("v", 0, 10 * min)
+        val w = DeletionWatch(
+            backgroundScope, { currentTime }, read = { DeletionCheck.GONE }, onGone = { awaitCancellation() },
+            onSlow = { said += it },
+        )
+        w.start(m, readNow = false) // the timer's first read (at 5 s) hangs in onGone
+        advanceTimeBy(10 * min + 1)
+        runCurrent()
+        assertEquals(listOf(m), said)
+        w.stop()
     }
 
-    // An erase that fails (onGone throws) after the bound fell while it was decided: "still finishing" is said all the same,
-    // by the decision itself (the read's own loop ends with the exception).
+    // An erase that fails (onGone throws) while the bound falls: "still finishing" is said all the same, by the bound's timer.
     @Test
     fun aGoneWhoseEraseFailsStillSaysTheBound() = runTest {
         val said = mutableListOf<DeletingMarker>()
@@ -129,10 +116,10 @@ class VaultDeletionRefusedTest {
         w.start(m, readNow = false) // the timer's first read (at 5 s) decides
         advanceTimeBy(6_000)
         runCurrent()
-        advanceTimeBy(10 * min) // the bound falls while onGone waits
+        gate.complete(Unit) // the erase fails: nothing cancels the bound's timer
         runCurrent()
         assertTrue(said.isEmpty())
-        gate.complete(Unit)
+        advanceTimeBy(10 * min)
         runCurrent()
         assertEquals(listOf(m), said)
         w.stop()

@@ -321,9 +321,6 @@ internal class DeletionWatch(
     /** [onSlow] was called for [marker]. */
     private var slowSaid = false
 
-    /** Reads whose "gone" for a marker is being decided ([onGone]), per marker: "still finishing" waits for the answers. */
-    private val deciding = mutableMapOf<DeletingMarker, Int>()
-
     /**
      * The timers run for [m] (from a start: [readNow] reads at once too). A watch that already runs for [m] is left as it
      * is; one that runs for another marker (an earlier deletion) is replaced.
@@ -358,7 +355,7 @@ internal class DeletionWatch(
     private fun slowIfPast(m: DeletingMarker? = null) {
         val said = synchronized(this) {
             marker?.takeIf { held ->
-                (m == null || m == held) && !slowSaid && held !in deciding &&
+                (m == null || m == held) && !slowSaid &&
                     VaultDeletion.pastBound(held.sinceMs, held.untilMs, nowMs())
             }?.also { slowSaid = true }
         }
@@ -394,30 +391,19 @@ internal class DeletionWatch(
      * 410-only attempt is erased only by its own reads; nor does a read made while the watch held no attempt (before a
      * start, or after a stop). A "gone" the app refused (a 410-only marker came meanwhile, or the attempt ended) concludes
      * nothing either: the watch keeps reading and "Check again" says nothing was confirmed. Only an erase takes "still
-     * finishing" away, so after a refusal Remove still comes at the bound; while the app decides, "still finishing" waits
-     * (an erase would take it away at once).
+     * finishing" away, so after a refusal (or an erase that failed) Remove still comes at the bound. "Still finishing" does
+     * not wait for the decision: the bound's own timer says it at `until` (owner decision 2026-11-15), whatever is in flight.
      */
     private suspend fun decideGone(m: DeletingMarker?): DeletionCheck {
-        val current = synchronized(this) {
-            (m != null && marker == m).also { if (it) deciding[m!!] = (deciding[m] ?: 0) + 1 }
-        }
-        if (!current || m == null) return DeletionCheck.UNCONFIRMED
-        var erased = false
-        try {
-            erased = onGone(m)
-        } finally {
-            synchronized(this) {
-                val left = (deciding[m] ?: 1) - 1
-                if (left > 0) deciding[m] = left else deciding.remove(m)
-                if (erased && marker == m) {
-                    boundTimer?.cancel()
-                    slowSaid = true
-                }
+        val current = synchronized(this) { m != null && marker == m }
+        if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
+        synchronized(this) {
+            if (marker == m) {
+                boundTimer?.cancel()
+                slowSaid = true
             }
-            // Not erased (refused, or the erase failed): a bound that fell while it was decided is said now.
-            if (!erased) slowIfPast(m)
         }
-        return if (erased) DeletionCheck.GONE else DeletionCheck.UNCONFIRMED
+        return DeletionCheck.GONE
     }
 
     @Suppress("ReturnCount") // gone, past the bound, and at the bound
