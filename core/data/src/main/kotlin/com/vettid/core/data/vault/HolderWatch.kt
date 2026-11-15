@@ -118,11 +118,18 @@ class HolderWatch(private val scope: CoroutineScope, private val wipe: suspend (
      */
     suspend fun wipeNow() = wipeOnce(wipes.value)
 
+    /**
+     * As [wipeNow], with the wipe [only] runs instead, which says whether it wiped: one that did not counts as no wipe (a
+     * transfer's approval waiting for one goes on waiting). For a wipe that runs only while a state still holds, decided
+     * where the wipe is (the "Remove from this phone" of a vault being deleted).
+     */
+    suspend fun wipeNowIf(only: suspend () -> Boolean) = wipeOnce(wipes.value, only)
+
     /** One wipe per proof received before it: a proof that arrived while a wipe ran waits for it and does nothing more. */
-    private suspend fun wipeOnce(seen: Int) {
+    private suspend fun wipeOnce(seen: Int, only: (suspend () -> Boolean)? = null) {
         lock.withLock {
             if (wipes.value != seen) return
-            wipe()
+            if (only == null) wipe() else if (!only()) return
             wipes.value = seen + 1
         }
     }

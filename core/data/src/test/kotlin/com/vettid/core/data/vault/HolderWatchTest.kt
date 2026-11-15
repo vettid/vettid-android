@@ -262,4 +262,30 @@ class HolderWatchTest {
         advanceUntilIdle()
         assertEquals(0, wipes)
     }
+
+    /** A gated wipe that does not run ("Remove" after the deletion's state ended) is no wipe; one that runs counts once. */
+    @Test
+    fun aGatedWipeCountsOnlyWhenItRan() = runTest {
+        val w = watch()
+        w.wipeNowIf { false }
+        assertEquals(0, wipes)
+        assertEquals(0, w.count)
+        var ran = 0
+        w.wipeNowIf {
+            ran++
+            true
+        }
+        assertEquals(1, ran)
+        assertEquals(0, wipes) // the gated wipe runs instead of the watch's own
+        assertEquals(1, w.count)
+    }
+
+    /** A transfer's approval waiting for the wipe is not ended by a gated wipe that did not run. */
+    @Test
+    fun aGatedWipeThatDidNotRunLeavesATransferWaiting() = runTest {
+        val w = watch()
+        val done = async { w.approveTransfer(10_000L) { w.wipeNowIf { false } } }
+        advanceUntilIdle()
+        assertFalse(done.await())
+    }
 }

@@ -132,6 +132,13 @@ interface AccountRepository {
     suspend fun eraseThisPhone()
 
     /**
+     * (ANDROID-PLAN 0.1.78) The confirmed "Remove from this phone" on "Your vault was deleted": [eraseThisPhone]'s wipe, run
+     * only while the vault is still being deleted ([AppPhase.Deleting]) when it starts. Nothing is erased once that state
+     * ended (the vault's word erased it already, or the vault is listed again).
+     */
+    suspend fun removeDeletedVault()
+
+    /**
      * (ANDROID-PLAN 0.1.54 "A vault being deleted") "Check again" on the "still finishing" screen: one read of `GET
      * /api/vault/status`; a tap while one runs waits for it.
      * [DeletionCheck.GONE] (only `410 vault_deleted` / `account_deleted`, and only with the vault's own
