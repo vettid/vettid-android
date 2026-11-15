@@ -1,6 +1,8 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
@@ -73,5 +75,34 @@ class VaultDeletionRefusedTest {
         assertFalse("an erase that failed", starts(AppPhase.Unreachable(FailureKind.ERASE_FAILED), closed = true))
         assertTrue("the 410 stands: erase", VaultDeletion.vaultWordErases(apiHeld = true))
         assertFalse("this phone's own deletion is up: a second word does nothing", VaultDeletion.vaultWordErases(apiHeld = false))
+    }
+
+    // While the app decides a "gone" (onGone waits on the deletion's lock), a bound that falls shows no "still finishing":
+    // an erase takes it away at once; a refusal says it then.
+    @Test
+    fun theBoundWaitsWhileAGoneIsDecided() = runTest {
+        for (erases in listOf(true, false)) {
+            val said = mutableListOf<DeletingMarker>()
+            val gate = CompletableDeferred<Unit>()
+            val base = currentTime // each pass on its own clock
+            val m = DeletingMarker("v", base, base + 10 * min)
+            val w = DeletionWatch(
+                backgroundScope, { currentTime }, read = {
+                    if (currentTime - base >= 9 * min) DeletionCheck.GONE else DeletionCheck.LISTED
+                }, onGone = { gate.await(); erases }, onSlow = { said += it },
+            )
+            w.start(m, readNow = false)
+            advanceTimeBy(9 * min)
+            val out = async { w.check() }
+            runCurrent()
+            advanceTimeBy(2 * min) // the bound falls while onGone waits
+            runCurrent()
+            assertTrue("no still finishing while deciding ($erases)", said.isEmpty())
+            gate.complete(Unit)
+            assertEquals(if (erases) DeletionCheck.GONE else DeletionCheck.UNCONFIRMED, out.await())
+            runCurrent()
+            assertEquals(if (erases) emptyList() else listOf(m), said)
+            w.stop()
+        }
     }
 }
