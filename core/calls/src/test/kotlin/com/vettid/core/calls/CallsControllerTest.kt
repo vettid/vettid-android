@@ -895,8 +895,47 @@ class CallsControllerTest {
         assertEquals(CallState.Idle, c.state.value)
         gate.send(Unit)
         runCurrent()
-        assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value !is CallState.Live)
+        // It rang (the offer was let through), then the hang-up ended it: Idle would mean it never rang.
+        assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value is CallState.Ended)
+        assertEquals(0, c.diagnostics.value.refused)
         assertTrue(!audio.ringtone)
+    }
+
+    /** The update screen is looked at after the wait: one that came up while the offer waited for the probe is not rung over. */
+    @Test
+    fun anOfferDoesNotRingOverAnUpdateScreenThatCameUpWhileItWaited() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T75", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        vault.updateShowing = true
+        gate.send(Unit)
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** During a live call an offer does not wait (it is answered busy): that call's own events are never held behind it. */
+    @Test
+    fun anOfferDuringALiveCallHoldsNothingUp() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(c.state.value is CallState.Live)
+        // A state the controller does not reach today (the probe is not asked again while a call is live): if it ever
+        // did, an offer would otherwise wait for the answer with the live call's events behind it.
+        c.forgetProbeForTest()
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T74", type = "call.offer", ts = T0, body = """{"connection_id":"conn-2"}""".toByteArray()))))
+        vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
+        runCurrent()
+        assertTrue("the live call's hang-up was not held up: ${c.state.value}", c.state.value !is CallState.Live)
     }
 
     /** Review of #128: while the release-update screen covers the app there is no screen to answer on: no ring. */
