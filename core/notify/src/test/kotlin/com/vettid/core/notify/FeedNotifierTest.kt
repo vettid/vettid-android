@@ -154,6 +154,18 @@ class FeedNotifierTest {
         assertTrue(poster.isPosted("f1"))
     }
 
+    /** (iOS #278's parity) With its screen or the Notifications list in front, a replayed ask leaves what is posted alone. */
+    @Test
+    fun aReplayedAskWithItsScreenInFrontLeavesThePostedOneAlone() = runTest {
+        notifier()
+        arrive(item("f1"))
+        poster.log.clear()
+        visible.value = Visible.Notifications
+        arrive(item("f1").copy(replayed = true))
+        assertTrue("nothing removed: ${poster.log}", poster.log.isEmpty())
+        assertTrue(poster.isPosted("f1"))
+    }
+
     // --- the app lock's cover (owner request 2026-11-02): nothing past the lock names anything ---
 
     @Test

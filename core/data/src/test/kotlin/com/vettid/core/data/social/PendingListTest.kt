@@ -76,6 +76,29 @@ class PendingListTest {
         assertEquals(listOf("auth:r2", "device:approval.pending:h1", "device:device.session.pending:s1"), m.keys())
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.132; iOS #278's parity) Only a read begun after the mark counts for the waiting-asks replay, by read
+     * order, not by the clock: a read already out at the mark that merges after it does not; and once one counts, what it
+     * listed is already published.
+     */
+    @Test
+    fun onlyAListReadBegunAfterTheMarkCounts() = runTest {
+        val m = manager()
+        val early = CompletableDeferred<PendingPage>()
+        val out = backgroundScope.launch { m.refreshPendingFrom { early.await() } }
+        runCurrent()
+        val mark = m.pendingReadMark()
+        early.complete(page(at(10), ask("authenticate", auth("r1"))))
+        out.join()
+        runCurrent()
+        assertEquals(listOf("auth:r1"), m.keys())
+        assertTrue("begun before the mark", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r2"))) }
+        runCurrent()
+        assertTrue(m.pendingListedSince(mark))
+        assertEquals(listOf("auth:r2"), m.listedNow().map { it.key })
+    }
+
     @Test
     fun everyPageIsReadAndOnlyTheFirstTsIsTheCut() = runTest {
         val m = manager()

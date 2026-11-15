@@ -54,6 +54,9 @@ internal class PendingAsks {
     /** A read starts. */
     fun begin(): Long = synchronized(lock) { ++issued }
 
+    /** The ticket of the latest read begun (0 before one): a read that begins from now on has a higher one. */
+    val lastIssued: Long get() = synchronized(lock) { issued }
+
     /** Whether the read of [ticket] is still current: no lock since it began and no later-started read has merged. */
     fun current(ticket: Long): Boolean = synchronized(lock) { ticket > floor && ticket >= merged }
 

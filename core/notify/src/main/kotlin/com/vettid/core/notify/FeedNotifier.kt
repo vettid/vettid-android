@@ -158,8 +158,10 @@ class FeedNotifier(
         recheckCover()
         // A re-post after a withdrawal only updates what is showing: a notification the member dismissed stays dismissed.
         if (item.quietRepost && !synchronized(lock) { stillShowing(item) }) return
-        clearForReplay(item)
         val channel = NotificationMapping.channel(item)?.takeIf { notifiable(item) } ?: return
+        // After the skips every arrival has: with the item's screen or the Notifications list in front, a notification
+        // still posted for it stays as it is.
+        clearForReplay(item)
         val covered = source.coveredNow()
         if (item.kind == VOTE_RESULT && !covered) {
             // Titled in its own job (#313): the items behind it are not held up by the list read. A later arrival of the

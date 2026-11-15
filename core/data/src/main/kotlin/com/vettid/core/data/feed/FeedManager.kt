@@ -308,17 +308,29 @@ class FeedManager(
     /**
      * (Owner decision a, 2026-11-15) A hold ended by a passed check: each ask still waiting ([WaitingAsks], against
      * [approvals] as read after the hold) arrives once, so that it notifies; nothing else of the full read does, and an
-     * ask that already arrived since [startReplayWindow] (live, during the reads) is not sent twice.
+     * ask that already arrived since [startReplayWindow] (live, during the reads) is not sent twice. False, with the window
+     * kept, while the feed is not loaded (a read failed or runs): the caller reads it and asks again. True once done (sent,
+     * or nothing to send: a later replay owns the window, or the check is due or held again).
      */
-    fun replayWaitingAsks(token: Int, approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant) {
-        val waiting = synchronized(lock) {
-            if (token != replayToken) return // a later replay owns the window and sends what is waiting
-            val seen = arrivedSince.also { arrivedSince = null }
-            if (gated() || loadState.value != ListLoad.LOADED) return
-            WaitingAsks.of(byId.values, approvals, now).filterNot { seen != null && it.itemId in seen }
+    fun replayWaitingAsks(token: Int, approvals: List<com.vettid.core.data.social.Approval>, now: java.time.Instant): Boolean {
+        // Null: not done, the window kept.
+        val waiting: List<FeedItem>? = synchronized(lock) {
+            when {
+                token != replayToken -> emptyList() // a later replay owns the window and sends what is waiting
+                gated() -> emptyList<FeedItem>().also { arrivedSince = null }
+                loadState.value != ListLoad.LOADED -> null
+                else -> {
+                    val seen = arrivedSince.also { arrivedSince = null }
+                    WaitingAsks.of(byId.values, approvals, now).filterNot { seen != null && it.itemId in seen }
+                }
+            }
         }
-        waiting.forEach { emitArrival(it.copy(replayed = true)) }
+        waiting?.forEach { emitArrival(it.copy(replayed = true)) }
+        return waiting != null
     }
+
+    /** The feed holds a full read (none failed or runs since, and nothing cleared it). */
+    val loaded: Boolean get() = loadState.value == ListLoad.LOADED
 
     /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
     private fun emitArrival(item: FeedItem) {

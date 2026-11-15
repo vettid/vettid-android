@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -81,9 +82,11 @@ class WaitingAsksTest {
         assertEquals(listOf("3"), WaitingAsks.of(items, approvals, now).map { it.itemId })
     }
 
-    private class Ops(val items: List<FeedItem>) : FeedOps {
-        override suspend fun list(afterSeq: Long, limit: Int) =
-            if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })
+    private class Ops(val items: List<FeedItem>, val down: () -> Boolean = { false }) : FeedOps {
+        override suspend fun list(afterSeq: Long, limit: Int): FeedPage {
+            if (down()) throw VaultOpException("feed.list", "unreachable")
+            return if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })
+        }
 
         override suspend fun update(itemId: String, status: String): FeedItem = throw VaultOpException("feed.update", "not_found")
 
@@ -134,6 +137,32 @@ class WaitingAsksTest {
         assertEquals(listOf("2"), arrived.map { it.itemId })
         m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200))), now)
         assertEquals("only the one not already sent", listOf("2", "1"), arrived.map { it.itemId })
+        job.cancel()
+    }
+
+    /**
+     * A feed read that failed does not use up the replay: it answers false and keeps the window (what arrives meanwhile is
+     * still noted), and once a read succeeds the waiting asks arrive.
+     */
+    @Test
+    fun aFailedFeedReadKeepsTheWindow() = runTest {
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1))
+        var down = true
+        val m = FeedManager(this, ops = { Ops(items) { down } }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        runCatching { m.refresh() }
+        advanceUntilIdle()
+        assertEquals(ListLoad.FAILED, m.load.value)
+        assertFalse("not done", m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        assertTrue(arrived.isEmpty())
+        down = false
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue(m.loaded)
+        assertTrue(m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        assertEquals(listOf("1"), arrived.map { it.itemId })
         job.cancel()
     }
 
