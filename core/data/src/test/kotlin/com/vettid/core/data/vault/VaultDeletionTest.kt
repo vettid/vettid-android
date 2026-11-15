@@ -498,7 +498,7 @@ class VaultDeletionTest {
         runCurrent()
         assertEquals(DeletionCheck.LISTED, fresh.await())
         gate.complete(Unit)
-        assertEquals(DeletionCheck.GONE, stale.await())
+        assertEquals(DeletionCheck.UNCONFIRMED, stale.await()) // concludes nothing for its caller
         assertEquals(0, gone)
         advanceTimeBy(10 * min + 1)
         assertEquals(listOf(m2), said) // m2's own bound still marks it

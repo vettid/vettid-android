@@ -374,7 +374,8 @@ internal class DeletionWatch(
                     }
                 }
             }
-            if (current) onGone()
+            if (!current) return DeletionCheck.UNCONFIRMED // an ended attempt's answer concludes nothing for the caller
+            onGone()
         }
         return r
     }

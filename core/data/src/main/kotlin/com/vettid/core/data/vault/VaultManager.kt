@@ -647,10 +647,12 @@ class VaultManager(
     private fun slowFor(d: AppPhase.Deleting, m: DeletingMarker): Boolean = VaultDeletion.slowFor(d, m, deletingMarker ?: local.deleting)
 
     private val resolvedRead = ResolvedRead(
-        apiStanding = { deletedApiMarker != null },
+        apiMarker = { deletedApiMarker },
         source = { readDeletion() },
-        onListedWhileApi = { scope.launch { clearApiDeleted() } },
+        onListedWhileApi = { m -> scope.launch { clearApiDeleted(m) } },
     )
+
+    private val apiClear = ApiMarkerClear<DeletedApiMarker>()
 
     private val deletionEvents = DeletionEvents(
         apiStanding = { deletedApiMarker != null },
@@ -3128,7 +3130,9 @@ class VaultManager(
         // clear is not to be written over with a stale marker.
         val saved = io {
             VaultDeletion.saveMarker {
-                record.update(record.recordGeneration) { if (deletedApiMarker == marker) it.copy(deletedApi = marker) else it }
+                record.update(record.recordGeneration) {
+                    if (apiClear.mayWrite(marker, deletedApiMarker)) it.copy(deletedApi = marker) else it
+                }
             }
         }
         syncTimeScale()
@@ -3156,21 +3160,28 @@ class VaultManager(
         steps.finish()
     }
 
-    /** A status that lists the vault again: the marker goes and the unlock screen returns. */
-    private suspend fun clearApiDeleted(): Unit = deletionEnd.withLock {
-        val m = deletedApiMarker
-        if (m == null || !phaseFlow.deleting) return@withLock
-        deletedApiMarker = null
-        val saved = io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = null) } } }
-        if (!saved) {
-            // The record still holds the marker: the screen and the watch stay as the record says (a start would reopen
-            // them anyway), and the next status that lists the vault clears it again.
-            deletedApiMarker = m
-            android.util.Log.w("VaultManager", "the deletion's marker could not be cleared")
-            return@withLock
-        }
-        deletionWatch.stop()
-        phaseFlow.endDeleting(AppPhase.Locked)
+    /**
+     * A status that lists the vault again, read under [expected]: that marker goes and the unlock screen returns. The marker
+     * stands until the record has dropped it ([ApiMarkerClear]), so meanwhile a 410 is never taken as the vault's word.
+     */
+    private suspend fun clearApiDeleted(expected: DeletedApiMarker): Unit = deletionEnd.withLock {
+        if (!phaseFlow.deleting) return@withLock
+        apiClear.clear(
+            expected,
+            held = { deletedApiMarker },
+            save = { io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = null) } } } },
+            onCleared = {
+                deletedApiMarker = null
+                deletionWatch.stop()
+                phaseFlow.endDeleting(AppPhase.Locked)
+            },
+            onSaveFailed = {
+                // The state stays as it is (the next listed status clears it again); the record keeps the marker, written
+                // again in case a close step's write was held off while it was being cleared.
+                android.util.Log.w("VaultManager", "the deletion's marker could not be cleared")
+                io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = expected) } } }
+            },
+        )
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */

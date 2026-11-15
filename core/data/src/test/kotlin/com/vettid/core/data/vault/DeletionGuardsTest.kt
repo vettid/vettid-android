@@ -3,6 +3,10 @@ package com.vettid.core.data.vault
 import com.vettid.core.altchan.MemberApiException
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.vault.VaultMessage
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,7 +70,7 @@ class DeletionGuardsTest {
     // --- the read ---
 
     private fun read(standing: Boolean, check: DeletionCheck, onListed: () -> Unit = {}) =
-        ResolvedRead({ standing }, { check }, onListed)
+        ResolvedRead({ if (standing) "m1" else null }, { check }, { onListed() })
 
     @Test
     fun aGoneErasesOnlyWithTheVaultsWord() = runTest {
@@ -82,6 +86,74 @@ class DeletionGuardsTest {
         read(false, DeletionCheck.LISTED) { cleared++ }.read()
         read(true, DeletionCheck.UNREACHABLE) { cleared++ }.read()
         assertEquals(1, cleared)
+    }
+
+    // A late LISTED clears only the marker its read began under: never a later 410's.
+    @Test
+    fun aListedStatusClearsOnlyTheMarkerItsReadBeganUnder() = runTest {
+        var held: String? = "m1"
+        val clear = ApiMarkerClear<String>()
+        val cleared = mutableListOf<String>()
+        val r = ResolvedRead({ held }, {
+            held = "m2" // m1 cleared and a new 410 while the read was out
+            DeletionCheck.LISTED
+        }) { m ->
+            launch { clear.clear(m, { held }, save = { true }, onCleared = { cleared += m }, onSaveFailed = {}) }
+        }
+        r.read()
+        advanceUntilIdle()
+        assertTrue(cleared.isEmpty())
+        assertEquals("m2", held)
+    }
+
+    // --- the clear ---
+
+    // While a clear waits for the record, the marker stands: a 410 read then is never the vault's word (no erase), and a
+    // close step does not write the marker back.
+    @Test
+    fun theMarkerStandsUntilTheRecordDroppedIt() = runTest {
+        var held: String? = "m1"
+        val clear = ApiMarkerClear<String>()
+        val saved = CompletableDeferred<Boolean>()
+        var cleared = 0
+        val job = launch {
+            clear.clear("m1", { held }, save = { saved.await() }, onCleared = { held = null; cleared++ }, onSaveFailed = {})
+        }
+        runCurrent()
+        assertEquals(DeletionCheck.API_ONLY, ResolvedRead({ held }, { DeletionCheck.GONE }) {}.read())
+        assertFalse(clear.mayWrite("m1", held))
+        saved.complete(true)
+        job.join()
+        assertEquals(1, cleared)
+        assertNull(held)
+        assertFalse(clear.mayWrite("m1", held))
+    }
+
+    // A failed save leaves everything as it was: the marker stands, nothing ends, and the next listed status can clear it.
+    @Test
+    fun aClearWhoseSaveFailsChangesNothing() = runTest {
+        var held: String? = "m1"
+        val clear = ApiMarkerClear<String>()
+        var cleared = 0
+        var failed = 0
+        assertFalse(clear.clear("m1", { held }, save = { false }, onCleared = { held = null; cleared++ }, onSaveFailed = { failed++ }))
+        assertEquals(0, cleared)
+        assertEquals(1, failed)
+        assertEquals("m1", held)
+        assertEquals(DeletionCheck.API_ONLY, ResolvedRead({ held }, { DeletionCheck.GONE }) {}.read())
+        assertTrue(clear.mayWrite("m1", held))
+        assertTrue(clear.clear("m1", { held }, save = { true }, onCleared = { held = null; cleared++ }, onSaveFailed = {}))
+        assertEquals(1, cleared)
+    }
+
+    @Test
+    fun aClearOfAMarkerNoLongerHeldDoesNothing() = runTest {
+        var saves = 0
+        val clear = ApiMarkerClear<String>()
+        assertFalse(clear.clear("m1", { "m2" }, save = { saves++; true }, onCleared = {}, onSaveFailed = {}))
+        assertEquals(0, saves)
+        assertTrue(clear.mayWrite("m2", "m2"))
+        assertFalse(clear.mayWrite("m1", "m2"))
     }
 
     // --- the start ---
