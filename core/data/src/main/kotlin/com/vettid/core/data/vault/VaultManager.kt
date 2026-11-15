@@ -638,21 +638,21 @@ class VaultManager(
         scope,
         nowMs = System::currentTimeMillis,
         read = { resolvedRead.read() },
-        onGone = { finishDeleted() },
+        onGone = { m -> finishDeleted(watched = m) },
         // One step under the phase's lock, from what is held (its apiOnly and bound): never after the hold ended, and only
         // for the deletion [m] belongs to (a watch of an earlier one marks nothing).
         onSlow = { m -> phaseFlow.updateDeleting { d -> if (slowFor(d, m)) d.copy(slow = true) else d } },
     )
 
-    /** Whether [m] is the marker of the deletion [d] shows: the 410's by its bound, the vault's own by its marker. */
-    private fun slowFor(d: AppPhase.Deleting, m: DeletingMarker): Boolean =
-        if (d.apiOnly) d.removeFromMs == m.untilMs else (deletingMarker ?: local.deleting) == m
+    private fun slowFor(d: AppPhase.Deleting, m: DeletingMarker): Boolean = VaultDeletion.slowFor(d, m, deletingMarker ?: local.deleting)
 
     private val resolvedRead = ResolvedRead(
-        apiStanding = { deletedApiMarker != null },
+        apiMarker = { deletedApiMarker },
         source = { readDeletion() },
-        onListedWhileApi = { scope.launch { clearApiDeleted() } },
+        onListedWhileApi = { m -> scope.launch { clearApiDeleted(m) } },
     )
+
+    private val apiClear = ApiMarkerClear<DeletedApiMarker>()
 
     private val deletionEvents = DeletionEvents(
         apiStanding = { deletedApiMarker != null },
@@ -1928,16 +1928,18 @@ class VaultManager(
             holder.wipeNow()
             return@guard AppPhase.SignedOut
         }
-        (local.deleting ?: deletingMarker)?.let { m ->
+        // This process's marker first: the one its watch and "still finishing" go by; the record's when it has none (a start).
+        (deletingMarker ?: local.deleting)?.let { m ->
             // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
             if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m)))
             deletionWatch.start(m, readNow = true)
             return@guard phaseFlow.value
         }
-        (local.deletedApi ?: deletedApiMarker)?.let { m ->
+        // The record's marker only when this process holds none (a start), adopted in one step with the 410's own write: a
+        // marker cleared or replaced meanwhile is never brought back over it.
+        synchronized(deletedApiLock) { deletedApiMarker ?: local.deletedApi?.also { deletedApiMarker = it } }?.let { m ->
             // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start and the
             // mailbox keeps being collected (the vault's event can still arrive there).
-            deletedApiMarker = m
             if (!phaseFlow.deleting) {
                 phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
             }
@@ -3054,7 +3056,13 @@ class VaultManager(
     private suspend fun closeForDeletion(marker: DeletingMarker) {
         // The marker first: a process that dies from here on starts in "being deleted". A write the record drops (a persist
         // that failed) is tried again; this process goes on from [deletingMarker] whatever becomes of it.
-        val saved = io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deleting = marker) } } }
+        // The watch first (as for a 410): nothing below that throws leaves the attempt unwatched.
+        if (VaultDeletion.watchesAttempt(phaseFlow.deleting, deletingMarker, marker)) deletionWatch.start(marker, readNow = false)
+        val saved = io {
+            VaultDeletion.saveMarker {
+                record.update(record.recordGeneration) { if (deletingMarker == marker) it.copy(deleting = marker) else it }
+            }
+        }
         syncTimeScale()
         if (!saved) android.util.Log.w("VaultManager", "the deletion's marker could not be saved")
         // Nothing more is sent to the vault (no lock either) and nothing more is read from it; the app key and the device
@@ -3085,8 +3093,6 @@ class VaultManager(
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
-        // Not for an attempt that already ended (the vault gone, a wipe): its watch would mark a later one.
-        steps.step { if (phaseFlow.deleting && deletingMarker == marker) deletionWatch.start(marker, readNow = false) }
         steps.finish()
     }
 
@@ -3114,11 +3120,22 @@ class VaultManager(
     private suspend fun closeForApiDeleted(marker: DeletedApiMarker, lock: Boolean) {
         // Fail secure: a vault that was open stays open on the server until it is locked. The lock is pending durably and tried
         // again like any lock (unbound when this phone knows no current unlock); the 410 does not stop it.
+        // The watch first, so that nothing below that throws leaves the attempt unwatched (no Remove until a restart); not for
+        // an attempt that already ended (listed again, the vault gone, a wipe): its watch would mark a later one.
+        if (VaultDeletion.watchesAttempt(phaseFlow.deleting, deletedApiMarker, marker)) deletionWatch.start(marker.watch(), readNow = false)
         if (lock) {
             val mine = withContext(Dispatchers.IO + NonCancellable) { lockKeeper.begin(session?.device?.unlockId) }
             scope.launch { lockKeeper.ask(mine) }
         }
-        val saved = io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = marker) } } }
+        // Only while it is still this process's marker: a status that listed the vault again meanwhile cleared it, and its
+        // clear is not to be written over with a stale marker.
+        val saved = io {
+            VaultDeletion.saveMarker {
+                record.update(record.recordGeneration) {
+                    if (apiClear.mayWrite(marker, deletedApiMarker)) it.copy(deletedApi = marker) else it
+                }
+            }
+        }
         syncTimeScale()
         if (!saved) android.util.Log.w("VaultManager", "the deletion's marker could not be saved")
         forgetPostedPin()
@@ -3140,19 +3157,36 @@ class VaultManager(
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
         steps.step { location.forget() }
-        // Not for an attempt that already ended (listed again, the vault gone, a wipe): its watch would mark a later one.
-        steps.step { if (phaseFlow.deleting && deletedApiMarker == marker) deletionWatch.start(marker.watch(), readNow = false) }
         steps.step { session?.device?.ensureCollecting() }
         steps.finish()
     }
 
-    /** A status that lists the vault again: the marker goes and the unlock screen returns. */
-    private suspend fun clearApiDeleted(): Unit = deletionEnd.withLock {
-        if (deletedApiMarker == null || !phaseFlow.deleting) return@withLock
-        deletionWatch.stop()
-        deletedApiMarker = null
-        io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = null) } } }
-        phaseFlow.endDeleting(AppPhase.Locked)
+    /**
+     * A status that lists the vault again, read under [expected]: that marker goes and the unlock screen returns
+     * (ANDROID-PLAN §4 "A vault being deleted" point 5). The marker stands while the record is written ([ApiMarkerClear]), so
+     * meanwhile a 410 is never taken as the vault's word; then the state ends whatever the write did (a record that kept
+     * the marker reopens it at the next start, and the next listed status clears it again).
+     */
+    private suspend fun clearApiDeleted(expected: DeletedApiMarker): Unit = deletionEnd.withLock {
+        if (!phaseFlow.deleting) {
+            deletionWatch.stop() // a stray watch ends with the state
+            return@withLock
+        }
+        val rec = record.recordGeneration
+        apiClear.clear(
+            expected,
+            held = { deletedApiMarker },
+            save = { io { VaultDeletion.saveMarker { record.update(rec) { it.copy(deletedApi = null) } } } },
+            onEnd = { saved ->
+                if (!saved) android.util.Log.w("VaultManager", "the deletion's marker could not be cleared")
+                // Not if something ended the state while the save ran (a wipe): its own end stands.
+                if (deletedApiMarker != expected || !phaseFlow.deleting) return@clear
+                // The watch first: a read then runs under the marker (API_ONLY) or under no attempt (concludes nothing).
+                deletionWatch.stop()
+                synchronized(deletedApiLock) { deletedApiMarker = null }
+                phaseFlow.endDeleting(AppPhase.Locked)
+            },
+        )
     }
 
     /** One read of `GET /api/vault/status` with the app key, without a session ([VaultDeletion.ofStatus]). */
@@ -3165,8 +3199,16 @@ class VaultManager(
      * The vault is gone: what the app does when a vault is gone (its keys and local data forgotten, a fresh app key), the
      * marker deleted with the record, "no vault", and the one-time notice.
      */
-    private suspend fun finishDeleted(): Unit = deletionEnd.withLock {
-        if (!phaseFlow.deleting) return@withLock
+    private suspend fun finishDeleted(watched: DeletingMarker? = null): Unit = deletionEnd.withLock {
+        if (!phaseFlow.deleting) {
+            deletionWatch.stop() // a stray watch ends with the state
+            return@withLock
+        }
+        // A watch's "gone" ([watched]) erases only for the vault's own deletion it was made for, while no 410-only marker
+        // stands; the vault's own word (its event, or the answer to this phone's vault.delete) comes with no [watched].
+        if (watched != null && !VaultDeletion.watchErases(deletedApiMarker != null, deletingMarker ?: local.deleting, watched)) {
+            return@withLock
+        }
         deletionWatch.stop()
         // The device stopped for the deletion is forgotten (its keys and stored state); then what a gone vault leaves.
         deletingDevice?.let { d -> runCatching { d.forget() } }
