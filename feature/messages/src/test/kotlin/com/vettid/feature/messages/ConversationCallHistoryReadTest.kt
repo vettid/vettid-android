@@ -150,4 +150,58 @@ class ConversationCallHistoryReadTest {
         advanceUntilIdle()
         assertFalse(vm.uiState.value.callsStale)
     }
+
+    /** Within one READY: the read at a call's end and the one a moment later, in both orders. */
+    @Test
+    fun theTwoReadsOfOneReadyInBothOrders() = runTest {
+        val t = Instant.parse("2026-10-12T10:00:00Z")
+        val calls = FakeCalls()
+        calls.entries = listOf(CallHistoryEntry("k1", "c2", true, CallOutcome.TALKED, t, Duration.ofSeconds(30)))
+        val vm = conversation(calls)
+        advanceUntilIdle()
+        // The first fails, the second works: the note comes, then goes.
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        calls.historyFails = true
+        calls.availability.value = CallAvailability.READY
+        runCurrent()
+        assertTrue(vm.uiState.value.callsStale)
+        calls.historyFails = false
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.callsStale)
+        // The first works, the second fails: the note comes, with the first read's lines.
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        calls.entries = calls.entries + CallHistoryEntry("k2", "c2", false, CallOutcome.MISSED, t.plusSeconds(60))
+        calls.availability.value = CallAvailability.READY
+        runCurrent()
+        assertFalse(vm.uiState.value.callsStale)
+        calls.historyFails = true
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.callsStale)
+        assertEquals(listOf("k1", "k2"), vm.uiState.value.calls.map { it.callId })
+        // During a call it stays, with the lines.
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.callsStale)
+        // A vault found without calls clears it with the lines, as a lock does.
+        calls.availability.value = CallAvailability.NOT_IN_VAULT
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.callsStale)
+        assertTrue(vm.uiState.value.calls.isEmpty())
+    }
+
+    /** A history that read empty keeps no call line: a failed read after it shows no note. */
+    @Test
+    fun noNoteWithoutACallLine() = runTest {
+        val calls = FakeCalls() // no entries
+        val vm = conversation(calls)
+        advanceUntilIdle()
+        calls.historyFails = true
+        calls.availability.value = CallAvailability.IN_CALL
+        advanceUntilIdle()
+        calls.availability.value = CallAvailability.READY
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.callsStale)
+    }
 }

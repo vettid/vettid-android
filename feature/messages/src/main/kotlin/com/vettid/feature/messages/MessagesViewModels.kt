@@ -267,16 +267,17 @@ class ConversationViewModel @Inject constructor(
     @Volatile
     private var photosCancelled = false
 
-    /** A read of the calls worked since the vault was last known to be open with calls (the note needs lines to qualify). */
+    /** A read of the calls worked since the vault was last known to be open with calls. */
     private var callsRead = false
 
     /**
      * One read of the calls: a good one replaces the lines and clears the note; a failed one keeps the lines shown (it is
-     * not an empty history) and, once a read has worked, says they may be out of date. With none read yet, nothing.
+     * not an empty history) and, when it kept call lines from a read that worked, says they may be out of date. With no
+     * call line kept (none read yet, or a history read empty), nothing.
      */
     private fun takeCalls(h: CallHistory) {
         if (h.failed) {
-            if (callsRead) local.update { it.copy(callsStale = true) }
+            if (callsRead) local.update { if (it.calls.isNotEmpty()) it.copy(callsStale = true) else it }
             return
         }
         callsRead = true

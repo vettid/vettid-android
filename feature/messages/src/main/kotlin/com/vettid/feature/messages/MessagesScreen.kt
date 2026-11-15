@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -390,6 +391,16 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
     LaunchedEffect(state.messages.lastOrNull()?.messageId, state.calls.maxByOrNull { it.startedAt }?.callId) {
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last > 0) listState.animateScrollToItem(last)
+    }
+    // "Calls may be out of date" comes as the list's last item: into view when it comes, if the member was at the end
+    // (once the frame with it has been laid out); a member reading further up keeps their place.
+    LaunchedEffect(state.callsStale) {
+        if (!state.callsStale) return@LaunchedEffect
+        val before = listState.layoutInfo
+        val atEnd = (before.visibleItemsInfo.lastOrNull()?.index ?: -1) >= before.totalItemsCount - 2
+        withFrameNanos { }
+        val last = listState.layoutInfo.totalItemsCount - 1
+        if (atEnd && last > 0) listState.animateScrollToItem(last)
     }
     DetailScaffold(
         onBackClick = actions.onBack,
