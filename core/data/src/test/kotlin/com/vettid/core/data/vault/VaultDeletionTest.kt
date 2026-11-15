@@ -203,7 +203,7 @@ class VaultDeletionTest {
         val w = DeletionWatch(backgroundScope, { currentTime }, read = {
             reads += currentTime
             VaultDeletion.resolve(VaultDeletion.readCheck { throw gone(410, "vault_deleted") }, vaultWord = false)
-        }, onGone = { gone++ }, onSlow = {})
+        }, onGone = { gone++; true }, onSlow = {})
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         advanceTimeBy(106_000)
         assertEquals(listOf(5_000L, 15_000L, 45_000L, 105_000L), reads)
@@ -212,7 +212,7 @@ class VaultDeletionTest {
         // With the vault's word the same 410 is GONE: the erase runs once.
         val w2 = DeletionWatch(backgroundScope, { currentTime }, read = {
             VaultDeletion.resolve(VaultDeletion.readCheck { throw gone(410, "account_deleted") }, vaultWord = true)
-        }, onGone = { gone++ }, onSlow = {})
+        }, onGone = { gone++; true }, onSlow = {})
         w2.start(DeletingMarker("v", currentTime, currentTime + 10 * min), readNow = false)
         assertEquals(DeletionCheck.GONE, w2.check())
         assertEquals(1, gone)
@@ -228,7 +228,7 @@ class VaultDeletionTest {
             { throw VaultFailure(FailureKind.UNAUTHORIZED) }, { VaultDeletion.StatusSeen(false, false) },
         ))
         val w = DeletionWatch(backgroundScope, { currentTime }, read = { VaultDeletion.readCheck { answers.removeFirst()() } },
-            onGone = { gone++; phase.endDeleting(AppPhase.SignedOut) }, onSlow = {})
+            onGone = { gone++; phase.endDeleting(AppPhase.SignedOut); true }, onSlow = {})
         assertEquals(DeletionCheck.UNCONFIRMED, w.check())
         assertEquals(DeletionCheck.UNCONFIRMED, w.check())
         assertEquals(0, gone)
@@ -254,7 +254,7 @@ class VaultDeletionTest {
         var skew = 0L
         val w = DeletionWatch(
             backgroundScope, { currentTime - skew }, read = { r2.at += currentTime; DeletionCheck.LISTED },
-            onGone = {}, onSlow = { r2.slow++ },
+            onGone = { true }, onSlow = { r2.slow++ },
         )
         advanceTimeBy(20_000)
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
@@ -299,7 +299,7 @@ class VaultDeletionTest {
             r.at += currentTime
             r.answers.removeFirstOrNull() ?: DeletionCheck.LISTED
         },
-        onGone = { r.gone++ },
+        onGone = { r.gone++; true },
         onSlow = { r.slow++ },
     )
 
@@ -381,7 +381,7 @@ class VaultDeletionTest {
         val w = DeletionWatch(backgroundScope, { currentTime }, read = {
             if (currentTime >= 10 * min) gate.await()
             DeletionCheck.LISTED
-        }, onGone = {}, onSlow = { slow++ })
+        }, onGone = { true }, onSlow = { slow++ })
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         advanceTimeBy(10 * min - 1)
         assertEquals(0, slow)
@@ -404,7 +404,7 @@ class VaultDeletionTest {
             reads++
             if (reads == 1) gate.await()
             DeletionCheck.UNREACHABLE
-        }, onGone = {}, onSlow = { slow++ })
+        }, onGone = { true }, onSlow = { slow++ })
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         runCurrent()
         val before = async { w.check() } // before the bound: nothing
@@ -431,7 +431,7 @@ class VaultDeletionTest {
         val w = DeletionWatch(backgroundScope, { currentTime }, read = {
             if (currentTime >= 9 * min) gate.await() // the 585 s read hangs
             DeletionCheck.LISTED
-        }, onGone = {}, onSlow = { said += it })
+        }, onGone = { true }, onSlow = { said += it })
         w.start(m, readNow = false)
         advanceTimeBy(10 * min - 1)
         assertTrue(said.isEmpty())
@@ -452,7 +452,7 @@ class VaultDeletionTest {
         val w = DeletionWatch(backgroundScope, { clock }, read = {
             gate.await()
             DeletionCheck.UNREACHABLE
-        }, onGone = {}, onSlow = { slow++ })
+        }, onGone = { true }, onSlow = { slow++ })
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         val first = async { w.check() } // before the bound, hangs
         runCurrent()
@@ -483,7 +483,7 @@ class VaultDeletionTest {
             } else {
                 DeletionCheck.LISTED
             }
-        }, onGone = { gone++ }, onSlow = { said += it })
+        }, onGone = { gone++; true }, onSlow = { said += it })
         val m1 = DeletingMarker("v", 0, 10 * min)
         val m2 = DeletingMarker("v", 1 * min, 11 * min)
         w.start(m1, readNow = false)
@@ -514,7 +514,7 @@ class VaultDeletionTest {
         val w = DeletionWatch(backgroundScope, { currentTime }, read = {
             gate.await()
             DeletionCheck.GONE
-        }, onGone = { gone++ }, onSlow = {})
+        }, onGone = { gone++; true }, onSlow = {})
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         w.stop()
         val out = async { w.check() } // made after the stop
@@ -523,7 +523,7 @@ class VaultDeletionTest {
         assertEquals(DeletionCheck.UNCONFIRMED, out.await())
         assertEquals(0, gone)
         // Never started at all: the same.
-        val w2 = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.GONE }, onGone = { gone++ }, onSlow = {})
+        val w2 = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.GONE }, onGone = { gone++; true }, onSlow = {})
         assertEquals(DeletionCheck.UNCONFIRMED, w2.check())
         assertEquals(0, gone)
     }
@@ -538,7 +538,7 @@ class VaultDeletionTest {
             reads++
             if (reads == 1) gate.await()
             if (reads == 1) DeletionCheck.GONE else DeletionCheck.LISTED
-        }, onGone = { gone++ }, onSlow = {})
+        }, onGone = { gone++; true }, onSlow = {})
         w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
         val stale = async { w.check() }
         runCurrent()
@@ -573,7 +573,7 @@ class VaultDeletionTest {
         val named = mutableListOf<DeletingMarker>()
         var held: String? = null // A cleared: no 410-only marker for a moment
         val read = ResolvedRead({ held }, { DeletionCheck.GONE }) {}
-        val w = DeletionWatch(backgroundScope, { currentTime }, read = { read.read() }, onGone = { named += it }, onSlow = {})
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = { read.read() }, onGone = { named += it; true }, onSlow = {})
         w.start(a, readNow = false)
         assertEquals(DeletionCheck.GONE, w.check()) // the read took "no 410 marker" as the vault's word
         assertEquals("the watch names the attempt it read for", listOf(a), named)
@@ -599,7 +599,7 @@ class VaultDeletionTest {
     @Test
     fun aNewMarkerReplacesTheEarlierTimers() = runTest {
         val said = mutableListOf<DeletingMarker>()
-        val w = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.LISTED }, onGone = {}, onSlow = { said += it })
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.LISTED }, onGone = { true }, onSlow = { said += it })
         val m1 = DeletingMarker("v", 0, 10 * min)
         val m2 = DeletingMarker("v", 9 * min, 19 * min)
         w.start(m1, readNow = false)
@@ -638,7 +638,7 @@ class VaultDeletionTest {
             reads++
             gate.await()
             DeletionCheck.UNREACHABLE
-        }, onGone = {}, onSlow = {})
+        }, onGone = { true }, onSlow = {})
         val a = async { w.check() }
         val b = async { w.check() }
         runCurrent()
@@ -702,4 +702,5 @@ class VaultDeletionTest {
         p.value = AppPhase.Locked
         assertEquals(AppPhase.Locked, p.value)
     }
+
 }

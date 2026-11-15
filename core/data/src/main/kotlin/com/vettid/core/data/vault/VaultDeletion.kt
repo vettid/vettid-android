@@ -275,6 +275,14 @@ object VaultDeletion {
      */
     internal fun watchErases(apiHeld: Boolean, own: DeletingMarker?, watched: DeletingMarker): Boolean = !apiHeld && own == watched
 
+    /**
+     * Whether the vault's own word, arriving with no "being deleted" up, starts it: only while this phone still has its vault
+     * ([vaultId] held, not signed out or in set-up, i.e. not after a wipe). A clear that ended a 410-only state just before
+     * the word must not lose it.
+     */
+    internal fun vaultWordStarts(phase: AppPhase, vaultId: String): Boolean =
+        vaultId.isNotEmpty() && phase !is AppPhase.SignedOut && phase !is AppPhase.Setup && phase !is AppPhase.Deleting
+
     /** Whether a close step starts the watch of [marker]: only while "being deleted" holds and [held] is still that marker. */
     internal fun <M : Any> watchesAttempt(deleting: Boolean, held: M?, marker: M): Boolean = deleting && held == marker
 }
@@ -295,8 +303,8 @@ internal class DeletionWatch(
     private val scope: CoroutineScope,
     private val nowMs: () -> Long,
     private val read: suspend () -> DeletionCheck,
-    /** The vault is gone, read for [DeletingMarker] (the attempt the read was made for). */
-    private val onGone: suspend (DeletingMarker) -> Unit,
+    /** The vault is gone, read for [DeletingMarker] (the attempt the read was made for): true when the app erased. */
+    private val onGone: suspend (DeletingMarker) -> Boolean,
     private val onSlow: (DeletingMarker) -> Unit,
 ) {
     private var timer: Job? = null
@@ -383,8 +391,9 @@ internal class DeletionWatch(
                     }
                 }
             }
-            if (!current || m == null) return DeletionCheck.UNCONFIRMED // an ended attempt's answer concludes nothing
-            onGone(m)
+            // An ended attempt's answer concludes nothing; nor does a "gone" the app refused (a 410-only marker came meanwhile,
+            // or the attempt ended): the watch keeps reading, and "Check again" says nothing was confirmed.
+            if (!current || m == null || !onGone(m)) return DeletionCheck.UNCONFIRMED
         }
         return r
     }

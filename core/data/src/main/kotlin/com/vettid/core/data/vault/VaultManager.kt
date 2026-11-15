@@ -1929,21 +1929,28 @@ class VaultManager(
             return@guard AppPhase.SignedOut
         }
         // This process's marker first: the one its watch and "still finishing" go by; the record's when it has none (a start).
-        (deletingMarker ?: local.deleting)?.let { m ->
-            // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
-            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m)))
-            deletionWatch.start(m, readNow = true)
-            return@guard phaseFlow.value
-        }
+        // The marker read, "being deleted" published and the watch started in one step, under the lock the ends (a clear,
+        // the vault gone) drop the marker and end the state under: an end that came first leaves nothing to publish.
+        synchronized(deletedApiLock) {
+            (deletingMarker ?: local.deleting)?.also { m ->
+                // ANDROID-PLAN 0.1.54: "being deleted" before anything is read; the status is re-read at every start.
+                if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m)))
+                deletionWatch.start(m, readNow = true)
+            }
+        }?.let { return@guard phaseFlow.value }
         // The record's marker only when this process holds none (a start), adopted in one step with the 410's own write: a
         // marker cleared or replaced meanwhile is never brought back over it.
-        synchronized(deletedApiLock) { deletedApiMarker ?: local.deletedApi?.also { deletedApiMarker = it } }?.let { m ->
-            // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start and the
-            // mailbox keeps being collected (the vault's event can still arrive there).
-            if (!phaseFlow.deleting) {
-                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
+        synchronized(deletedApiLock) {
+            (deletedApiMarker ?: local.deletedApi?.also { deletedApiMarker = it })?.also { m ->
+                // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start
+                // and the mailbox keeps being collected (the vault's event can still arrive there).
+                if (!phaseFlow.deleting) {
+                    val slow = VaultDeletion.pastBound(m.watch())
+                    phaseFlow.deleting(AppPhase.Deleting(slow = slow, apiOnly = true, removeFromMs = m.untilMs))
+                }
+                deletionWatch.start(m.watch(), readNow = true)
             }
-            deletionWatch.start(m.watch(), readNow = true)
+        }?.let { m ->
             scope.launch { runCatching { session(mailboxOnly = true).device.ensureCollecting() } }
             return@guard phaseFlow.value
         }
@@ -3183,8 +3190,11 @@ class VaultManager(
                 if (deletedApiMarker != expected || !phaseFlow.deleting) return@clear
                 // The watch first: a read then runs under the marker (API_ONLY) or under no attempt (concludes nothing).
                 deletionWatch.stop()
-                synchronized(deletedApiLock) { deletedApiMarker = null }
-                phaseFlow.endDeleting(AppPhase.Locked)
+                // Under the lock evaluate publishes "being deleted" under: it cannot publish it again after this end.
+                synchronized(deletedApiLock) {
+                    deletedApiMarker = null
+                    phaseFlow.endDeleting(AppPhase.Locked)
+                }
             },
         )
     }
@@ -3199,15 +3209,22 @@ class VaultManager(
      * The vault is gone: what the app does when a vault is gone (its keys and local data forgotten, a fresh app key), the
      * marker deleted with the record, "no vault", and the one-time notice.
      */
-    private suspend fun finishDeleted(watched: DeletingMarker? = null): Unit = deletionEnd.withLock {
+    /**
+     * The vault is gone: true when this erased. [watched]: a watch's "gone", for that deletion only; null: the vault's own
+     * word (its event, or the answer to this phone's `vault.delete`).
+     */
+    private suspend fun finishDeleted(watched: DeletingMarker? = null): Boolean = deletionEnd.withLock {
         if (!phaseFlow.deleting) {
             deletionWatch.stop() // a stray watch ends with the state
-            return@withLock
+            // The vault's own word, after a clear ended a 410-only state meanwhile (its status listed the vault): the word
+            // is not lost; "being deleted" starts from it, as it would have without the 410 (not after a wipe).
+            if (watched == null && VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId)) startDeleting()
+            return@withLock false
         }
         // A watch's "gone" ([watched]) erases only for the vault's own deletion it was made for, while no 410-only marker
-        // stands; the vault's own word (its event, or the answer to this phone's vault.delete) comes with no [watched].
+        // stands; the vault's own word comes with no [watched].
         if (watched != null && !VaultDeletion.watchErases(deletedApiMarker != null, deletingMarker ?: local.deleting, watched)) {
-            return@withLock
+            return@withLock false
         }
         deletionWatch.stop()
         // The device stopped for the deletion is forgotten (its keys and stored state); then what a gone vault leaves.
@@ -3216,9 +3233,13 @@ class VaultManager(
         dropSession(forget = true)
         io { resetLocal(LocalAccount(deletedNotice = true)) }
         deleteExpMs = null
-        deletingMarker = null
-        deletedApiMarker = null
-        phaseFlow.endDeleting(AppPhase.SignedOut)
+        // Under the lock evaluate publishes "being deleted" under: it cannot publish it again after this end.
+        synchronized(deletedApiLock) {
+            deletingMarker = null
+            deletedApiMarker = null
+            phaseFlow.endDeleting(AppPhase.SignedOut)
+        }
+        true
     }
 
     override suspend fun checkDeletion(): DeletionCheck = if (phaseFlow.deleting) deletionWatch.check() else DeletionCheck.GONE
