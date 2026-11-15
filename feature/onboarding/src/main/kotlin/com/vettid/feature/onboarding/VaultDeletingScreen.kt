@@ -91,12 +91,6 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
     /** The phase's own "still finishing" (the root passes it on). */
     fun setSlow(slow: Boolean) = state.update { it.copy(slow = slow) }
 
-    /** The phase's `apiOnly` (the root passes it on). */
-    fun setApiOnly(apiOnly: Boolean) = state.update { it.copy(apiOnly = apiOnly) }
-
-    /** The phase's `removeFromMs` (the root passes it on). */
-    fun setRemoveFrom(ms: Long?) = state.update { it.copy(removeFromMs = ms) }
-
     /** The phase's `apiOnly` and `removeFromMs` in one step, so the screen never shows the one without the other. */
     fun setApi(apiOnly: Boolean, removeFromMs: Long?) = state.update { it.copy(apiOnly = apiOnly, removeFromMs = removeFromMs) }
 

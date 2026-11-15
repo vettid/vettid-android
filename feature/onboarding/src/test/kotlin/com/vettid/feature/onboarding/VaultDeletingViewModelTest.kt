@@ -97,7 +97,7 @@ class VaultDeletingViewModelTest {
     fun anApiOnlyStateOffersRemoveOnlyFromTheBoundAndANewChecksNeverLeaves() = runTest {
         val api = FakeVault(AppPhase.Deleting(apiOnly = true))
         val vm = VaultDeletingViewModel(api)
-        vm.setApiOnly(true)
+        vm.setApi(true, null)
         vm.askRemove() // before the bound
         vm.confirmRemove()
         assertFalse(vm.uiState.value.removeConfirm)
@@ -118,10 +118,11 @@ class VaultDeletingViewModelTest {
     @Test
     fun theBoundIsPassedOnToTheScreen() = runTest {
         val vm = VaultDeletingViewModel(FakeVault(AppPhase.Deleting(apiOnly = true)))
-        vm.setApiOnly(true)
-        vm.setRemoveFrom(42L)
+        vm.setApi(true, 42L)
+        assertTrue(vm.uiState.value.apiOnly)
         assertEquals(42L, vm.uiState.value.removeFromMs)
-        vm.setRemoveFrom(null)
+        vm.setApi(false, null)
+        assertFalse(vm.uiState.value.apiOnly)
         assertNull(vm.uiState.value.removeFromMs)
     }
 }

@@ -270,17 +270,19 @@ object VaultDeletion {
  * one runs waits for it.
  *
  * (owner decision 2026-11-15) The screen names the bound's time, so "still finishing" (and with it "Remove from this
- * phone") does not wait for a read: every read, the timer's at the bound and those of a start, a return to the
- * foreground and "Check again", first publishes it when the bound has passed. [onSlow] is called once per marker.
+ * phone") does not wait for a read: a timer of its own publishes it at the bound, whatever read is in flight then, and
+ * every [check] and read past the bound publishes it first. [onSlow] is called once per marker, with that marker, and
+ * never for a marker the watch no longer holds (a new one replaces the old timers).
  */
 internal class DeletionWatch(
     private val scope: CoroutineScope,
     private val nowMs: () -> Long,
     private val read: suspend () -> DeletionCheck,
     private val onGone: suspend () -> Unit,
-    private val onSlow: () -> Unit,
+    private val onSlow: (DeletingMarker) -> Unit,
 ) {
     private var timer: Job? = null
+    private var boundTimer: Job? = null
     private var inFlight: Deferred<DeletionCheck>? = null
 
     /** The marker watched, for the bound of every read; null once stopped. */
@@ -289,13 +291,19 @@ internal class DeletionWatch(
     /** [onSlow] was called for [marker]. */
     private var slowSaid = false
 
-    /** The timer runs for [m] (from a start: [readNow] reads at once too). A watch that already runs is left as it is. */
+    /**
+     * The timers run for [m] (from a start: [readNow] reads at once too). A watch that already runs for [m] is left as it
+     * is; one that runs for another marker (an earlier deletion) is replaced.
+     */
     @Synchronized
     fun start(m: DeletingMarker, readNow: Boolean) {
         if (m != marker) {
+            timer?.cancel()
+            boundTimer?.cancel()
             marker = m
             slowSaid = false
         }
+        if (boundTimer?.isActive != true) boundTimer = scope.launch { slowAtBound(m) }
         if (timer?.isActive == true) return
         timer = scope.launch { run(m, readNow) }
     }
@@ -305,22 +313,32 @@ internal class DeletionWatch(
     fun stop() {
         timer?.cancel()
         timer = null
+        boundTimer?.cancel()
+        boundTimer = null
         marker = null
     }
 
-    /** "Still finishing", once, when [marker]'s bound has passed. */
-    private fun slowIfPast() {
-        val past = synchronized(this) {
-            val m = marker ?: return
-            if (slowSaid || !VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return
-            slowSaid = true
-            true
+    /** "Still finishing", once, when the held marker's bound has passed ([m]: only if it is still the one held). */
+    private fun slowIfPast(m: DeletingMarker? = null) {
+        val said = synchronized(this) {
+            marker?.takeIf { held ->
+                (m == null || m == held) && !slowSaid && VaultDeletion.pastBound(held.sinceMs, held.untilMs, nowMs())
+            }?.also { slowSaid = true }
         }
-        if (past) onSlow()
+        said?.let(onSlow)
     }
 
-    /** One read now, or the one that runs. */
+    /** At [m]'s bound, on its own timer: no read in flight holds it back. Capped and looped as the read timer. */
+    private suspend fun slowAtBound(m: DeletingMarker) {
+        while (!VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) {
+            delay((m.untilMs - nowMs()).coerceIn(1L, VaultDeletion.THEN_EVERY_MS))
+        }
+        slowIfPast(m)
+    }
+
+    /** One read now, or the one that runs; past the bound, "still finishing" first, before joining a read in flight. */
     suspend fun check(): DeletionCheck {
+        slowIfPast()
         val d = synchronized(this) {
             inFlight?.takeIf { it.isActive } ?: scope.async { readOnce() }.also { inFlight = it }
         }
@@ -330,7 +348,14 @@ internal class DeletionWatch(
     private suspend fun readOnce(): DeletionCheck {
         slowIfPast()
         val r = read()
-        if (r == DeletionCheck.GONE) onGone()
+        if (r == DeletionCheck.GONE) {
+            // Gone: no "still finishing" for this deletion any more, from the bound's timer or a later read.
+            synchronized(this) {
+                boundTimer?.cancel()
+                slowSaid = true
+            }
+            onGone()
+        }
         return r
     }
 
@@ -338,15 +363,14 @@ internal class DeletionWatch(
     private suspend fun run(m: DeletingMarker, readNow: Boolean) {
         if (readNow && check() == DeletionCheck.GONE) return
         // Past the bound (a start after it): "still finishing" at once, with no timer.
-        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast()
+        if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast(m)
         while (true) {
             val now = nowMs()
             // Capped: a clock that moved back must not make the wait as long as the move.
             delay((minOf(VaultDeletion.nextReadMs(m.sinceMs, now), m.untilMs) - now).coerceIn(0L, VaultDeletion.THEN_EVERY_MS))
             if (check() == DeletionCheck.GONE) return
-            // At the bound: "still finishing" was published before this read (or now, if the bound passed during it), and
-            // nothing more runs on a timer.
-            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast()
+            // At the bound ("still finishing" came on its own timer, or before this read), nothing more runs on a timer.
+            if (VaultDeletion.pastBound(m.sinceMs, m.untilMs, nowMs())) return slowIfPast(m)
         }
     }
 }
@@ -428,8 +452,10 @@ internal class PhaseHolder(initial: AppPhase) {
     fun updateDeleting(change: (AppPhase.Deleting) -> AppPhase.Deleting): Boolean {
         val d = held ?: return false
         val next = change(d)
-        held = next
-        publish(next)
+        if (next != d) {
+            held = next
+            publish(next)
+        }
         return true
     }
 

@@ -420,6 +420,68 @@ class VaultDeletionTest {
         assertEquals(1, slow)
     }
 
+    // A read started before the bound that hangs across it: "still finishing" comes at the bound on its own timer, not when
+    // the read answers.
+    @Test
+    fun aReadHangingAcrossTheBoundDoesNotHoldRemoveBack() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val said = mutableListOf<DeletingMarker>()
+        val m = DeletingMarker("v", 0, 10 * min)
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = {
+            if (currentTime >= 9 * min) gate.await() // the 585 s read hangs
+            DeletionCheck.LISTED
+        }, onGone = {}, onSlow = { said += it })
+        w.start(m, readNow = false)
+        advanceTimeBy(10 * min - 1)
+        assertTrue(said.isEmpty())
+        advanceTimeBy(2)
+        assertEquals(listOf(m), said) // at the bound, the 585 s read still hanging
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(1, said.size)
+    }
+
+    // A check past the bound joins the read in flight only after publishing "still finishing" (here the bound timer
+    // cannot have fired: the phone's clock jumped past the bound while virtual time stood still).
+    @Test
+    fun aCheckPastTheBoundIsStillFinishingBeforeJoiningAReadInFlight() = runTest {
+        var clock = 0L
+        val gate = CompletableDeferred<Unit>()
+        var slow = 0
+        val w = DeletionWatch(backgroundScope, { clock }, read = {
+            gate.await()
+            DeletionCheck.UNREACHABLE
+        }, onGone = {}, onSlow = { slow++ })
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        val first = async { w.check() } // before the bound, hangs
+        runCurrent()
+        assertEquals(0, slow)
+        clock = 10 * min + 1_000
+        val joined = async { w.check() }
+        runCurrent()
+        assertEquals(1, slow) // before the read in flight answers
+        gate.complete(Unit)
+        first.await()
+        joined.await()
+        assertEquals(1, slow)
+    }
+
+    // A watch of an earlier deletion is replaced by a later one: the earlier bound marks nothing, the later bound does.
+    @Test
+    fun aNewMarkerReplacesTheEarlierTimers() = runTest {
+        val said = mutableListOf<DeletingMarker>()
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.LISTED }, onGone = {}, onSlow = { said += it })
+        val m1 = DeletingMarker("v", 0, 10 * min)
+        val m2 = DeletingMarker("v", 9 * min, 19 * min)
+        w.start(m1, readNow = false)
+        advanceTimeBy(9 * min)
+        w.start(m2, readNow = false)
+        advanceTimeBy(5 * min) // past m1's bound
+        assertTrue(said.isEmpty())
+        advanceTimeBy(5 * min + 1) // past m2's
+        assertEquals(listOf(m2), said)
+    }
+
     // A new marker (a new deletion) is told apart: its own bound, its own "still finishing"; a stopped watch says nothing.
     @Test
     fun stillFinishingIsOncePerMarkerAndNotAfterAStop() = runTest {
