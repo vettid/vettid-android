@@ -213,6 +213,7 @@ class VaultDeletionTest {
         val w2 = DeletionWatch(backgroundScope, { currentTime }, read = {
             VaultDeletion.resolve(VaultDeletion.readCheck { throw gone(410, "account_deleted") }, vaultWord = true)
         }, onGone = { gone++ }, onSlow = {})
+        w2.start(DeletingMarker("v", currentTime, currentTime + 10 * min), readNow = false)
         assertEquals(DeletionCheck.GONE, w2.check())
         assertEquals(1, gone)
     }
@@ -502,6 +503,29 @@ class VaultDeletionTest {
         assertEquals(0, gone)
         advanceTimeBy(10 * min + 1)
         assertEquals(listOf(m2), said) // m2's own bound still marks it
+    }
+
+    // A read made while the watch holds no attempt (after a stop, or before the next start) is no attempt's: its GONE
+    // erases nothing, even if a new deletion starts while it is out.
+    @Test
+    fun aReadWhileNoAttemptIsHeldErasesNothing() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var gone = 0
+        val w = DeletionWatch(backgroundScope, { currentTime }, read = {
+            gate.await()
+            DeletionCheck.GONE
+        }, onGone = { gone++ }, onSlow = {})
+        w.start(DeletingMarker("v", 0, 10 * min), readNow = false)
+        w.stop()
+        val out = async { w.check() } // made after the stop
+        runCurrent()
+        gate.complete(Unit)
+        assertEquals(DeletionCheck.UNCONFIRMED, out.await())
+        assertEquals(0, gone)
+        // Never started at all: the same.
+        val w2 = DeletionWatch(backgroundScope, { currentTime }, read = { DeletionCheck.GONE }, onGone = { gone++ }, onSlow = {})
+        assertEquals(DeletionCheck.UNCONFIRMED, w2.check())
+        assertEquals(0, gone)
     }
 
     // The same through a replacement without a stop (a later deletion's start).

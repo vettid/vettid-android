@@ -366,8 +366,9 @@ internal class DeletionWatch(
             // Gone: no "still finishing" for this deletion any more, from the bound's timer or a later read. A read of a
             // deletion the watch no longer holds (stopped, or replaced by a later one) acts on nothing: a 410-only attempt
             // is erased only by its own reads.
+            // A read made while the watch held no attempt (before a start, or after a stop) is no attempt's: it erases nothing.
             val current = synchronized(this) {
-                (marker == m).also { held ->
+                (m != null && marker == m).also { held ->
                     if (held) {
                         boundTimer?.cancel()
                         slowSaid = true

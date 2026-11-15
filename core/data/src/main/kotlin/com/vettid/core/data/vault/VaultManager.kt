@@ -3166,11 +3166,15 @@ class VaultManager(
      */
     private suspend fun clearApiDeleted(expected: DeletedApiMarker): Unit = deletionEnd.withLock {
         if (!phaseFlow.deleting) return@withLock
+        // One record generation for the save and any restore: a wipe or reset in between drops both.
+        val rec = record.recordGeneration
         apiClear.clear(
             expected,
             held = { deletedApiMarker },
-            save = { io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = null) } } } },
+            save = { io { VaultDeletion.saveMarker { record.update(rec) { it.copy(deletedApi = null) } } } },
             onCleared = {
+                // Not if something ended the state while the save ran (a wipe): its own end stands.
+                if (deletedApiMarker != expected || !phaseFlow.deleting) return@clear
                 deletedApiMarker = null
                 deletionWatch.stop()
                 phaseFlow.endDeleting(AppPhase.Locked)
@@ -3179,7 +3183,9 @@ class VaultManager(
                 // The state stays as it is (the next listed status clears it again); the record keeps the marker, written
                 // again in case a close step's write was held off while it was being cleared.
                 android.util.Log.w("VaultManager", "the deletion's marker could not be cleared")
-                io { VaultDeletion.saveMarker { record.update(record.recordGeneration) { it.copy(deletedApi = expected) } } }
+                if (deletedApiMarker == expected) {
+                    io { VaultDeletion.saveMarker { record.update(rec) { it.copy(deletedApi = expected) } } }
+                }
             },
         )
     }
