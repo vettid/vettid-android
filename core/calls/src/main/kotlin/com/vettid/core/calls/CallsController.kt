@@ -259,7 +259,9 @@ class CallsController(
      * it. No call is live on this phone while it is locked or the probe has not answered, so nothing else is held up;
      * during a live call it does not wait at all, so that call's events never wait (the phone drops such an offer, busy
      * in another call, and the vault rings the member's other devices). The vault's lock and the update screen are
-     * looked at again after the wait: a lock or an update screen that came during it is not rung over.
+     * looked at again after the wait: a lock or an update screen that came during it is not rung over. (A lock also sets
+     * the probe's answer back to unknown, which ends the wait without it: the look at [open] is defence in depth for a
+     * lock between the answer and the resumption, which no test reaches.)
      */
     private suspend fun mayRing(): Boolean {
         val known = if (machine.state.value is CallState.Live) open && supported == true else callsKnownWithin(UNLOCK_WAIT)

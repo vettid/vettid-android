@@ -872,9 +872,7 @@ class CallsControllerTest {
         gate.send(Unit)
         runCurrent()
         assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
-        // Its `call.ringing` is sent from the call's session (CallMachine.ring), which the hang-up ends in the same pass:
-        // here it is cancelled before it goes; on a phone it may go just before. Never more than the one.
-        assertTrue(vault.gateway.ringings.size <= 1 && vault.gateway.ringings.all { it == CALL_ID })
+        assertEquals(listOf(CALL_ID), vault.gateway.ringings)
     }
 
     /**
@@ -900,9 +898,9 @@ class CallsControllerTest {
         // It rang (the offer was let through), then the hang-up ended it: Idle would mean it never rang.
         assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value is CallState.Ended)
         assertEquals(0, c.diagnostics.value.refused)
-        // Its `call.ringing` is sent from the call's session (CallMachine.ring), which the hang-up ends in the same pass:
-        // here it is cancelled before it goes; on a phone it may go just before. Never more than the one.
-        assertTrue(vault.gateway.ringings.size <= 1 && vault.gateway.ringings.all { it == CALL_ID })
+        // Its `call.ringing` goes from the call's session (CallMachine.ring), which the hang-up ends in the same pass
+        // here, before it is sent (on a phone it may go just before the hang-up is handled).
+        assertEquals(emptyList<String>(), vault.gateway.ringings)
         assertTrue(!audio.ringtone)
     }
 
@@ -925,7 +923,10 @@ class CallsControllerTest {
         assertEquals(1, c.diagnostics.value.refused)
     }
 
-    /** During a live call an offer does not wait (it is answered busy): that call's own events are never held behind it. */
+    /**
+     * During a live call an offer does not wait (the phone, busy in another call, drops it and the vault rings the
+     * member's other devices): that call's own events are never held behind it.
+     */
     @Test
     fun anOfferDuringALiveCallHoldsNothingUp() = runTest {
         val c = controller()
@@ -946,7 +947,11 @@ class CallsControllerTest {
         assertEquals(1, c.diagnostics.value.refused)
     }
 
-    /** A lock that comes while an offer waits for the probe: no ring, and nothing is sent for it. */
+    /**
+     * A lock that comes while an offer waits for the probe: no ring, and nothing is sent for it. (The lock sets the probe's
+     * answer back to unknown, so the wait ends without it; mayRing's own look at the lock after the wait is defence in
+     * depth that no test here reaches.)
+     */
     @Test
     fun anOfferDoesNotRingWhenTheVaultLocksWhileItWaits() = runTest {
         val gate = Channel<Unit>(Channel.UNLIMITED)
