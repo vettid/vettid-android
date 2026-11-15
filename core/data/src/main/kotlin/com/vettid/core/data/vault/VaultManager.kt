@@ -639,7 +639,12 @@ class VaultManager(
         nowMs = System::currentTimeMillis,
         read = { resolvedRead.read() },
         onGone = { finishDeleted() },
-        onSlow = { if (phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = true, apiOnly = deletedApiMarker != null)) },
+        onSlow = {
+            if (phaseFlow.deleting) {
+                val api = deletedApiMarker
+                phaseFlow.deleting(AppPhase.Deleting(slow = true, apiOnly = api != null, removeFromMs = api?.untilMs))
+            }
+        },
     )
 
     private val resolvedRead = ResolvedRead(
@@ -692,7 +697,7 @@ class VaultManager(
         // first read of the phase, [evaluate]).
         local.deleting?.let { m -> phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m))) }
             ?: local.deletedApi?.let { m ->
-                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true))
+                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
             }
     }
 
@@ -1932,7 +1937,9 @@ class VaultManager(
             // ANDROID-PLAN 0.1.78: "Your vault was deleted" before anything is read; the status is read at every start and the
             // mailbox keeps being collected (the vault's event can still arrive there).
             deletedApiMarker = m
-            if (!phaseFlow.deleting) phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true))
+            if (!phaseFlow.deleting) {
+                phaseFlow.deleting(AppPhase.Deleting(slow = VaultDeletion.pastBound(m.watch()), apiOnly = true, removeFromMs = m.untilMs))
+            }
             deletionWatch.start(m.watch(), readNow = true)
             scope.launch { runCatching { session(mailboxOnly = true).device.ensureCollecting() } }
             return@guard phaseFlow.value
@@ -3095,7 +3102,7 @@ class VaultManager(
             DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
                 record.bumpGeneration()
                 deletedApiMarker = it
-                phaseFlow.deleting(AppPhase.Deleting(apiOnly = true))
+                phaseFlow.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = it.untilMs))
             }
         }
         releaseUpdate.close()

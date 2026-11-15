@@ -38,9 +38,10 @@ sealed interface AppPhase {
      * being deleted", over every other phase, until the member API no longer lists the vault ([VaultDeletion]). [slow]:
      * still listed at the bound, "Still finishing" with "Check again".
      * (0.1.78) [apiOnly]: "Your vault was deleted" from the member API's `410` alone, without the vault's word; [slow]
-     * is then the bound after the first 410, from which a confirmed "Remove from this phone" is offered.
+     * is then the bound after the first 410, from which a confirmed "Remove from this phone" is offered; [removeFromMs] is
+     * that bound (epoch ms, this phone's clock), which the screen names before it is reached (owner decision 2026-11-15).
      */
-    data class Deleting(val slow: Boolean = false, val apiOnly: Boolean = false) : AppPhase
+    data class Deleting(val slow: Boolean = false, val apiOnly: Boolean = false, val removeFromMs: Long? = null) : AppPhase
 
     // A phone that a transfer or a recovery replaced has no phase of its own: it erases itself and is
     // SignedOut, as freshly installed (owner decision, 2026-10-05; VaultManager, HolderWatch).

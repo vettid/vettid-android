@@ -114,4 +114,14 @@ class VaultDeletingViewModelTest {
         advanceUntilIdle()
         assertEquals(1, api.calls.count { it == "eraseThisPhone" })
     }
+
+    @Test
+    fun theBoundIsPassedOnToTheScreen() = runTest {
+        val vm = VaultDeletingViewModel(FakeVault(AppPhase.Deleting(apiOnly = true)))
+        vm.setApiOnly(true)
+        vm.setRemoveFrom(42L)
+        assertEquals(42L, vm.uiState.value.removeFromMs)
+        vm.setRemoveFrom(null)
+        assertNull(vm.uiState.value.removeFromMs)
+    }
 }

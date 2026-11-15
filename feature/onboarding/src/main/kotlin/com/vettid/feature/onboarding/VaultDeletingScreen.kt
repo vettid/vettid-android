@@ -1,5 +1,6 @@
 package com.vettid.feature.onboarding
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -19,7 +20,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -41,6 +44,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Date
 import javax.inject.Inject
 
 /** Immutable UI state of "Your vault is being deleted" (ANDROID-PLAN 0.1.54). */
@@ -49,6 +53,8 @@ data class VaultDeletingUiState(
     val slow: Boolean = false,
     /** (0.1.78) The member API's `410` alone: "Your vault was deleted"; nothing is erased without the member (or the vault's word). */
     val apiOnly: Boolean = false,
+    /** With [apiOnly]: when "Remove from this phone" is offered (epoch ms), named in the text until [slow]. */
+    val removeFromMs: Long? = null,
     /** A "Check again" read is under way. */
     val checking: Boolean = false,
     /** What the last "Check again" found, when the vault was not gone: still listed, or not reachable. */
@@ -89,6 +95,9 @@ class VaultDeletingViewModel @Inject constructor(private val account: AccountRep
     /** The phase's `apiOnly` (the root passes it on). */
     fun setApiOnly(apiOnly: Boolean) = state.update { it.copy(apiOnly = apiOnly) }
 
+    /** The phase's `removeFromMs` (the root passes it on). */
+    fun setRemoveFrom(ms: Long?) = state.update { it.copy(removeFromMs = ms) }
+
     override fun checkAgain() {
         if (state.value.checking) return
         state.update { it.copy(checking = true, lastCheck = null) }
@@ -124,10 +133,12 @@ fun VaultDeletingRoute(
     slow: Boolean,
     onOpenAccountSite: () -> Unit,
     apiOnly: Boolean = false,
+    removeFromMs: Long? = null,
     viewModel: VaultDeletingViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(slow) { viewModel.setSlow(slow) }
     LaunchedEffect(apiOnly) { viewModel.setApiOnly(apiOnly) }
+    LaunchedEffect(removeFromMs) { viewModel.setRemoveFrom(removeFromMs) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     VaultDeletingContent(state, viewModel, onOpenAccountSite)
 }
@@ -147,9 +158,30 @@ private fun checkRes(c: DeletionCheck): Int = when (c) {
 
 private fun bodyRes(state: VaultDeletingUiState): Int = when {
     state.apiOnly && state.slow -> R.string.vault_deleted_api_slow_body
-    state.apiOnly -> R.string.vault_deleted_api_body
+    state.apiOnly && state.removeFromMs != null -> R.string.vault_deleted_api_body
+    state.apiOnly -> R.string.vault_deleted_api_body_soon
     state.slow -> R.string.vault_deleting_slow_body
     else -> R.string.vault_deleting_body
+}
+
+/** [ms] rounded up to the next whole minute (unchanged when it is one). */
+internal fun roundUpToMinute(ms: Long): Long = Math.floorDiv(ms + MINUTE_MS - 1, MINUTE_MS) * MINUTE_MS
+
+private const val MINUTE_MS = 60_000L
+
+/**
+ * The body's text. Before the bound of a `410` alone it names the time from which "Remove from this phone" is offered
+ * (owner decision 2026-11-15), in the phone's own short time format.
+ */
+@Composable
+private fun bodyText(state: VaultDeletingUiState): String {
+    val res = bodyRes(state)
+    val at = state.removeFromMs
+    if (res != R.string.vault_deleted_api_body || at == null) return stringResource(res)
+    val context = LocalContext.current
+    // Rounded up to the minute: the clock shows no seconds, and the text must never name a minute before the removal.
+    val time = remember(at, context) { DateFormat.getTimeFormat(context).format(Date(roundUpToMinute(at))) }
+    return stringResource(res, time)
 }
 
 /** The screen for [state] (stateless). The progress has no percentage; the title is a polite live region. */
@@ -176,7 +208,7 @@ fun VaultDeletingContent(state: VaultDeletingUiState, actions: VaultDeletingActi
                     },
                 )
                 Text(
-                    stringResource(bodyRes(state)),
+                    bodyText(state),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

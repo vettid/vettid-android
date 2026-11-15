@@ -219,6 +219,7 @@ fun VettIdApp(
                             VaultDeletingRoute(
                                 slow = slow,
                                 apiOnly = (phase as? AppPhase.Deleting)?.apiOnly == true,
+                                removeFromMs = (phase as? AppPhase.Deleting)?.removeFromMs,
                                 onOpenAccountSite = { uri.openUri(portal) },
                             )
                         }
