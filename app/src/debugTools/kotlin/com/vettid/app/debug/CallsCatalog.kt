@@ -130,6 +130,12 @@ internal object CallsCatalog {
         "messages.conversation_calls" to {
             ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, call = CallAvailability.READY, calls = calls), ConversationActions())
         },
+        "messages.conversation_calls_stale" to {
+            ConversationScreen(
+                ConversationUiState("c1", sam, thread, loading = false, call = CallAvailability.READY, calls = calls, callsStale = true),
+                ConversationActions(),
+            )
+        },
         "messages.conversation_in_call" to {
             ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, call = CallAvailability.IN_CALL, calls = calls.take(1)), ConversationActions())
         },

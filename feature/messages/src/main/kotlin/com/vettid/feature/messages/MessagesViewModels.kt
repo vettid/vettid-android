@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.calls.CallAvailability
+import com.vettid.core.data.calls.CallHistory
 import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.NoCallAccess
 import android.graphics.Bitmap
@@ -153,6 +154,11 @@ data class ConversationUiState(
     val calls: List<CallHistoryEntry> = emptyList(),
     /** (GC #7718) Some of the vault's calls with this connection did not read: "Some calls couldn't be shown.". */
     val callsNotShown: Boolean = false,
+    /**
+     * (Owner-approved 2026-11-15) The last read of the calls failed after an earlier one worked: the lines shown are kept
+     * and "Calls may be out of date. VettID couldn't check them just now." says so, until the next read works.
+     */
+    val callsStale: Boolean = false,
     /** (C2) Calls with this connection are off: the button is disabled, with where to turn them on under it. */
     val callsOff: Boolean = false,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
@@ -261,26 +267,40 @@ class ConversationViewModel @Inject constructor(
     @Volatile
     private var photosCancelled = false
 
+    /** A read of the calls worked since the vault was last known to be open with calls. */
+    private var callsRead = false
+
+    /**
+     * One read of the calls: a good one replaces the lines and clears the note; a failed one keeps the lines shown (it is
+     * not an empty history) and, when it kept call lines from a read that worked, says they may be out of date. With no
+     * call line kept (none read yet, or a history read empty), nothing.
+     */
+    private fun takeCalls(h: CallHistory) {
+        if (h.failed) {
+            if (callsRead) local.update { if (it.calls.isNotEmpty()) it.copy(callsStale = true) else it }
+            return
+        }
+        callsRead = true
+        local.update { it.copy(calls = h.entries, callsNotShown = h.someNotShown, callsStale = false) }
+    }
+
     init {
         viewModelScope.launch {
             // The calls of this conversation: read when the vault is known to have calls, and again after each call
             // (the availability goes from "in a call" back to "ready").
             calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
-                    // A read that failed (the vault has calls, its list did not read this time) keeps the calls shown:
-                    // it is not an empty history. With none read yet, nothing is shown, as before.
-                    val h = calls.history(connectionId)
-                    if (!h.failed) local.update { it.copy(calls = h.entries, callsNotShown = h.someNotShown) }
                     // Read at the moment a call ends, the vault may not have taken its `call.end` yet: the call
                     // would stay "in a call" in the list. Once more, a moment later (collectLatest: not if the
                     // availability changed meanwhile).
+                    takeCalls(calls.history(connectionId))
                     delay(HISTORY_AGAIN_MS)
-                    val later = calls.history(connectionId)
-                    if (!later.failed) local.update { it.copy(calls = later.entries, callsNotShown = later.someNotShown) }
+                    takeCalls(calls.history(connectionId))
                 } else if (a != CallAvailability.IN_CALL) {
                     // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
                     // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
-                    local.update { it.copy(calls = emptyList(), callsNotShown = false) }
+                    callsRead = false
+                    local.update { it.copy(calls = emptyList(), callsNotShown = false, callsStale = false) }
                 }
             }
         }
