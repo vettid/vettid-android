@@ -255,10 +255,13 @@ class OwnerCheckManager(
                     // longer idle-lock value set before it is in force now (§3.6.8).
                     checkPassedForIdleLock()
                     estimate = OwnerCheckView.MAX_FAILURES
-                    update(passed = true) { v ->
-                        val deadline = instant(VaultJson.str(m.body, "deadline")) ?: v.deadline
+                    // The event's deadline as it is, none included: the passed one is never kept, or a due state known only
+                    // from the clock would not end (and the replay would not come). The status then says the next one.
+                    val deadline = instant(VaultJson.str(m.body, "deadline"))
+                    update(Pass(counts = true, at = m.ts)) { v ->
                         v.copy(state = OwnerCheckState.OK, deadline = deadline, failures = 0, waiting = null, idleLockAt = null)
                     }
+                    if (deadline == null) scope.launch { runCatching { refreshOwnerCheck() } }
                 }
                 "settings.changed" -> scope.launch { runCatching { refreshOwnerCheck() } }
             }
@@ -372,10 +375,9 @@ class OwnerCheckManager(
 
     private fun onHeld(m: VaultMessage) {
         val n = runCatching { VaultJson.decode(HeldNotice.serializer(), m.body) }.getOrNull() ?: return
-        // A device keeps the newest by ts (§3.6.3).
+        // A device keeps the newest by ts (§3.6.3); one from before the latest pass (here or on another device) is over.
         val prev = heldTs
-        if (prev != null && m.ts.isBefore(prev)) return
-        heldTs = m.ts
+        if (prev != null && m.ts.isBefore(prev) || before(m.ts)) return
         val counts = n.waiting.toCounts()
         val base = view.value ?: unknownHeld()
         val state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD
@@ -385,18 +387,29 @@ class OwnerCheckManager(
                 // (Release L) A vault.held from a release before L says nothing of the idle lock: what was read stays.
                 idleLockAt = instant(n.idleLockAt) ?: base.idleLockAt,
             ),
+            // Its ts is kept only when it is taken (in the step that publishes it, before it is saved).
+            stale = { before(m.ts).also { over -> if (!over) heldTs = m.ts } },
         )
     }
 
-    /** A request was answered `owner_check_required` (§3.6.3): the vault is past its deadline. */
-    fun onRequired() {
+    /**
+     * A request was answered `owner_check_required` (§3.6.3): the vault is past its deadline. [answeredAt]: the answer's `ts`,
+     * on the vault's clock; an answer from before the latest pass (a request the vault refused before it) changes no state.
+     */
+    fun onRequired(answeredAt: Instant? = null) {
         val v = view.value
         if (v == null || v.state == OwnerCheckState.OK) {
             val base = v ?: unknownHeld()
-            set(base.copy(state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD))
+            set(
+                base.copy(state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD),
+                stale = { answeredAt != null && before(answeredAt) },
+            )
         }
         scope.launch { runCatching { refreshOwnerCheck() } }
     }
+
+    /** [ts], on the vault's clock, is before the latest pass known ([passedAt]). */
+    private fun before(ts: Instant): Boolean = passedAt?.let { ts.isBefore(it) } == true
 
     /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
     fun onOpened(afterUnlock: Boolean = true) {
@@ -428,15 +441,6 @@ class OwnerCheckManager(
      * [generation] ([foregroundGeneration] read before the unlock request) and came back before this answer.
      */
     suspend fun afterUnlock(pin: String, password: String, generation: Int) {
-        inUnlock = true
-        try {
-            afterUnlockRun(pin, password, generation)
-        } finally {
-            inUnlock = false
-        }
-    }
-
-    private suspend fun afterUnlockRun(pin: String, password: String, generation: Int) {
         unlockPin = null
         markOpen()
         estimate = 0
@@ -449,7 +453,7 @@ class OwnerCheckManager(
             null
         }
         if (v == null || !v.gated(now())) return
-        val r = check(pin, password, null)
+        val r = checkWith(pin, password, null, unlocksOwn = true)
         unlockOutcome.value = r
         val retry = (r is OwnerCheckOutcome.BadPassword && (r.checksLeft ?: 0) > 0) || r is OwnerCheckOutcome.Backoff
         unlockPin = pin.takeIf { retry && foregroundFlow.value && generation == foregroundGeneration }
@@ -498,20 +502,11 @@ class OwnerCheckManager(
      * that does not pass waits in [unlockCheckOutcome], and [checkAfterCancel] asks for the check screen.
      */
     suspend fun afterCancelledRecovery(pin: String, password: String) {
-        inUnlock = true
-        try {
-            afterCancelledRecoveryRun(pin, password)
-        } finally {
-            inUnlock = false
-        }
-    }
-
-    private suspend fun afterCancelledRecoveryRun(pin: String, password: String) {
         markOpen()
         // No count was read in this session: the check does not go out with the previous session's estimate (ANDROID-PLAN 0.1.96).
         estimate = 0
         keepCount = false
-        val r = check(pin, password, null)
+        val r = checkWith(pin, password, null, unlocksOwn = true)
         if (r != OwnerCheckOutcome.Passed) {
             unlockOutcome.value = r
             checkAfterCancelFlow.value = true
@@ -526,6 +521,7 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
+        val passesAtSend = checkPasses.get()
         val stamp = beginStatusRead()
         val read = vaultGuard(resend = true) { ops().statusRead() }
         val (st0, recovery, timeScale) = read
@@ -535,7 +531,6 @@ class OwnerCheckManager(
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
         val st = st0 ?: return view.value
-        estimate = (OwnerCheckView.MAX_FAILURES - st.failures).coerceAtLeast(0)
         val prev = view.value
         val state = when (st.state) {
             "held" -> OwnerCheckState.HELD
@@ -554,11 +549,22 @@ class OwnerCheckManager(
             // (Release L) As the vault computes it now; absent before L.
             idleLockAt = instant(st.idleLockAt),
         )
-        set(v)
-        return v
+        // Sent before a check that passed since: a held or due state it reads is the one the pass ended (and its count the
+        // failures before it), so it is dropped; the next read says the state after the pass.
+        // Compared and published in one step: a pass cannot come between.
+        val taken = set(v, stale = { checkPasses.get() != passesAtSend && v.gated(now()) })
+        if (taken) estimate = (OwnerCheckView.MAX_FAILURES - st.failures).coerceAtLeast(0)
+        return if (taken) v else view.value
     }
 
-    override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
+    override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome =
+        checkWith(pin, password, holdOff, unlocksOwn = false)
+
+    /**
+     * The check; [unlocksOwn]: the one an unlock makes ([afterUnlock], [afterCancelledRecovery]), whose pass does not count
+     * in [OwnerCheckView.passes]. Said per call, so an unlock running beside it never changes how another check counts.
+     */
+    private suspend fun checkWith(pin: String, password: String, holdOff: HoldOff?, unlocksOwn: Boolean): OwnerCheckOutcome {
         unlockPin = null
         val until = holdOff?.until?.let { clampHoldOff(it) }
         val outcome = try {
@@ -570,16 +576,22 @@ class OwnerCheckManager(
             lockedHere = false
             checkPassedForIdleLock()
             estimate = OwnerCheckView.MAX_FAILURES // a passed check ends the run of failures
+            val deadline = instant(r.deadline)
             set(
                 OwnerCheckView(
                     state = OwnerCheckState.OK,
-                    deadline = instant(r.deadline),
+                    deadline = deadline,
                     intervalSeconds = r.intervalSeconds ?: view.value?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S,
                     failures = 0,
                     hold = r.hold,
                     holdOffUntil = instant(r.holdOffUntil),
                 ),
-                passed = !inUnlock,
+                // When it passed, on the vault's clock: its deadline less its interval as it runs on this vault (a staging time
+                // scale divides it; unknown without both).
+                Pass(
+                    counts = !unlocksOwn,
+                    at = r.intervalSeconds?.let { deadline?.minusSeconds(TimeScales.divide(it, lastTimeScale)) },
+                ),
             )
             onPassed()
             OwnerCheckOutcome.Passed
@@ -759,6 +771,7 @@ class OwnerCheckManager(
     fun clear() {
         unlockPin = null
         epoch.incrementAndGet()
+        passedAt = null
         estimate = 0
         keepCount = false
         view.value = null
@@ -783,13 +796,34 @@ class OwnerCheckManager(
     private fun unknownHeld() =
         OwnerCheckView(OwnerCheckState.HELD, null, OwnerCheckView.MAX_INTERVAL_S, 0, hold = true, holdOffUntil = null)
 
-    private fun update(passed: Boolean = false, f: (OwnerCheckView) -> OwnerCheckView) {
-        view.value?.let { set(f(it), passed) }
+    private fun update(pass: Pass? = null, f: (OwnerCheckView) -> OwnerCheckView) {
+        val v = view.value
+        if (v != null) {
+            set(f(v), pass)
+        } else if (pass != null) {
+            // Nothing to show yet, but the pass is still known: a status read sent before it is dropped all the same.
+            synchronized(setLock) { notePass(pass) }
+        }
     }
 
-    /** An unlock's own check runs ([afterUnlock], [afterCancelledRecovery]): its pass does not count in [OwnerCheckView.passes]. */
+    /**
+     * A check passed: here or on another device, an unlock's own included. [counts]: with the vault open, not the check an
+     * unlock makes ([OwnerCheckView.passes]); [at]: when, on the vault's clock (null: not known).
+     */
+    private class Pass(val counts: Boolean, val at: Instant?)
+
+    /**
+     * Every check passed, here or on another device (an unlock's own included): a `vault.status` read sent before the
+     * latest pass says nothing of the state after it ([readStatus]).
+     */
+    private val checkPasses = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * When the latest pass known was, on the vault's clock (null: none known): a `vault.held` or an `owner_check_required`
+     * answer from before it says nothing of the state after it. Set under [setLock] with the pass's view.
+     */
     @Volatile
-    private var inUnlock = false
+    private var passedAt: Instant? = null
 
     /** Checks passed with the vault open in this process ([OwnerCheckView.passes]). */
     private val passCount = java.util.concurrent.atomic.AtomicInteger()
@@ -797,12 +831,15 @@ class OwnerCheckManager(
     private val setLock = Any()
 
     /**
-     * [passed]: [v] is the OK of a check that passed with the vault open; it counts before [v] is published. The count is
-     * read and published in one step, so a value built earlier (a slow status read) never publishes a lower one.
+     * [pass]: [v] is the OK of a check that passed; one that [Pass.counts] counts before [v] is published. The count is
+     * read and published in one step, so a value built earlier (a slow status read) never publishes a lower one. [stale]
+     * is asked in that same step: true, nothing is published (a pass came first) and the answer is false.
      */
-    private fun set(v: OwnerCheckView, passed: Boolean = false) {
+    private fun set(v: OwnerCheckView, pass: Pass? = null, stale: () -> Boolean = { false }): Boolean {
         synchronized(setLock) {
-            val passes = if (passed) passCount.incrementAndGet() else passCount.get()
+            if (stale()) return false
+            if (pass != null) notePass(pass)
+            val passes = if (pass?.counts == true) passCount.incrementAndGet() else passCount.get()
             view.value = v.copy(passes = passes)
         }
         // Before the deadline the idle lock's time is the deadline plus the value in force (§3.6.8).
@@ -815,6 +852,13 @@ class OwnerCheckManager(
             idleAfterKnown = idleAfterKnown, lockedHere = lockedHere,
         )
         runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
+        return true
+    }
+
+    /** Under [setLock]: [pass] happened; [passedAt] only ever moves forward. */
+    private fun notePass(pass: Pass) {
+        checkPasses.incrementAndGet()
+        pass.at?.let { at -> if (passedAt?.isAfter(at) != true) passedAt = at }
     }
 
     private fun restore(): Saved? = try {

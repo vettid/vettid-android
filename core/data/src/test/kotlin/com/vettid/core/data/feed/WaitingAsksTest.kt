@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -81,9 +82,11 @@ class WaitingAsksTest {
         assertEquals(listOf("3"), WaitingAsks.of(items, approvals, now).map { it.itemId })
     }
 
-    private class Ops(val items: List<FeedItem>) : FeedOps {
-        override suspend fun list(afterSeq: Long, limit: Int) =
-            if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })
+    private class Ops(val items: List<FeedItem>, val down: () -> Boolean = { false }) : FeedOps {
+        override suspend fun list(afterSeq: Long, limit: Int): FeedPage {
+            if (down()) throw VaultOpException("feed.list", "unreachable")
+            return if (afterSeq == 0L) FeedPage(items, items.maxOf { it.seq }) else FeedPage(emptyList(), items.maxOf { it.seq })
+        }
 
         override suspend fun update(itemId: String, status: String): FeedItem = throw VaultOpException("feed.update", "not_found")
 
@@ -135,6 +138,57 @@ class WaitingAsksTest {
         m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200))), now)
         assertEquals("only the one not already sent", listOf("2", "1"), arrived.map { it.itemId })
         job.cancel()
+    }
+
+    /**
+     * A feed read that failed does not use up the replay: it answers false and keeps the window (what arrives meanwhile is
+     * still noted), and once a read succeeds the waiting asks arrive.
+     */
+    @Test
+    fun aFailedFeedReadKeepsTheWindow() = runTest {
+        val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1), item("2", WaitingAsks.SIGN_IN, seq = 2))
+        var down = true
+        val m = FeedManager(this, ops = { Ops(items) { down } }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        runCatching { m.refresh() }
+        advanceUntilIdle()
+        assertEquals(ListLoad.FAILED, m.load.value)
+        val asks = listOf(signIn("r1", now.plusSeconds(200)), signIn("r2", now.plusSeconds(200)))
+        assertFalse("not done", m.replayWaitingAsks(token, asks, now))
+        assertTrue(arrived.isEmpty())
+        assertTrue("the window is kept", m.replayOwns(token))
+        // An ask that arrives live meanwhile is noted in the kept window.
+        m.onEvent(
+            com.vettid.core.vault.VaultMessage(
+                com.vettid.core.crypto.envelope.Inner(
+                    id = com.vettid.core.crypto.envelope.Ulid.new(), type = "feed.event", ts = now,
+                    body = com.vettid.core.vault.VaultJson.json.encodeToString(FeedItem.serializer(), items[1].copy(seq = 3)).toByteArray(),
+                ),
+            ),
+        )
+        assertEquals(listOf("2"), arrived.map { it.itemId })
+        down = false
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue(m.loaded)
+        assertTrue(m.replayWaitingAsks(token, asks, now))
+        assertEquals("the live one not twice", listOf("2", "1"), arrived.map { it.itemId })
+        job.cancel()
+    }
+
+    /** A replay no longer owns its window once a later one starts or a clear (a lock, a hold) closes it. */
+    @Test
+    fun aReplayIsOvertakenByALaterOneOrAClear() = runTest {
+        val m = FeedManager(this, ops = { Ops(listOf(item("1", WaitingAsks.SIGN_IN))) }, now = { now })
+        val first = m.startReplayWindow()
+        assertTrue(m.replayOwns(first))
+        val second = m.startReplayWindow()
+        assertFalse(m.replayOwns(first))
+        assertTrue(m.replayOwns(second))
+        m.clear()
+        assertFalse(m.replayOwns(second))
     }
 
     /** Two replays overlapping: the earlier one sends nothing, the later one owns the window. */

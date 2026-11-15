@@ -196,11 +196,23 @@ class SocialManager internal constructor(
     /** A `pending.list` was merged since the unlock: it is authoritative for sessions and approvals, so none is made from a feed item. */
     private val listReadFlow = MutableStateFlow(false)
 
-    /** How many `pending.list` answers were merged in this process: a merge after a moment is a list read since then. */
-    private val pendingMerges = java.util.concurrent.atomic.AtomicInteger()
+    /**
+     * The ticket of the latest `pending.list` read whose list is merged and published (0 before one). Tickets count the
+     * reads begun, never the clock, so a phone clock set back or forward changes nothing.
+     */
+    private val pendingPublished = java.util.concurrent.atomic.AtomicLong()
 
-    /** [pendingMerges] now (ANDROID-PLAN 0.1.132: the waiting asks are judged on a list merged after the check). */
-    internal val pendingMergeCount: Int get() = pendingMerges.get()
+    /**
+     * (ANDROID-PLAN 0.1.132) A mark for [pendingListedSince]: the waiting asks are judged on a list read begun after the
+     * check, so one already on its way then does not count.
+     */
+    internal fun pendingReadMark(): Long = pending.lastIssued
+
+    /**
+     * A `pending.list` read begun after [mark] was merged, and what it listed is published ([listedNow] has it). Not one
+     * whose list a hold or a lock dropped since: only a read begun after that counts.
+     */
+    internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
     /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
     internal val pendingUnsupported: Boolean get() = pending.isUnsupported
@@ -1611,7 +1623,6 @@ class SocialManager internal constructor(
             val plan = pending.merge(ticket, ts, listed) ?: return@edit l
             merged = true
             listReadFlow.value = true
-            pendingMerges.incrementAndGet()
             val at = now().toEpochMilli()
             val (gone, kept) = l.events.partition { e ->
                 e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
@@ -1623,6 +1634,8 @@ class SocialManager internal constructor(
                     .map { StoredEvent(it.type, enc(it.body), firstSeen[it.key] ?: at) },
             )
         }
+        // Only once [edit] has published the list: a replay that sees the stamp reads what it listed.
+        if (merged) pendingPublished.accumulateAndGet(ticket) { x, y -> maxOf(x, y) }
         return merged
     }
 

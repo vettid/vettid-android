@@ -76,6 +76,54 @@ class PendingListTest {
         assertEquals(listOf("auth:r2", "device:approval.pending:h1", "device:device.session.pending:s1"), m.keys())
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.132; iOS #278's parity) Only a read begun after the mark counts for the waiting-asks replay, by read
+     * order, not by the clock: a read already out at the mark that merges after it does not; and once one counts, what it
+     * listed is already published.
+     */
+    @Test
+    fun onlyAListReadBegunAfterTheMarkCounts() = runTest {
+        val m = manager()
+        val early = CompletableDeferred<PendingPage>()
+        val out = backgroundScope.launch { m.refreshPendingFrom { early.await() } }
+        runCurrent()
+        val mark = m.pendingReadMark()
+        early.complete(page(at(10), ask("authenticate", auth("r1"))))
+        out.join()
+        runCurrent()
+        assertEquals(listOf("auth:r1"), m.keys())
+        assertTrue("begun before the mark", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r2"))) }
+        runCurrent()
+        assertTrue(m.pendingListedSince(mark))
+        assertEquals(listOf("auth:r2"), m.listedNow().map { it.key })
+    }
+
+    /** A read that fails, or one not merged (its `ts` is older than the list already merged), sets no stamp. */
+    @Test
+    fun noStampWithoutAMerge() = runTest {
+        val m = manager()
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r1"))) }
+        val mark = m.pendingReadMark()
+        runCatching { m.refreshPendingFrom { throw VaultFailure(FailureKind.NETWORK) } }
+        assertTrue("a failed read", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r2"))) }
+        assertTrue("a list older than the cut is not merged", !m.pendingListedSince(mark))
+    }
+
+    /** A hold (or a lock) drops what a read merged: that read no longer counts, only one begun after the hold. */
+    @Test
+    fun aHoldDropsTheStamp() = runTest {
+        val m = manager()
+        val mark = m.pendingReadMark()
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
+        assertTrue(m.pendingListedSince(mark))
+        m.forgetPending()
+        assertTrue("dropped with the hold", !m.pendingListedSince(mark))
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r2"))) }
+        assertTrue(m.pendingListedSince(mark))
+    }
+
     @Test
     fun everyPageIsReadAndOnlyTheFirstTsIsTheCut() = runTest {
         val m = manager()

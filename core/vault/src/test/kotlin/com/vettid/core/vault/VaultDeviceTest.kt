@@ -1773,7 +1773,7 @@ class VaultDeviceTest {
                 ),
             )
             assertEquals("owner_check_required", (refused.await().exceptionOrNull() as VaultOpException).code)
-            assertEquals("message.send", signal.await())
+            assertEquals("message.send", signal.await().type)
 
             val status = async(Dispatchers.IO) { api.status() }
             val sr = v.open(nextDeposit().second)

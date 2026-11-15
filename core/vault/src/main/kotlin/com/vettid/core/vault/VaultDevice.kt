@@ -444,13 +444,16 @@ class VaultDevice private constructor(
     data class QuotaBackoff(val ms: Long, val stopCount: Long)
 
     private val ownerCheckRefusals =
-        MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        MutableSharedFlow<OwnerCheckRefusal>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /** A request of [type] the vault answered `owner_check_required`, in an answer whose `ts` (the vault's clock) is [ts]. */
+    data class OwnerCheckRefusal(val type: String, val ts: java.time.Instant)
 
     /**
-     * The types of requests the vault answered `owner_check_required` (§3.6.3, 0.13.0): the vault is past its
-     * owner-check deadline and serves this app nothing but the check until it passes.
+     * The requests the vault answered `owner_check_required` (§3.6.3, 0.13.0): the vault is past its owner-check deadline
+     * and serves this app nothing but the check until it passes.
      */
-    val ownerCheckRequired: SharedFlow<String> = ownerCheckRefusals.asSharedFlow()
+    val ownerCheckRequired: SharedFlow<OwnerCheckRefusal> = ownerCheckRefusals.asSharedFlow()
 
     /** Starts [vaultRefusals] again (after a sealed unlock result: the enclave knows this device). */
     fun clearVaultRefusals() {
@@ -2415,7 +2418,9 @@ class VaultDevice private constructor(
         if (re != null) noteAnswerTime(inner.ts)
         if (re != null && st.unsettled.remove(re) != null) save()
         if (re != null) {
-            if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) ownerCheckRefusals.tryEmit(inner.type)
+            if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) {
+                ownerCheckRefusals.tryEmit(OwnerCheckRefusal(inner.type, inner.ts))
+            }
             pending[re]?.complete(inner)
         } else {
             publish(VaultMessage(inner))
