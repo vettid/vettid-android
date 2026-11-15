@@ -593,19 +593,18 @@ class CallsController(
     }
 
     override suspend fun history(connectionId: String): CallHistory {
-        val list = if (supported == true) {
-            try {
-                vault.gateway.list(HISTORY_LIMIT)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                null
-            }
-        } else {
-            null
+        // A vault without calls (or not known to have them) has no history; one with calls whose list does not read this
+        // time says so ([CallHistory.failed]), so that a conversation keeps what it shows rather than emptying it.
+        if (supported != true) return historyOf(null, connectionId, now())
+        return try {
+            val list = vault.gateway.list(HISTORY_LIMIT)
+            noteSkipped(list)
+            historyOf(list, connectionId, now())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+            CallHistory(failed = true)
         }
-        list?.let(::noteSkipped)
-        return historyOf(list, connectionId, now())
     }
 
     companion object {
