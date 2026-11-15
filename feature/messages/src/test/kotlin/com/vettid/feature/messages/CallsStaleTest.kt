@@ -52,4 +52,16 @@ class CallsStaleTest {
         }
         rule.onNodeWithTag("calls_stale").assertDoesNotExist()
     }
+
+    /** Into view only when the note comes and the member was at the end; never on a re-entry or from an empty layout. */
+    @Test
+    fun theNoteScrollsIntoViewOnlyWhenItComes() {
+        assertEquals(true, CallsStaleScroll.came(wasStale = false, stale = true))
+        assertEquals("already up (a rotation, a return)", false, CallsStaleScroll.came(wasStale = true, stale = true))
+        assertEquals(false, CallsStaleScroll.came(wasStale = true, stale = false))
+        assertEquals(true, CallsStaleScroll.atEnd(lastVisible = 9, total = 10))
+        assertEquals(true, CallsStaleScroll.atEnd(lastVisible = 8, total = 10))
+        assertEquals("reading further up", false, CallsStaleScroll.atEnd(lastVisible = 3, total = 10))
+        assertEquals("no layout yet", false, CallsStaleScroll.atEnd(lastVisible = null, total = 0))
+    }
 }

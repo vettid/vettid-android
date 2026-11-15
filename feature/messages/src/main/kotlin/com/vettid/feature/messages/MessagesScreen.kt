@@ -44,6 +44,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -393,11 +396,15 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         if (last > 0) listState.animateScrollToItem(last)
     }
     // "Calls may be out of date" comes as the list's last item: into view when it comes, if the member was at the end
-    // (once the frame with it has been laid out); a member reading further up keeps their place.
+    // (once the frame with it has been laid out); a member reading further up keeps their place. Only when it comes, not
+    // when the screen comes back with it already there (a rotation, a return from a call).
+    var staleSeen by rememberSaveable { mutableStateOf(state.callsStale) }
     LaunchedEffect(state.callsStale) {
-        if (!state.callsStale) return@LaunchedEffect
+        val came = CallsStaleScroll.came(staleSeen, state.callsStale)
+        staleSeen = state.callsStale
+        if (!came) return@LaunchedEffect
         val before = listState.layoutInfo
-        val atEnd = (before.visibleItemsInfo.lastOrNull()?.index ?: -1) >= before.totalItemsCount - 2
+        val atEnd = CallsStaleScroll.atEnd(before.visibleItemsInfo.lastOrNull()?.index, before.totalItemsCount)
         withFrameNanos { }
         val last = listState.layoutInfo.totalItemsCount - 1
         if (atEnd && last > 0) listState.animateScrollToItem(last)
@@ -499,6 +506,15 @@ private fun CallsNotShownLine() {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("calls_not_shown"),
     )
+}
+
+/** When "Calls may be out of date" brings the list to its end (pure rules). */
+internal object CallsStaleScroll {
+    /** The note came: it was not up before (as last seen, kept across a rotation) and is now. */
+    fun came(wasStale: Boolean, stale: Boolean): Boolean = stale && !wasStale
+
+    /** The member was at the end: the last visible item is the last or the one before it; an empty layout is not. */
+    fun atEnd(lastVisible: Int?, total: Int): Boolean = total > 0 && lastVisible != null && lastVisible >= total - 2
 }
 
 /** (Owner-approved 2026-11-15) The last read of the calls failed: the lines shown may be out of date. */
