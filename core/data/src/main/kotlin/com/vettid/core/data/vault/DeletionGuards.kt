@@ -29,19 +29,47 @@ internal class DeletionEvents(
 
 /**
  * One read of the status for the watch: a `410` is [DeletionCheck.GONE] (erases) only with the vault's word, so not while a 410
- * stands alone ([apiStanding]); a status that lists the vault again then removes the marker ([onListedWhileApi]).
+ * stands alone ([apiMarker] holds one); a status that lists the vault again then removes that marker ([onListedWhileApi],
+ * given the marker the read began under, so that a late answer clears no later 410).
  */
-internal class ResolvedRead(
-    private val apiStanding: () -> Boolean,
+internal class ResolvedRead<M : Any>(
+    private val apiMarker: () -> M?,
     private val source: suspend () -> DeletionCheck,
-    private val onListedWhileApi: () -> Unit,
+    private val onListedWhileApi: (M) -> Unit,
 ) {
     suspend fun read(): DeletionCheck {
-        val api = apiStanding()
-        val r = VaultDeletion.resolve(source(), vaultWord = !api)
-        if (api && VaultDeletion.clearsApiMarker(r)) onListedWhileApi()
+        val held = apiMarker()
+        val r = VaultDeletion.resolve(source(), vaultWord = held == null)
+        if (held != null && VaultDeletion.clearsApiMarker(r)) onListedWhileApi(held)
         return r
     }
+}
+
+/**
+ * The clear of a 410-only marker when the status lists the vault again. The marker stands (so a 410 is never the vault's
+ * word, and the event observer keeps its 410 rules) while the record is written; a close step's write of the same marker
+ * is held off meanwhile ([mayWrite]), so it cannot write it back. Then [onEnd] ends the state whatever the write did: a
+ * listed vault is never left behind "Your vault was deleted" (a record that kept the marker reopens it at the next start,
+ * and the next listed status clears it again). Callers hold one lock around [clear].
+ */
+internal class ApiMarkerClear<M : Any> {
+    @Volatile
+    private var clearing: M? = null
+
+    /** Clears [expected] if it is still [held]: [save] drops it from the record, then [onEnd] with whether it did. */
+    suspend fun clear(expected: M, held: () -> M?, save: suspend () -> Boolean, onEnd: (saved: Boolean) -> Unit): Boolean {
+        if (held() != expected) return false
+        clearing = expected
+        try {
+            onEnd(save())
+            return true
+        } finally {
+            clearing = null
+        }
+    }
+
+    /** Whether a close step may write [marker] to the record: it is still [held] and is not being cleared. */
+    fun mayWrite(marker: M, held: M?): Boolean = held == marker && clearing != marker
 }
 
 /** Whether a failed request starts the 410-only state, and whether it locks the vault first. */
