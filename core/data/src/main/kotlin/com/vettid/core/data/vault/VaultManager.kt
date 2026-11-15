@@ -1979,7 +1979,13 @@ class VaultManager(
                 deletionWatch.start(m.watch(), readNow = true)
             }
         }?.let { m ->
-            scope.launch { runCatching { session(mailboxOnly = true).device.ensureCollecting() } }
+            scope.launch {
+                // Only while that marker still stands and the record is open: a wipe or a clear that ended it meanwhile
+                // makes no session here (a session on a wiped phone would make fresh keys and reach the relay).
+                if (synchronized(deletedApiLock) { deletedApiMarker == m && !record.closed }) {
+                    runCatching { session(mailboxOnly = true).device.ensureCollecting() }
+                }
+            }
             return@guard phaseFlow.value
         }
         // Nothing redeemed or claimed on this phone (and nothing re-created after a wipe): the welcome screen.
@@ -2171,20 +2177,27 @@ class VaultManager(
      * deleted" notice stays), or a status that listed the vault again ended the state (nothing is erased then).
      */
     override suspend fun removeDeletedVault() {
+        // The deletion the member confirmed Remove for: the one up when it is called.
+        val confirmed = synchronized(deletedApiLock) { deletionSeen() }
         scope.launch {
             holder.wipeNowIf {
                 deletionEnd.withLock {
-                    if (!phaseFlow.deleting) {
-                        android.util.Log.i("VaultManager", "Remove after the deletion's state ended: nothing to erase")
-                        false
-                    } else {
-                        wipeUnderDeletionEnd()
-                        true
+                    val wipes = synchronized(deletedApiLock) {
+                        DeletionRemove.wipes(confirmed, deletionSeen(), phaseFlow.deleting, phaseFlow.value)
                     }
+                    if (wipes) {
+                        wipeUnderDeletionEnd()
+                    } else {
+                        android.util.Log.i("VaultManager", "Remove for a deletion no longer up, or not past its bound: nothing to erase")
+                    }
+                    wipes
                 }
             }
         }.join()
     }
+
+    /** The deletion up as this process holds it (its markers, else the record's): read under [deletedApiLock]. */
+    private fun deletionSeen() = DeletionRemove.Seen(deletingMarker ?: local.deleting, deletedApiMarker ?: local.deletedApi)
 
     // --- VaultRepository ---
 
@@ -3072,22 +3085,19 @@ class VaultManager(
         // ANDROID-PLAN 0.1.54: the deletion's bound is at least this request's `exp` plus 2 minutes (a credential
         // operation's exp is 10 minutes after it is sent, ChangeTypes.EXP; taken here on this phone's clock).
         // Counted and set in one step under the lock a clear's end looks at the count under: a clear never takes the bound
-        // from under this request. The count goes down only after "being deleted" started from the answer (which reads it),
-        // or once the answer's word with a 410 standing has been decided in its own coroutine ([startDeleting]'s job).
+        // from under this request. The count goes down only after "being deleted" started from the answer (which reads it);
+        // an answer's word with a 410 standing is decided in its own coroutine, which [startDeleting] counts until it ends.
         deleteBound.begin(com.vettid.core.vault.ChangeTypes.EXP.toMillis())
-        var decidedElsewhere = false
         try {
             guard { session().openApi.deleteVault(pin, password) }
             // The vault's `{}` follows its step 1 (§12.5), as `device.unlinked{vault_deleted}` does: "being deleted" until
             // the member API no longer lists the vault; then the welcome screen (a new vault needs a new setup code).
-            startDeleting()?.let { job ->
-                decidedElsewhere = true
-                job.invokeOnCompletion { deleteBound.end { phaseFlow.deleting } }
-            }
+            startDeleting()
         } finally {
-            // Not answered, refused, cancelled or decided here: when no other of this phone's requests is out and no
-            // deletion is up, no bound is kept (the vault's own event still starts a deletion, with the 10 minutes).
-            if (!decidedElsewhere) deleteBound.end { phaseFlow.deleting }
+            // Not answered, refused, cancelled or decided here: when no other of this phone's requests (or words being
+            // decided) is out and no deletion is up, no bound is kept (the vault's own event still starts a deletion, with
+            // the 10 minutes).
+            deleteBound.end { phaseFlow.deleting }
         }
     }
 
@@ -3099,20 +3109,28 @@ class VaultManager(
      * stops. Then, in another coroutine (this may run in the event observer, which it ends): the marker, nothing more sent
      * to the vault or read from it, the vault's data and PIN dropped from memory, and the re-reads of the status.
      */
-    private fun startDeleting(): Job? {
+    private fun startDeleting() {
         // The check and the publish in one step, under the lock a 410 publishes its own hold under: neither overwrites the
         // other. Null: nothing to start.
         val marker = synchronized(deletedApiLock) {
             when {
-                // (0.1.78) The vault's own word with the member API's 410 standing: both signals, erase at once. The job is
-                // returned so that this phone's own answer keeps its bound until it has decided (a clear meanwhile may hand
-                // the word back to a new "being deleted", which needs it).
-                deletedApiMarker != null -> return scope.launch { finishDeleted() }
+                // (0.1.78) The vault's own word with the member API's 410 standing: both signals, erase at once. Counted as a
+                // request out until it has decided ([DeleteBound.hold]): a clear meanwhile may hand the word back to a new
+                // "being deleted" (here again, and so again through this branch), which needs this phone's bound.
+                deletedApiMarker != null -> {
+                    deleteBound.hold(scope.launch { finishDeleted() }) { phaseFlow.deleting }
+                    return
+                }
                 // A wipe runs or an erase failed: its own screen stands (its "Try again" erases).
                 phaseFlow.deleting || record.closed -> {
                     if (record.closed) {
                         android.util.Log.w("VaultManager", "the vault's word while the record is shut: the wipe's screen stands")
                     }
+                    null
+                }
+                // An answer that arrived after this phone was signed out or wiped (no vault on it any more): nothing starts.
+                !VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed) -> {
+                    android.util.Log.w("VaultManager", "the vault's word with no vault on this phone: nothing starts")
                     null
                 }
                 else -> {
@@ -3131,7 +3149,6 @@ class VaultManager(
             releaseUpdate.close()
             scope.launch { closeForDeletion(marker) }
         }
-        return null
     }
 
     private suspend fun closeForDeletion(marker: DeletingMarker) {
@@ -5112,6 +5129,15 @@ class VaultManager(
             // crash-safe: a process that dies from here on finishes the wipe at its next start
             mark = { wiper.begin(if (movedAway) LocalWipe.REASON_MOVED_AWAY else null) },
             erase = { eraseAfterMark() },
+            // While the record is still shut (a refresh returns at once): the markers and the watch go, so that a refresh
+            // after it reopens finds no deletion to show or mailbox to collect for (a session would make fresh keys).
+            beforeOpen = {
+                synchronized(deletedApiLock) {
+                    deletionWatch.stop()
+                    deletingMarker = null
+                    deletedApiMarker = null
+                }
+            },
             onEnd = { phase ->
                 if (phase == AppPhase.SignedOut) wipeMovedAway = false
                 finishMoveFlow.value = false
@@ -5127,7 +5153,7 @@ class VaultManager(
                     deletingMarker = null
                     deletedApiMarker = null
                     // The record reopened before this end (WipeRun: endWipe, then onEnd): a refresh that began in between
-                    // and read a marker publishes nothing after it.
+                    // publishes nothing after it. (A 410 taken in between is ended here too.)
                     record.bumpGeneration()
                     phaseFlow.endDeleting(phase)
                 }

@@ -15,9 +15,13 @@ class WipeRunTest {
         val eraseResult: Boolean = true,
         val eraseThrows: Boolean = false,
         val abandonThrows: Boolean = false,
+        val beforeOpenThrows: Boolean = false,
     ) {
         val record = AccountRecord(LocalAccount(userGuid = "u", vaultId = "v"), readable = true, persist = {})
         val steps = mutableListOf<String>()
+
+        /** The wipe's end, in order: [beforeOpen] (and whether the guard was still shut) and [onEnd]. */
+        val ends = mutableListOf<String>()
         var phase: AppPhase? = null
         var marks = 0
 
@@ -55,7 +59,15 @@ class WipeRunTest {
                 if (eraseThrows) error("erase")
                 eraseResult
             },
-            onEnd = { phase = it },
+            onEnd = {
+                ends += "end"
+                phase = it
+            },
+            beforeOpen = {
+                // what must be gone before anything reads the record again: the guard is still shut here
+                ends += if (record.closed) "beforeOpen(shut)" else "beforeOpen(open)"
+                if (beforeOpenThrows) error("beforeOpen")
+            },
             retryMs = 1,
         )
     }
@@ -65,6 +77,7 @@ class WipeRunTest {
         val f = Fixture()
         f.run.run()
         assertEquals(listOf("abandon", "detach", "mark", "erase", "abandon", "detach"), f.steps)
+        assertEquals(listOf("beforeOpen(shut)", "end"), f.ends)
         assertEquals(AppPhase.SignedOut, f.phase)
         assertEquals(LocalAccount(), f.record.value)
         assertFalse(f.record.closed)
@@ -187,6 +200,25 @@ class WipeRunTest {
         val f = Fixture(abandonThrows = true)
         f.run.run()
         assertEquals(listOf("abandon", "detach", "mark", "erase", "abandon", "detach"), f.steps)
+        assertEquals(listOf("beforeOpen(shut)", "end"), f.ends)
         assertEquals(AppPhase.SignedOut, f.phase)
+    }
+
+    /** The deletion's markers go while the record is still shut, for a wipe that failed too; one that throws ends it all the same. */
+    @Test
+    fun beforeOpenRunsWhileShutAndNeverStopsTheEnd() = runTest {
+        for (f in listOf(Fixture(), Fixture(eraseResult = false))) {
+            f.run.run()
+            assertEquals(listOf("beforeOpen(shut)", "end"), f.ends)
+        }
+        val f = Fixture(beforeOpenThrows = true)
+        try {
+            f.run.run()
+            fail("the failure is not swallowed")
+        } catch (e: IllegalStateException) {
+            assertEquals("beforeOpen", e.message)
+        }
+        assertEquals(AppPhase.SignedOut, f.phase)
+        assertFalse(f.record.closed)
     }
 }

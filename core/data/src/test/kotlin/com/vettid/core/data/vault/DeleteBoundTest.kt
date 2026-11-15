@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -91,5 +92,52 @@ class DeleteBoundTest {
         assertEquals(0, bound.requestsOut)
         bound.begin(600_000L)
         assertEquals(1, bound.requestsOut)
+    }
+
+    /** The answer's word with a 410 standing, handed to its own job: the request done meanwhile keeps the bound until it ends. */
+    @Test
+    fun aHeldWordKeepsTheBoundUntilItsJobEnds() {
+        bound.begin(600_000L)
+        val word = Job()
+        bound.hold(word) { deleting }
+        bound.end { deleting } // the request's own end
+        bound.clearUnlessOut() // a clear while the word is being decided
+        assertEquals(1_600_000L, bound.expMs)
+        word.complete()
+        assertNull(bound.expMs)
+        assertEquals(0, bound.requestsOut)
+    }
+
+    /** 410, listed, 410, listed in the deciding window: the word handed on again is held too. */
+    @Test
+    fun aWordHandedOnAgainIsHeldToo() {
+        bound.begin(600_000L)
+        val first = Job()
+        bound.hold(first) { deleting }
+        bound.end { deleting }
+        bound.clearUnlessOut()
+        val second = Job()
+        bound.hold(second) { deleting } // the first, deciding after a clear, met a new 410 and handed the word on
+        first.complete()
+        bound.clearUnlessOut()
+        assertEquals(1_600_000L, bound.expMs)
+        deleting = true // the second starts "being deleted" with this phone's bound
+        second.complete()
+        assertEquals(1_600_000L, bound.expMs)
+    }
+
+    /** A job cancelled before it decided is done with as well; one already ended when held counts once. */
+    @Test
+    fun aCancelledOrEndedJobIsDoneWith() {
+        bound.begin(600_000L)
+        val cancelled = Job()
+        bound.hold(cancelled) { deleting }
+        cancelled.cancel()
+        val ended = Job().apply { complete() }
+        bound.hold(ended) { deleting }
+        assertEquals(1, bound.requestsOut)
+        bound.end { deleting }
+        assertNull(bound.expMs)
+        assertEquals(0, bound.requestsOut)
     }
 }

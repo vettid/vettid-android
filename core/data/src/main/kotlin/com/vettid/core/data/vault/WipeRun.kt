@@ -12,7 +12,8 @@ import kotlinx.coroutines.delay
  * 3. [mark]: the wipe's marker, which makes a later start finish it, tried [attempts] times;
  * 4. [erase]: everything else; true when nothing is left.
  *
- * Whatever happens, both run again (nothing opened meanwhile outlives the wipe), the guard ends
+ * Whatever happens, both run again (nothing opened meanwhile outlives the wipe), [beforeOpen] runs while the guard is still
+ * shut (what must be gone before anything can read the record again), the guard ends
  * ([AccountRecord.endWipe]: open on the fresh record only after a complete erase, shut otherwise) and [onEnd] hears the
  * phase to show: SignedOut only after a complete erase; otherwise [failedPhase], which says that this phone was not
  * erased and offers to try again (a marker that could not be written leaves nothing for a later start to finish).
@@ -24,6 +25,7 @@ internal class WipeRun(
     private val mark: () -> Unit,
     private val erase: suspend () -> Boolean,
     private val onEnd: (AppPhase) -> Unit,
+    private val beforeOpen: () -> Unit = {},
     private val attempts: Int = MARK_ATTEMPTS,
     private val retryMs: Long = MARK_RETRY_MS,
 ) {
@@ -41,8 +43,12 @@ internal class WipeRun(
             } catch (_: Exception) {
                 // the store stays shut below unless the erase completed; no session opens while it is
             }
-            record.endWipe(complete)
-            onEnd(if (complete) AppPhase.SignedOut else failedPhase)
+            try {
+                beforeOpen()
+            } finally {
+                record.endWipe(complete)
+                onEnd(if (complete) AppPhase.SignedOut else failedPhase)
+            }
         }
     }
 

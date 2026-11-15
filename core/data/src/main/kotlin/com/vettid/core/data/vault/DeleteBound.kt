@@ -1,5 +1,7 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.Job
+
 /**
  * (ANDROID-PLAN 0.1.54) The deletion's bound from this phone's own `vault.delete` requests: when the latest one expires
  * ([expMs], epoch ms, memory only), and how many are still out. Every change is made under [lock] (the one the deletion's
@@ -32,6 +34,16 @@ internal class DeleteBound(private val lock: Any, private val now: () -> Long = 
         // Never below 0 (an end without its begin would be a bug; it may run in a completion handler, so it does not throw).
         if (out > 0) out--
         if (out == 0 && !deleting()) exp = null
+    }
+
+    /**
+     * The vault's word with a 410 standing, handed to [job] to decide: counted as a request out until the job ends, so a
+     * clear meanwhile keeps the bound for the "being deleted" the word may start, however many times the word is handed
+     * on (a 410, a clear, another 410 in the deciding window). Then done with as [end].
+     */
+    fun hold(job: Job, deleting: () -> Boolean) {
+        synchronized(lock) { out++ }
+        job.invokeOnCompletion { end(deleting) }
     }
 
     /** A clear of a 410-only state: the bound goes unless a request is still out (its answer still needs it). */
