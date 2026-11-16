@@ -1112,6 +1112,9 @@ class VaultManager(
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
             onTimeScale = { t, since -> noteStatusTimeScale(t, since) },
+            // The rule the descriptor is checked against; with no channel to ask, real time.
+            acceptsTimeScale = { t -> TimeScales.accepted(t, session?.alt?.let { a -> a::acceptsTimeScale }) },
+            storedTimeScale = { local.timeScale },
             // (ANDROID-PLAN 0.1.95) "Probably locked, checking": the member API's word on the vault, and the lock it finds.
             memberState = { lockSession()?.let { runCatching { guard { vaultStatus(it) } }.getOrNull()?.state } },
             onFoundLocked = { lockedByNotice() },
