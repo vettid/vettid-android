@@ -61,6 +61,17 @@ object TimeScales {
         else -> reported
     }
 
+    /**
+     * The scale a `vault.status` [reported] runs at, for the times this phone works out from it (when a check passed, the
+     * presence notice's check time, the idle lock's time, the relay re-check): the reported one only when it is in range
+     * and this build accepts it ([accepts], the rule [fromStatus] stores by); otherwise real time. A scale larger than the
+     * vault's own is the only input that moves a pass's time later than it was; real time moves it earlier (fail closed).
+     */
+    fun inForce(reported: Long?, accepts: (Long) -> Boolean): Long = when {
+        reported == null || reported !in TimeScale.REAL..TimeScale.MAX || !accepts(reported) -> TimeScale.REAL
+        else -> reported
+    }
+
     private const val MS_PER_S = 1_000L
 }
 

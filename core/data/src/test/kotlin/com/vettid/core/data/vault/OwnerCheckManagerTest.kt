@@ -18,6 +18,7 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
@@ -129,6 +130,9 @@ class OwnerCheckManagerTest {
     private var memberGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     private var foundLocked = 0
 
+    /** Whether the build accepts a `time_scale` (a staging build: up to TimeScale.MAX). */
+    private var accepts: (Long) -> Boolean = { true }
+
     private fun TestScope.manager(ops: Ops) = OwnerCheckManager(
         this,
         ops = { ops },
@@ -139,6 +143,7 @@ class OwnerCheckManagerTest {
         now = { nowHook?.also { nowHook = null }?.invoke(); now },
         memberState = { memberGate?.await(); memberState },
         onFoundLocked = { foundLocked++ },
+        acceptsTimeScale = { accepts(it) },
     )
 
     /** The manager's vault calls run on the IO dispatcher (vaultGuard): let them finish. */
@@ -530,11 +535,20 @@ class OwnerCheckManagerTest {
         ops.statusGate = gate
         val stale = this.async(Dispatchers.Default) { m.refreshOwnerCheck() }
         awaitReads(ops, 1)
-        ops.statusGate = null
+        // The pass with no view starts a fresh read of its own: held at its gate until the stale one has ended.
+        val fresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = fresh
         m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T12:00:00Z"}"""))
+        runCurrent() // the launched read starts (and goes to its gate)
+        awaitReads(ops, 2)
         gate.complete(Unit)
         stale.await()
         assertTrue("not held: ${m.ownerCheck.value}", m.ownerCheck.value?.gated(now) != true)
+        // The fresh read says the state after the pass.
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+        fresh.complete(Unit)
+        settle { m.ownerCheck.value?.state == OwnerCheckState.OK }
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
     }
 
     /** A `vault.held` or a refusal whose ts is the pass's own time is kept (only one strictly before it is over). */
@@ -610,6 +624,89 @@ class OwnerCheckManagerTest {
         m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(3600)))
         m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = now.plusSeconds(1800)))
         assertEquals("dropped: no view made from it", null, m.ownerCheck.value)
+    }
+
+    /** Another device's pass with nothing to show yet: the status is read, so the view does not stay empty. */
+    @Test
+    fun anotherDevicesPassWithNoViewReadsTheStatus() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T13:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.plusSeconds(60)))
+        settle { m.ownerCheck.value != null }
+        assertEquals(1, ops.reads)
+        assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
+        // With a view and a deadline, nothing more is read.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T14:00:00Z"}""", ts = now.plusSeconds(120)))
+        settle { true }
+        assertEquals(1, ops.reads)
+    }
+
+    /**
+     * A `time_scale` this build does not accept is real time: the pass time is the deadline less the whole interval, so a
+     * held the reported scale would have put before the pass is kept (a scale larger than the vault's is the only input
+     * that moves the pass later, the fail-open way).
+     */
+    @Test
+    fun aScaleTheBuildDoesNotAcceptIsRealTime() = runTest {
+        accepts = { it == 1L }
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // deadline 2026-10-07T12:00Z
+        // At 24 the pass would be 11:00Z; at real time it is 2026-10-06T12:00Z, so this held is after it.
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+        assertEquals(OwnerCheckState.HELD, m.ownerCheck.value!!.state)
+    }
+
+    /** Out of range is real time too, whatever the build accepts. */
+    @Test
+    fun aScaleOutOfRangeIsRealTime() {
+        assertEquals(1L, TimeScales.inForce(com.vettid.core.crypto.altchan.TimeScale.MAX + 1) { true })
+        assertEquals(1L, TimeScales.inForce(0) { true })
+        assertEquals(1L, TimeScales.inForce(null) { true })
+        assertEquals(24L, TimeScales.inForce(24) { true })
+        assertEquals(1L, TimeScales.inForce(24) { it == 1L })
+    }
+
+    /** A clear (a wipe, a deleted vault) forgets the scale: a pass after it, before any status read, is at real time. */
+    @Test
+    fun aClearForgetsTheScale() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        m.clear()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // no status read: deadline 2026-10-07T12:00Z
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+        assertEquals("after the real-time pass: taken", OwnerCheckState.HELD, m.ownerCheck.value?.state)
+    }
+
+    /**
+     * The presence notice's check time is the deadline less the interval as it runs (staging, 24: an hour), as for the
+     * pass: a presence recorded before that check, inside the unscaled 24 hours, does not end the notice.
+     */
+    @Test
+    fun thePresenceCheckTimeUsesTheScaledInterval() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            presentRecorded = false
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw")) // deadline 2026-10-07T12:00Z: the check at 11:00Z
+        assertTrue(m.presenceUnrecorded.value)
+        ops.presentRecordedAt = "2026-10-07T10:59:59Z" // after the unscaled time, before the check
+        m.refreshOwnerCheck()
+        assertTrue(m.presenceUnrecorded.value)
+        ops.presentRecordedAt = "2026-10-07T11:00:00Z"
+        m.refreshOwnerCheck()
+        assertFalse(m.presenceUnrecorded.value)
     }
 
     /**

@@ -85,6 +85,11 @@ class OwnerCheckManager(
      * warning (S2) is reckoned with the scale of the vault that set the deadline.
      */
     private val onTimeScale: suspend (Long?, mark: Int) -> Unit = { _, _ -> },
+    /**
+     * Whether this build accepts a `time_scale` (the rule the descriptor is checked against: a production build 1 only).
+     * A value it does not accept is taken as real time ([TimeScales.inForce]).
+     */
+    private val acceptsTimeScale: (Long) -> Boolean = { it == com.vettid.core.crypto.altchan.TimeScale.REAL },
     private val now: () -> Instant = Instant::now,
     private val mark: () -> Int = { 0 },
     /** (ANDROID-PLAN 0.1.95) The member API's `GET /api/vault/status` `state` (`locked`, `unlocked`, ...); null: no answer. */
@@ -204,7 +209,11 @@ class OwnerCheckManager(
      */
     private var idleAfterKnown: Long? = saved?.idleAfterKnown
 
-    /** The time scale of the last `vault.status` read (1 without one): an idle-lock value as it runs. */
+    /**
+     * The time scale of the last `vault.status` read, as this build accepts it ([TimeScales.inForce]; 1 without one or
+     * after [clear]): an interval or idle-lock value as it runs.
+     */
+    @Volatile
     private var lastTimeScale: Long = 1
 
     /** (Release L) The member locked the vault on this phone since it last opened. */
@@ -261,7 +270,9 @@ class OwnerCheckManager(
                     update(Pass(counts = true, at = m.ts)) { v ->
                         v.copy(state = OwnerCheckState.OK, deadline = deadline, failures = 0, waiting = null, idleLockAt = null)
                     }
-                    if (deadline == null) scope.launch { runCatching { refreshOwnerCheck() } }
+                    // No deadline in it, or nothing to show yet (the pass is recorded, but no view was made from it):
+                    // the status says the state after it.
+                    if (deadline == null || view.value == null) scope.launch { runCatching { refreshOwnerCheck() } }
                 }
                 "settings.changed" -> scope.launch { runCatching { refreshOwnerCheck() } }
             }
@@ -526,7 +537,7 @@ class OwnerCheckManager(
         val read = vaultGuard(resend = true) { ops().statusRead() }
         val (st0, recovery, timeScale) = read
         runCatching { onTimeScale(timeScale, since) }
-        lastTimeScale = timeScale?.takeIf { it >= 1 } ?: 1
+        lastTimeScale = TimeScales.inForce(timeScale, acceptsTimeScale)
         noteRelay(stamp, read.relayRefused) // (0.84.0) after the time scale, which the one re-read divides by
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
@@ -743,7 +754,12 @@ class OwnerCheckManager(
             false -> {
                 val deadline = instant(r.deadline)
                 val interval = r.intervalSeconds
-                presenceCheckAt = if (deadline != null && interval != null) deadline.minusSeconds(interval) else null
+                // When the check passed: the deadline less the interval as it runs on this vault, as for the pass's time.
+                presenceCheckAt = if (deadline != null && interval != null) {
+                    deadline.minusSeconds(TimeScales.divide(interval, lastTimeScale))
+                } else {
+                    null
+                }
                 presenceFlow.value = true
             }
             true -> {
@@ -786,6 +802,7 @@ class OwnerCheckManager(
         idleFlow.value = null
         idleInForce = null
         idleAfterKnown = null
+        lastTimeScale = 1
         lockedHere = false
         idleSettingFlow.value = null
         runCatching { persist(ByteArray(0)) }
