@@ -1494,8 +1494,13 @@ class VaultManager(
     override fun dismissLockNotice() = lockKeeper.dismissConfirmed()
 
     /** The session a lock is sent through: only for a vault this phone is set up with (an erased phone opens none). */
+    // The 410 flag is read here and again by the session's own check: a clear in between refuses this attempt once, and
+    // the lock keeper's next try opens a normal session (fail secure).
     private suspend fun lockSession(): Session? =
         if (enrolledOnThisPhone) runCatching { session(mailboxOnly = sessionGuard.lockMailboxOnly()) }.getOrNull() else null
+
+    /** This phone's vault for the deletion's checks and markers ([VaultDeletion.heldVaultId]); empty: none. */
+    private fun heldVaultId(): String = VaultDeletion.heldVaultId(session?.device?.vaultId, local.vaultId)
 
     /**
      * The vault client for an operation on the open vault. While a lock is pending the vault counts as locked,
@@ -3129,16 +3134,15 @@ class VaultManager(
                     null
                 }
                 // An answer that arrived after this phone was signed out or wiped (no vault on it any more): nothing starts.
-                // The vault id as the marker below takes it: the open session's first (a transfer to this phone writes it
-                // to the record only at its end).
-                !VaultDeletion.vaultWordStarts(phaseFlow.value, session?.device?.vaultId ?: local.vaultId, record.closed) -> {
+                // The vault id as the marker below takes it ([heldVaultId]).
+                !VaultDeletion.vaultWordStarts(phaseFlow.value, heldVaultId(), record.closed) -> {
                     android.util.Log.w("VaultManager", "the vault's word with no vault on this phone: nothing starts")
                     null
                 }
                 else -> {
                     val since = System.currentTimeMillis()
                     val until = VaultDeletion.untilMs(since, deleteBound.expMs)
-                    DeletingMarker(session?.device?.vaultId ?: local.vaultId, since, until).also {
+                    DeletingMarker(heldVaultId(), since, until).also {
                         // What was on its way (a refresh, the end of an unlock) publishes nothing after this.
                         record.bumpGeneration()
                         deletingMarker = it
@@ -3210,7 +3214,7 @@ class VaultManager(
             // A wipe runs or an erase failed: its own screen stands (its "Try again" erases), never "Your vault was deleted".
             if (record.closed) return
             // No vault on this phone (signed out, or a wipe that has just reopened the fresh record): nothing to mark.
-            val vaultId = session?.device?.vaultId ?: local.vaultId
+            val vaultId = heldVaultId()
             plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting, vaultId) ?: return
             val since = System.currentTimeMillis()
             DeletedApiMarker(vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
@@ -3405,7 +3409,7 @@ class VaultManager(
             }
             phase = phaseFlow.value
             closed = record.closed
-            VaultDeletion.vaultWordStarts(phase, local.vaultId, closed)
+            VaultDeletion.vaultWordStarts(phase, heldVaultId(), closed)
         }
         // startDeleting decides again under the lock (a 410 that lands meanwhile erases through it).
         if (start) {

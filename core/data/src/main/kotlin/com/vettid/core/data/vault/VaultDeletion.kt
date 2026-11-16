@@ -285,6 +285,14 @@ object VaultDeletion {
      * record is open ([recordClosed]: no wipe running, no erase that failed). A clear that ended a 410-only state just
      * before the word must not lose it.
      */
+    /**
+     * The vault this phone holds, for the deletion's checks and markers: the open session's device first (during a
+     * transfer to this phone the record has it only once the transfer completes), else the record's; an empty id is none
+     * (empty: no vault).
+     */
+    internal fun heldVaultId(deviceVaultId: String?, recordVaultId: String): String =
+        deviceVaultId?.ifEmpty { null } ?: recordVaultId
+
     internal fun vaultWordStarts(phase: AppPhase, vaultId: String, recordClosed: Boolean): Boolean =
         vaultId.isNotEmpty() && !recordClosed && phase !is AppPhase.SignedOut
 
