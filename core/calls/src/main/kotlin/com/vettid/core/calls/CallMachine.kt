@@ -212,7 +212,8 @@ internal class CallMachine(
 
     /**
      * The vault is being locked or is locked on this phone ([vaultLocking] until [vaultOpened]). Set at once, not through
-     * the inbox: a call request already waiting there when the lock begins is refused when it is handled.
+     * the inbox: a call request, an offer or a glare's winner already waiting there when the lock begins is refused when
+     * it is handled.
      */
     @Volatile
     private var locked = false
@@ -408,7 +409,9 @@ internal class CallMachine(
 
     private fun onPlaced(s: Session?, m: Msg.Placed) {
         if (s == null || s.seq != m.seq) {
-            // The member hung up while the vault was answering: the call exists there, so it is ended there.
+            // The member hung up while the vault was answering: the call exists there, so it is ended there. Its key goes
+            // whether or not it is still among the abandoned starts (a start pushed out of that list keeps none either).
+            signalling.drop(m.call.callId)
             if (abandoned.remove(m.seq)) sendEnd(m.call.callId, CallReason.HANGUP)
             return
         }
@@ -513,7 +516,8 @@ internal class CallMachine(
             is SignalEvent.Offer -> when {
                 e.callId in endedWinners -> Unit // a glare's winner that already ended
                 s == null -> if (!locked) ring(e) // never on a phone that is locking
-                glareWith(s, e) -> if (s.supersededBy == e.callId) takeGlare(s, e) else s.glareOffer = e
+                // The winner is not answered on a phone that is locking: the lock's hang-up ends the lost call.
+                glareWith(s, e) -> if (s.supersededBy != e.callId) s.glareOffer = e else if (!locked) takeGlare(s, e)
                 else -> Unit // busy here: the vault rings every device, and this one is in another call
             }
             is SignalEvent.Ringing -> if (s != null && s.callId == e.callId && s.phase == CallPhase.CALLING) {
@@ -558,7 +562,9 @@ internal class CallMachine(
             if (superseded(s, e)) {
                 val by = e.supersededBy
                 val held = s.glareOffer
-                if (held != null && held.callId == by && now().isBefore(held.exp)) takeGlare(s, held) else lostGlare(s, by)
+                // Not answered on a phone that is locking: the call waits as lost, and the lock's hang-up ends it.
+                val winner = held?.takeIf { it.callId == by && now().isBefore(it.exp) }
+                if (winner != null && !locked) takeGlare(s, winner) else lostGlare(s, by)
             } else {
                 finish(s, ended(s, e.reason), null)
             }
@@ -837,7 +843,8 @@ internal class CallMachine(
         // (the vault, the other side, a refusal of `call.start` such as `busy`, a failure): it rings. Never after this
         // member's own end, a lock's above all: a call rings only while the vault is open on this phone, and a lock
         // would decline it unseen.
-        if (held != null && !s.memberEnded && now().isBefore(held.exp)) ring(held)
+        val rings = held?.takeIf { !s.memberEnded && now().isBefore(it.exp) }
+        if (rings != null && !locked) ring(rings)
     }
 
     /** A connected call ended: its path is counted, by the last one the stack reported (relayed, direct, or not said). */

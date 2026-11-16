@@ -1458,8 +1458,97 @@ class CallMachineTest {
         assertEquals("end($CALL_ID, decline)", signalling.sent.last())
     }
 
+    /** A ringing outgoing call with the connection's own offer held (a glare's winner, perhaps). */
+    private fun TestScope.ringingWithHeldOffer(m: CallMachine) {
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+    }
+
+    /**
+     * The vault's end of this call (declined) was waiting when the lock began: the call ends, and its held offer is not
+     * rung on a phone that is locking (nobody would see it, and the lock's hang-up would decline it).
+     */
+    @Test
+    fun aHeldOfferIsNotRungWhenTheCallEndsAsTheLockBegins() = runTest {
+        val m = machine()
+        ringingWithHeldOffer(m)
+        signalling.afterNext = { m.vaultLocking() }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(CallEnd.DECLINED, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("ringing") || it.startsWith("end(") })
+    }
+
+    /** The glare's end naming the held offer was waiting when the lock began: the winner is not answered. */
+    @Test
+    fun aHeldWinnerIsNotAnsweredWhenTheGlaresEndComesAsTheLockBegins() = runTest {
+        val m = machine()
+        ringingWithHeldOffer(m)
+        signalling.afterNext = { m.vaultLocking() }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertEquals("no engine for the winner", 1, engines.created.size)
+        assertTrue(signalling.sent.none { it.startsWith("answer") || it.startsWith("end(") })
+    }
+
+    /** A lost glare waits for its winner; the winner's offer was waiting when the lock began: it is not answered. */
+    @Test
+    fun aWinnersOfferIsNotAnsweredWhenItComesAsTheLockBegins() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        signalling.afterNext = { m.vaultLocking() }
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertEquals("no engine for the winner", 1, engines.created.size)
+        assertTrue(signalling.sent.none { it.startsWith("answer") || it.startsWith("end(") })
+    }
+
+    /** Another call's end held while the start was out does not stop this call's gathering. */
+    @Test
+    fun anotherCallsEndHeldWhileTheStartWasOutLeavesTheGatheringAlone() = runTest {
+        val m = machine()
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        signalling.deliver(SignalEvent.End("01JB2Z6V9K3M4N5P6Q7R8S9T77", CallReason.HANGUP))
+        runCurrent()
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CallPhase.CALLING, m.live().phase)
+        assertTrue(engines.last.calls.contains("startGathering(0)"))
+    }
+
+    /**
+     * Starts the member hung up while the vault was answering are let go when it does, every one of them, also those
+     * past the abandoned starts' list: their keys go.
+     */
+    @Test
+    fun everyStartAnsweredForNoSessionIsDropped() = runTest {
+        val m = machine()
+        signalling.startGate = Channel(Channel.UNLIMITED)
+        repeat(STARTS) {
+            m.call("conn-1")
+            runCurrent()
+            m.hangUp()
+            runCurrent()
+            m.dismiss()
+            runCurrent()
+        }
+        repeat(STARTS) { signalling.startGate!!.trySend(Unit) }
+        runCurrent()
+        assertEquals(List(STARTS) { CALL_ID }, signalling.dropped)
+    }
+
     private companion object {
         /** Longer than any ring or wait of the default timings. */
         const val MAX_WAIT_MS = 10 * 60_000L
+
+        /** More starts than the abandoned starts' list holds (8). */
+        const val STARTS = 9
     }
 }

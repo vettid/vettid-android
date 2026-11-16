@@ -68,6 +68,8 @@ object CallsModule {
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
         override val unlocked: Flow<Boolean> = m.phase.map { it == AppPhase.Unlocked }.distinctUntilChanged()
 
+        override val unlockedNow: Boolean get() = m.phase.value == AppPhase.Unlocked
+
         /** The root UI shows the release update over every phase while its progress is non-null (VettIdApp). */
         override val updateShowing: Boolean get() = m.releaseUpdate.progress.value != null
 

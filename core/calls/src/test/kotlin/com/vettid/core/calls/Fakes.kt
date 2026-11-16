@@ -145,7 +145,21 @@ class FakeEngines(
 /** Signalling that records what was sent and delivers what the test gives it. */
 open class FakeSignalling : CallSignalling {
     val channel = Channel<SignalEvent>(Channel.UNLIMITED)
-    override val events: Flow<SignalEvent> get() = channel.receiveAsFlow()
+    override val events: Flow<SignalEvent> get() = kotlinx.coroutines.flow.flow {
+        for (e in channel) {
+            emit(e)
+            afterNext?.let {
+                afterNext = null
+                it()
+            }
+        }
+    }
+
+    /**
+     * Run once, right after the next event is in the machine's inbox and before the machine handles it: a lock begun
+     * there puts its hang-up behind that event, as when the event was already waiting when the lock began.
+     */
+    var afterNext: (() -> Unit)? = null
     val sent = mutableListOf<String>()
     val ice = mutableListOf<List<CallCandidate>>()
     var startResult: () -> PlacedCall = { PlacedCall(CALL_ID, T0.plusSeconds(45), emptyList()) }

@@ -110,7 +110,7 @@ internal interface CallSignalling {
      * machine only after the signalling saw it): whatever the signalling still keeps of it, its key above all, goes now.
      * Sends nothing; for an id it does not know, does nothing.
      */
-    fun drop(callId: String) {}
+    fun drop(callId: String)
 
     /** (C2) `call.keepalive` for the active call [callId], while the vault is C2 ([formTwo]). */
     suspend fun keepalive(callId: String) {}

@@ -43,6 +43,12 @@ interface CallVault {
     /** True while the vault is open on this phone. */
     val unlocked: Flow<Boolean>
 
+    /**
+     * Whether the vault is open on this phone at this moment ([unlocked] as it is now, not as its collector has seen it
+     * yet). A lock makes it false before its hooks run.
+     */
+    val unlockedNow: Boolean
+
     /** True while the release-update screen covers the app: no screen could answer a call, so none rings. */
     val updateShowing: Boolean get() = false
 
@@ -364,11 +370,22 @@ class CallsController(
      * collects nothing, so a hang-up sent after the lock would wait in its mailbox while the other member listens
      * to silence. The caller bounds the wait; the lock happens whatever becomes of this.
      */
+    @Suppress("ReturnCount") // one return per reason not to wait
     suspend fun endCallBeforeLock() {
+        // "Lock it now" reads the vault's status before the hooks run, and an unlock here can overtake its lock meanwhile:
+        // the vault is then open again, the lock does not happen, and nothing is ended or refused (the guard below would
+        // stay on with nothing to clear it).
+        if (vault.unlockedNow) return
         // From here no call is placed, rung or answered, a request still in the machine's inbox included, until the vault is
-        // open again (the phase may not have reached [locked] yet). With no call it ends nothing. Before the state is read:
-        // a call request handled in between is refused, not started unseen by this hook.
+        // open again (the phase may not have reached [locked] yet). With no call it ends nothing. Set before the state is
+        // read: a call request handled after this is refused; one the machine is handling at this very moment may start,
+        // and the lock's hang-up behind it ends it with nothing sent.
         machine.vaultLocking()
+        // An unlock that completed just now: its opening may have reached [opened] before the line above.
+        if (vault.unlockedNow) {
+            machine.vaultOpened()
+            return
+        }
         val live = machine.state.value is CallState.Live
         // Nothing to end, no hang-up on its way and no `call.start` out: no wait. A hang-up still being sent, or a
         // `call.start` whose answer is still to come (the call it places is then ended at once), is waited for also when

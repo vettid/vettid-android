@@ -151,6 +151,9 @@ class CallsControllerTest {
 
     private class Vault : CallVault {
         override val unlocked = MutableStateFlow(false)
+
+        /** As a lock's hook finds it: the phase is not open (a lock sets it before its hooks run). */
+        override var unlockedNow = false
         override var updateShowing = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -1114,6 +1117,30 @@ class CallsControllerTest {
         runCurrent()
         assertTrue(done)
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
+    }
+
+    /**
+     * "Lock it now" whose lock an unlock here overtook before its hooks ran: the vault is open, so the hook ends nothing
+     * and refuses nothing, and calls are placed as before (nothing would clear the guard otherwise).
+     */
+    @Test
+    fun aLockOvertakenByAnUnlockLeavesCallsAlone() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        vault.unlockedNow = true
+        c.endCallBeforeLock()
+        runCurrent()
+        assertTrue("the live call goes on", c.state.value is CallState.Live)
+        assertTrue(vault.gateway.sent.none { it.startsWith("end") })
+        c.hangUp()
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue("and calls are placed", c.state.value is CallState.Live)
+        assertEquals(2, vault.gateway.sent.count { it.startsWith("start") })
     }
 
     /**

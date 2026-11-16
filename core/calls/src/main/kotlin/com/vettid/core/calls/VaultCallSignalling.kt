@@ -188,7 +188,7 @@ internal class VaultCallSignalling(
     /** The vault ended [callId]: its key goes, and if no call here has that id while a start is out, it is remembered. */
     private fun forget(callId: String) {
         synchronized(lock) {
-            if (!let(callId) && starting > 0) {
+            if (!letGo(callId) && starting > 0) {
                 endedEarly += callId
                 while (endedEarly.size > MAX_KEPT) endedEarly.remove(endedEarly.first())
             }
@@ -196,7 +196,7 @@ internal class VaultCallSignalling(
     }
 
     /** Lets [callId] go, its key destroyed (rule 3); true if a call here had that id. Under [lock]. */
-    private fun let(callId: String): Boolean {
+    private fun letGo(callId: String): Boolean {
         val known = placed.remove(callId)?.also { it.destroy() } != null
         return ringing.remove(callId) != null || known
     }
@@ -207,7 +207,7 @@ internal class VaultCallSignalling(
      * Nothing is remembered here: the id is one the machine knew, not an end that may overtake a start.
      */
     override fun drop(callId: String) {
-        synchronized(lock) { let(callId) }
+        synchronized(lock) { letGo(callId) }
     }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
