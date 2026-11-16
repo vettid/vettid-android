@@ -1738,7 +1738,8 @@ class VaultDevice private constructor(
 
     private fun applyPaired(o: JsonObject) {
         VaultJson.str(o, "device_id")?.let { st.deviceId = it }
-        VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
+        // An empty id is no id (it would hide the record's from whoever takes the device's first).
+        VaultJson.str(o, "vault_id")?.ifEmpty { null }?.let { st.vaultId = it }
         val rel = VaultJson.str(o, "release")
         val num = VaultJson.long(o, "release_number")
         if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))

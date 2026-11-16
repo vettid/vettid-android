@@ -76,9 +76,12 @@ internal class ApiMarkerClear<M : Any> {
 internal object ApiDeletionStart {
     class Plan(val code: String, val lock: Boolean)
 
-    /** Null: this failure starts nothing (not a definite 410, a state already held, a phone with no paired vault). */
-    fun plan(f: VaultFailure, phase: AppPhase, deleting: Boolean): Plan? {
-        if (!VaultDeletion.isGone410(f) || !VaultDeletion.api410Applies(phase, deleting)) return null
+    /**
+     * Null: this failure starts nothing (not a definite 410, a state already held, a phone with no paired vault, or no
+     * vault id on it: [vaultId], the open session's, else the record's).
+     */
+    fun plan(f: VaultFailure, phase: AppPhase, deleting: Boolean, vaultId: String): Plan? {
+        if (!VaultDeletion.isGone410(f) || !VaultDeletion.api410Applies(phase, deleting, vaultId)) return null
         val code = (f.cause as MemberApiException).code
         return Plan(code, VaultDeletion.locksOnApiDeleted(phase))
     }

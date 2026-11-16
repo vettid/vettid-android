@@ -161,19 +161,21 @@ class DeletionGuardsTest {
 
     @Test
     fun onlyADefinite410OnAPhoneWithAVaultStartsTheStateAndLocksAnOpenOne() {
-        val p = ApiDeletionStart.plan(gone(), AppPhase.Unlocked, deleting = false)!!
+        val p = ApiDeletionStart.plan(gone(), AppPhase.Unlocked, deleting = false, "v")!!
         assertEquals("vault_deleted", p.code)
         assertTrue(p.lock)
-        assertEquals("account_deleted", ApiDeletionStart.plan(gone("account_deleted"), AppPhase.Locked, false)!!.code)
-        assertFalse(ApiDeletionStart.plan(gone(), AppPhase.Locked, false)!!.lock)
-        assertTrue(ApiDeletionStart.plan(gone(), AppPhase.Setup(SetupStage.FINISHING), false)!!.lock)
+        assertEquals("account_deleted", ApiDeletionStart.plan(gone("account_deleted"), AppPhase.Locked, false, "v")!!.code)
+        assertFalse(ApiDeletionStart.plan(gone(), AppPhase.Locked, false, "v")!!.lock)
+        assertTrue(ApiDeletionStart.plan(gone(), AppPhase.Setup(SetupStage.FINISHING), false, "v")!!.lock)
         // Nothing else starts it.
-        assertNull(ApiDeletionStart.plan(VaultFailure(FailureKind.UNAUTHORIZED, "unauthorized"), AppPhase.Unlocked, false))
-        assertNull(ApiDeletionStart.plan(gone("release_unavailable"), AppPhase.Unlocked, false))
-        assertNull(ApiDeletionStart.plan(gone(status = 404), AppPhase.Unlocked, false))
-        assertNull(ApiDeletionStart.plan(gone(), AppPhase.Unlocked, deleting = true))
-        assertNull(ApiDeletionStart.plan(gone(), AppPhase.SignedOut, false))
-        assertNull(ApiDeletionStart.plan(gone(), AppPhase.Setup(SetupStage.NEW_VAULT), false))
+        assertNull(ApiDeletionStart.plan(VaultFailure(FailureKind.UNAUTHORIZED, "unauthorized"), AppPhase.Unlocked, false, "v"))
+        assertNull(ApiDeletionStart.plan(gone("release_unavailable"), AppPhase.Unlocked, false, "v"))
+        assertNull(ApiDeletionStart.plan(gone(status = 404), AppPhase.Unlocked, false, "v"))
+        assertNull(ApiDeletionStart.plan(gone(), AppPhase.Unlocked, deleting = true, "v"))
+        assertNull(ApiDeletionStart.plan(gone(), AppPhase.SignedOut, false, "v"))
+        assertNull(ApiDeletionStart.plan(gone(), AppPhase.Setup(SetupStage.NEW_VAULT), false, "v"))
+        // no vault id (a wipe that has just reopened the fresh record): nothing to mark
+        assertNull(ApiDeletionStart.plan(gone(), AppPhase.Unlocked, false, ""))
     }
 
     // --- the sessions ---

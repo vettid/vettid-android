@@ -148,16 +148,20 @@ class VaultDeletionTest {
         assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = false, apiStanding = true))
         assertFalse(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = false))
         assertTrue(VaultDeletion.allowsSession(deleting = true, mailboxOnly = true, apiStanding = true))
+        // a mailbox-only session is for a standing 410 alone, whatever the state
+        assertFalse(VaultDeletion.allowsSession(deleting = false, mailboxOnly = true, apiStanding = false))
+        assertTrue(VaultDeletion.allowsSession(deleting = false, mailboxOnly = true, apiStanding = true))
     }
 
     @Test
     fun a410StartsTheStateOnlyOnAPhoneWithAVaultAndNotTwice() {
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false))
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Starting, deleting = false))
-        assertTrue(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.FINISHING), deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.NEW_VAULT), deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.SignedOut, deleting = false))
-        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = true))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false, vaultId = "v"))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Starting, deleting = false, vaultId = "v"))
+        assertTrue(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.FINISHING), deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Setup(SetupStage.NEW_VAULT), deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.SignedOut, deleting = false, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = true, vaultId = "v"))
+        assertFalse(VaultDeletion.api410Applies(AppPhase.Unlocked, deleting = false, vaultId = ""))
     }
 
     @Test
@@ -701,5 +705,16 @@ class VaultDeletionTest {
         assertFalse(p.deleting)
         p.value = AppPhase.Locked
         assertEquals(AppPhase.Locked, p.value)
+    }
+
+    /** The vault the deletion's checks take: the session's device first (a transfer to this phone), an empty id is none. */
+    @Test
+    fun theHeldVaultIdIsTheDevicesFirst() {
+        assertEquals("dev", VaultDeletion.heldVaultId("dev", ""))
+        assertEquals("dev", VaultDeletion.heldVaultId("dev", "rec"))
+        assertEquals("rec", VaultDeletion.heldVaultId(null, "rec"))
+        assertEquals("rec", VaultDeletion.heldVaultId("", "rec"))
+        assertEquals("", VaultDeletion.heldVaultId(null, ""))
+        assertEquals("", VaultDeletion.heldVaultId("", ""))
     }
 }

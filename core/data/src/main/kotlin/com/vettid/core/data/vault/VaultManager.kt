@@ -1494,8 +1494,13 @@ class VaultManager(
     override fun dismissLockNotice() = lockKeeper.dismissConfirmed()
 
     /** The session a lock is sent through: only for a vault this phone is set up with (an erased phone opens none). */
+    // The 410 flag is read here and again by the session's own check: a clear in between refuses this attempt once, and
+    // the lock keeper's next try opens a normal session (fail secure).
     private suspend fun lockSession(): Session? =
         if (enrolledOnThisPhone) runCatching { session(mailboxOnly = sessionGuard.lockMailboxOnly()) }.getOrNull() else null
+
+    /** This phone's vault for the deletion's checks and markers ([VaultDeletion.heldVaultId]); empty: none. */
+    private fun heldVaultId(): String = VaultDeletion.heldVaultId(session?.device?.vaultId, local.vaultId)
 
     /**
      * The vault client for an operation on the open vault. While a lock is pending the vault counts as locked,
@@ -3129,14 +3134,15 @@ class VaultManager(
                     null
                 }
                 // An answer that arrived after this phone was signed out or wiped (no vault on it any more): nothing starts.
-                !VaultDeletion.vaultWordStarts(phaseFlow.value, local.vaultId, record.closed) -> {
+                // The vault id as the marker below takes it ([heldVaultId]).
+                !VaultDeletion.vaultWordStarts(phaseFlow.value, heldVaultId(), record.closed) -> {
                     android.util.Log.w("VaultManager", "the vault's word with no vault on this phone: nothing starts")
                     null
                 }
                 else -> {
                     val since = System.currentTimeMillis()
                     val until = VaultDeletion.untilMs(since, deleteBound.expMs)
-                    DeletingMarker(session?.device?.vaultId ?: local.vaultId, since, until).also {
+                    DeletingMarker(heldVaultId(), since, until).also {
                         // What was on its way (a refresh, the end of an unlock) publishes nothing after this.
                         record.bumpGeneration()
                         deletingMarker = it
@@ -3207,9 +3213,11 @@ class VaultManager(
         val marker = synchronized(deletedApiLock) {
             // A wipe runs or an erase failed: its own screen stands (its "Try again" erases), never "Your vault was deleted".
             if (record.closed) return
-            plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting) ?: return
+            // No vault on this phone (signed out, or a wipe that has just reopened the fresh record): nothing to mark.
+            val vaultId = heldVaultId()
+            plan = ApiDeletionStart.plan(f, phaseFlow.value, phaseFlow.deleting, vaultId) ?: return
             val since = System.currentTimeMillis()
-            DeletedApiMarker(session?.device?.vaultId ?: local.vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
+            DeletedApiMarker(vaultId, since, VaultDeletion.apiUntilMs(since), plan!!.code).also {
                 record.bumpGeneration()
                 deletedApiMarker = it
                 phaseFlow.deleting(AppPhase.Deleting(apiOnly = true, removeFromMs = it.untilMs))
@@ -3401,7 +3409,7 @@ class VaultManager(
             }
             phase = phaseFlow.value
             closed = record.closed
-            VaultDeletion.vaultWordStarts(phase, local.vaultId, closed)
+            VaultDeletion.vaultWordStarts(phase, heldVaultId(), closed)
         }
         // startDeleting decides again under the lock (a 410 that lands meanwhile erases through it).
         if (start) {
@@ -5153,7 +5161,8 @@ class VaultManager(
                     deletingMarker = null
                     deletedApiMarker = null
                     // The record reopened before this end (WipeRun: endWipe, then onEnd): a refresh that began in between
-                    // publishes nothing after it. (A 410 taken in between is ended here too.)
+                    // publishes nothing after it. A 410 is not taken in between (no vault is on the phone then); the
+                    // markers cleared here are memory only.
                     record.bumpGeneration()
                     phaseFlow.endDeleting(phase)
                 }
