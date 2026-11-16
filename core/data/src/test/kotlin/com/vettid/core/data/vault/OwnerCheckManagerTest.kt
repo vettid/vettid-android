@@ -774,6 +774,24 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
     }
 
+    /** A lock found by a probe (no status answer, the member API says locked) forgets the scale too. */
+    @Test
+    fun aLockFoundByAProbeForgetsTheScale() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.failStatus = true
+        memberState = "locked"
+        assertEquals(VaultProbe.LOCKED, m.probeVault(lockCauseKnown = false))
+        ops.failStatus = false
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // deadline 2026-10-07T12:00Z, no status read
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+        assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
+    }
+
     /** A lock forgets the scale (a `vault.locking` or the member's own): a check sent before the next read is at real time. */
     @Test
     fun aLockForgetsTheScale() = runTest {

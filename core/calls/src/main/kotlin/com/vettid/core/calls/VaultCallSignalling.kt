@@ -78,6 +78,18 @@ internal class VaultCallSignalling(
 
     /** Answers that arrived for no known call while one was being started: looked at again when it is. */
     private val heldAnswers = mutableListOf<CallEvent.Answer>()
+
+    /**
+     * Calls ended (by the vault or here) while one was being started, that were not known here: the vault's `call.end`
+     * (`busy`, say) can arrive before its answer to `call.start` is read. [start] destroys such a call at once and keeps
+     * nothing of it (rule 3); emptied when no start is in flight. Bounded by [MAX_KEPT]: with more unknown ends than
+     * that during one start, the oldest is let go, and a call it named is kept as before this list existed (until it
+     * is ended again or pushed out of [placed]).
+     */
+    private val endedEarly = LinkedHashSet<String>()
+
+    /** For tests: how many answers are held and how many ended ids are remembered, now. */
+    internal fun heldCounts(): Pair<Int, Int> = synchronized(lock) { heldAnswers.size to endedEarly.size }
     private val late = Channel<SignalEvent>(Channel.UNLIMITED)
 
     /** Offers and answers that did not pass their checks since the process started (diagnostics; no detail is kept). */
@@ -174,14 +186,18 @@ internal class VaultCallSignalling(
 
     private fun forget(callId: String) {
         synchronized(lock) {
-            placed.remove(callId)?.destroy()
-            ringing.remove(callId)
+            val known = placed.remove(callId)?.also { it.destroy() } != null
+            if (ringing.remove(callId) == null && !known && starting > 0) {
+                endedEarly += callId
+                while (endedEarly.size > MAX_KEPT) endedEarly.remove(endedEarly.first())
+            }
         }
     }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
+        var endedFirst = false
         val call = try {
             // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
             // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
@@ -192,8 +208,15 @@ internal class VaultCallSignalling(
             }
             gateway.start(connectionId, sdp, suites, peerIk).also { c ->
                 synchronized(lock) {
-                    placed[c.callId] = c
-                    while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
+                    endedFirst = endedEarly.remove(c.callId)
+                    if (endedFirst) {
+                        // Its end overtook this answer: nothing to keep, and the key goes now (rule 3). The machine
+                        // ends the call from the end it already has.
+                        c.destroy()
+                    } else {
+                        placed[c.callId] = c
+                        while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
+                    }
                 }
             }
         } catch (e: VaultOpException) {
@@ -204,11 +227,15 @@ internal class VaultCallSignalling(
             synchronized(lock) {
                 starting--
                 held = heldAnswers.toList()
-                if (starting == 0) heldAnswers.clear()
+                if (starting == 0) {
+                    heldAnswers.clear()
+                    endedEarly.clear()
+                }
             }
         }
         // An answer that overtook the vault's answer to `call.start`: checked now, as any answer.
-        for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
+        // Not for a call already ended: it is not kept, and its answer is nobody's (nor held again for another start).
+        if (!endedFirst) for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
         return PlacedCall(call.callId, call.exp, call.ice.servers, call.formTwo)
     }
 

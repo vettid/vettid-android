@@ -1,5 +1,7 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -9,11 +11,13 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -23,7 +27,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * `VaultManager.lock()` is this sequence around `api.lock()` (the manager itself needs a phone to be built).
  */
 class LockSequenceTest {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** What reached the scope's handler (in the app, `RelaySafetyNet`: an Error there ends the process). */
+    private val reported = CopyOnWriteArrayList<Throwable>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> reported += e })
     private val budget = 300L
     private val locked = AtomicBoolean(false)
     private val after = AtomicInteger(0)
@@ -74,6 +80,53 @@ class LockSequenceTest {
         val ms = timed { sequence({ throw IllegalStateException("x") }, { second.set(true) }).lock() }
         assertTrue(second.get() && locked.get())
         assertTrue("$ms ms", ms < budget)
+    }
+
+    /** A hook still running when the budget is over is cancelled, not left running beside the lock. */
+    @Test
+    fun aHookStillRunningAfterTheBudgetIsCancelled() {
+        val cancelled = CompletableDeferred<Unit>()
+        timed {
+            sequence({
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelled.complete(Unit)
+                }
+            }).lock()
+        }
+        assertTrue(locked.get())
+        assertTrue("cancelled", runBlocking { withTimeoutOrNull(1_000) { cancelled.await() } } != null)
+    }
+
+    /** A hook that throws while another is still running: the other finishes, and nothing reaches the handler. */
+    @Test
+    fun aHookThatThrowsCancelsNoneOfTheOthersStillRunning() {
+        val slow = AtomicBoolean(false)
+        val thrown = CompletableDeferred<Unit>()
+        timed { sequence({ thrown.await(); delay(SETTLE_MS); slow.set(true) }, { thrown.complete(Unit); error("x") }).lock() }
+        assertTrue("the slower hook finished", slow.get())
+        assertTrue(locked.get())
+        assertTrue("$reported", reported.isEmpty())
+    }
+
+    /** An Error is not swallowed (the scope's handler gets it, as before), but it no longer cancels the other hooks. */
+    @Test
+    fun aHookThatFailsWithAnErrorCancelsNoneOfTheOthers() {
+        val slow = AtomicBoolean(false)
+        val thrown = CompletableDeferred<Unit>()
+        timed { sequence({ thrown.await(); delay(SETTLE_MS); slow.set(true) }, { thrown.complete(Unit); throw HookError() }).lock() }
+        assertTrue("the slower hook finished", slow.get())
+        assertTrue(locked.get())
+        assertEquals(1, after.get())
+        assertEquals(listOf(HookError::class.java), reported.map { it.javaClass })
+    }
+
+    private class HookError : Error("hook")
+
+    private companion object {
+        /** After the other hook failed: time for a cancellation to reach this one, if anything cancelled it. */
+        const val SETTLE_MS = 50L
     }
 
     @Test

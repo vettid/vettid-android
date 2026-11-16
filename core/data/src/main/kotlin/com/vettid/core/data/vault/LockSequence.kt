@@ -2,6 +2,8 @@ package com.vettid.core.data.vault
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -16,7 +18,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  *   its hang-up reaches the vault) runs first, each hook in a job of its own and all of them side by side, and is
  *   waited for [hookBudgetMs] at most, then cancelled and left behind. A hook that suspends for ever, throws, or
  *   blocks its thread cannot hold the lock back longer, nor keep the other hooks from running (a call's hang-up
- *   waiting for the vault's answer does not starve the clears registered after it). Without hooks nothing is
+ *   waiting for the vault's answer does not starve the clears registered after it). A hook that fails with an
+ *   [Error] does not cancel the others either: the error goes on to the scope's handler. Without hooks nothing is
  *   waited for.
  * - `after` runs whatever became of `lock`: the phone's own state ends locked also when the vault could not be told.
  */
@@ -48,20 +51,22 @@ internal class LockSequence(private val scope: CoroutineScope, private val hookB
 
     private suspend fun runHooks() {
         if (hooks.isEmpty()) return
-        val job = scope.launch {
-            for (hook in hooks) {
-                // Each in its own child: a slow one does not hold the others back.
-                launch {
-                    try {
-                        hook()
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                        // One hook's failure is not another's, and never the lock's.
-                    }
+        // A supervisor: a hook that fails with what is not caught below (an Error) goes to the scope's handler, as it
+        // did before, and cancels none of the others.
+        val job = SupervisorJob(scope.coroutineContext[Job])
+        for (hook in hooks) {
+            // Each in its own child: a slow one does not hold the others back.
+            scope.launch(job) {
+                try {
+                    hook()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    // One hook's failure is not another's, and never the lock's.
                 }
             }
         }
+        job.complete()
         withTimeoutOrNull(hookBudgetMs) { job.join() }
         // Not joined after the cancel: a hook that blocks its thread is left to finish by itself.
         job.cancel()
