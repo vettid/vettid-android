@@ -5,6 +5,7 @@ import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -279,9 +280,59 @@ class CallMachineTest {
         assertEquals(0, m.pendingEnds.value)
     }
 
+    /** What the machine's flows did, in order, seen in the very step each changed. */
+    private fun TestScope.flowLog(m: CallMachine): MutableList<String> {
+        val log = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { m.startsOut.collect { log += "starts=$it" } }
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { m.pendingEnds.collect { log += "ends=$it" } }
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+            m.state.collect { if (it is CallState.Ended) log += "ended" }
+        }
+        return log
+    }
+
     /**
-     * A call ended while its offer was being made sends no `call.start` at all: the offer is made, but the lock is in
-     * the loop's queue ahead of it (a lock while the offer is still being made cancels the making itself).
+     * The start is counted in the loop step that lets it go: a lock queued right behind the offer finds it counted when
+     * it ends the call, never a moment with the call ended and nothing counted.
+     */
+    @Test
+    fun aStartIsCountedBeforeALockQueuedBehindItEndsTheCall() = runTest {
+        val m = machine()
+        val log = flowLog(m)
+        val gate = Channel<Unit>(1)
+        engines.onCreate = { (it as FakeEngine).offerGate = gate }
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        // The offer is made first; the lock is posted by a task that runs after it, before the loop takes the offer, so
+        // the loop finds the lock right behind the offer and handles both in one go (the start's own coroutine runs later).
+        gate.trySend(Unit)
+        launch { m.vaultLocking() }
+        runCurrent()
+        assertEquals(listOf("starts=0", "ends=0", "starts=1", "ended"), log)
+        assertTrue(signalling.sent.any { it.startsWith("start") })
+    }
+
+    /** The hang-up the start's answer needs is counted before the start is done with: the lock never sees both at 0. */
+    @Test
+    fun theHangUpIsCountedBeforeTheStartIsDone() = runTest {
+        val m = machine()
+        val log = flowLog(m)
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        m.vaultLocking()
+        runCurrent()
+        log.clear()
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(listOf("ends=1", "starts=0", "ends=0"), log)
+    }
+
+    /**
+     * A call ended while its offer was being made sends no `call.start` at all. With the lock queued first, the lock
+     * cancels the offer's making (the lane goes with the call) and the gate is never reached; with the offer made and
+     * the lock queued right behind it (`lockFirst = false`), the loop's own check drops the offer.
      */
     @Test
     fun noStartForACallEndedWhileItsOfferWasMade() = runTest {

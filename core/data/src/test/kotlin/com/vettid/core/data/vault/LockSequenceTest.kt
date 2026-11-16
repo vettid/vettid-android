@@ -58,6 +58,16 @@ class LockSequenceTest {
         assertTrue(locked.get())
     }
 
+    /** A hook that never finishes (a call's start never answered) does not keep the hooks after it from running. */
+    @Test
+    fun aHookThatNeverFinishesDoesNotStarveTheOthers() {
+        val second = AtomicBoolean(false)
+        val ms = timed { sequence({ awaitCancellation() }, { second.set(true) }).lock() }
+        assertTrue("the hook after it ran", second.get())
+        assertTrue("$ms ms", ms in budget..budget + 700)
+        assertTrue(locked.get())
+    }
+
     @Test
     fun aHookThatThrowsStopsNeitherTheNextHookNorTheLock() {
         val second = AtomicBoolean(false)

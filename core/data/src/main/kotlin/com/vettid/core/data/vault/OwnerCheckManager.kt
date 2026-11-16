@@ -327,6 +327,8 @@ class OwnerCheckManager(
 
     /** The vault is known locked; [causeKnown]: by ten wrong checks (`vault.locking{owner_check}`, or an estimate of 0). */
     private fun markLocked(causeKnown: Boolean) {
+        // A lock however it is learnt (a probe, the tenth failed check, `vault.locking`): a new epoch and real time.
+        newEpoch()
         // A cause already known is never downgraded while the vault stays locked (a probe may finish after `vault.locking`).
         causeUnknown.value = !causeKnown && (!locked.value || causeUnknown.value)
         locked.value = true

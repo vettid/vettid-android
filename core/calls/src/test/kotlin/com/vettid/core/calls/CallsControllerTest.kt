@@ -1144,6 +1144,32 @@ class CallsControllerTest {
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
     }
 
+    /** Hung up while `call.start` is out, then locked: the lock still waits for its answer and the hang-up it needs. */
+    @Test
+    fun aHangUpWhileTheStartIsOutThenALockWaitsForIt() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val start = Channel<Unit>(1)
+        vault.gateway.startGate = start
+        c.call("conn-1")
+        runCurrent()
+        c.hangUp()
+        runCurrent()
+        assertTrue("the call is over on this phone", c.state.value !is CallState.Live)
+        var done = false
+        backgroundScope.launch {
+            c.endCallBeforeLock()
+            done = true
+        }
+        runCurrent()
+        assertTrue("the lock waits for call.start's answer", !done)
+        start.send(Unit)
+        runCurrent()
+        assertTrue(done)
+        assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
+    }
+
     /** Review L8 of #127: hung up, then locked at once. The call is over here, its hang-up is not with the relay yet. */
     @Test
     fun aHangUpStillOnItsWayIsWaitedForBeforeTheVaultLocks() = runTest {

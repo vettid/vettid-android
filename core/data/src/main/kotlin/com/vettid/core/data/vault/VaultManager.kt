@@ -1416,7 +1416,8 @@ class VaultManager(
             @Suppress("ReturnCount") // one return per answer
             override suspend fun memberLock(unlockId: String?): MemberLock {
                 val s = lockSession() ?: return MemberLock.NoAnswer
-                // The session's own vault (an empty id is none).
+                // The session's own vault, an empty id being none: no answer then, not the record's id as the other
+                // readers take it, since the lock goes through this session to the vault it is with.
                 val vaultId = s.device.vaultId?.ifEmpty { null } ?: return MemberLock.NoAnswer
                 return try {
                     val slot = io { s.alt.lock(vaultId, MEMBER_LOCK_WAIT, unlockId) }
