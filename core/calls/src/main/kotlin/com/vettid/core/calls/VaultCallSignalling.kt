@@ -78,6 +78,13 @@ internal class VaultCallSignalling(
 
     /** Answers that arrived for no known call while one was being started: looked at again when it is. */
     private val heldAnswers = mutableListOf<CallEvent.Answer>()
+
+    /**
+     * Calls ended (by the vault or here) while one was being started, that were not known here: the vault's `call.end`
+     * (`busy`, say) can arrive before its answer to `call.start` is read. [start] destroys such a call at once and keeps
+     * nothing of it (rule 3); emptied when no start is in flight.
+     */
+    private val endedEarly = LinkedHashSet<String>()
     private val late = Channel<SignalEvent>(Channel.UNLIMITED)
 
     /** Offers and answers that did not pass their checks since the process started (diagnostics; no detail is kept). */
@@ -174,8 +181,11 @@ internal class VaultCallSignalling(
 
     private fun forget(callId: String) {
         synchronized(lock) {
-            placed.remove(callId)?.destroy()
-            ringing.remove(callId)
+            val known = placed.remove(callId)?.also { it.destroy() } != null
+            if (ringing.remove(callId) == null && !known && starting > 0) {
+                endedEarly += callId
+                while (endedEarly.size > MAX_KEPT) endedEarly.remove(endedEarly.first())
+            }
         }
     }
 
@@ -192,8 +202,14 @@ internal class VaultCallSignalling(
             }
             gateway.start(connectionId, sdp, suites, peerIk).also { c ->
                 synchronized(lock) {
-                    placed[c.callId] = c
-                    while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
+                    if (endedEarly.remove(c.callId)) {
+                        // Its end overtook this answer: nothing to keep, and the key goes now (rule 3). The machine
+                        // ends the call from the end it already has.
+                        c.destroy()
+                    } else {
+                        placed[c.callId] = c
+                        while (placed.size > MAX_KEPT) placed.remove(placed.keys.first())?.destroy()
+                    }
                 }
             }
         } catch (e: VaultOpException) {
@@ -204,7 +220,10 @@ internal class VaultCallSignalling(
             synchronized(lock) {
                 starting--
                 held = heldAnswers.toList()
-                if (starting == 0) heldAnswers.clear()
+                if (starting == 0) {
+                    heldAnswers.clear()
+                    endedEarly.clear()
+                }
             }
         }
         // An answer that overtook the vault's answer to `call.start`: checked now, as any answer.

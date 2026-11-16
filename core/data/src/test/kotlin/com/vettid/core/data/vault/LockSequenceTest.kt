@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -23,7 +25,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * `VaultManager.lock()` is this sequence around `api.lock()` (the manager itself needs a phone to be built).
  */
 class LockSequenceTest {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** What reached the scope's handler (in the app, `RelaySafetyNet`: an Error there ends the process). */
+    private val reported = CopyOnWriteArrayList<Throwable>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> reported += e })
     private val budget = 300L
     private val locked = AtomicBoolean(false)
     private val after = AtomicInteger(0)
@@ -75,6 +79,29 @@ class LockSequenceTest {
         assertTrue(second.get() && locked.get())
         assertTrue("$ms ms", ms < budget)
     }
+
+    /** A hook that throws while another is still running: the other finishes, and nothing reaches the handler. */
+    @Test
+    fun aHookThatThrowsCancelsNoneOfTheOthersStillRunning() {
+        val slow = AtomicBoolean(false)
+        timed { sequence({ delay(100); slow.set(true) }, { throw IllegalStateException("x") }).lock() }
+        assertTrue("the slower hook finished", slow.get())
+        assertTrue(locked.get())
+        assertTrue("$reported", reported.isEmpty())
+    }
+
+    /** An Error is not swallowed (the scope's handler gets it, as before), but it no longer cancels the other hooks. */
+    @Test
+    fun aHookThatFailsWithAnErrorCancelsNoneOfTheOthers() {
+        val slow = AtomicBoolean(false)
+        timed { sequence({ delay(100); slow.set(true) }, { throw HookError() }).lock() }
+        assertTrue("the slower hook finished", slow.get())
+        assertTrue(locked.get())
+        assertEquals(1, after.get())
+        assertEquals(listOf(HookError::class.java), reported.map { it.javaClass })
+    }
+
+    private class HookError : Error("hook")
 
     @Test
     fun aHookThatBlocksItsThreadCannotHoldTheLockBack() {

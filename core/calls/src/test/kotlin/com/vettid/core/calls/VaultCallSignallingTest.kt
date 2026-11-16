@@ -445,6 +445,42 @@ class VaultCallSignallingTest {
         assertEquals(1, out.size)
     }
 
+    /**
+     * The vault's `call.end` (`busy`) overtakes its answer to `call.start`: the call it then returns is not kept, and its
+     * ephemeral key is destroyed at once (rule 3). An end for another call while the start is out changes nothing.
+     */
+    @Test
+    fun anEndThatOvertakesTheAnswerToCallStartLeavesNoKeyBehind() = runTest {
+        val s = signalling()
+        for (endedId in listOf(CALL_ID, "01JB2Z6V9K3M4N5P6Q7R8S9T51")) {
+            out.clear()
+            gateway.asked.clear()
+            val key = KemPrivateKey.generate()
+            gateway.startGate = Channel(1)
+            gateway.start = {
+                OutgoingCall(
+                    CALL_ID, "conn-1", "audio", T0.plusSeconds(45), CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList()),
+                    listOf(1), key,
+                )
+            }
+            val starting = backgroundScope.launch { s.start("conn-1", "v=0", listOf(s1)) }
+            runCurrent()
+            gateway.channel.send(CallEvent.Ended(endedId, "busy"))
+            runCurrent()
+            gateway.startGate!!.send(Unit)
+            runCurrent()
+            assertTrue(starting.isCompleted)
+            val overtaken = endedId == CALL_ID
+            assertEquals("ended $endedId", overtaken, runCatching { key.seed() }.isFailure)
+            // Kept or not: an answer for it is checked only while the call is kept.
+            gateway.accept = { AcceptedCall(CALL_ID, "v=0", keys()) }
+            gateway.channel.send(answerEvent())
+            runCurrent()
+            assertEquals("ended $endedId", !overtaken, gateway.asked.any { it.startsWith("accept") })
+            if (!overtaken) assertTrue("an answered call's key goes too", runCatching { key.seed() }.isFailure)
+        }
+    }
+
     /** Only `CallApi` may make a verified call object: no production source outside `:core:vault` opts in. */
     @Test
     fun noProductionSourceMakesAVerifiedCallObjectByHand() {
