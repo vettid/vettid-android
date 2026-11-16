@@ -44,7 +44,8 @@ import java.time.Instant
  * closed value put in between two open ones whose count differs. A lock and an unlock fast enough for the closed phase
  * to be conflated away are then still seen as a close, so nothing of the vault before the lock is kept after it (the
  * probe's answer, the C2 flag, the permissions). Each pair must be read together (the phase first, then the count, both
- * as they are now), so that an open phase never comes with the count from before its own opening.
+ * as they are now), so that an open phase never comes with the count from before its own opening. A close put in this
+ * way ends a call that began during the collector's lag, as a lock would: fail-secure, since the vault did close.
  */
 fun vaultOpenings(phase: Flow<Pair<Boolean, Int>>): Flow<Boolean> = flow {
     var lastOpen: Boolean? = null
@@ -314,6 +315,8 @@ class CallsController(
 
     init {
         scope.launch {
+            // collectLatest cancels an opening's probe when a close comes; locked() never suspends, so a close is
+            // never cut short by the opening after it.
             vault.unlocked.collectLatest { isOpen ->
                 open = isOpen
                 if (isOpen) opened() else locked()
