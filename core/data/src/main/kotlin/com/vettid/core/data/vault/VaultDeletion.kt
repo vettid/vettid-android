@@ -211,18 +211,22 @@ object VaultDeletion {
 
     /**
      * Whether a session may be opened: never while "being deleted", except the mailbox of a phone that holds a 410 without
-     * the vault's word ([mailboxOnly] and [apiStanding]).
+     * the vault's word ([mailboxOnly] and [apiStanding]). A mailbox-only session is for that alone: never without a 410
+     * standing, whatever the state.
      */
     fun allowsSession(deleting: Boolean, mailboxOnly: Boolean, apiStanding: Boolean): Boolean =
-        !deleting || (mailboxOnly && apiStanding)
+        if (mailboxOnly) apiStanding else !deleting
 
     /** A 410 without the vault's word closes an open (or paired) vault with a fail-secure lock; a locked or unset phone needs none. */
     fun locksOnApiDeleted(phase: AppPhase): Boolean =
         phase is AppPhase.Unlocked || (phase is AppPhase.Setup && phase.stage in PAIRED_STAGES)
 
-    /** Whether a 410 without the vault's word starts the state: not twice, not on a phone with no vault, not before a vault is paired. */
-    fun api410Applies(phase: AppPhase, deleting: Boolean): Boolean =
-        !deleting && phase != AppPhase.SignedOut && (phase !is AppPhase.Setup || phase.stage in PAIRED_STAGES)
+    /**
+     * Whether a 410 without the vault's word starts the state: not twice, not on a phone with no vault (signed out, or no
+     * [vaultId]: a wipe that has just reopened the fresh record), not before a vault is paired.
+     */
+    fun api410Applies(phase: AppPhase, deleting: Boolean, vaultId: String): Boolean =
+        !deleting && vaultId.isNotEmpty() && phase != AppPhase.SignedOut && (phase !is AppPhase.Setup || phase.stage in PAIRED_STAGES)
 
     /** Setup stages of a phone that is paired with its vault (it can open it), where a 410 also applies. */
     val PAIRED_STAGES = setOf(SetupStage.NEEDS_CREDENTIAL, SetupStage.FINISHING)
@@ -281,6 +285,14 @@ object VaultDeletion {
      * record is open ([recordClosed]: no wipe running, no erase that failed). A clear that ended a 410-only state just
      * before the word must not lose it.
      */
+    /**
+     * The vault this phone holds, for the deletion's checks and markers: the open session's device first (during a
+     * transfer to this phone the record has it only once the transfer completes), else the record's; an empty id is none
+     * (empty: no vault).
+     */
+    internal fun heldVaultId(deviceVaultId: String?, recordVaultId: String): String =
+        deviceVaultId?.ifEmpty { null } ?: recordVaultId
+
     internal fun vaultWordStarts(phase: AppPhase, vaultId: String, recordClosed: Boolean): Boolean =
         vaultId.isNotEmpty() && !recordClosed && phase !is AppPhase.SignedOut
 

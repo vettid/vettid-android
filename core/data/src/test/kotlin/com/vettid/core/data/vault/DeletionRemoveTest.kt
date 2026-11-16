@@ -24,6 +24,8 @@ class DeletionRemoveTest {
         assertFalse(DeletionRemove.wipes(api, none, deleting = false, phase = AppPhase.SignedOut))
         assertFalse(DeletionRemove.wipes(api, none, deleting = false, phase = AppPhase.Locked))
         assertFalse(DeletionRemove.wipes(api, api, deleting = false, phase = AppPhase.Locked))
+        // the phase still reads "being deleted" past its bound, but the state is no longer held (ending, or a wipe's)
+        assertFalse(DeletionRemove.wipes(api, api, deleting = false, phase = slowApi))
     }
 
     /** A clear, then at once a new 410: the new deletion has its own bound first. */
