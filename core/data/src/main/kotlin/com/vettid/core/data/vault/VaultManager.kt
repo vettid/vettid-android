@@ -148,7 +148,10 @@ class VaultManager(
 ) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault, PushVault, TimeScaleSource {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
-    private val gateway: MemberGateway = env.memberGateway(app, http) { session?.device?.vaultId ?: local.vaultId.ifEmpty { null } }
+    private val gateway: MemberGateway = env.memberGateway(app, http) {
+        // The same rule as the deletion's: the open session's device first, an empty id being none.
+        VaultDeletion.heldVaultId(session?.device?.vaultId, local.vaultId).ifEmpty { null }
+    }
     private val accountFile = KeystoreFileStore(File(app.noBackupFilesDir, "account.bin"), "account")
     private val mutex = Mutex()
     private var session: Session? = null
@@ -1496,9 +1499,13 @@ class VaultManager(
 
     override fun dismissLockNotice() = lockKeeper.dismissConfirmed()
 
-    /** The session a lock is sent through: only for a vault this phone is set up with (an erased phone opens none). */
-    // The 410 flag is read here and again by the session's own check: a clear in between refuses this attempt once, and
-    // the lock keeper's next try opens a normal session (fail secure).
+    /**
+     * The session a lock is sent through: only for a vault this phone is set up with (an erased phone opens none). The 410
+     * flag is read here and again by the session's own check ([SessionGuard.check]); both ways a change in between fails
+     * secure: a clear refuses this attempt once (a mailbox-only session with no 410 standing) and the lock keeper's next
+     * try opens a normal session; a 410 that lands in between refuses the normal session (no session while "being
+     * deleted"), and the next try opens the mailbox one.
+     */
     private suspend fun lockSession(): Session? =
         if (enrolledOnThisPhone) runCatching { session(mailboxOnly = sessionGuard.lockMailboxOnly()) }.getOrNull() else null
 

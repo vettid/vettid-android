@@ -391,6 +391,25 @@ class VaultDeviceTest {
         return d to v
     }
 
+    /** A `device.paired` whose `vault_id` is empty is no id: the one the enrolment gave stays. */
+    @Test
+    fun anEmptyPairedVaultIdKeepsTheEnrolledOne() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore(), java.time.Duration.ofSeconds(5)), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            val paired = async(Dispatchers.IO) { d.completeEnrollment(java.time.Duration.ofSeconds(10)) }
+            val (_, init) = nextDeposit()
+            d.handle(v.respond(init, d))
+            v.fin(nextDeposit().second, d)
+            d.handle(v.seal("device.paired", """{"device_id":"dev-1","role":"app","vault_id":"","release":"${"a3".repeat(48)}","release_number":3}"""))
+            paired.await()
+            assertEquals("dev-1", d.deviceId)
+            assertEquals(v.vaultId, d.vaultId)
+        }
+    }
+
     @Test
     fun enrollPairRequestAndEvents() = runBlocking<Unit> {
         withTimeout(30_000) {

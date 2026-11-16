@@ -739,6 +739,37 @@ class OwnerCheckManagerTest {
         assertFalse(m.presenceUnrecorded.value)
     }
 
+    /**
+     * The stored scale is for the presence time only: a pass before any status read is at real time, so a held dated
+     * between the deadline less 24 hours and the deadline less one hour (the pass at 24) is still taken.
+     */
+    @Test
+    fun theStoredScaleStaysOutOfThePassTime() = runTest {
+        storedScale = 24
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.afterCancelledRecovery("975310", "pw") // no status read: deadline 2026-10-07T12:00Z, the pass at real time 2026-10-06T12:00Z
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:00:00Z")))
+        assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
+    }
+
+    /** A lock forgets the scale (a `vault.locking` or the member's own): a check sent before the next read is at real time. */
+    @Test
+    fun aLockForgetsTheScale() = runTest {
+        for (lockHere in listOf(false, true)) {
+            val ops = Ops().apply {
+                status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+                timeScale = 24
+            }
+            val m = manager(ops)
+            m.refreshOwnerCheck()
+            if (lockHere) m.onLockedHere() else m.onEvent(event("vault.locking", """{"reason":"member"}"""))
+            assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+            m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+            assertEquals("lockHere=$lockHere", OwnerCheckState.HELD, m.ownerCheck.value?.state)
+        }
+    }
+
     /** A clear (a wipe, a deleted vault) forgets the scale: a pass after it, before any status read, is at real time. */
     @Test
     fun aClearForgetsTheScale() = runTest {

@@ -2619,7 +2619,8 @@ class VaultDevice private constructor(
         }
         st.vault!!.token = tok
         st.vault!!.tokenExpMs = exp.toEpochMilli()
-        st.vaultId = vid
+        // An empty id is no id: the one already held (a recovery's) stays.
+        if (vid.isNotEmpty()) st.vaultId = vid
         val a = alt()
         if (a.enrollNonce != null) setAlt(AltRequests.applyEnrolled(a, o.optUint("state_seq", 0, StrictJson.MAX_SAFE_INTEGER)))
         publish(VaultMessage(inner))
