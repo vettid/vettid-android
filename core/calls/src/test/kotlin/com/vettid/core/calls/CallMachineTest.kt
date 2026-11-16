@@ -1435,8 +1435,8 @@ class CallMachineTest {
     }
 
     /**
-     * From [CallMachine.vaultLocking] no call is placed until [CallMachine.vaultOpened]: also not a request
-     * already waiting in the inbox when the lock began. Nothing of it starts: no session, no engine, no `call.start`.
+     * From a lock (the phase closed, then [CallMachine.vaultLocking]) no call is placed until the phase is open again: also
+     * not a request already waiting in the inbox when the lock began. Nothing of it starts: no session, no engine, no `call.start`.
      */
     @Test
     fun noCallIsPlacedFromALockUntilTheVaultIsOpenAgain() = runTest {
@@ -1611,6 +1611,34 @@ class CallMachineTest {
         assertEquals(CallEnd.LOCKED, m2.ended().reason)
         assertTrue("the vault ended the lost call already: nothing sent", s2.sent.none { it.startsWith("end(") || it.startsWith("answer") })
         assertTrue(GLARE_ID in s2.dropped)
+
+        // A held winner, and the glare's end with the vault closed: not answered, the lost call ends at once, nothing sent.
+        val s3 = FakeSignalling()
+        val m3 = machine(s3)
+        m3.call("conn-1")
+        runCurrent()
+        s3.deliver(offer(GLARE_ID))
+        runCurrent()
+        open = false
+        s3.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m3.ended().reason)
+        assertTrue(s3.sent.none { it.startsWith("end(") || it.startsWith("answer") })
+        assertTrue(GLARE_ID in s3.dropped)
+    }
+
+    /** With the vault open, a held offer the call does not ring (the member hung up) is let go in the signalling too. */
+    @Test
+    fun aHeldOfferNotRungAfterTheMembersHangUpIsLetGo() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        m.hangUp()
+        runCurrent()
+        assertEquals(CallEnd.HUNG_UP, m.ended().reason)
+        assertTrue(signalling.sent.none { it.startsWith("ringing") })
+        assertTrue(GLARE_ID in signalling.dropped)
     }
 
     /** The phase alone decides, read live: a lock and an unlock that came and went start calls again with nothing to clear. */

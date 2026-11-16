@@ -254,7 +254,8 @@ internal class CallMachine(
         val s = session
         when (m) {
             is Msg.Call -> if (s == null && !closed) startOutgoing(m.connectionId)
-            // A ringing call the lock is ending is not answered: the lock's hang-up behind this declines it.
+            // Not answered while the vault is not open: a lock's hang-up behind this declines the call; with none (a lock an
+            // unlock overtook) it goes on ringing, and can be answered once the vault reads open.
             Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING && !closed) answerIncoming(s)
             Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
                 s.memberEnded = true
@@ -510,7 +511,7 @@ internal class CallMachine(
                 e.callId in endedWinners -> Unit // a glare's winner that already ended
                 // Never on a phone that is locking: the offer is let go, here and in the signalling.
                 s == null -> if (!closed) ring(e) else signalling.drop(e.callId)
-                // The winner is not answered on a phone that is locking: the lock's hang-up ends the lost call.
+                // The winner is not answered on a phone that is locking: its offer is let go and the lost call ends here.
                 glareWith(s, e) -> when {
                     s.supersededBy != e.callId -> s.glareOffer = e
                     !closed -> takeGlare(s, e)
@@ -585,8 +586,8 @@ internal class CallMachine(
 
     /**
      * This call lost a glare to [by]: its held offer, when that is the winner and still current, is answered; otherwise the
-     * call waits as lost. Not answered on a phone that is locking: the call waits as lost, the winner's offer is let go,
-     * and the lock's hang-up ends the call.
+     * call waits as lost. Not answered on a phone that is locking: the winner's offer is let go, and the lost call ends here
+     * at once (nothing is sent: the vault ended it already).
      */
     private fun settleGlare(s: Session, by: String?) {
         val winner = s.glareOffer?.takeIf { it.callId == by && now().isBefore(it.exp) }
