@@ -1,6 +1,7 @@
 package com.vettid.core.calls
 
 import com.vettid.core.crypto.call.MediaSuite
+import com.vettid.core.vault.CallCandidate
 import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -203,6 +204,56 @@ class CallMachineGlareEndsTest {
         }
     }
 
+    /**
+     * Candidates are kept for one call: those of a held offer that the vault's glare let go for another winner (or that
+     * another offer replaced) never reach the winner.
+     */
+    @Test
+    fun anotherHeldCallsCandidatesNeverReachTheWinner() = runTest {
+        for (replaced in listOf(false, true)) {
+            val s = FakeSignalling()
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            s.deliver(offer(OTHER_ID))
+            s.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(3))))
+            if (replaced) {
+                // Another offer from the connection takes the held one's place, with its own candidates.
+                s.deliver(offer(GLARE_ID))
+                s.deliver(SignalEvent.Ice(GLARE_ID, listOf(candidate(4))))
+                s.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+            } else {
+                // The glare's winner is not the held offer: it is let go, and the winner's offer comes after.
+                s.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+                s.deliver(offer(GLARE_ID))
+            }
+            runCurrent()
+            assertEquals(GLARE_ID, m.live().callId)
+            val expected = if (replaced) listOf(candidate(4)) else emptyList()
+            assertEquals("replaced=$replaced", expected, engines.last.remote)
+        }
+    }
+
+    /**
+     * The call ends another way (declined) and its held offer rings: the candidates of the offer that held offer
+     * replaced are not handed to it.
+     */
+    @Test
+    fun aRungHeldOfferTakesNoCandidatesOfTheOfferItReplaced() = runTest {
+        val m = machine()
+        m.call("conn-1")
+        runCurrent()
+        signalling.deliver(offer(OTHER_ID))
+        signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(3))))
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(GLARE_ID, m.live().callId)
+        m.answer()
+        runCurrent()
+        assertEquals(emptyList<CallCandidate>(), engines.last.remote)
+    }
+
     /** A held offer rung after a refused start takes the candidates held for it, applied once it is answered. */
     @Test
     fun aHeldOfferRungAfterARefusedStartTakesItsCandidates() = runTest {
@@ -235,5 +286,8 @@ class CallMachineGlareEndsTest {
     private companion object {
         /** More starts than the old list of abandoned starts held (8). */
         const val STARTS = 9
+
+        /** An offer from the connection that is not the glare's winner. */
+        const val OTHER_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4A"
     }
 }

@@ -173,6 +173,9 @@ internal class CallMachine(
          */
         val glareIce = mutableListOf<CallCandidate>()
 
+        /** The call [glareIce] is for: candidates are kept for one call at a time and handed only to that call. */
+        var glareIceFor: String? = null
+
         /** The last path the stack reported for this call (relayed or direct); null while it has said nothing. */
         var relayed: Boolean? = null
 
@@ -395,10 +398,10 @@ internal class CallMachine(
         }
         val early = s.early.toList()
         s.early.clear()
-        forgetEndedGlareOffer(s, early)
         s.callId = m.call.callId
         // An offer held before the call had its id, that turns out to carry this very id, is no other call.
         if (s.glareOffer?.callId == m.call.callId) s.glareOffer = null
+        forgetEndedGlareOffer(s, early)
         s.formTwo = m.call.formTwo
         s.phase = CallPhase.CALLING
         s.canSendIce = true
@@ -540,7 +543,15 @@ internal class CallMachine(
         val forWinner = s.glareOffer?.callId == e.callId || (s.glareOffer == null && s.supersededBy == e.callId)
         when {
             s.callId == e.callId -> onIce(s, e.candidates)
-            forWinner && s.glareIce.size + e.candidates.size <= MAX_PENDING_CANDIDATES -> s.glareIce += e.candidates
+            forWinner -> {
+                // Another held call than the one kept for (the held offer was replaced, or let go for another winner):
+                // what was kept is not this call's.
+                if (s.glareIceFor != e.callId) {
+                    s.glareIce.clear()
+                    s.glareIceFor = e.callId
+                }
+                if (s.glareIce.size + e.candidates.size <= MAX_PENDING_CANDIDATES) s.glareIce += e.candidates
+            }
         }
     }
 
@@ -633,7 +644,7 @@ internal class CallMachine(
      * winner comes with video (C4).
      */
     private fun takeGlare(s: Session, offer: SignalEvent.Offer) {
-        val ice = s.glareIce.toList()
+        val ice = s.glareIceFor(offer.callId)
         release(s)
         val y = incoming(offer)
         // The winner's candidates that came while this device's lost call was the session: waiting with the offer, as
@@ -852,8 +863,8 @@ internal class CallMachine(
         val held = s.glareOffer
         // Its candidates: those kept with it, and those still among the call's early events.
         val heldIce = held?.let { h ->
-            (s.glareIce + s.early.filterIsInstance<SignalEvent.Ice>().filter { it.callId == h.callId }.flatMap { it.candidates })
-                .take(MAX_PENDING_CANDIDATES)
+            val early = s.early.filterIsInstance<SignalEvent.Ice>().filter { it.callId == h.callId }.flatMap { it.candidates }
+            (s.glareIceFor(h.callId) + early).take(MAX_PENDING_CANDIDATES)
         }.orEmpty()
         release(s)
         val callId = s.callId
@@ -872,6 +883,9 @@ internal class CallMachine(
             session?.takeIf { it.callId == held.callId }?.let { onIce(it, heldIce) }
         }
     }
+
+    /** The candidates kept for [callId] alone ([Session.glareIceFor]); none when they are another call's. */
+    private fun Session.glareIceFor(callId: String): List<CallCandidate> = if (glareIceFor == callId) glareIce.toList() else emptyList()
 
     /**
      * A held glare offer whose own end is among [early] has ended, as [onEnd] treats one live: it is let go and
