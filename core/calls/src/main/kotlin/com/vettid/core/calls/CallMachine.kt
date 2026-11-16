@@ -102,8 +102,10 @@ internal class CallMachine(
      * start was out (when the call ends before its id, and those a replay leaves), and incoming calls that rang here and
      * ended. An offer for one of them that still arrives is not rung or answered. Kept apart from [endedWinners] so that many
      * of them (a mailbox replayed after a reconnect) cannot push a glare's ended winner out. An end that arrives with no
-     * session at all is remembered too (its offer may still come). Both lists are memory only, and kept across a lock on
-     * purpose: a call that ended before a lock is still ended after it.
+     * session at all is remembered too (its offer may still come), so a replay of more than 32 old ends (a reconnect) can
+     * push out an incoming call remembered here; and a start's own end remembered here (the held events full) can be
+     * pushed out before the start is answered by about as many more, which then leaves the call to its usual end. Both
+     * lists are memory only, and kept across a lock on purpose: a call that ended before a lock is still ended after it.
      */
     private val endedOthers = ArrayDeque<String>()
 
