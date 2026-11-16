@@ -30,8 +30,9 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    no ring, nothing sent ([refused] counts it).
  * 2. An answer is used only if it is for a call this device placed and verifies against the identity of the
  *    connection **that call was placed to**. Otherwise the call is over: [SignalEvent.AnswerRejected].
- * 3. Key material is this object's to destroy: an [OutgoingCall]'s ephemeral key when its call ends in any way,
- *    [CallKeys] as soon as their copies are on their way to the engine.
+ * 3. Key material is this object's to destroy: an [OutgoingCall]'s ephemeral key when its call ends in any way (the
+ *    vault's end, this device's, or the machine letting the call go: [drop]), [CallKeys] as soon as their copies are on
+ *    their way to the engine.
  * 4. **Nothing that goes wrong with one event ends the listening.** Whatever a check or the vault client throws
  *    (not only a failed check: a locked vault, a relay error), the event is refused and counted, and the next one
  *    is handled.
@@ -80,11 +81,11 @@ internal class VaultCallSignalling(
     private val heldAnswers = mutableListOf<CallEvent.Answer>()
 
     /**
-     * Calls ended (by the vault or here) while one was being started, that were not known here: the vault's `call.end`
-     * (`busy`, say) can arrive before its answer to `call.start` is read. [start] destroys such a call at once and keeps
-     * nothing of it (rule 3); emptied when no start is in flight. Bounded by [MAX_KEPT]: with more unknown ends than
-     * that during one start, the oldest is let go, and a call it named is kept as before this list existed (until it
-     * is ended again or pushed out of [placed]).
+     * Calls the vault ended while one was being started, that were not known here: its `call.end` (`busy`, say) can
+     * arrive before its answer to `call.start` is read. [start] destroys such a call at once and keeps nothing of it
+     * (rule 3); emptied when no start is in flight. Bounded by [MAX_KEPT]: with more unknown ends than that during one
+     * start, the oldest is let go, and a call it named is placed after all; its key goes when the machine lets the call
+     * go on the end it holds ([drop]).
      */
     private val endedEarly = LinkedHashSet<String>()
 
@@ -184,14 +185,29 @@ internal class VaultCallSignalling(
         keys.destroy()
     }
 
+    /** The vault ended [callId]: its key goes, and if no call here has that id while a start is out, it is remembered. */
     private fun forget(callId: String) {
         synchronized(lock) {
-            val known = placed.remove(callId)?.also { it.destroy() } != null
-            if (ringing.remove(callId) == null && !known && starting > 0) {
+            if (!letGo(callId) && starting > 0) {
                 endedEarly += callId
                 while (endedEarly.size > MAX_KEPT) endedEarly.remove(endedEarly.first())
             }
         }
+    }
+
+    /** Lets [callId] go, its key destroyed (rule 3); true if a call here had that id. Under [lock]. */
+    private fun letGo(callId: String): Boolean {
+        val known = placed.remove(callId)?.also { it.destroy() } != null
+        return ringing.remove(callId) != null || known
+    }
+
+    /**
+     * The machine let the call go. Also the backstop for a key that [endedEarly] could not keep track of (more unknown
+     * ends than [MAX_KEPT] during one start): the machine still has that end, and lets the call go when it is placed.
+     * Nothing is remembered here: the id is one the machine knew, not an end that may overtake a start.
+     */
+    override fun drop(callId: String) {
+        synchronized(lock) { letGo(callId) }
     }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
@@ -258,7 +274,8 @@ internal class VaultCallSignalling(
     override suspend fun ice(callId: String, candidates: List<CallCandidate>) = gateway.ice(callId, candidates)
 
     override suspend fun end(callId: String, reason: String) {
-        forget(callId)
+        // This device's own end, for a call it knows: let go, not remembered as an end that overtook a start.
+        drop(callId)
         gateway.end(callId, reason)
     }
 
