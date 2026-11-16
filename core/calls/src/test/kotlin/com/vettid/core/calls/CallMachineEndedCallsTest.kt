@@ -289,12 +289,26 @@ class CallMachineEndedCallsTest {
     fun aPlacedCallWhoseOwnEndWasRememberedEndsAtOnce() = runTest {
         val m = starting()
         repeat(MAX_EARLY) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
-        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
         runCurrent()
         release()
-        assertTrue(m.state.value is CallState.Ended)
-        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        // The vault's reason, kept with the remembered end.
+        assertEquals(CallEnd.DECLINED, (m.state.value as CallState.Ended).reason)
+        assertTrue(signalling.sent.none { it.startsWith("end(") || it.startsWith("ice(") })
         assertTrue(engines.last.calls.none { it.startsWith("startGathering") })
+    }
+
+    /** The same with the call's own end held as well (delivered again): the held one is replayed, as for any start. */
+    @Test
+    fun aPlacedCallWhoseOwnEndIsAlsoHeldReplaysIt() = runTest {
+        val m = starting()
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY))
+        repeat(MAX_EARLY) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        release()
+        assertEquals(CallEnd.BUSY, (m.state.value as CallState.Ended).reason)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
     }
 
     /** A start no session shows, whose end the vault sent while it was out, is not ended `hangup` again. */

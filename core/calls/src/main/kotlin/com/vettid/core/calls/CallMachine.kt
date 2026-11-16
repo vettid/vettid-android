@@ -102,10 +102,16 @@ internal class CallMachine(
      * start was out (when the call ends before its id, and those a replay leaves), and incoming calls that rang here and
      * ended. An offer for one of them that still arrives is not rung or answered. Kept apart from [endedWinners] so that many
      * of them (a mailbox replayed after a reconnect) cannot push a glare's ended winner out. An end that arrives with no
-     * session at all is not remembered. Both lists are memory only, and kept across a lock on purpose: a call that ended
-     * before a lock is still ended after it.
+     * session at all is remembered too (its offer may still come). Both lists are memory only, and kept across a lock on
+     * purpose: a call that ended before a lock is still ended after it.
      */
     private val endedOthers = ArrayDeque<String>()
+
+    /**
+     * The reason of an end remembered among [endedOthers] while a start had no id (its own end may be one of them, when
+     * the held events were full): what the placed call shows if it is ([onPlaced]). Kept with its id, gone with it.
+     */
+    private val endedOtherReasons = HashMap<String, String>()
 
     private sealed interface Msg {
         data class Call(val connectionId: String) : Msg
@@ -441,9 +447,8 @@ internal class CallMachine(
         rememberHeldWinners(early, m.call.callId)
         // The vault's end for this very call came while it had no id and was not held (the held events full): the call
         // is over, nothing is sent for it, no address is gathered, and what was held goes where it belongs.
-        if (m.call.callId in endedOthers) {
-            finish(s, CallEnd.FAILED, null)
-            for (e in early) afterReplay(e)
+        if (ownEndRemembered(m.call.callId, early)) {
+            endPlacedAtOnce(s, m.call.callId, early)
             return
         }
         s.formTwo = m.call.formTwo
@@ -689,9 +694,10 @@ internal class CallMachine(
             }
         } else if (s.callId != e.callId) {
             // Another call's end (its offer not here yet, or one turned away as busy): its late offer is not rung. While
-            // the call has no id its own end may be among these (the early events full): remembering it is harmless, since
-            // no offer for this device's own call comes here.
-            rememberEndedOther(e.callId)
+            // the call has no id its own end may be among these (the early events full): no offer for this device's own
+            // call comes here, and [onPlaced] ends the call at once when its id turns out to be one of them (its reason
+            // kept for that, unless it was a glare's).
+            rememberEndedOther(e.callId, e.reason.takeIf { s.callId == null && e.supersededBy == null })
         }
     }
 
@@ -738,11 +744,26 @@ internal class CallMachine(
         if (s.direction == CallDirection.INCOMING) rememberEndedOther(callId)
     }
 
+    /** Whether [callId]'s own end is remembered among [endedOthers] and not also among the [early] events held. */
+    private fun ownEndRemembered(callId: String, early: List<SignalEvent>): Boolean =
+        callId in endedOthers && early.none { it is SignalEvent.End && it.callId == callId }
+
+    /**
+     * The placed call [callId] ended already: it shows the remembered reason (a lost glare's winner rings: §10.10 allows a
+     * device that does not answer it by itself to ring it), and what was held goes where it belongs.
+     */
+    private fun endPlacedAtOnce(s: Session, callId: String, early: List<SignalEvent>) {
+        val reason = endedOtherReasons[callId]
+        finish(s, if (reason == null) CallEnd.FAILED else ended(s, reason), null)
+        for (e in early) afterReplay(e)
+    }
+
     /** [callId] ended (another call's end, see [endedOthers]); a repeat moves it to the newest. */
-    private fun rememberEndedOther(callId: String) {
+    private fun rememberEndedOther(callId: String, reason: String? = null) {
         endedOthers.remove(callId)
         endedOthers.addLast(callId)
-        if (endedOthers.size > MAX_ENDED_OTHERS) endedOthers.removeFirst()
+        if (reason != null) endedOtherReasons[callId] = reason
+        if (endedOthers.size > MAX_ENDED_OTHERS) endedOtherReasons.remove(endedOthers.removeFirst())
     }
 
     /** Whether the call [callId] is known to have ended here ([endedWinners], [endedOthers]). */
