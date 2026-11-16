@@ -254,6 +254,37 @@ class CallMachineGlareEndsTest {
         assertEquals(emptyList<CallCandidate>(), engines.last.remote)
     }
 
+    /** The call ends another way (declined): its held offer rings with the candidates kept for it while the call rang. */
+    @Test
+    fun aHeldOffersCandidatesGoWithItWhenItRings() = runTest {
+        val m = machine()
+        m.call("conn-1")
+        runCurrent()
+        signalling.deliver(offer(GLARE_ID))
+        signalling.deliver(SignalEvent.Ice(GLARE_ID, listOf(candidate(1))))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
+        runCurrent()
+        assertEquals(GLARE_ID, m.live().callId)
+        m.answer()
+        runCurrent()
+        assertEquals(listOf(candidate(1)), engines.last.remote)
+    }
+
+    /** What a rung held offer takes is bounded as any call's waiting candidates: 320 held, 256 applied. */
+    @Test
+    fun aRungHeldOffersCandidatesAreBounded() = runTest {
+        signalling.startResult = { throw CallRefusedException("busy") }
+        val m = starting()
+        signalling.deliver(offer(GLARE_ID))
+        repeat(2) { half -> signalling.deliver(SignalEvent.Ice(GLARE_ID, List(HALF) { candidate(half * HALF + it) })) }
+        runCurrent()
+        release()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        m.answer()
+        runCurrent()
+        assertEquals(BOUND, engines.last.remote.size)
+    }
+
     /** A held offer rung after a refused start takes the candidates held for it, applied once it is answered. */
     @Test
     fun aHeldOfferRungAfterARefusedStartTakesItsCandidates() = runTest {
@@ -287,7 +318,10 @@ class CallMachineGlareEndsTest {
         /** More starts than the old list of abandoned starts held (8). */
         const val STARTS = 9
 
-        /** An offer from the connection that is not the glare's winner. */
-        const val OTHER_ID = "01JB2Z6V9K3M4N5P6Q7R8S9T4A"
+        /** Half of the candidates held for an offer: two halves are more than [BOUND]. */
+        const val HALF = 160
+
+        /** How many waiting candidates a call keeps (`CallMachine`'s bound). */
+        const val BOUND = 256
     }
 }
