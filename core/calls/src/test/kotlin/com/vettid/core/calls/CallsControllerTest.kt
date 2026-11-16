@@ -1166,6 +1166,32 @@ class CallsControllerTest {
         assertTrue(vault.gateway.sent.any { it.startsWith("start") })
     }
 
+    /** The lock's hook and the collector both see the lock (the usual case): the call is ended and its hang-up sent once. */
+    @Test
+    fun aLockSeenByTheHookAndTheCollectorEndsTheCallOnce() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        val gate = Channel<Unit>(1)
+        vault.gateway.endGate = gate
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
+        var done = false
+        backgroundScope.launch {
+            c.endCallBeforeLock()
+            done = true
+        }
+        runCurrent()
+        vault.unlocked.value = false // and the collector sees it while the hook waits
+        runCurrent()
+        assertTrue("the lock still waits for the hang-up", !done)
+        gate.send(Unit)
+        runCurrent()
+        assertTrue(done)
+        assertEquals(1, vault.gateway.sent.count { it == "end($CALL_ID, hangup)" })
+    }
+
     /**
      * A call the member asked for as the lock begins (still in the machine's inbox when the lock's hook
      * finds no call) is not placed: no audio, no service, no `call.start`, though the vault still counts as open here.

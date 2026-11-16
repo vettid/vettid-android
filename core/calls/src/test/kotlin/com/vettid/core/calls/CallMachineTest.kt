@@ -957,6 +957,7 @@ class CallMachineTest {
             assertTrue("lock $lock: ${m.state.value}", m.state.value is CallState.Ended)
             assertTrue(s.sent.none { it.startsWith("ringing(") || it.startsWith("end($GLARE_ID") })
             if (lock) {
+                assertTrue("the held offer is let go in the signalling", GLARE_ID in s.dropped)
                 m.locking()
                 runCurrent()
                 assertTrue(s.sent.none { it.startsWith("end($GLARE_ID") })
@@ -1582,6 +1583,34 @@ class CallMachineTest {
         assertTrue("never connecting: $seen", seen.none { it is CallState.Live && it.phase == CallPhase.CONNECTING })
         assertTrue(a.keys.send.all { it == 0.toByte() } && a.keys.receive.all { it == 0.toByte() })
         assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
+    }
+
+    /**
+     * A closed vault with no hang-up of the lock coming (a lock an unlock overtook, its hook doing nothing): an answer or a
+     * glare's winner the machine refuses ends the call there and then, not at the ring timer.
+     */
+    @Test
+    fun aRefusedAnswerOrWinnerEndsTheCallWithoutWaitingForTheLocksHangUp() = runTest {
+        val m = machine()
+        placed(m)
+        open = false
+        signalling.deliver(answer())
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
+
+        val s2 = FakeSignalling()
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        open = false
+        s2.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m2.ended().reason)
+        assertTrue("the vault ended the lost call already: nothing sent", s2.sent.none { it.startsWith("end(") || it.startsWith("answer") })
+        assertTrue(GLARE_ID in s2.dropped)
     }
 
     /** The phase alone decides, read live: a lock and an unlock that came and went start calls again with nothing to clear. */
