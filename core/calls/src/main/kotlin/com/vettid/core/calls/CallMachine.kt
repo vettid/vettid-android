@@ -210,7 +210,14 @@ internal class CallMachine(
 
     // --- the member ---
 
-    /** Calls [connectionId]. Ignored while a call is live. */
+    /**
+     * The vault is being locked or is locked on this phone ([vaultLocking] until [vaultOpened]). Set at once, not through
+     * the inbox: a call request already waiting there when the lock begins is refused when it is handled.
+     */
+    @Volatile
+    private var locked = false
+
+    /** Calls [connectionId]. Ignored while a call is live, and while the vault is locking or locked. */
     fun call(connectionId: String) = post(Msg.Call(connectionId))
 
     /** Answers the ringing call. */
@@ -222,8 +229,19 @@ internal class CallMachine(
     /** Ends the call in any phase (a ringing incoming call is declined). */
     fun hangUp() = post(Msg.HangUp(CallEnd.HUNG_UP))
 
-    /** The vault is being locked: a live call ends. */
-    fun vaultLocking() = post(Msg.HangUp(CallEnd.LOCKED))
+    /**
+     * The vault is being locked: a live call ends, and no call is placed until [vaultOpened] (not even one the member
+     * asked for a moment before: nothing of a call, its audio or its service, starts on a phone that is locking).
+     */
+    fun vaultLocking() {
+        locked = true
+        post(Msg.HangUp(CallEnd.LOCKED))
+    }
+
+    /** The vault is open on this phone again: calls may be placed. */
+    fun vaultOpened() {
+        locked = false
+    }
 
     fun setMuted(muted: Boolean) = post(Msg.Mute(muted))
 
@@ -240,7 +258,7 @@ internal class CallMachine(
     private fun handle(m: Msg) {
         val s = session
         when (m) {
-            is Msg.Call -> if (s == null) startOutgoing(m.connectionId)
+            is Msg.Call -> if (s == null && !locked) startOutgoing(m.connectionId)
             Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING) answerIncoming(s)
             Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
                 s.memberEnded = true
@@ -402,8 +420,13 @@ internal class CallMachine(
         s.canSendIce = true
         diagnosticsFlow.update { it.copy(tapToPlacedMs = m.atMs - s.tappedAtMs) }
         val engine = s.engine ?: return
-        s.lane.trySend { engine.startGathering(m.call.servers) }
-        timer(s, TimerKind.GATHER, timings.gather)
+        // The vault's end for this very call may be among what arrived first: then no address is gathered for it (the
+        // ICE servers are not asked with a dead call's credentials). The replay below ends it, or (a glare lost) lets its
+        // media go and waits for the winner.
+        if (early.none { it is SignalEvent.End && it.callId == m.call.callId }) {
+            s.lane.trySend { engine.startGathering(m.call.servers) }
+            timer(s, TimerKind.GATHER, timings.gather)
+        }
         val ring = Duration.between(now(), m.call.exp).coerceIn(timings.minRing, timings.maxRing)
         timer(s, TimerKind.RING_OUT, ring)
         publish(s)
@@ -824,10 +847,11 @@ internal class CallMachine(
         }
     }
 
-    /** Lets the call go: its jobs, engine and keys. Publishes nothing and sends nothing. */
+    /** Lets the call go: its jobs, engine and keys, and what the signalling keeps of it. Publishes nothing and sends nothing. */
     private fun release(s: Session) {
         if (session !== s) return
         session = null
+        s.callId?.let { signalling.drop(it) }
         s.lane.close()
         s.job.cancel()
         s.engine?.close()

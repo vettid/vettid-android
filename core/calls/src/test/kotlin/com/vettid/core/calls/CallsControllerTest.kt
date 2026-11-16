@@ -1093,6 +1093,11 @@ class CallsControllerTest {
         vault.unlocked.value = true
         runCurrent()
         c.endCallBeforeLock() // nothing live: returns at once
+        // That lock ran its course; the vault is open again, so calls are placed again.
+        vault.unlocked.value = false
+        runCurrent()
+        vault.unlocked.value = true
+        runCurrent()
         c.call("conn-1")
         runCurrent()
         val gate = Channel<Unit>(1)
@@ -1109,6 +1114,22 @@ class CallsControllerTest {
         runCurrent()
         assertTrue(done)
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
+    }
+
+    /**
+     * A call the member asked for as the lock begins (still in the machine's inbox when the lock's hook
+     * finds no call) is not placed: no audio, no service, no `call.start`, though the vault still counts as open here.
+     */
+    @Test
+    fun aCallAskedForAsTheLockBeginsIsNotPlaced() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        c.endCallBeforeLock()
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.sent.none { it.startsWith("start") })
     }
 
     /**

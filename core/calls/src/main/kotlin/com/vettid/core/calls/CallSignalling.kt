@@ -105,6 +105,13 @@ internal interface CallSignalling {
     /** `call.end` (durable). */
     suspend fun end(callId: String, reason: String)
 
+    /**
+     * The machine has let the call [callId] go, however it ended (also by the vault's word, which may have reached the
+     * machine only after the signalling saw it): whatever the signalling still keeps of it, its key above all, goes now.
+     * Sends nothing; for an id it does not know, does nothing.
+     */
+    fun drop(callId: String) {}
+
     /** (C2) `call.keepalive` for the active call [callId], while the vault is C2 ([formTwo]). */
     suspend fun keepalive(callId: String) {}
 

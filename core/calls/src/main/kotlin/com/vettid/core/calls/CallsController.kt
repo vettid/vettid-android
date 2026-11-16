@@ -289,7 +289,12 @@ class CallsController(
         scope.launch {
             vault.unlocked.collectLatest { isOpen ->
                 open = isOpen
-                if (isOpen) opened() else locked()
+                if (isOpen) {
+                    machine.vaultOpened()
+                    opened()
+                } else {
+                    locked()
+                }
             }
         }
         scope.launch { machine.state.collect { around(it) } }
@@ -361,11 +366,13 @@ class CallsController(
      */
     suspend fun endCallBeforeLock() {
         val live = machine.state.value is CallState.Live
+        // From here no call is placed, a request still in the machine's inbox included, until the vault is open again
+        // (the phase may not have reached [locked] yet). With no call it ends nothing.
+        machine.vaultLocking()
         // Nothing to end, no hang-up on its way and no `call.start` out: no wait. A hang-up still being sent, or a
         // `call.start` whose answer is still to come (the call it places is then ended at once), is waited for also when
         // the call itself is already over on this phone (the member hung up and locked at once).
         if (!live && machine.pendingEnds.value == 0 && machine.startsOut.value == 0) return
-        if (live) machine.vaultLocking()
         combine(machine.state, machine.pendingEnds, machine.startsOut) { s, pending, starts ->
             s !is CallState.Live && pending == 0 && starts == 0
         }.first { it }

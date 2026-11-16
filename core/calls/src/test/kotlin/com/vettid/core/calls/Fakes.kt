@@ -183,6 +183,13 @@ open class FakeSignalling : CallSignalling {
     override suspend fun end(callId: String, reason: String) {
         sent += "end($callId, $reason)"
     }
+
+    /** The calls the machine let go ([CallSignalling.drop]), in order; not in [sent]: nothing is sent for them. */
+    val dropped = mutableListOf<String>()
+
+    override fun drop(callId: String) {
+        dropped += callId
+    }
 }
 
 /**
