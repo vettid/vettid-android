@@ -225,11 +225,76 @@ class CallMachineEndedCallsTest {
         runCurrent()
         m2.hangUp()
         runCurrent()
+        // Exactly 32 are kept: the second oldest is still known, the oldest is not.
+        notRung(m2, s2, other(11))
         m2.dismiss()
         runCurrent()
         s2.deliver(offer(other(10)))
         runCurrent()
         assertEquals("the oldest was pushed out: it rings", CallPhase.INCOMING, m2.live().phase)
+    }
+
+    /** A repeated end moves to the newest place: 32 ends after its first arrival do not push it out. */
+    @Test
+    fun aRepeatedEndMovesToTheNewest() = runTest {
+        val m = machine()
+        placed(m)
+        signalling.deliver(SignalEvent.End(other(0), CallReason.HANGUP))
+        repeat(31) { signalling.deliver(SignalEvent.End(other(it + 1), CallReason.HANGUP)) }
+        signalling.deliver(SignalEvent.End(other(0), CallReason.HANGUP))
+        signalling.deliver(SignalEvent.End(other(40), CallReason.HANGUP))
+        runCurrent()
+        m.hangUp()
+        runCurrent()
+        notRung(m, signalling, other(0))
+    }
+
+    /** An idle phone remembers an end: the offer that comes after it does not ring, and nothing is sent. */
+    @Test
+    fun anIdlePhoneDoesNotRingACallThatEnded() = runTest {
+        val m = machine()
+        runCurrent()
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        runCurrent()
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallState.Idle, m.state.value)
+        assertTrue(signalling.sent.none { it.startsWith("ringing") })
+    }
+
+    /** Another call's glare end does not put its winner among the winners: only this call's own does. */
+    @Test
+    fun anotherCallsGlareEndDoesNotKeepItsWinner() = runTest {
+        val m = starting()
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        repeat(OVER) { signalling.deliver(SignalEvent.End(other(it), CallReason.HANGUP)) }
+        signalling.deliver(SignalEvent.End(OTHER_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        release()
+        assertEquals(CallPhase.CALLING, m.live().phase)
+        m.hangUp()
+        runCurrent()
+        m.dismiss()
+        runCurrent()
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals("pushed out with the other ends: it rings", CallPhase.INCOMING, m.live().phase)
+    }
+
+    /**
+     * The call's own end came while it had no id and was not held (the held events full): when the start is answered the
+     * call is over at once, nothing is sent and no address is gathered.
+     */
+    @Test
+    fun aPlacedCallWhoseOwnEndWasRememberedEndsAtOnce() = runTest {
+        val m = starting()
+        repeat(MAX_EARLY) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY))
+        runCurrent()
+        release()
+        assertTrue(m.state.value is CallState.Ended)
+        assertTrue(signalling.sent.none { it.startsWith("end(") })
+        assertTrue(engines.last.calls.none { it.startsWith("startGathering") })
     }
 
     /** A start no session shows, whose end the vault sent while it was out, is not ended `hangup` again. */
@@ -288,5 +353,8 @@ class CallMachineEndedCallsTest {
     private companion object {
         /** More than the other calls' ends kept (32). */
         const val OVER = 33
+
+        /** The held events of a start (CallMachine's MAX_EARLY). */
+        const val MAX_EARLY = 64
     }
 }

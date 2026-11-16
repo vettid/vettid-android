@@ -421,12 +421,14 @@ internal class CallMachine(
         else -> CallEnd.FAILED
     }
 
+    @Suppress("ReturnCount") // the start no session shows, the call already ended, no engine
     private fun onPlaced(s: Session?, m: Msg.Placed) {
         if (s == null || s.seq != m.seq) {
             // No session shows the call (the member hung up, or a lock ended it, while the vault was answering): the
             // call exists there, so it is ended there, as hung up, however many such starts there were. Its key goes now.
             signalling.drop(m.call.callId)
             // Not when the vault ended it already: its end was held while the start was out and is remembered ([finish]).
+            // Pushed out of that list by other ends, the hang-up goes all the same: a vault ignores a second end of a call.
             if (m.call.callId !in endedOthers) sendEnd(m.call.callId, CallReason.HANGUP)
             return
         }
@@ -437,6 +439,13 @@ internal class CallMachine(
         if (s.glareOffer?.callId == m.call.callId) s.glareOffer = null
         forgetEndedGlareOffer(s, early)
         rememberHeldWinners(early, m.call.callId)
+        // The vault's end for this very call came while it had no id and was not held (the held events full): the call
+        // is over, nothing is sent for it, no address is gathered, and what was held goes where it belongs.
+        if (m.call.callId in endedOthers) {
+            finish(s, CallEnd.FAILED, null)
+            for (e in early) afterReplay(e)
+            return
+        }
         s.formTwo = m.call.formTwo
         s.phase = CallPhase.CALLING
         s.canSendIce = true
@@ -613,7 +622,9 @@ internal class CallMachine(
                 finish(s, CallEnd.NOT_ENCRYPTED, CallReason.FAILED)
             }
             is SignalEvent.Ice -> if (s != null) onIceEvent(s, e)
-            is SignalEvent.End -> if (s != null) onEnd(s, e)
+            // With no session the end is remembered all the same: its offer may still come (VAULT-MESSAGING §8.4 gives no
+            // order), and an idle phone must not ring a call that already ended. Ids are unique (§10.10); the list is bounded.
+            is SignalEvent.End -> if (s != null) onEnd(s, e) else rememberEndedOther(e.callId)
         }
     }
 
