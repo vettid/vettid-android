@@ -553,10 +553,11 @@ class VaultCallSignallingTest {
 
     /**
      * The bound's fallback: with more than 4 other unknown ends after the call's own during its start, its end is let go
-     * and the call is kept as before this list existed; its next end (or being pushed out) destroys its key.
+     * and the call is placed after all. The machine holds that end and lets the call go on it: [VaultCallSignalling.drop]
+     * destroys the key (a second end from the vault would too).
      */
     @Test
-    fun anOverflowedEarlyEndFallsBackToKeepingTheCallUntilItEndsAgain() = runTest {
+    fun anOverflowedEarlyEndFallsBackToTheMachineDroppingTheCall() = runTest {
         val s = signalling()
         val key = KemPrivateKey.generate()
         gateway.startGate = Channel(1)
@@ -569,10 +570,32 @@ class VaultCallSignallingTest {
         gateway.startGate!!.send(Unit)
         runCurrent()
         assertEquals(CALL_ID, starting.getCompleted().callId)
-        assertTrue("kept, as before", runCatching { key.seed() }.isSuccess)
-        gateway.channel.send(CallEvent.Ended(CALL_ID, "busy"))
+        assertTrue("placed: the list lost its end", runCatching { key.seed() }.isSuccess)
+        s.drop(CALL_ID)
+        assertTrue("the machine let it go: the key with it", runCatching { key.seed() }.isFailure)
+        s.drop(CALL_ID) // a second time: nothing left, nothing thrown
+    }
+
+    /**
+     * Only the vault's ends can overtake a start: this device's own `call.end` and the machine's [VaultCallSignalling.drop]
+     * name calls it knew, and are not remembered (they would push a real early end out of the list).
+     */
+    @Test
+    fun ownEndsAndDropsAreNotRememberedAsEarlyEnds() = runTest {
+        val s = signalling()
+        gateway.startGate = Channel(1)
+        gateway.start = { placedAs(CALL_ID, KemPrivateKey.generate()) }
+        val starting = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
         runCurrent()
-        assertTrue(runCatching { key.seed() }.isFailure)
+        s.end("01JB2Z6V9K3M4N5P6Q7R8S9T90", "hangup")
+        s.drop("01JB2Z6V9K3M4N5P6Q7R8S9T91")
+        assertEquals(0 to 0, s.heldCounts())
+        gateway.channel.send(CallEvent.Ended("01JB2Z6V9K3M4N5P6Q7R8S9T92", "busy"))
+        runCurrent()
+        assertEquals("the vault's end is", 0 to 1, s.heldCounts())
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CALL_ID, starting.getCompleted().callId)
     }
 
     /** Only `CallApi` may make a verified call object: no production source outside `:core:vault` opts in. */
