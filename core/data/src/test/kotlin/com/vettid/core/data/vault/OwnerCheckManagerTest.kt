@@ -133,6 +133,9 @@ class OwnerCheckManagerTest {
     /** Whether the build accepts a `time_scale` (a staging build: up to TimeScale.MAX). */
     private var accepts: (Long) -> Boolean = { true }
 
+    /** The vault's scale as the phone stored it (null: none stored). */
+    private var storedScale: Long? = null
+
     private fun TestScope.manager(ops: Ops) = OwnerCheckManager(
         this,
         ops = { ops },
@@ -144,6 +147,7 @@ class OwnerCheckManagerTest {
         memberState = { memberGate?.await(); memberState },
         onFoundLocked = { foundLocked++ },
         acceptsTimeScale = { accepts(it) },
+        storedTimeScale = { storedScale },
     )
 
     /** The manager's vault calls run on the IO dispatcher (vaultGuard): let them finish. */
@@ -635,10 +639,14 @@ class OwnerCheckManagerTest {
         settle { m.ownerCheck.value != null }
         assertEquals(1, ops.reads)
         assertEquals(OwnerCheckState.OK, m.ownerCheck.value!!.state)
-        // With a view and a deadline, nothing more is read.
+        // With a view and a deadline, nothing more is read: the event's deadline is taken, and no read starts after it.
         m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T14:00:00Z"}""", ts = now.plusSeconds(120)))
-        settle { true }
-        assertEquals(1, ops.reads)
+        assertEquals(Instant.parse("2026-10-07T14:00:00Z"), m.ownerCheck.value!!.deadline)
+        repeat(20) {
+            runCurrent()
+            Thread.sleep(SETTLE_MS)
+        }
+        assertEquals("no read launched", 1, ops.reads)
     }
 
     /**
@@ -669,6 +677,66 @@ class OwnerCheckManagerTest {
         assertEquals(1L, TimeScales.inForce(null) { true })
         assertEquals(24L, TimeScales.inForce(24) { true })
         assertEquals(1L, TimeScales.inForce(24) { it == 1L })
+    }
+
+    /** The upper bound itself is in range. */
+    @Test
+    fun theLargestScaleIsInRange() {
+        val max = com.vettid.core.crypto.altchan.TimeScale.MAX
+        assertEquals(max, TimeScales.inForce(max) { true })
+    }
+
+    /** The build's rule decides; with no rule to ask (no channel yet) nothing is accepted. */
+    @Test
+    fun withNoRuleNothingIsAccepted() {
+        assertFalse(TimeScales.accepted(1, null))
+        assertFalse(TimeScales.accepted(24, null))
+        assertTrue(TimeScales.accepted(24) { it == 24L })
+        assertFalse(TimeScales.accepted(24) { it == 1L })
+        assertEquals(1L, TimeScales.inForce(24) { TimeScales.accepted(it, null) })
+    }
+
+    /** A status read begun before a clear does not set the scale after it: a pass after the clear is at real time. */
+    @Test
+    fun aReadBegunBeforeAClearDoesNotSetTheScale() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        ops.statusGate = gate
+        val read = this.async(Dispatchers.Default) { runCatching { m.refreshOwnerCheck() } }
+        awaitReads(ops, 1)
+        ops.statusGate = null
+        m.clear()
+        gate.complete(Unit)
+        read.await()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // deadline 2026-10-07T12:00Z
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+        assertEquals("after the real-time pass: taken", OwnerCheckState.HELD, m.ownerCheck.value?.state)
+    }
+
+    /**
+     * A check sent before this process read a status (after a cancelled recovery): the presence check time takes the
+     * stored scale, never the deadline less the unscaled 24 hours.
+     */
+    @Test
+    fun thePresenceCheckTimeBeforeAnyStatusReadTakesTheStoredScale() = runTest {
+        storedScale = 24
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("ok", "2026-10-07T12:00:00Z", 86_400, hold = true)
+            presentRecorded = false
+        }
+        val m = manager(ops)
+        m.afterCancelledRecovery("975310", "pw") // no status read first: deadline 2026-10-07T12:00Z, the check at 11:00Z
+        assertTrue(m.presenceUnrecorded.value)
+        ops.presentRecordedAt = "2026-10-07T10:59:59Z"
+        m.refreshOwnerCheck() // this status has no time_scale: the stored one still counts
+        assertTrue(m.presenceUnrecorded.value)
+        ops.presentRecordedAt = "2026-10-07T11:00:00Z"
+        m.refreshOwnerCheck()
+        assertFalse(m.presenceUnrecorded.value)
     }
 
     /** A clear (a wipe, a deleted vault) forgets the scale: a pass after it, before any status read, is at real time. */

@@ -64,13 +64,22 @@ object TimeScales {
     /**
      * The scale a `vault.status` [reported] runs at, for the times this phone works out from it (when a check passed, the
      * presence notice's check time, the idle lock's time, the relay re-check): the reported one only when it is in range
-     * and this build accepts it ([accepts], the rule [fromStatus] stores by); otherwise real time. A scale larger than the
-     * vault's own is the only input that moves a pass's time later than it was; real time moves it earlier (fail closed).
+     * and this build accepts it ([accepts], the rule [fromStatus] stores by); otherwise real time. Which way is safe
+     * depends on the use: for a pass's time a scale larger than the vault's own is the fail-open way (it moves the pass
+     * later) and real time the fail-closed one; for the presence notice's check time it is the other way round (an
+     * earlier check time lets an older presence end the notice), so that use also takes the stored scale
+     * ([OwnerCheckManager]).
      */
     fun inForce(reported: Long?, accepts: (Long) -> Boolean): Long = when {
         reported == null || reported !in TimeScale.REAL..TimeScale.MAX || !accepts(reported) -> TimeScale.REAL
         else -> reported
     }
+
+    /**
+     * Whether this build accepts [scale] by [rule] (the channel's descriptor rule, `AltChannelFlow.acceptsTimeScale`);
+     * with no rule to ask (no channel yet), nothing is accepted and [inForce] gives real time.
+     */
+    fun accepted(scale: Long, rule: ((Long) -> Boolean)?): Boolean = rule?.invoke(scale) == true
 
     private const val MS_PER_S = 1_000L
 }

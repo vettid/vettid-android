@@ -90,6 +90,11 @@ class OwnerCheckManager(
      * A value it does not accept is taken as real time ([TimeScales.inForce]).
      */
     private val acceptsTimeScale: (Long) -> Boolean = { it == com.vettid.core.crypto.altchan.TimeScale.REAL },
+    /**
+     * The vault's scale as this phone stored it (checked against the descriptor at the unlock, or taken from a status):
+     * for the presence notice's check time before this process has read a status ([presenceScale]).
+     */
+    private val storedTimeScale: () -> Long? = { null },
     private val now: () -> Instant = Instant::now,
     private val mark: () -> Int = { 0 },
     /** (ANDROID-PLAN 0.1.95) The member API's `GET /api/vault/status` `state` (`locked`, `unlocked`, ...); null: no answer. */
@@ -215,6 +220,16 @@ class OwnerCheckManager(
      */
     @Volatile
     private var lastTimeScale: Long = 1
+
+    /** [lastTimeScale] is written under this, against [epoch]: a read begun before a [clear] or a lock never sets it after. */
+    private val scaleLock = Any()
+
+    /**
+     * The scale for the presence notice's check time, where an earlier time is the unsafe way: the larger of the last
+     * status's and the stored one (an accepted scale), so a check sent before this process read a status (after a
+     * cancelled recovery, or typed before the opening read lands) is not put up to 23 hours early on staging.
+     */
+    private fun presenceScale(): Long = maxOf(lastTimeScale, TimeScales.inForce(storedTimeScale(), acceptsTimeScale))
 
     /** (Release L) The member locked the vault on this phone since it last opened. */
     private var lockedHere: Boolean = saved?.lockedHere == true
@@ -532,12 +547,15 @@ class OwnerCheckManager(
 
     private suspend fun readStatus(): OwnerCheckView? {
         val since = mark()
+        val epochAtSend = epoch.get()
         val passesAtSend = checkPasses.get()
         val stamp = beginStatusRead()
         val read = vaultGuard(resend = true) { ops().statusRead() }
         val (st0, recovery, timeScale) = read
         runCatching { onTimeScale(timeScale, since) }
-        lastTimeScale = TimeScales.inForce(timeScale, acceptsTimeScale)
+        synchronized(scaleLock) {
+            if (epoch.get() == epochAtSend) lastTimeScale = TimeScales.inForce(timeScale, acceptsTimeScale)
+        }
         noteRelay(stamp, read.relayRefused) // (0.84.0) after the time scale, which the one re-read divides by
         presenceFromStatus(recovery)
         runCatching { onRecoveryStatus(recovery, since) }
@@ -754,9 +772,10 @@ class OwnerCheckManager(
             false -> {
                 val deadline = instant(r.deadline)
                 val interval = r.intervalSeconds
-                // When the check passed: the deadline less the interval as it runs on this vault, as for the pass's time.
+                // When the check passed: the deadline less the interval as it runs on this vault ([presenceScale]: never
+                // earlier than that, the safe way for this notice).
                 presenceCheckAt = if (deadline != null && interval != null) {
-                    deadline.minusSeconds(TimeScales.divide(interval, lastTimeScale))
+                    deadline.minusSeconds(TimeScales.divide(interval, presenceScale()))
                 } else {
                     null
                 }
@@ -802,7 +821,7 @@ class OwnerCheckManager(
         idleFlow.value = null
         idleInForce = null
         idleAfterKnown = null
-        lastTimeScale = 1
+        synchronized(scaleLock) { lastTimeScale = 1 } // after the epoch moved: a read still out does not set it again
         lockedHere = false
         idleSettingFlow.value = null
         runCatching { persist(ByteArray(0)) }
