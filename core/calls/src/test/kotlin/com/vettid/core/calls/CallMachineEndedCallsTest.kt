@@ -87,6 +87,7 @@ class CallMachineEndedCallsTest {
         runCurrent()
         assertEquals(CallEnd.MISSED, m.ended().reason)
         notRung(m, signalling, GLARE_ID)
+        assertTrue("the ignored offer is let go in the signalling", GLARE_ID in signalling.dropped)
     }
 
     /** The same order held while `call.start` is out, with no offer held: missed when it is answered, never answered. */

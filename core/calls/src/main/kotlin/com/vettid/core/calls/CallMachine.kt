@@ -271,8 +271,8 @@ internal class CallMachine(
         val s = session
         when (m) {
             is Msg.Call -> if (s == null && !closed) startOutgoing(m.connectionId)
-            // Not answered while the vault is not open: a lock's hang-up behind this declines the call; with none (a lock an
-            // unlock overtook) it goes on ringing, and can be answered once the vault reads open.
+            // Not answered while the vault is not open: the lock's hang-up behind this (the hook's, or the one the
+            // controller posts at every close, a lock an unlock overtook included) declines the call.
             Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING && !closed) answerIncoming(s)
             Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
                 s.memberEnded = true
@@ -575,7 +575,8 @@ internal class CallMachine(
     private fun onSignal(s: Session?, e: SignalEvent) {
         when (e) {
             is SignalEvent.Offer -> when {
-                hasEnded(e.callId) -> Unit // a glare's winner, or another call, that already ended
+                // A glare's winner, or another call, that already ended: let go in the signalling too.
+                hasEnded(e.callId) -> signalling.drop(e.callId)
                 // Never on a phone that is locking: the offer is let go, here and in the signalling.
                 s == null -> if (!closed) ring(e) else signalling.drop(e.callId)
                 // The winner is not answered on a phone that is locking: its offer is let go and the lost call ends here.
@@ -685,7 +686,7 @@ internal class CallMachine(
 
     /**
      * The vault is locking while this call waits on something the lock refuses (an answer, a glare's winner): it ends here
-     * and now as the lock's own hang-up would end it, without waiting for that hang-up (a lock an unlock overtook posts none).
+     * and now as the lock's own hang-up would end it, without waiting for that hang-up (the hook of a lock an unlock overtook posts none).
      */
     private fun endForLock(s: Session) = hangUp(s, CallEnd.LOCKED)
 

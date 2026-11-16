@@ -68,8 +68,15 @@ object CallsModule {
     /** What the calls use of the vault manager: its phase, its typed client, and its connections as the app shows them. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
-        override val unlocked: Flow<Boolean> =
-            vaultOpenings(combine(m.phase, m.opens) { p, n -> (p == AppPhase.Unlocked) to n }.distinctUntilChanged())
+        // Both read live, the phase first: an opening counts itself before the phase is published, so a phase read as
+        // open always comes with its own count (the two flows' values, collected apart, could pair an open phase with the
+        // count before it and make an unlock look like a lock and an unlock).
+        override val unlocked: Flow<Boolean> = vaultOpenings(
+            combine(m.phase, m.opens) { _, _ ->
+                val open = m.phase.value == AppPhase.Unlocked
+                open to m.opens.value
+            }.distinctUntilChanged(),
+        )
 
         override val unlockedNow: Boolean get() = m.phase.value == AppPhase.Unlocked
 

@@ -43,7 +43,8 @@ import java.time.Instant
  * [CallVault.unlocked] from the vault's phase and its count of openings (`VaultManager.opens`): open or not, with a
  * closed value put in between two open ones whose count differs. A lock and an unlock fast enough for the closed phase
  * to be conflated away are then still seen as a close, so nothing of the vault before the lock is kept after it (the
- * probe's answer, the C2 flag, the permissions). At worst one extra close and open, never a lock missed.
+ * probe's answer, the C2 flag, the permissions). Each pair must be read together (the phase first, then the count, both
+ * as they are now), so that an open phase never comes with the count from before its own opening.
  */
 fun vaultOpenings(phase: Flow<Pair<Boolean, Int>>): Flow<Boolean> = flow {
     var lastOpen: Boolean? = null
@@ -388,7 +389,8 @@ class CallsController(
     @Suppress("ReturnCount") // one return per reason not to wait
     suspend fun endCallBeforeLock() {
         // "Lock it now" reads the vault's status before the hooks run, and an unlock here can overtake its lock meanwhile:
-        // the vault is then open again and the lock does not happen, so nothing is ended.
+        // the vault is then open again and the lock does not happen, so this hook ends nothing. (The phase did close for a
+        // moment: [locked], which follows every close, still ends a call and resets what calls know of the vault.)
         if (vault.unlockedNow) return
         // The lock set the phase before this hook ran, so from here the machine starts nothing of a call (it reads the phase
         // live). The hang-up ends a live call, also one the machine was starting at this very moment, before the state
