@@ -2610,6 +2610,8 @@ class VaultDevice private constructor(
         if (!Ed25519.equalPublic(sender, pr.relay.pk())) return
         if (!checkEnrolledAttestation(o.optString("attestation"), bundle, t)) return
         val vid = o.string("vault_id")
+        // An enrolment that names no vault is refused whole: nothing of it is taken (no half-accepted vault).
+        if (vid.isEmpty()) return
         val tok = o.string("token")
         setVault(pr)
         val exp = heldFromVault(tok)
@@ -2619,8 +2621,7 @@ class VaultDevice private constructor(
         }
         st.vault!!.token = tok
         st.vault!!.tokenExpMs = exp.toEpochMilli()
-        // An empty id is no id: the one already held (a recovery's) stays.
-        if (vid.isNotEmpty()) st.vaultId = vid
+        st.vaultId = vid
         val a = alt()
         if (a.enrollNonce != null) setAlt(AltRequests.applyEnrolled(a, o.optUint("state_seq", 0, StrictJson.MAX_SAFE_INTEGER)))
         publish(VaultMessage(inner))

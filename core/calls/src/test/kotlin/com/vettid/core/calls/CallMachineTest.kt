@@ -5,6 +5,7 @@ import com.vettid.core.vault.CallReason
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -258,6 +259,118 @@ class CallMachineTest {
         runCurrent()
         assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
         assertEquals(CallEnd.HUNG_UP, m.ended().reason)
+    }
+
+    /** A `call.start` out is counted from the step that sends it until its answer was handled (and its hang-up counted). */
+    @Test
+    fun aStartOutIsCountedUntilItsAnswerIsHandled() = runTest {
+        val m = machine()
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(1, m.startsOut.value)
+        m.vaultLocking()
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertEquals("still out", 1, m.startsOut.value)
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
+        assertEquals(0, m.startsOut.value)
+        assertEquals(0, m.pendingEnds.value)
+    }
+
+    /** What the machine's flows did, in order, seen in the very step each changed. */
+    private fun TestScope.flowLog(m: CallMachine): MutableList<String> {
+        val log = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { m.startsOut.collect { log += "starts=$it" } }
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { m.pendingEnds.collect { log += "ends=$it" } }
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+            m.state.collect { if (it is CallState.Ended) log += "ended" }
+        }
+        return log
+    }
+
+    /**
+     * The start is counted in the loop step that lets it go: a lock queued right behind the offer finds it counted when
+     * it ends the call, never a moment with the call ended and nothing counted.
+     */
+    @Test
+    fun aStartIsCountedBeforeALockQueuedBehindItEndsTheCall() = runTest {
+        val m = machine()
+        val log = flowLog(m)
+        val gate = Channel<Unit>(1)
+        engines.onCreate = { (it as FakeEngine).offerGate = gate }
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        // The offer is made first; the lock is posted by a task that runs after it, before the loop takes the offer, so
+        // the loop finds the lock right behind the offer and handles both in one go (the start's own coroutine runs later).
+        gate.trySend(Unit)
+        launch { m.vaultLocking() }
+        runCurrent()
+        assertEquals(listOf("starts=0", "ends=0", "starts=1", "ended"), log)
+        assertTrue(signalling.sent.any { it.startsWith("start") })
+    }
+
+    /** The hang-up the start's answer needs is counted before the start is done with: the lock never sees both at 0. */
+    @Test
+    fun theHangUpIsCountedBeforeTheStartIsDone() = runTest {
+        val m = machine()
+        val log = flowLog(m)
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        m.vaultLocking()
+        runCurrent()
+        log.clear()
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(listOf("ends=1", "starts=0", "ends=0"), log)
+    }
+
+    /**
+     * A call ended while its offer was being made sends no `call.start` at all. With the lock queued first, the lock
+     * cancels the offer's making (the lane goes with the call) and the gate is never reached; with the offer made and
+     * the lock queued right behind it (`lockFirst = false`), the loop's own check drops the offer.
+     */
+    @Test
+    fun noStartForACallEndedWhileItsOfferWasMade() = runTest {
+        for (lockFirst in listOf(true, false)) {
+            val s = FakeSignalling()
+            val e = FakeEngines()
+            val m = machine(s, e)
+            val gate = Channel<Unit>(1)
+            e.onCreate = { (it as FakeEngine).offerGate = gate }
+            m.call("conn-1")
+            runCurrent()
+            if (lockFirst) {
+                // The lock is queued before the offer is: the loop takes it first, then drops the offer.
+                m.vaultLocking()
+                gate.trySend(Unit)
+            } else {
+                gate.trySend(Unit)
+                m.vaultLocking()
+            }
+            runCurrent()
+            assertEquals(CallEnd.LOCKED, m.ended().reason)
+            assertTrue("lockFirst=$lockFirst", s.sent.none { it.startsWith("start") })
+            assertEquals(0, m.startsOut.value)
+        }
+    }
+
+    /** A start that fails or is refused is done with too: the count goes back to 0 and the call ends as before. */
+    @Test
+    fun aFailedOrRefusedStartIsDoneWith() = runTest {
+        val cases = listOf(java.io.IOException("relay") to CallEnd.FAILED, CallRefusedException("busy") to CallEnd.OWN_VAULT_BUSY)
+        for ((thrown, reason) in cases) {
+            val s = FakeSignalling().apply { startResult = { throw thrown } }
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            assertEquals(reason, m.ended().reason)
+            assertEquals(0, m.startsOut.value)
+        }
     }
 
     @Test

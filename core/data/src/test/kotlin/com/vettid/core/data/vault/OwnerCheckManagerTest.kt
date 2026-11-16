@@ -753,6 +753,27 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
     }
 
+    /** The tenth failed check locks the vault (seen from a fresh status): that lock forgets the scale too. */
+    @Test
+    fun theTenthFailureForgetsTheScale() = runTest {
+        val ops = Ops().apply {
+            status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true, failures = 9)
+            timeScale = 24
+        }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.checkError = "bad_password"
+        ops.status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true, failures = 10)
+        // Real time: the status read after the failure runs on the IO dispatcher and wins against its 5 s timeout. It says
+        // 24, then the lock it shows resets the scale.
+        assertEquals(OwnerCheckOutcome.BadPassword(0), withContext(Dispatchers.Default) { m.check("975310", "wrong", null) })
+        assertTrue(m.lockedByOwnerCheck.value)
+        ops.checkError = null
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null)) // deadline 2026-10-07T12:00Z, no status read
+        m.onEvent(event("vault.held", """{"waiting":{"messages":1}}""", ts = Instant.parse("2026-10-07T10:59:59Z")))
+        assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
+    }
+
     /** A lock forgets the scale (a `vault.locking` or the member's own): a check sent before the next read is at real time. */
     @Test
     fun aLockForgetsTheScale() = runTest {

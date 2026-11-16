@@ -70,6 +70,15 @@ internal class CallMachine(
     /** `call.end` messages handed to the vault client and not yet with the relay. */
     val pendingEnds: StateFlow<Int> = pendingEndsFlow.asStateFlow()
 
+    private val startsOutFlow = MutableStateFlow(0)
+
+    /**
+     * `call.start` requests sent and not yet handled: raised in the loop's step that lets the start go (the call still
+     * current), lowered by a message posted after the answer's own, so a hang-up the answer needs (the call was ended
+     * meanwhile) is already counted in [pendingEnds] when this goes down. A lock waits for both.
+     */
+    val startsOut: StateFlow<Int> = startsOutFlow.asStateFlow()
+
     private val inbox = Channel<Msg>(Channel.UNLIMITED)
     private var session: Session? = null
     private var nextSeq = 0
@@ -93,6 +102,17 @@ internal class CallMachine(
         class Signal(val event: SignalEvent) : Msg
         class Media(val seq: Int, val event: MediaEvent) : Msg
         class Placed(val seq: Int, val call: PlacedCall, val atMs: Long) : Msg
+
+        /** The offer for an outgoing call is made: `call.start` goes only if the call is still the current one. */
+        class Offered(
+            val seq: Int,
+            val connectionId: String,
+            val sdp: String,
+            val suites: List<com.vettid.core.crypto.call.MediaSuite>,
+        ) : Msg
+
+        /** A `call.start` sent by [Offered] is done with (after its [Placed] or [Failed]). */
+        data object StartDone : Msg
         class Answered(val seq: Int) : Msg
         class RemoteApplied(val seq: Int) : Msg
         class Gathering(val seq: Int) : Msg
@@ -235,6 +255,8 @@ internal class CallMachine(
             Msg.Dismiss -> if (s == null) stateFlow.value = CallState.Idle
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
+            is Msg.Offered -> onOffered(s, m)
+            Msg.StartDone -> startsOutFlow.update { (it - 1).coerceAtLeast(0) }
             // A call that lost a glare has let its media go: what its engine still reports is of no use.
             is Msg.Media -> if (s != null && s.seq == m.seq && s.supersededBy == null) onMedia(s, m.event)
             is Msg.Answered -> if (s != null && s.seq == m.seq) onAnswered(s)
@@ -318,13 +340,38 @@ internal class CallMachine(
         }
         s.lane.trySend {
             val sdp = engine.createOffer(offered.first())
-            // Not cancelled by a hang-up: once `call.start` may have left, its answer is needed to end the call.
+            // The loop decides whether `call.start` goes: not for a call ended while its offer was made (a hang-up, a lock).
+            post(Msg.Offered(s.seq, connectionId, sdp, offered))
+        }
+    }
+
+    /**
+     * The offer is made: `call.start` goes only while the call is still the current one, and is counted ([startsOut]) in
+     * this same step, so a lock that ends the call from now on waits for its answer (and the hang-up that answer needs).
+     */
+    private fun onOffered(s: Session?, m: Msg.Offered) {
+        if (s == null || s.seq != m.seq) {
+            // Ended while its offer was made: nothing was placed, so nothing is left to end when no answer comes.
+            abandoned.remove(m.seq)
+            return
+        }
+        startsOutFlow.update { it + 1 }
+        // In the machine's scope, not the call's, and not cancelled by a hang-up: once `call.start` may have left, its
+        // answer is needed to end the call.
+        scope.launch {
             withContext(NonCancellable) {
                 try {
-                    val placed = signalling.start(connectionId, sdp, offered)
-                    post(Msg.Placed(s.seq, placed, elapsedMs()))
+                    val placed = signalling.start(m.connectionId, m.sdp, m.suites)
+                    post(Msg.Placed(m.seq, placed, elapsedMs()))
                 } catch (e: CallRefusedException) {
-                    post(Msg.Failed(s.seq, refusal(e.code)))
+                    post(Msg.Failed(m.seq, refusal(e.code)))
+                } catch (_: CallSecurityException) {
+                    post(Msg.Failed(m.seq, CallEnd.NOT_ENCRYPTED))
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    // The relay failed; what failed is never in a log.
+                    post(Msg.Failed(m.seq, CallEnd.FAILED))
+                } finally {
+                    post(Msg.StartDone)
                 }
             }
         }

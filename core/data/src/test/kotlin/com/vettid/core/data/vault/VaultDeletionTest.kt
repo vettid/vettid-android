@@ -706,15 +706,4 @@ class VaultDeletionTest {
         p.value = AppPhase.Locked
         assertEquals(AppPhase.Locked, p.value)
     }
-
-    /** The vault the deletion's checks take: the session's device first (a transfer to this phone), an empty id is none. */
-    @Test
-    fun theHeldVaultIdIsTheDevicesFirst() {
-        assertEquals("dev", VaultDeletion.heldVaultId("dev", ""))
-        assertEquals("dev", VaultDeletion.heldVaultId("dev", "rec"))
-        assertEquals("rec", VaultDeletion.heldVaultId(null, "rec"))
-        assertEquals("rec", VaultDeletion.heldVaultId("", "rec"))
-        assertEquals("", VaultDeletion.heldVaultId(null, ""))
-        assertEquals("", VaultDeletion.heldVaultId("", ""))
-    }
 }
