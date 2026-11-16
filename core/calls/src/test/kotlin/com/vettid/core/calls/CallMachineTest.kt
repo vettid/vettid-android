@@ -323,10 +323,12 @@ class CallMachineTest {
         signalling.startGate = Channel(1)
         m.call("conn-1")
         runCurrent()
-        // The offer is made first; the lock is posted by a task that runs after it, before the loop takes the offer, so
-        // the loop finds the lock right behind the offer and handles both in one go (the start's own coroutine runs later).
+        // The offer is made first; the lock's hang-up is posted by a task that runs after it, before the loop takes the
+        // offer, so the loop finds it right behind the offer and handles both in one go (the start's own coroutine runs
+        // later). The phase is still open when the loop takes the offer (a lock it reads only after this step): the start
+        // goes, and is counted in that same step. With the phase already closed, no start would go at all.
         gate.trySend(Unit)
-        launch { m.locking() }
+        launch { m.vaultLocking() }
         runCurrent()
         assertEquals(listOf("starts=0", "ends=0", "starts=1", "ended"), log)
         assertTrue(signalling.sent.any { it.startsWith("start") })
@@ -432,11 +434,14 @@ class CallMachineTest {
             "answered_elsewhere" to CallEnd.ANSWERED_ELSEWHERE, "decline" to CallEnd.DECLINED_HERE,
         )
         val m = machine()
-        for ((reason, end) in expected) {
-            signalling.deliver(offer())
+        for ((i, entry) in expected.entries.withIndex()) {
+            val (reason, end) = entry
+            // A call of its own each time: an incoming call that rang and ended does not ring again.
+            val id = "01JB2Z6V9K3M4N5P6Q7R8S9T6" + ('A' + i)
+            signalling.deliver(offer(id))
             runCurrent()
             signalling.sent.clear()
-            signalling.deliver(SignalEvent.End(CALL_ID, reason))
+            signalling.deliver(SignalEvent.End(id, reason))
             runCurrent()
             assertEquals(reason, end, m.ended().reason)
             assertTrue(signalling.sent.isEmpty())
@@ -1548,8 +1553,8 @@ class CallMachineTest {
     }
 
     /**
-     * Starts the member hung up while the vault was answering are let go when it does, every one of them, also those
-     * past the abandoned starts' list: their keys go.
+     * Starts the member hung up while the vault was answering are let go when it does, every one of them, however many
+     * there are: their keys go.
      */
     @Test
     fun everyStartAnsweredForNoSessionIsDropped() = runTest {
@@ -1659,7 +1664,7 @@ class CallMachineTest {
         /** Longer than any ring or wait of the default timings. */
         const val MAX_WAIT_MS = 10 * 60_000L
 
-        /** More starts than the abandoned starts' list holds (8). */
+        /** More starts than the old list of abandoned starts held (8). */
         const val STARTS = 9
     }
 }
