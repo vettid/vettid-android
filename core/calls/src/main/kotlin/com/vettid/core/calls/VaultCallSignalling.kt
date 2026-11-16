@@ -82,9 +82,14 @@ internal class VaultCallSignalling(
     /**
      * Calls ended (by the vault or here) while one was being started, that were not known here: the vault's `call.end`
      * (`busy`, say) can arrive before its answer to `call.start` is read. [start] destroys such a call at once and keeps
-     * nothing of it (rule 3); emptied when no start is in flight.
+     * nothing of it (rule 3); emptied when no start is in flight. Bounded by [MAX_KEPT]: with more unknown ends than
+     * that during one start, the oldest is let go, and a call it named is kept as before this list existed (until it
+     * is ended again or pushed out of [placed]).
      */
     private val endedEarly = LinkedHashSet<String>()
+
+    /** For tests: how many answers are held and how many ended ids are remembered, now. */
+    internal fun heldCounts(): Pair<Int, Int> = synchronized(lock) { heldAnswers.size to endedEarly.size }
     private val late = Channel<SignalEvent>(Channel.UNLIMITED)
 
     /** Offers and answers that did not pass their checks since the process started (diagnostics; no detail is kept). */

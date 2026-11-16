@@ -11,6 +11,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -79,6 +80,23 @@ class LockSequenceTest {
         val ms = timed { sequence({ throw IllegalStateException("x") }, { second.set(true) }).lock() }
         assertTrue(second.get() && locked.get())
         assertTrue("$ms ms", ms < budget)
+    }
+
+    /** A hook still running when the budget is over is cancelled, not left running beside the lock. */
+    @Test
+    fun aHookStillRunningAfterTheBudgetIsCancelled() {
+        val cancelled = CompletableDeferred<Unit>()
+        timed {
+            sequence({
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelled.complete(Unit)
+                }
+            }).lock()
+        }
+        assertTrue(locked.get())
+        assertTrue("cancelled", runBlocking { withTimeoutOrNull(1_000) { cancelled.await() } } != null)
     }
 
     /** A hook that throws while another is still running: the other finishes, and nothing reaches the handler. */

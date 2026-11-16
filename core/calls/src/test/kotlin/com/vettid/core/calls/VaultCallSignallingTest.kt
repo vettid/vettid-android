@@ -482,6 +482,99 @@ class VaultCallSignallingTest {
         }
     }
 
+    private fun placedAs(id: String, key: KemPrivateKey = KemPrivateKey.generate()) = OutgoingCall(
+        id, "conn-1", "audio", T0.plusSeconds(45), CallWire.IceConfig(id, T0.plusSeconds(600), emptyList()), listOf(1), key,
+    )
+
+    /**
+     * Two starts out; the first call's end and then its answer arrive before either returns. When the first returns, its
+     * call is not kept and its answer is not looked at again (it stays held once, not twice, while the second is out).
+     */
+    @Test
+    fun aHeldAnswerForACallThatEndedFirstIsNotHeldAgainForAnotherStart() = runTest {
+        val s = signalling()
+        val first = "01JB2Z6V9K3M4N5P6Q7R8S9T61"
+        val second = "01JB2Z6V9K3M4N5P6Q7R8S9T62"
+        val calls = ArrayDeque(listOf(placedAs(first), placedAs(second)))
+        gateway.startGate = Channel(Channel.UNLIMITED)
+        gateway.start = { calls.removeFirst() }
+        gateway.accept = { AcceptedCall(it.callId, "v=0", keys()) }
+        val a = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
+        val b = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
+        runCurrent()
+        gateway.channel.send(CallEvent.Ended(first, "busy"))
+        gateway.channel.send(answerEvent(first))
+        runCurrent()
+        assertEquals(1 to 1, s.heldCounts())
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(first, a.getCompleted().callId)
+        assertEquals("held once, not again (the ended id is used up)", 1 to 0, s.heldCounts())
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(second, b.getCompleted().callId)
+        assertEquals(0 to 0, s.heldCounts())
+        assertTrue(gateway.asked.none { it.startsWith("accept") })
+    }
+
+    /**
+     * What is remembered of ended calls: only while a start is out, only for calls not known here, at most `MAX_KEPT` (4),
+     * and nothing once the last start has returned.
+     */
+    @Test
+    fun endedCallsAreRememberedOnlyWhileAStartIsOutAndOnlyAFew() = runTest {
+        val s = signalling()
+        // No start out: an end for an unknown call is not remembered.
+        gateway.channel.send(CallEvent.Ended("01JB2Z6V9K3M4N5P6Q7R8S9T70", "busy"))
+        runCurrent()
+        assertEquals(0 to 0, s.heldCounts())
+        // A call that is known (placed) and ends while another start is out: forgotten, not remembered.
+        val known = "01JB2Z6V9K3M4N5P6Q7R8S9T71"
+        val knownKey = KemPrivateKey.generate()
+        val calls = ArrayDeque(listOf(placedAs(known, knownKey), placedAs(CALL_ID)))
+        gateway.start = { calls.removeFirst() }
+        s.start("conn-1", "v=0", listOf(s1))
+        gateway.startGate = Channel(Channel.UNLIMITED)
+        val out2 = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
+        runCurrent()
+        gateway.channel.send(CallEvent.Ended(known, "hangup"))
+        runCurrent()
+        assertEquals(0 to 0, s.heldCounts())
+        assertTrue("the known call's key went", runCatching { knownKey.seed() }.isFailure)
+        // Many unknown ends during one start: at most 4 kept.
+        for (i in 0 until 6) gateway.channel.send(CallEvent.Ended("01JB2Z6V9K3M4N5P6Q7R8S9T8$i", "busy"))
+        runCurrent()
+        assertEquals(0 to 4, s.heldCounts())
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CALL_ID, out2.getCompleted().callId)
+        assertEquals("emptied after the last start", 0 to 0, s.heldCounts())
+    }
+
+    /**
+     * The bound's fallback: with more than 4 other unknown ends after the call's own during its start, its end is let go
+     * and the call is kept as before this list existed; its next end (or being pushed out) destroys its key.
+     */
+    @Test
+    fun anOverflowedEarlyEndFallsBackToKeepingTheCallUntilItEndsAgain() = runTest {
+        val s = signalling()
+        val key = KemPrivateKey.generate()
+        gateway.startGate = Channel(1)
+        gateway.start = { placedAs(CALL_ID, key) }
+        val starting = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
+        runCurrent()
+        gateway.channel.send(CallEvent.Ended(CALL_ID, "busy"))
+        for (i in 0 until 4) gateway.channel.send(CallEvent.Ended("01JB2Z6V9K3M4N5P6Q7R8S9T9$i", "busy"))
+        runCurrent()
+        gateway.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CALL_ID, starting.getCompleted().callId)
+        assertTrue("kept, as before", runCatching { key.seed() }.isSuccess)
+        gateway.channel.send(CallEvent.Ended(CALL_ID, "busy"))
+        runCurrent()
+        assertTrue(runCatching { key.seed() }.isFailure)
+    }
+
     /** Only `CallApi` may make a verified call object: no production source outside `:core:vault` opts in. */
     @Test
     fun noProductionSourceMakesAVerifiedCallObjectByHand() {
