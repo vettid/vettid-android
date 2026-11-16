@@ -24,8 +24,27 @@ class CallMachineTest {
     private val signalling = FakeSignalling()
     private val engines = FakeEngines()
 
-    private fun TestScope.machine(s: CallSignalling = signalling, e: MediaEngineFactory = engines, config: MediaConfig = MediaConfig()) =
-        CallMachine(s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime }, config = { config })
+    /** The vault's phase as the machine reads it live: false from a lock until the vault is open again. */
+    private var open = true
+
+    /** A machine as a fresh start makes one, with the vault open. */
+    private fun TestScope.machine(
+        s: CallSignalling = signalling,
+        e: MediaEngineFactory = engines,
+        config: MediaConfig = MediaConfig(),
+    ): CallMachine {
+        open = true
+        return CallMachine(
+            s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime },
+            config = { config }, vaultOpen = { open },
+        )
+    }
+
+    /** A lock as the app makes one: the phase first, then the machine is told. */
+    private fun CallMachine.locking() {
+        open = false
+        vaultLocking()
+    }
 
     private fun CallMachine.live() = state.value as CallState.Live
 
@@ -269,7 +288,7 @@ class CallMachineTest {
         m.call("conn-1")
         runCurrent()
         assertEquals(1, m.startsOut.value)
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("still out", 1, m.startsOut.value)
@@ -307,7 +326,7 @@ class CallMachineTest {
         // The offer is made first; the lock is posted by a task that runs after it, before the loop takes the offer, so
         // the loop finds the lock right behind the offer and handles both in one go (the start's own coroutine runs later).
         gate.trySend(Unit)
-        launch { m.vaultLocking() }
+        launch { m.locking() }
         runCurrent()
         assertEquals(listOf("starts=0", "ends=0", "starts=1", "ended"), log)
         assertTrue(signalling.sent.any { it.startsWith("start") })
@@ -321,7 +340,7 @@ class CallMachineTest {
         signalling.startGate = Channel(1)
         m.call("conn-1")
         runCurrent()
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         log.clear()
         signalling.startGate!!.send(Unit)
@@ -346,11 +365,11 @@ class CallMachineTest {
             runCurrent()
             if (lockFirst) {
                 // The lock is queued before the offer is: the loop takes it first, then drops the offer.
-                m.vaultLocking()
+                m.locking()
                 gate.trySend(Unit)
             } else {
                 gate.trySend(Unit)
-                m.vaultLocking()
+                m.locking()
             }
             runCurrent()
             assertEquals(CallEnd.LOCKED, m.ended().reason)
@@ -933,12 +952,12 @@ class CallMachineTest {
             runCurrent()
             s.deliver(offer(GLARE_ID))
             runCurrent()
-            if (lock) m.vaultLocking() else m.hangUp()
+            if (lock) m.locking() else m.hangUp()
             runCurrent()
             assertTrue("lock $lock: ${m.state.value}", m.state.value is CallState.Ended)
             assertTrue(s.sent.none { it.startsWith("ringing(") || it.startsWith("end($GLARE_ID") })
             if (lock) {
-                m.vaultLocking()
+                m.locking()
                 runCurrent()
                 assertTrue(s.sent.none { it.startsWith("end($GLARE_ID") })
             }
@@ -1052,7 +1071,7 @@ class CallMachineTest {
             runCurrent()
             s2.deliver(offer(GLARE_ID))
             runCurrent()
-            if (lock) m2.vaultLocking() else m2.hangUp()
+            if (lock) m2.locking() else m2.hangUp()
             runCurrent()
             assertTrue("lock $lock", m2.state.value is CallState.Ended)
             assertTrue(s2.sent.none { it.startsWith("ringing(") })
@@ -1184,16 +1203,16 @@ class CallMachineTest {
     fun lockingTheVaultEndsTheCall() = runTest {
         val m = machine()
         placed(m)
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
         // And a ringing one is declined (the vault open again in between: a locking phone rings for none).
         m.dismiss()
-        m.vaultOpened()
+        open = true
         signalling.deliver(offer())
         runCurrent()
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("end($CALL_ID, decline)", signalling.sent.last())
@@ -1422,14 +1441,14 @@ class CallMachineTest {
     fun noCallIsPlacedFromALockUntilTheVaultIsOpenAgain() = runTest {
         val m = machine()
         m.call("conn-1") // waiting in the inbox
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         m.call("conn-1")
         runCurrent()
         assertEquals(CallState.Idle, m.state.value)
         assertTrue(engines.created.isEmpty())
         assertTrue(signalling.sent.isEmpty())
-        m.vaultOpened()
+        open = true
         m.call("conn-1")
         runCurrent()
         assertEquals(CallPhase.CALLING, m.live().phase)
@@ -1441,16 +1460,17 @@ class CallMachineTest {
     fun noOfferRingsAndNoneIsAnsweredFromALock() = runTest {
         val m = machine()
         signalling.deliver(offer())
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         assertEquals("delivered as the lock began: not rung", CallState.Idle, m.state.value)
         assertTrue(signalling.sent.isEmpty())
-        m.vaultOpened()
+        assertEquals("and let go in the signalling", listOf(CALL_ID), signalling.dropped)
+        open = true
         signalling.deliver(offer())
         runCurrent()
         assertEquals(CallPhase.INCOMING, m.live().phase)
         m.answer()
-        m.vaultLocking()
+        m.locking()
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertTrue(engines.created.isEmpty())
@@ -1473,11 +1493,12 @@ class CallMachineTest {
     fun aHeldOfferIsNotRungWhenTheCallEndsAsTheLockBegins() = runTest {
         val m = machine()
         ringingWithHeldOffer(m)
-        signalling.afterNext = { m.vaultLocking() }
+        signalling.afterNext = { m.locking() }
         signalling.deliver(SignalEvent.End(CALL_ID, CallReason.DECLINE))
         runCurrent()
         assertEquals(CallEnd.DECLINED, m.ended().reason)
         assertTrue(signalling.sent.none { it.startsWith("ringing") || it.startsWith("end(") })
+        assertTrue("the held offer is let go in the signalling too", GLARE_ID in signalling.dropped)
     }
 
     /** The glare's end naming the held offer was waiting when the lock began: the winner is not answered. */
@@ -1485,12 +1506,13 @@ class CallMachineTest {
     fun aHeldWinnerIsNotAnsweredWhenTheGlaresEndComesAsTheLockBegins() = runTest {
         val m = machine()
         ringingWithHeldOffer(m)
-        signalling.afterNext = { m.vaultLocking() }
+        signalling.afterNext = { m.locking() }
         signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("no engine for the winner", 1, engines.created.size)
         assertTrue(signalling.sent.none { it.startsWith("answer") || it.startsWith("end(") })
+        assertTrue("the winner is let go in the signalling too", GLARE_ID in signalling.dropped)
     }
 
     /** A lost glare waits for its winner; the winner's offer was waiting when the lock began: it is not answered. */
@@ -1500,12 +1522,13 @@ class CallMachineTest {
         placed(m)
         signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
         runCurrent()
-        signalling.afterNext = { m.vaultLocking() }
+        signalling.afterNext = { m.locking() }
         signalling.deliver(offer(GLARE_ID))
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("no engine for the winner", 1, engines.created.size)
         assertTrue(signalling.sent.none { it.startsWith("answer") || it.startsWith("end(") })
+        assertTrue("the winner's offer is let go in the signalling too", GLARE_ID in signalling.dropped)
     }
 
     /** Another call's end held while the start was out does not stop this call's gathering. */
@@ -1542,6 +1565,37 @@ class CallMachineTest {
         repeat(STARTS) { signalling.startGate!!.trySend(Unit) }
         runCurrent()
         assertEquals(List(STARTS) { CALL_ID }, signalling.dropped)
+    }
+
+    /** The other side's answer was waiting when the lock began: it is not taken, its keys go, and the lock ends the call. */
+    @Test
+    fun anAnswerWaitingAsTheLockBeginsIsNotTaken() = runTest {
+        val m = machine()
+        placed(m)
+        val seen = mutableListOf<CallState>()
+        backgroundScope.launch(kotlinx.coroutines.Dispatchers.Unconfined) { m.state.collect { seen += it } }
+        val a = answer()
+        signalling.afterNext = { m.locking() }
+        signalling.deliver(a)
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertTrue("never connecting: $seen", seen.none { it is CallState.Live && it.phase == CallPhase.CONNECTING })
+        assertTrue(a.keys.send.all { it == 0.toByte() } && a.keys.receive.all { it == 0.toByte() })
+        assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
+    }
+
+    /** The phase alone decides, read live: a lock and an unlock that came and went start calls again with nothing to clear. */
+    @Test
+    fun callsArePlacedAgainOnceThePhaseIsOpenWithNothingToClear() = runTest {
+        val m = machine()
+        open = false
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(CallState.Idle, m.state.value)
+        open = true
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(CallPhase.CALLING, m.live().phase)
     }
 
     private companion object {

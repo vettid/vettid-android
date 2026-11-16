@@ -204,7 +204,8 @@ class CallsController(
         peerKey = vault::identityKey,
         vaultIsC2 = { vaultC2 },
     )
-    private val machine = CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig })
+    private val machine =
+        CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig }, vaultOpen = { vault.unlockedNow })
 
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
@@ -295,12 +296,7 @@ class CallsController(
         scope.launch {
             vault.unlocked.collectLatest { isOpen ->
                 open = isOpen
-                if (isOpen) {
-                    machine.vaultOpened()
-                    opened()
-                } else {
-                    locked()
-                }
+                if (isOpen) opened() else locked()
             }
         }
         scope.launch { machine.state.collect { around(it) } }
@@ -373,19 +369,12 @@ class CallsController(
     @Suppress("ReturnCount") // one return per reason not to wait
     suspend fun endCallBeforeLock() {
         // "Lock it now" reads the vault's status before the hooks run, and an unlock here can overtake its lock meanwhile:
-        // the vault is then open again, the lock does not happen, and nothing is ended or refused (the guard below would
-        // stay on with nothing to clear it).
+        // the vault is then open again and the lock does not happen, so nothing is ended.
         if (vault.unlockedNow) return
-        // From here no call is placed, rung or answered, a request still in the machine's inbox included, until the vault is
-        // open again (the phase may not have reached [locked] yet). With no call it ends nothing. Set before the state is
-        // read: a call request handled after this is refused; one the machine is handling at this very moment may start,
-        // and the lock's hang-up behind it ends it with nothing sent.
+        // The lock set the phase before this hook ran, so from here the machine starts nothing of a call (it reads the phase
+        // live). The hang-up ends a live call, also one the machine was starting at this very moment, before the state
+        // below is read; with no call it ends nothing.
         machine.vaultLocking()
-        // An unlock that completed just now: its opening may have reached [opened] before the line above.
-        if (vault.unlockedNow) {
-            machine.vaultOpened()
-            return
-        }
         val live = machine.state.value is CallState.Live
         // Nothing to end, no hang-up on its way and no `call.start` out: no wait. A hang-up still being sent, or a
         // `call.start` whose answer is still to come (the call it places is then ended at once), is waited for also when

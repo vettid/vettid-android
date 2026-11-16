@@ -152,8 +152,10 @@ class CallsControllerTest {
     private class Vault : CallVault {
         override val unlocked = MutableStateFlow(false)
 
-        /** As a lock's hook finds it: the phase is not open (a lock sets it before its hooks run). */
-        override var unlockedNow = false
+        /** The phase as a lock sets it before its hooks run, before the collector of [unlocked] has seen anything. */
+        var phaseClosed = false
+
+        override val unlockedNow: Boolean get() = unlocked.value && !phaseClosed
         override var updateShowing = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -1095,10 +1097,12 @@ class CallsControllerTest {
         val c = controller()
         vault.unlocked.value = true
         runCurrent()
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         c.endCallBeforeLock() // nothing live: returns at once
         // That lock ran its course; the vault is open again, so calls are placed again.
         vault.unlocked.value = false
         runCurrent()
+        vault.phaseClosed = false
         vault.unlocked.value = true
         runCurrent()
         c.call("conn-1")
@@ -1106,6 +1110,7 @@ class CallsControllerTest {
         val gate = Channel<Unit>(1)
         vault.gateway.endGate = gate
         var done = false
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         backgroundScope.launch {
             c.endCallBeforeLock()
             done = true
@@ -1130,7 +1135,6 @@ class CallsControllerTest {
         runCurrent()
         c.call("conn-1")
         runCurrent()
-        vault.unlockedNow = true
         c.endCallBeforeLock()
         runCurrent()
         assertTrue("the live call goes on", c.state.value is CallState.Live)
@@ -1144,6 +1148,25 @@ class CallsControllerTest {
     }
 
     /**
+     * A lock and an unlock here that the collector of `unlocked` never saw (the open phase conflated over the closed one):
+     * nothing is left set, so calls are placed as soon as the phase is open again.
+     */
+    @Test
+    fun aLockAndUnlockTheCollectorNeverSawLeaveCallsWorking() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
+        c.endCallBeforeLock()
+        vault.phaseClosed = false // an unlock here: the collector sees "open" throughout
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(c.state.value is CallState.Live)
+        assertTrue(vault.gateway.sent.any { it.startsWith("start") })
+    }
+
+    /**
      * A call the member asked for as the lock begins (still in the machine's inbox when the lock's hook
      * finds no call) is not placed: no audio, no service, no `call.start`, though the vault still counts as open here.
      */
@@ -1153,6 +1176,7 @@ class CallsControllerTest {
         vault.unlocked.value = true
         runCurrent()
         c.call("conn-1")
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         c.endCallBeforeLock()
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
@@ -1176,6 +1200,7 @@ class CallsControllerTest {
         val end = Channel<Unit>(1)
         vault.gateway.endGate = end
         var done = false
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         backgroundScope.launch {
             c.endCallBeforeLock()
             done = true
@@ -1206,6 +1231,7 @@ class CallsControllerTest {
         runCurrent()
         assertTrue("the call is over on this phone", c.state.value !is CallState.Live)
         var done = false
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         backgroundScope.launch {
             c.endCallBeforeLock()
             done = true
@@ -1232,6 +1258,7 @@ class CallsControllerTest {
         runCurrent()
         assertTrue("the call is over on this phone", c.state.value !is CallState.Live)
         var done = false
+        vault.phaseClosed = true // the lock sets the phase before its hooks run
         backgroundScope.launch {
             c.endCallBeforeLock()
             done = true
