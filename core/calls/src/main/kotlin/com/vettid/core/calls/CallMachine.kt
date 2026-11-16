@@ -217,7 +217,7 @@ internal class CallMachine(
     @Volatile
     private var locked = false
 
-    /** Calls [connectionId]. Ignored while a call is live, and while the vault is locking or locked. */
+    /** Calls [connectionId]. Ignored while a call is live, and while the vault is locking or locked ([vaultLocking]). */
     fun call(connectionId: String) = post(Msg.Call(connectionId))
 
     /** Answers the ringing call. */
@@ -230,8 +230,9 @@ internal class CallMachine(
     fun hangUp() = post(Msg.HangUp(CallEnd.HUNG_UP))
 
     /**
-     * The vault is being locked: a live call ends, and no call is placed until [vaultOpened] (not even one the member
-     * asked for a moment before: nothing of a call, its audio or its service, starts on a phone that is locking).
+     * The vault is being locked: a live call ends, and until [vaultOpened] no call is placed, no offer rings and none is
+     * answered (not even one asked for or delivered a moment before: nothing of a call, its ring, audio or service,
+     * starts on a phone that is locking).
      */
     fun vaultLocking() {
         locked = true
@@ -259,7 +260,8 @@ internal class CallMachine(
         val s = session
         when (m) {
             is Msg.Call -> if (s == null && !locked) startOutgoing(m.connectionId)
-            Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING) answerIncoming(s)
+            // A ringing call the lock is ending is not answered: the lock's hang-up behind this declines it.
+            Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING && !locked) answerIncoming(s)
             Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
                 s.memberEnded = true
                 finish(s, CallEnd.DECLINED_HERE, CallReason.DECLINE)
@@ -510,7 +512,7 @@ internal class CallMachine(
         when (e) {
             is SignalEvent.Offer -> when {
                 e.callId in endedWinners -> Unit // a glare's winner that already ended
-                s == null -> ring(e)
+                s == null -> if (!locked) ring(e) // never on a phone that is locking
                 glareWith(s, e) -> if (s.supersededBy == e.callId) takeGlare(s, e) else s.glareOffer = e
                 else -> Unit // busy here: the vault rings every device, and this one is in another call
             }

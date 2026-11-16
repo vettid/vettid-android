@@ -365,10 +365,11 @@ class CallsController(
      * to silence. The caller bounds the wait; the lock happens whatever becomes of this.
      */
     suspend fun endCallBeforeLock() {
-        val live = machine.state.value is CallState.Live
-        // From here no call is placed, a request still in the machine's inbox included, until the vault is open again
-        // (the phase may not have reached [locked] yet). With no call it ends nothing.
+        // From here no call is placed, rung or answered, a request still in the machine's inbox included, until the vault is
+        // open again (the phase may not have reached [locked] yet). With no call it ends nothing. Before the state is read:
+        // a call request handled in between is refused, not started unseen by this hook.
         machine.vaultLocking()
+        val live = machine.state.value is CallState.Live
         // Nothing to end, no hang-up on its way and no `call.start` out: no wait. A hang-up still being sent, or a
         // `call.start` whose answer is still to come (the call it places is then ended at once), is waited for also when
         // the call itself is already over on this phone (the member hung up and locked at once).

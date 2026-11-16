@@ -1188,8 +1188,9 @@ class CallMachineTest {
         runCurrent()
         assertEquals(CallEnd.LOCKED, m.ended().reason)
         assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
-        // And a ringing one is declined.
+        // And a ringing one is declined (the vault open again in between: a locking phone rings for none).
         m.dismiss()
+        m.vaultOpened()
         signalling.deliver(offer())
         runCurrent()
         m.vaultLocking()
@@ -1346,12 +1347,12 @@ class CallMachineTest {
     }
 
     /**
-     * The vault's end for this very call came before `call.start` was answered: the call is let go on the replay with no
-     * address gathered for it (the ICE servers are never asked with a dead call's credentials), and the signalling is
-     * told to let it go too, whatever it remembered.
+     * The vault's end for this very call came before `call.start` was answered: the call is let go on the replay, and the
+     * signalling is told to let it go too, whatever it remembered. (That no address is gathered for it is pinned by
+     * [aGlareLostBeforeItWasPlacedGathersNoAddress]: here the replay closes the lane before queued work could run.)
      */
     @Test
-    fun aCallWhoseEndCameBeforeItWasPlacedGathersNoAddress() = runTest {
+    fun aCallWhoseEndCameBeforeItWasPlacedIsDropped() = runTest {
         val m = machine()
         signalling.startGate = Channel(1)
         m.call("conn-1")
@@ -1361,7 +1362,6 @@ class CallMachineTest {
         signalling.startGate!!.send(Unit)
         runCurrent()
         assertEquals(CallEnd.BUSY, m.ended().reason)
-        assertTrue(engines.last.calls.none { it.startsWith("startGathering") })
         assertEquals(listOf(CALL_ID), signalling.dropped)
         assertTrue(signalling.sent.none { it.startsWith("end") })
     }
@@ -1434,6 +1434,28 @@ class CallMachineTest {
         runCurrent()
         assertEquals(CallPhase.CALLING, m.live().phase)
         assertEquals(listOf("start(conn-1, [1])"), signalling.sent)
+    }
+
+    /** Nor does an offer ring, or a ringing call get answered, from [CallMachine.vaultLocking]: the lock declines it. */
+    @Test
+    fun noOfferRingsAndNoneIsAnsweredFromALock() = runTest {
+        val m = machine()
+        signalling.deliver(offer())
+        m.vaultLocking()
+        runCurrent()
+        assertEquals("delivered as the lock began: not rung", CallState.Idle, m.state.value)
+        assertTrue(signalling.sent.isEmpty())
+        m.vaultOpened()
+        signalling.deliver(offer())
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        m.answer()
+        m.vaultLocking()
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertTrue(engines.created.isEmpty())
+        assertTrue(signalling.sent.none { it.startsWith("answer") })
+        assertEquals("end($CALL_ID, decline)", signalling.sent.last())
     }
 
     private companion object {
