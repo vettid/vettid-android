@@ -286,6 +286,10 @@ object VaultDeletion {
     internal fun heldVaultId(deviceVaultId: String?, recordVaultId: String): String =
         deviceVaultId?.ifEmpty { null } ?: recordVaultId
 
+    /** [heldVaultId] for a reader that needs an id or none (the member API's gateway): empty is null. */
+    internal fun vaultIdOrNull(deviceVaultId: String?, recordVaultId: String): String? =
+        heldVaultId(deviceVaultId, recordVaultId).ifEmpty { null }
+
     /**
      * Whether the vault's own word, arriving with no "being deleted" up, starts it, as the word starts it without a 410
      * (`startDeleting`, in any phase): only while this phone still has its vault ([vaultId] held, not signed out) and its

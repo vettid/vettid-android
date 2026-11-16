@@ -260,6 +260,68 @@ class CallMachineTest {
         assertEquals(CallEnd.HUNG_UP, m.ended().reason)
     }
 
+    /** A `call.start` out is counted from the step that sends it until its answer was handled (and its hang-up counted). */
+    @Test
+    fun aStartOutIsCountedUntilItsAnswerIsHandled() = runTest {
+        val m = machine()
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(1, m.startsOut.value)
+        m.vaultLocking()
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertEquals("still out", 1, m.startsOut.value)
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals("end($CALL_ID, hangup)", signalling.sent.last())
+        assertEquals(0, m.startsOut.value)
+        assertEquals(0, m.pendingEnds.value)
+    }
+
+    /**
+     * A call ended while its offer was being made sends no `call.start` at all: the offer is made, but the lock is in
+     * the loop's queue ahead of it (a lock while the offer is still being made cancels the making itself).
+     */
+    @Test
+    fun noStartForACallEndedWhileItsOfferWasMade() = runTest {
+        for (lockFirst in listOf(true, false)) {
+            val s = FakeSignalling()
+            val e = FakeEngines()
+            val m = machine(s, e)
+            val gate = Channel<Unit>(1)
+            e.onCreate = { (it as FakeEngine).offerGate = gate }
+            m.call("conn-1")
+            runCurrent()
+            if (lockFirst) {
+                // The lock is queued before the offer is: the loop takes it first, then drops the offer.
+                m.vaultLocking()
+                gate.trySend(Unit)
+            } else {
+                gate.trySend(Unit)
+                m.vaultLocking()
+            }
+            runCurrent()
+            assertEquals(CallEnd.LOCKED, m.ended().reason)
+            assertTrue("lockFirst=$lockFirst", s.sent.none { it.startsWith("start") })
+            assertEquals(0, m.startsOut.value)
+        }
+    }
+
+    /** A start that fails or is refused is done with too: the count goes back to 0 and the call ends as before. */
+    @Test
+    fun aFailedOrRefusedStartIsDoneWith() = runTest {
+        val cases = listOf(java.io.IOException("relay") to CallEnd.FAILED, CallRefusedException("busy") to CallEnd.OWN_VAULT_BUSY)
+        for ((thrown, reason) in cases) {
+            val s = FakeSignalling().apply { startResult = { throw thrown } }
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            assertEquals(reason, m.ended().reason)
+            assertEquals(0, m.startsOut.value)
+        }
+    }
+
     @Test
     fun anIncomingCallRingsAndCanBeDeclined() = runTest {
         val m = machine()

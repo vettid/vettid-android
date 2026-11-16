@@ -181,11 +181,11 @@ class VaultDeviceTest {
         fun msg(payload: ByteArray, from: String = sender) = RelayMessage(Ulid.new(), "", from, null, payload)
 
         /** vault.enrolled (§11.3), sealed to the device's KEM key. */
-        fun enrolled(d: VaultDevice): RelayMessage {
+        fun enrolled(d: VaultDevice, sentVaultId: String = vaultId): RelayMessage {
             val bundle = JsonBuilder().uint("v", 1).uint("suite", 2).raw("ik", JsonBuilder.quote(Base64s.encodeStd(ik.publicKey)))
                 .raw("kem", JsonBuilder.quote(Base64s.encodeStd(kem.publicKey.bytes())))
                 .raw("relay", JsonBuilder().string("url", relayUrl).string("mailbox", mailbox).base64("pk", relayKey.publicKey).build()).bytes()
-            val body = JsonBuilder().string("vault_id", vaultId).base64("vault_bundle", bundle).string("token", tokenFor(d)).uint("state_seq", 2).bytes()
+            val body = JsonBuilder().string("vault_id", sentVaultId).base64("vault_bundle", bundle).string("token", tokenFor(d)).uint("state_seq", 2).bytes()
             val inner = Inner(id = Ulid.new(), type = "vault.enrolled", ts = Instant.now(), body = body)
             return msg(Envelope.sealSealed(d.kemKey, Kid.ANONYMOUS, Inner.encode(inner, Mode.SEALED)).first)
         }
@@ -389,6 +389,24 @@ class VaultDeviceTest {
         assertEquals(3, d.altState.releaseNumber)
         takeFeatures(v) // the pairing's device.features (§10.2)
         return d to v
+    }
+
+    /** A `vault.enrolled` that names no vault (an empty `vault_id`) is refused whole: no vault, no id, not enrolled. */
+    @Test
+    fun anEnrolmentWithAnEmptyVaultIdIsRefused() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore(), java.time.Duration.ofSeconds(5)), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d, sentVaultId = ""))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEnrolled(java.time.Duration.ofMillis(300)) }
+            }
+            assertNull(d.vaultId)
+            // The same enrolment naming its vault is then taken.
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            assertEquals(v.vaultId, d.vaultId)
+        }
     }
 
     /** A `device.paired` whose `vault_id` is empty is no id: the one the enrolment gave stays. */

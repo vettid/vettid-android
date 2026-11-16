@@ -361,11 +361,14 @@ class CallsController(
      */
     suspend fun endCallBeforeLock() {
         val live = machine.state.value is CallState.Live
-        // Nothing to end and no hang-up on its way: no wait. A hang-up still being sent is waited for also when the
-        // call itself is already over on this phone (the member hung up and locked at once).
-        if (!live && machine.pendingEnds.value == 0) return
+        // Nothing to end, no hang-up on its way and no `call.start` out: no wait. A hang-up still being sent, or a
+        // `call.start` whose answer is still to come (the call it places is then ended at once), is waited for also when
+        // the call itself is already over on this phone (the member hung up and locked at once).
+        if (!live && machine.pendingEnds.value == 0 && machine.startsOut.value == 0) return
         if (live) machine.vaultLocking()
-        combine(machine.state, machine.pendingEnds) { s, pending -> s !is CallState.Live && pending == 0 }.first { it }
+        combine(machine.state, machine.pendingEnds, machine.startsOut) { s, pending, starts ->
+            s !is CallState.Live && pending == 0 && starts == 0
+        }.first { it }
     }
 
     @Suppress("ReturnCount")

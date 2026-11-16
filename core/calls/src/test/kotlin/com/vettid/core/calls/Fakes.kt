@@ -39,9 +39,13 @@ class FakeEngine(override val suites: List<MediaSuite> = listOf(MediaSuite.AES_1
     /** The suite the cryptors were made for (createOffer, acceptOffer). Like the real engine, never remade. */
     var madeFor: MediaSuite? = null
 
+    /** When set, the offer is made only once the test lets it (a hang-up or a lock while it is being made). */
+    var offerGate: Channel<Unit>? = null
+
     override suspend fun createOffer(suite: MediaSuite): String {
         check(suite in suites) { "suite ${suite.id}" }
         madeFor = suite
+        offerGate?.receive()
         calls += "createOffer"
         return "v=0\r\ns=offer\r\nm=audio 9 X 111\r\n"
     }

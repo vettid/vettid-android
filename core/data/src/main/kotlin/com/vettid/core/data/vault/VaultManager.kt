@@ -150,7 +150,7 @@ class VaultManager(
     private val http = env.http(baseHttp)
     private val gateway: MemberGateway = env.memberGateway(app, http) {
         // The same rule as the deletion's: the open session's device first, an empty id being none.
-        VaultDeletion.heldVaultId(session?.device?.vaultId, local.vaultId).ifEmpty { null }
+        VaultDeletion.vaultIdOrNull(session?.device?.vaultId, local.vaultId)
     }
     private val accountFile = KeystoreFileStore(File(app.noBackupFilesDir, "account.bin"), "account")
     private val mutex = Mutex()
@@ -1416,7 +1416,8 @@ class VaultManager(
             @Suppress("ReturnCount") // one return per answer
             override suspend fun memberLock(unlockId: String?): MemberLock {
                 val s = lockSession() ?: return MemberLock.NoAnswer
-                val vaultId = s.device.vaultId ?: return MemberLock.NoAnswer
+                // The session's own vault (an empty id is none).
+                val vaultId = s.device.vaultId?.ifEmpty { null } ?: return MemberLock.NoAnswer
                 return try {
                     val slot = io { s.alt.lock(vaultId, MEMBER_LOCK_WAIT, unlockId) }
                     when (slot.status) {
@@ -3027,7 +3028,7 @@ class VaultManager(
             null
         }
         VaultOverview(
-            vaultId = st?.vaultId ?: s.device.vaultId,
+            vaultId = st?.vaultId?.ifEmpty { null } ?: s.device.vaultId?.ifEmpty { null },
             state = st?.state,
             release = st?.release?.let { ReleaseInfoView(it.number, it.status, it.endsAt, it.newestActive, it.notice) },
             lastRelease = s.device.altState.releaseNumber,
@@ -4876,7 +4877,7 @@ class VaultManager(
         // complete, and the unlock screen says why this phone cannot unlock.
         if (guid != null) {
             gateway.memberChanged(guid)
-            io { updateLocal(rec) { it.copy(userGuid = guid, vaultId = s.device.vaultId ?: it.vaultId) } }
+            io { updateLocal(rec) { it.copy(userGuid = guid, vaultId = VaultDeletion.heldVaultId(s.device.vaultId, it.vaultId)) } }
         }
         // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
         if (local.phone.inUse) {

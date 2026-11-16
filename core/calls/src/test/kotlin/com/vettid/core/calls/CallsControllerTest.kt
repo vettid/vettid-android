@@ -58,8 +58,12 @@ class CallsControllerTest {
         var vaultNow: Instant? = null
         var listGate: suspend () -> Unit = {}
 
+        /** When set, `call.start`'s answer comes only once the test lets it. */
+        var startGate: Channel<Unit>? = null
+
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
             sent += "start($connectionId)" + (if (peerIk != null) " form2" else "")
+            startGate?.receive()
             val ice = CallWire.IceConfig(CALL_ID, T0.plusSeconds(600), emptyList())
             return OutgoingCall(CALL_ID, connectionId, "audio", T0.plusSeconds(45), ice, listOf(1), KemPrivateKey.generate())
         }
@@ -1102,6 +1106,39 @@ class CallsControllerTest {
         assertEquals(CallEnd.LOCKED, (c.state.value as CallState.Ended).reason)
         assertTrue("the lock still waits: the hang-up is not with the relay yet", !done)
         gate.send(Unit)
+        runCurrent()
+        assertTrue(done)
+        assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())
+    }
+
+    /**
+     * A lock while `call.start` is out: the lock waits for its answer and for the hang-up of the call it placed, so that
+     * hang-up is with the relay before the vault locks (as iOS #285).
+     */
+    @Test
+    fun aLockWaitsForACallStartStillOutAndItsHangUp() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val start = Channel<Unit>(1)
+        vault.gateway.startGate = start
+        c.call("conn-1")
+        runCurrent()
+        assertEquals("start(conn-1)", vault.gateway.sent.last())
+        val end = Channel<Unit>(1)
+        vault.gateway.endGate = end
+        var done = false
+        backgroundScope.launch {
+            c.endCallBeforeLock()
+            done = true
+        }
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, (c.state.value as CallState.Ended).reason)
+        assertTrue("the lock waits for call.start's answer", !done)
+        start.send(Unit)
+        runCurrent()
+        assertTrue("then for the hang-up of the call it placed", !done)
+        end.send(Unit)
         runCurrent()
         assertTrue(done)
         assertEquals("end($CALL_ID, hangup)", vault.gateway.sent.last())

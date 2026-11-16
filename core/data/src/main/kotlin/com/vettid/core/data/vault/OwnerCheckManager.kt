@@ -223,12 +223,18 @@ class OwnerCheckManager(
 
     /**
      * [lastTimeScale] is written under this, against [epoch]: [clear] and a lock ([onLockedHere], `vault.locking`) move
-     * the epoch, then reset the scale to 1 under this; a read begun before them never sets it after.
+     * the epoch and reset the scale to 1 in one step under this ([newEpoch]); a read begun before them never sets it after.
      */
     private val scaleLock = Any()
 
-    /** Real time until the next status read; after the epoch moved, so a read still out does not set it again. */
-    private fun resetScale() = synchronized(scaleLock) { lastTimeScale = 1 }
+    /**
+     * A new epoch (a lock, a clear) and real time until the next status read, in one step under [scaleLock], the lock a
+     * read checks its epoch and writes the scale under: no read begun before it sets the scale after it, in any order.
+     */
+    private fun newEpoch() = synchronized(scaleLock) {
+        epoch.incrementAndGet()
+        lastTimeScale = 1
+    }
 
     /**
      * The scale for the presence notice's check time, where an earlier time is the unsafe way: the larger of the last
@@ -272,8 +278,9 @@ class OwnerCheckManager(
     fun onEvent(m: VaultMessage) {
         if (m.type == "vault.locking") {
             unlockPin = null // a lock of any reason ends the kept PIN (ANDROID-PLAN 0.1.93)
-            epoch.incrementAndGet() // and drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96)
-            resetScale() // a check sent before the next status read (a cancelled recovery's) is at real time
+            // Drops a probe that finishes after it, whatever the reason (ANDROID-PLAN 0.1.96), and resets the scale: a check
+            // sent before the next status read (a cancelled recovery's) is at real time.
+            newEpoch()
             clearRelay() // a locked app shows no vault notice (0.84.0); the next `vault.status` after an unlock says again
             if (VaultJson.str(m.body, "reason") != REASON_OWNER_CHECK) lockedOther = true
         }
@@ -698,8 +705,7 @@ class OwnerCheckManager(
 
     override fun onLockedHere() {
         unlockPin = null
-        epoch.incrementAndGet() // a read that finishes after the member's own lock does not mark it
-        resetScale()
+        newEpoch() // a read that finishes after the member's own lock does not mark it (nor set the scale)
         clearRelay()
         lockedHere = true
         lockedOther = true
@@ -813,7 +819,7 @@ class OwnerCheckManager(
     /** Forgets everything (a wipe, a deleted vault). */
     fun clear() {
         unlockPin = null
-        epoch.incrementAndGet()
+        newEpoch()
         passedAt = null
         estimate = 0
         keepCount = false
@@ -829,7 +835,6 @@ class OwnerCheckManager(
         idleFlow.value = null
         idleInForce = null
         idleAfterKnown = null
-        resetScale()
         lockedHere = false
         idleSettingFlow.value = null
         runCatching { persist(ByteArray(0)) }
