@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,7 +85,8 @@ class LockSequenceTest {
     @Test
     fun aHookThatThrowsCancelsNoneOfTheOthersStillRunning() {
         val slow = AtomicBoolean(false)
-        timed { sequence({ delay(100); slow.set(true) }, { throw IllegalStateException("x") }).lock() }
+        val thrown = CompletableDeferred<Unit>()
+        timed { sequence({ thrown.await(); delay(SETTLE_MS); slow.set(true) }, { thrown.complete(Unit); error("x") }).lock() }
         assertTrue("the slower hook finished", slow.get())
         assertTrue(locked.get())
         assertTrue("$reported", reported.isEmpty())
@@ -94,7 +96,8 @@ class LockSequenceTest {
     @Test
     fun aHookThatFailsWithAnErrorCancelsNoneOfTheOthers() {
         val slow = AtomicBoolean(false)
-        timed { sequence({ delay(100); slow.set(true) }, { throw HookError() }).lock() }
+        val thrown = CompletableDeferred<Unit>()
+        timed { sequence({ thrown.await(); delay(SETTLE_MS); slow.set(true) }, { thrown.complete(Unit); throw HookError() }).lock() }
         assertTrue("the slower hook finished", slow.get())
         assertTrue(locked.get())
         assertEquals(1, after.get())
@@ -102,6 +105,11 @@ class LockSequenceTest {
     }
 
     private class HookError : Error("hook")
+
+    private companion object {
+        /** After the other hook failed: time for a cancellation to reach this one, if anything cancelled it. */
+        const val SETTLE_MS = 50L
+    }
 
     @Test
     fun aHookThatBlocksItsThreadCannotHoldTheLockBack() {

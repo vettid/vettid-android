@@ -22,6 +22,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -463,13 +464,13 @@ class VaultCallSignallingTest {
                     listOf(1), key,
                 )
             }
-            val starting = backgroundScope.launch { s.start("conn-1", "v=0", listOf(s1)) }
+            val starting = backgroundScope.async { s.start("conn-1", "v=0", listOf(s1)) }
             runCurrent()
             gateway.channel.send(CallEvent.Ended(endedId, "busy"))
             runCurrent()
             gateway.startGate!!.send(Unit)
             runCurrent()
-            assertTrue(starting.isCompleted)
+            assertEquals("the start returned the call", CALL_ID, starting.getCompleted().callId)
             val overtaken = endedId == CALL_ID
             assertEquals("ended $endedId", overtaken, runCatching { key.seed() }.isFailure)
             // Kept or not: an answer for it is checked only while the call is kept.

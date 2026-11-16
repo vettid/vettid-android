@@ -192,6 +192,7 @@ internal class VaultCallSignalling(
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
+        var endedFirst = false
         val call = try {
             // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
             // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
@@ -202,7 +203,8 @@ internal class VaultCallSignalling(
             }
             gateway.start(connectionId, sdp, suites, peerIk).also { c ->
                 synchronized(lock) {
-                    if (endedEarly.remove(c.callId)) {
+                    endedFirst = endedEarly.remove(c.callId)
+                    if (endedFirst) {
                         // Its end overtook this answer: nothing to keep, and the key goes now (rule 3). The machine
                         // ends the call from the end it already has.
                         c.destroy()
@@ -227,7 +229,8 @@ internal class VaultCallSignalling(
             }
         }
         // An answer that overtook the vault's answer to `call.start`: checked now, as any answer.
-        for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
+        // Not for a call already ended: it is not kept, and its answer is nobody's (nor held again for another start).
+        if (!endedFirst) for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
         return PlacedCall(call.callId, call.exp, call.ice.servers, call.formTwo)
     }
 
