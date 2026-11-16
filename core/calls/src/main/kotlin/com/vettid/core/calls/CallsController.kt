@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -37,6 +38,24 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
+
+/**
+ * [CallVault.unlocked] from the vault's phase and its count of openings (`VaultManager.opens`): open or not, with a
+ * closed value put in between two open ones whose count differs. A lock and an unlock fast enough for the closed phase
+ * to be conflated away are then still seen as a close, so nothing of the vault before the lock is kept after it (the
+ * probe's answer, the C2 flag, the permissions). At worst one extra close and open, never a lock missed.
+ */
+fun vaultOpenings(phase: Flow<Pair<Boolean, Int>>): Flow<Boolean> = flow {
+    var lastOpen: Boolean? = null
+    var lastCount = 0
+    phase.collect { (open, count) ->
+        val reopened = open && lastOpen == true && count != lastCount
+        if (reopened) emit(false)
+        if (open != lastOpen || reopened) emit(open)
+        lastOpen = open
+        lastCount = count
+    }
+}
 
 /** What the calls need of the app's vault; the app's wiring gives it from `VaultManager`. */
 interface CallVault {

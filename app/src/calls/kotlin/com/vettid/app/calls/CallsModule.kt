@@ -17,6 +17,7 @@ import com.vettid.core.calls.CallsController
 import com.vettid.core.calls.MediaConfig
 import com.vettid.core.calls.VaultCallGateway
 import com.vettid.core.calls.WebRtcMediaEngine
+import com.vettid.core.calls.vaultOpenings
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.prefs.NotificationPreviews
@@ -33,6 +34,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -66,7 +68,8 @@ object CallsModule {
     /** What the calls use of the vault manager: its phase, its typed client, and its connections as the app shows them. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
-        override val unlocked: Flow<Boolean> = m.phase.map { it == AppPhase.Unlocked }.distinctUntilChanged()
+        override val unlocked: Flow<Boolean> =
+            vaultOpenings(combine(m.phase, m.opens) { p, n -> (p == AppPhase.Unlocked) to n }.distinctUntilChanged())
 
         override val unlockedNow: Boolean get() = m.phase.value == AppPhase.Unlocked
 
