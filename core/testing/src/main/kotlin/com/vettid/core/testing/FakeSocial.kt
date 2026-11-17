@@ -282,6 +282,11 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     override suspend fun approveAuthentication(requestId: String, password: String) {
         call("approveAuthentication")
+        // As SocialManager: a challenge held with a document is approved only over it (0.89.0 §10.4), and one not held at
+        // all (it may carry one) fails as the vault's not_found.
+        val held = approvals.value.firstOrNull { it.key == "auth:$requestId" } as? Approval.Authentication
+            ?: throw VaultFailure(FailureKind.NOT_FOUND, "not_found")
+        if (held.hasDocument) throw VaultFailure(FailureKind.OTHER, "document_not_shown")
         lastPassword = password
         drop("auth:$requestId")
     }
@@ -291,6 +296,9 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     /** What [approveAuthentication] over a document answers; only [DocumentApproval.Approved] takes the ask out. */
     var documentApproval: DocumentApproval = DocumentApproval.Approved
+
+    /** When set, [approveAuthentication] over a document waits for it before it answers (to order it against other work). */
+    var documentApprovalGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
     override suspend fun authenticationDocument(request: Approval.Authentication): ApprovalDocument.Check {
         call("authenticationDocument")
@@ -304,6 +312,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     ): DocumentApproval {
         call("approveAuthenticationDocument")
         lastPassword = password
+        documentApprovalGate?.await()
         if (documentApproval == DocumentApproval.Approved) drop("auth:${request.requestId}")
         return documentApproval
     }

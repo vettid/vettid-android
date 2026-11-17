@@ -17,11 +17,19 @@ import com.vettid.core.crypto.json.StrictJson
  * `connection.authenticate.document` returned them, once they passed the app's checks ([check]). Only a checked document
  * is shown, and the hash an approval sends is [sha256] of exactly these bytes, never of a re-serialised form.
  *
+ * Bound to what it was checked for: [requestId], the challenge it was fetched for, and [context], the line its reference
+ * was checked against. An approval over it is refused for any other request or line ([isFor]), so a screen can never
+ * show one request's line while it signs another's document.
+ *
  * Equal when the bytes are equal. Prints its action and size only.
  */
 class ApprovalDocument private constructor(
     private val raw: ByteArray,
     private val hash: ByteArray,
+    /** The `request_id` of the challenge it was fetched for and checked against. */
+    val requestId: String,
+    /** The challenge's `context` it was checked against (it ends with this document's reference). */
+    val context: String,
     val action: String,
     val summary: String,
     /** `payload`, as parsed (members in the document's order, which is canonical). */
@@ -35,6 +43,13 @@ class ApprovalDocument private constructor(
 
     /** The `document_sha256` an approval sends: standard base64 of [d]. */
     val sha256: String get() = Base64s.encodeStd(hash)
+
+    /**
+     * Whether this is the document checked for [request] as it is now: the same challenge, the same `context`, and the
+     * hash the request announces.
+     */
+    fun isFor(request: Approval.Authentication): Boolean =
+        request.requestId == requestId && request.context == context && request.documentSha256 == sha256
 
     override fun equals(other: Any?): Boolean = other is ApprovalDocument && raw.contentEquals(other.raw)
 
@@ -96,7 +111,7 @@ class ApprovalDocument private constructor(
          * canonical, and [context] ending with the reference).
          */
         @Suppress("ReturnCount") // one refusal per check, in the vault's order
-        fun check(base64: String, sha256: String?, size: Int?, context: String?): Check {
+        fun check(base64: String, sha256: String?, size: Int?, context: String?, requestId: String): Check {
             // Judged by its length first, as the vault does: an over-long string is `size` whatever it holds.
             if (base64.length > MAX_BASE64) return Check.Refused(Failure.SIZE)
             val bytes = try {
@@ -107,12 +122,12 @@ class ApprovalDocument private constructor(
             if (bytes.size > MAX_BYTES || size == null || bytes.size != size) return Check.Refused(Failure.SIZE)
             val expected = sha256?.let { runCatching { Base64s.decodeStd(it, SHA256_BYTES) }.getOrNull() }
             if (expected == null || !expected.contentEquals(Bytes.sha256(bytes))) return Check.Refused(Failure.HASH)
-            return checkBytes(bytes, context)
+            return checkBytes(bytes, context, requestId)
         }
 
         /** The checks on the decoded bytes (the vault's 2 to 4). */
         @Suppress("ReturnCount") // one refusal per check, in the vault's order
-        internal fun checkBytes(bytes: ByteArray, context: String?): Check {
+        internal fun checkBytes(bytes: ByteArray, context: String?, requestId: String): Check {
             val doc = shaped(bytes) ?: return Check.Refused(Failure.SHAPE)
             val canonical = runCatching { Jcs.canonical(doc) }.getOrNull()
             if (canonical == null || !canonical.contentEquals(bytes)) return Check.Refused(Failure.CANONICAL)
@@ -121,7 +136,7 @@ class ApprovalDocument private constructor(
             if (context == null || !context.endsWith(ref(d))) return Check.Refused(Failure.REF)
             return Check.Shown(
                 ApprovalDocument(
-                    bytes.copyOf(), d, (doc["action"] as JsonString).value, (doc["summary"] as JsonString).value,
+                    bytes.copyOf(), d, requestId, context, (doc["action"] as JsonString).value, (doc["summary"] as JsonString).value,
                     doc["payload"] as JsonObject,
                 ),
             )

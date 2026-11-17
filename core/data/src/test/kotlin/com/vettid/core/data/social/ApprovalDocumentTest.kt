@@ -30,14 +30,14 @@ class ApprovalDocumentTest {
     /** [doc] checked as fetched for a challenge whose `context` ends with its own reference, of its own hash and size. */
     private fun check(doc: String, context: String = "Approve — ${ref(doc)}"): Failure? {
         val b = doc.toByteArray()
-        return (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, context) as? Check.Refused)?.reason
+        return (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, context, "a1") as? Check.Refused)?.reason
     }
 
     @Test
     fun theVectorsDocumentIsShown() {
         val doc = vector.string("document")
         val r = ApprovalDocument.check(
-            Base64s.encodeStd(doc.toByteArray()), vector.string("document_sha256_b64"), doc.toByteArray().size, vector.string("context"),
+            Base64s.encodeStd(doc.toByteArray()), vector.string("document_sha256_b64"), doc.toByteArray().size, vector.string("context"), "a1",
         )
         val d = (r as Check.Shown).document
         // The challenge as the service sent it carries exactly these bytes.
@@ -127,7 +127,7 @@ class ApprovalDocumentTest {
         val ctx = ref(good)
         val std = Base64s.encodeStd(b)
         fun refused(base64: String = std, sha: String? = sha(b), size: Int? = b.size, context: String? = ctx): Failure? =
-            (ApprovalDocument.check(base64, sha, size, context) as? Check.Refused)?.reason
+            (ApprovalDocument.check(base64, sha, size, context, "a1") as? Check.Refused)?.reason
         assertNull(refused())
         assertEquals(Failure.HASH, refused(sha = sha("other".toByteArray())))
         assertEquals(Failure.HASH, refused(sha = ""))
@@ -150,10 +150,13 @@ class ApprovalDocumentTest {
     fun theSameBytesAreTheSameDocument() {
         val good = """{"action":"a","payload":{},"summary":""}"""
         val b = good.toByteArray()
-        val one = (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, ref(good)) as Check.Shown).document
-        val two = (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, "x " + ref(good)) as Check.Shown).document
+        val one = (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, ref(good), "a1") as Check.Shown).document
+        val two = (ApprovalDocument.check(Base64s.encodeStd(b), sha(b), b.size, "x " + ref(good), "a2") as Check.Shown).document
         assertEquals(one, two)
         assertEquals(sha(b), one.sha256)
+        // Each bound to what it was checked for.
+        assertEquals("a1" to ref(good), one.requestId to one.context)
+        assertEquals("a2" to "x " + ref(good), two.requestId to two.context)
         // What it hands out is a copy.
         one.bytes[0] = '['.code.toByte()
         assertTrue(one.bytes.contentEquals(b))

@@ -340,26 +340,72 @@ class ApprovalDocumentFlowTest {
     }
 
     @Test
-    fun aDocumentRequiredAskIsRefusedWithoutItsDocumentBeforeTheUnlock() = runTest {
+    fun aDocumentIsApprovedOnlyForTheRequestAndContextItWasCheckedFor() = runTest {
         val m = manager()
-        pending(m, challenge(required = true))
-        val f = failure { m.approveAuthentication("a1", "pw-fake-1") }
-        // Exactly as the vault's own answer reads: the usual failure, naming the code.
-        assertEquals(FailureKind.OTHER, f.kind)
-        assertEquals(VaultCodes.UPDATE_REQUIRED, f.code)
-        assertEquals(VaultCodes.UPDATE_REQUIRED, f.shownCode)
+        pending(m, challenge())
+        // The same document under another request, with another line that ends with the same reference.
+        pending(m, challenge(id = "a2").replace("Extend a vote — ref", "Remove an admin — ref"))
+        ops.documents = listOf(b64(doc))
+        val d = m.shown(m.auth("a1"))
+        assertEquals("a1" to m.auth("a1").context, d.requestId to d.context)
+        ops.calls.clear()
+        // Another request's line with this document: refused before anything is opened or sent.
+        assertEquals(SocialManager.CODE_DOCUMENT_MISMATCH, failure { m.approveAuthentication(m.auth("a2"), "pw-fake-1", d) }.code)
+        // The same request, held with another line than the one checked: refused too.
+        val moved = m.auth("a1").copy(context = "Something else — ref ${ref(doc)}")
+        assertEquals(SocialManager.CODE_DOCUMENT_MISMATCH, failure { m.approveAuthentication(moved, "pw-fake-1", d) }.code)
+        // The same document and the very same line under another request_id: refused too.
+        pending(m, challenge(id = "a3"))
+        assertEquals(m.auth("a1").context, m.auth("a3").context)
+        assertEquals(m.auth("a1").documentSha256, m.auth("a3").documentSha256)
+        assertEquals(SocialManager.CODE_DOCUMENT_MISMATCH, failure { m.approveAuthentication(m.auth("a3"), "pw-fake-1", d) }.code)
         assertTrue(ops.calls.isEmpty())
         assertTrue(unlocked.isEmpty())
-        assertEquals(1, open(m).size)
+        assertEquals(3, open(m).size)
+        // Its own request approves.
+        assertEquals(DocumentApproval.Approved, m.approveAuthentication(m.auth("a1"), "pw-fake-1", d))
+        assertEquals(listOf("approve:a1:${sha(doc)}"), ops.calls)
     }
 
     @Test
-    fun anAskThatMerelyCarriesADocumentIsApprovedWithoutAHashAsBefore() = runTest {
+    fun anAskWithADocumentIsRefusedWithoutItBeforeTheUnlock() = runTest {
+        // Required or not: a challenge held with a document is approved only over it, from the screen that showed it.
+        for (required in listOf(true, false)) {
+            val m = manager()
+            pending(m, challenge(required = required))
+            val f = failure { m.approveAuthentication("a1", "pw-fake-1") }
+            assertEquals(FailureKind.OTHER, f.kind)
+            assertEquals(SocialManager.CODE_DOCUMENT_NOT_SHOWN, f.code)
+            assertTrue(ops.calls.isEmpty())
+            assertTrue(unlocked.isEmpty())
+            assertEquals(1, open(m).size)
+        }
+    }
+
+    @Test
+    fun anAskNoLongerHeldIsNeverApprovedWithoutItsDocument() = runTest {
+        // It may carry a document this app can no longer tell of (gone from memory at a lock, or never listed here):
+        // refused as the vault's not_found reads ("no longer waiting"), nothing opened or sent.
         val m = manager()
-        pending(m, challenge(required = false))
-        m.approveAuthentication("a1", "pw-fake-1")
-        assertEquals(listOf("approve:a1"), ops.calls)
+        val f = failure { m.approveAuthentication("a1", "pw-fake-1") }
+        assertEquals(FailureKind.NOT_FOUND, f.kind)
+        assertEquals("not_found", f.code)
+        // As the vault's own answer reads.
+        val vault = runCatching { com.vettid.core.data.vault.vaultGuard { throw VaultOpException("connection.authenticate.approve", "not_found") } }
+            .exceptionOrNull() as VaultFailure
+        assertEquals(vault.kind to vault.shownCode, f.kind to f.shownCode)
+        assertTrue(ops.calls.isEmpty())
+        assertTrue(unlocked.isEmpty())
+        // Its document overload still goes by the request it is handed, and only over the document that request names.
+        pending(m, challenge())
+        ops.documents = listOf(b64(doc))
+        val r = m.auth()
+        val d = m.shown(r)
+        m.forgetPending()
         assertTrue(open(m).isEmpty())
+        ops.calls.clear()
+        assertEquals(DocumentApproval.Approved, m.approveAuthentication(r, "pw-fake-1", d))
+        assertEquals(listOf("approve:a1:${sha(doc)}"), ops.calls)
     }
 
     @Test

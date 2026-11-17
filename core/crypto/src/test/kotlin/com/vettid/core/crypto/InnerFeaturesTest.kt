@@ -70,7 +70,9 @@ class InnerFeaturesTest {
         assertTrue(Inner.validFeatures(listOf("a".repeat(32))))
         assertTrue(Inner.validFeatures(listOf("_", "a", "b_1")))
         assertTrue(Inner.validFeatures(DeviceFeatures.ALL))
-        assertEquals(listOf("hs_confirm"), DeviceFeatures.ALL) // relay_follow is not advertised
+        // relay_follow is not advertised; (0.89.0 §10.4) approval_document is, with the screen that shows documents.
+        assertEquals(listOf("approval_document", "hs_confirm"), DeviceFeatures.ALL)
+        assertEquals("sorted and unique", DeviceFeatures.ALL.toSortedSet().toList(), DeviceFeatures.ALL)
     }
 
     /** An unknown member next to it is still ignored (§5.3), and `features` is checked wherever it sits. */

@@ -6,7 +6,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.VaultCodes
 import com.vettid.core.data.vault.VaultFailure
-import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.DeviceStateStore
 import com.vettid.core.vault.PendingPage
@@ -17,7 +16,6 @@ import com.vettid.core.vault.connectionAsksMute
 import com.vettid.core.vault.connectionAsksResume
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
-import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -1988,14 +1986,14 @@ class SocialManager internal constructor(
     }
 
     override suspend fun approveAuthentication(requestId: String, password: String) {
-        // (0.89.0 §10.4 "Approval documents") No document hash is sent: the purpose form, as an app before 0.89.0 approves.
-        // A `document_required` challenge cannot count so: refused here as the vault refuses it (`update_required`), before
-        // the unlock window is opened for nothing. The challenge stays open. Accepted, as on the iPhone: since nothing is
-        // sent, an ask that already ended at the vault gets `update_required` here, not the vault's `not_found` (which comes
-        // first in its table), and the password is not checked; the screen that shows documents replaces this path.
-        if ((find("auth:$requestId") as? Approval.Authentication)?.documentRequired == true) {
-            throw refusedAsVault(TYPE_AUTH_APPROVE, VaultCodes.UPDATE_REQUIRED)
-        }
+        // (0.89.0 §10.4 "Approval documents") No document hash is sent: the purpose form. A challenge that carries a
+        // document is approved only over it, from the screen that showed it whole (the overload below), never here: not
+        // from a notification, the feed, a list or this path: refused with `document_not_shown`. An ask this app no longer
+        // holds may carry one, so it is never approved here either: it fails as the vault's own `not_found` would read
+        // ("no longer waiting"), since the app holds it no more. Both before the unlock window is opened and before
+        // anything is sent. The screen decides from the request it shows as well.
+        val held = find("auth:$requestId") as? Approval.Authentication ?: throw notFoundAsVault()
+        if (held.hasDocument) throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_NOT_SHOWN)
         credential.openUnlockWindow(password)
         decideRun("auth:$requestId") { vaultGuard { authOps().approve(requestId, null) } }
     }
@@ -2014,7 +2012,7 @@ class SocialManager internal constructor(
         }
         // An answer without a `document` string is no document.
         val base64 = answer ?: return ApprovalDocument.Check.Refused(ApprovalDocument.Failure.ENCODING)
-        return ApprovalDocument.check(base64, request.documentSha256, request.documentSize, request.context)
+        return ApprovalDocument.check(base64, request.documentSha256, request.documentSize, request.context, request.requestId)
     }
 
     @Suppress("ReturnCount") // approved at once, approved after the fetch again, or changed
@@ -2023,8 +2021,9 @@ class SocialManager internal constructor(
         password: String,
         document: ApprovalDocument,
     ): DocumentApproval {
-        // Only the document this request announced, before anything is opened or sent.
-        if (!request.hasDocument || document.sha256 != request.documentSha256) {
+        // Only the document this request announced, checked for this very request and `context`, before anything is
+        // opened or sent.
+        if (!request.hasDocument || !document.isFor(request)) {
             throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_MISMATCH)
         }
         credential.openUnlockWindow(password)
@@ -2036,14 +2035,19 @@ class SocialManager internal constructor(
         }
         // The vault has no record of this device's fetch: fetch again, and approve again only the very bytes shown.
         val again = authenticationDocument(request)
+        // A Shown document already matched the hash the request announced, so other bytes cannot pass here: the
+        // comparison is a defence only.
         if (again !is ApprovalDocument.Check.Shown || again.document != document) return DocumentApproval.Changed(again)
         decideRun(request.key) { vaultGuard { authOps().approve(request.requestId, again.document.sha256) } }
         return DocumentApproval.Approved
     }
 
-    /** A refusal the app makes itself exactly as the vault's answer [code] to [type] would read (its kind and its text). */
-    private fun refusedAsVault(type: String, code: String): VaultFailure =
-        VaultFailure(VaultManager.opFailure(code, type), code, cause = VaultOpException(type, code))
+    /** The failure the vault's `not_found` to `connection.authenticate.approve` makes, made here with nothing sent. */
+    private fun notFoundAsVault(): VaultFailure = VaultFailure(
+        com.vettid.core.data.vault.VaultManager.opFailure(CODE_NOT_FOUND, TYPE_AUTH_APPROVE),
+        CODE_NOT_FOUND,
+        cause = com.vettid.core.vault.VaultOpException(TYPE_AUTH_APPROVE, CODE_NOT_FOUND),
+    )
 
     override suspend fun denyAuthentication(requestId: String) = decide("auth:$requestId") { it.authenticateDeny(requestId) }
 
@@ -2261,10 +2265,17 @@ class SocialManager internal constructor(
         private const val MAX_NOT_FOUND = 100
         private const val MAX_WITHDRAWN = 256
         private const val CODE_TOO_LARGE = "response_too_large"
-        private const val TYPE_AUTH_APPROVE = "connection.authenticate.approve"
 
         /** The app's own refusal of a document that is not the one its request announced (never sent to the vault). */
         const val CODE_DOCUMENT_MISMATCH = "document_mismatch"
+        private const val TYPE_AUTH_APPROVE = "connection.authenticate.approve"
+        private const val CODE_NOT_FOUND = "not_found"
+
+        /**
+         * The app's own refusal to approve a challenge that carries a document (or one it no longer holds) without its
+         * document (never sent to the vault).
+         */
+        const val CODE_DOCUMENT_NOT_SHOWN = "document_not_shown"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */

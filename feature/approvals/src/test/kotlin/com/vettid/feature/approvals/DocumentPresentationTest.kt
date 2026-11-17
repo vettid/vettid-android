@@ -1,0 +1,336 @@
+// Test data: documents and expected lines stay on one line each.
+@file:Suppress("MaxLineLength")
+
+package com.vettid.feature.approvals
+
+import com.vettid.feature.approvals.DocumentPresentation.Asked
+import com.vettid.feature.approvals.DocumentPresentation.KnownAction
+import com.vettid.feature.approvals.DocumentPresentation.Request
+import com.vettid.feature.approvals.ShownText.Run
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.VerbatimTtsAnnotation
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.time.ZoneId
+import java.util.Locale
+
+/**
+ * VAULT-MESSAGING 0.89.0 §10.4 "Approval documents": what the screen shows of a document, in pure rules. Robolectric, for
+ * Android's Unicode data (android.icu answers defaults on a plain JVM, which would pass nothing).
+ */
+@RunWith(RobolectricTestRunner::class)
+class DocumentPresentationTest {
+    private fun markers(s: String, lineBreaks: Boolean = false) = ShownText.of(s, lineBreaks).runs.filterIsInstance<Run.Marker>().map { it.codePoint }
+
+    private fun present(json: String) = DocumentPresentation.of(DocumentSamples.document(json), "Approve this")!!
+
+    @Test
+    fun everyCategoryOfSection104IsAMarker() {
+        val cases = mapOf(
+            "Cc" to 0x0007, "U+0085" to 0x0085, "Cf (RLO)" to 0x202E, "Cf (FSI)" to 0x2068, "Cf (LRM)" to 0x200E, "Zl" to 0x2028, "Zp" to 0x2029,
+            "Co" to 0xE000, "Cn" to 0x0378, "Hangul filler" to 0x3164, "variation selector" to 0xFE0F, "ZWJ" to 0x200D, "ZWNJ" to 0x200C,
+            "Zs NBSP" to 0x00A0, "Zs ideographic" to 0x3000, "tag" to 0xE0041,
+            // Chosen, as iOS: the marker's brackets and a look-alike, the blank glyphs, the continuation mark.
+            "marker bracket" to 0x27E8, "closing bracket" to 0x27E9, "look-alike" to 0x2329, "braille blank" to 0x2800, "object replacement" to 0xFFFC, "continuation" to 0x21B3,
+        )
+        for ((name, cp) in cases) {
+            val s = "a" + String(Character.toChars(cp)) + "b"
+            assertEquals(name, listOf(cp), markers(s))
+            assertEquals(name, "a" + ShownText.marker(cp) + "b", ShownText.of(s).plain)
+        }
+        assertEquals("\u27E8U+202E\u27E9", ShownText.marker(0x202E))
+        assertEquals("\u27E8U+E0041\u27E9", ShownText.marker(0xE0041))
+        // A plain space and ordinary letters, digits and punctuation are themselves.
+        assertTrue(markers("Pay 40, now: \"ok\" é ü 日本 שלום").isEmpty())
+    }
+
+    @Test
+    fun marksPastTheSecondAndMarksWithoutABaseAreMarkers() {
+        assertTrue(markers("e\u0301\u0302").isEmpty())
+        assertEquals(listOf(0x0303, 0x0304), markers("e\u0301\u0302\u0303\u0304"))
+        // A mark at the start of a run, or after a marker, has no base of its own.
+        assertEquals(listOf(0x0301), markers("\u0301a"))
+        assertEquals(listOf(0x202E, 0x0301), markers("a\u202E\u0301"))
+        // An emoji modifier with no base.
+        assertEquals(listOf(0x1F3FD), markers(String(Character.toChars(0x1F3FD))))
+    }
+
+    @Test
+    fun lineBreaksAreKeptOnlyWhereTheFieldKeepsThemAtMostTwoInARow() {
+        assertEquals(listOf(0x0A), markers("a\nb"))
+        val kept = ShownText.of("a\n\n\nb", lineBreaks = true).runs
+        assertEquals(listOf(Run.Text("a"), Run.LineBreak, Run.LineBreak, Run.Marker(0x0A), Run.Text("b")), kept)
+    }
+
+    @Test
+    fun theRawViewEscapesQuotesAndBackslashes() {
+        assertEquals("say \\\"hi\\\" \\\\ ok", ShownText.of("say \"hi\" \\ ok", escaped = true).plain)
+        assertEquals("say \"hi\"", ShownText.of("say \"hi\"").plain)
+    }
+
+    @Test
+    fun coverageCountsOnlyWhatJoinsFromTheTop() {
+        var c = SeenCoverage().saw(0f..100f, 300f)
+        assertFalse(c.whole)
+        // A jump to the end leaves a gap.
+        c = c.saw(200f..300f, 300f)
+        assertFalse(c.whole)
+        assertEquals(100f, c.seenTo)
+        c = c.saw(90f..210f, 300f)
+        assertTrue(c.whole)
+        // Another height (another text size) starts again.
+        assertFalse(c.saw(0f..100f, 400f).whole)
+        assertFalse("nothing seen of a row of no height", SeenCoverage().saw(null, 0f).whole)
+    }
+
+    @Test
+    fun aMatchingPayloadIsItsForm() {
+        val p = present(DocumentSamples.EXTEND)
+        assertEquals(Asked.Known(KnownAction.VOTE_EXTEND), p.asked)
+        val f = (p.request as Request.Extend).form
+        assertEquals("p-17", f.proposalId.plain)
+        assertEquals(1796720400L, f.closesAt)
+        assertEquals("relay", f.outageSource.plain)
+        val q = (present(DocumentSamples.PROPOSAL).request as Request.Proposal).form
+        assertEquals(listOf("Yes", "No"), q.choices.map { it.plain })
+        assertEquals("Line one\nLine two", q.text!!.plain)
+        assertNull("an empty quorum text is not shown", q.quorumText)
+        assertEquals(1L, q.quorumBallots)
+    }
+
+    @Test
+    fun anyDifferenceAtAnyDepthIsTheRawView() {
+        val e = DocumentSamples.EXTEND
+        val variants = listOf(
+            "extra member" to e.replace("\"proposal_id\":\"p-17\"", "\"proposal_id\":\"p-17\",\"x\":1"),
+            "missing member" to e.replace("\"proposal_id\":\"p-17\",", ""),
+            "wrong type" to e.replace("\"proposal_id\":\"p-17\"", "\"proposal_id\":17"),
+            "extra member at depth" to e.replace("\"source\":\"relay\"", "\"source\":\"relay\",\"y\":true"),
+            "missing member at depth" to e.replace(",\"to\":1796703600", ""),
+            "wrong type at depth" to e.replace("\"from\":1796700000", "\"from\":\"1796700000\""),
+            "time past 9999" to e.replace("1796720400", "253402300800"),
+        )
+        for ((name, json) in variants) {
+            val p = present(json)
+            assertEquals(name, Asked.Known(KnownAction.VOTE_EXTEND), p.asked)
+            assertTrue(name, p.request is Request.Raw)
+        }
+        val pr = DocumentSamples.PROPOSAL
+        for (json in listOf(pr.replace("{\"label\":\"No\"}", "{\"label\":\"No\",\"x\":1}"), pr.replace("\"min_ballots\":1", "\"min_ballots\":true"), pr.replace("\"binding\":true", "\"binding\":1"))) {
+            assertTrue(json, present(json).request is Request.Raw)
+        }
+        // A known action without a form, and an unknown one: the raw view, the unknown named.
+        assertTrue(present(DocumentSamples.big(10)).request is Request.Raw)
+        val u = present("""{"action":"pay.out","payload":{},"summary":""}""")
+        assertEquals(Asked.Unknown("pay.out"), u.asked)
+        assertTrue(u.request is Request.Raw)
+    }
+
+    @Test
+    fun theRawViewIsTheWholeDocumentALineToAMember() {
+        val p = present("""{"action":"pay.out","payload":{"a":[1,"10",true,null,{},[]],"k\"":"v"},"summary":"S"}""")
+        val lines = (p.request as Request.Raw).lines.flatMap { DocPiece.raw(it) }.map { piece ->
+            piece.tokens.joinToString("") {
+                when (it) {
+                    is DocPiece.Token.Punct -> it.text
+                    is DocPiece.Token.Content -> it.text
+                    is DocPiece.Token.Literal -> it.text
+                    is DocPiece.Token.Indent -> "  ".repeat(it.levels)
+                    is DocPiece.Token.Marker -> ShownText.marker(it.codePoint)
+                    is DocPiece.Token.Open -> "<"
+                    is DocPiece.Token.Close -> ">"
+                    DocPiece.Token.LineBreak -> "\n"
+                }
+            }
+        }
+        assertEquals(
+            listOf(
+                "{",
+                "  \"<action>\": \"<pay.out>\",",
+                "  \"<payload>\": {",
+                "    \"<a>\": [",
+                "      1,", "      \"<10>\",", "      true,", "      null,", "      {},", "      []",
+                "    ],",
+                "    \"<k\\\">\": \"<v>\"",
+                "  },",
+                "  \"<summary>\": \"<S>\"",
+                "}",
+            ),
+            lines,
+        )
+        assertEquals(listOf(1, 2, 2, 3, 4), (p.request as Request.Raw).lines.take(5).map { DocPiece.raw(it).first().level })
+    }
+
+    @Test
+    fun longValuesAreCutIntoPiecesThatJoinBackWhole() {
+        val s = "word ".repeat(200) + "end"
+        val pieces = DocPiece.value(ShownText.of(s))
+        assertTrue(pieces.size > 1)
+        assertTrue(pieces.all { it.length <= ShownText.PIECE_CHARACTERS })
+        val joined = pieces.joinToString("") { p -> p.tokens.filterIsInstance<DocPiece.Token.Content>().joinToString("") { it.text } }
+        assertEquals(s, joined)
+        assertTrue(pieces.drop(1).all { it.continuation && it.tokens.first() == DocPiece.Token.Punct(DocPiece.CONTINUED) })
+        // A raw line with a long string: every piece but the last ends with the mark, inside its own isolate.
+        val raw = DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("k"), DocumentPresentation.RawValue.Str(ShownText.of("x".repeat(500), escaped = true)), false))
+        assertTrue(raw.size > 3)
+        assertEquals(2, raw.first().level)
+        assertTrue(raw.dropLast(1).all { it.tokens.last() == DocPiece.Token.Punct(DocPiece.CONTINUES) })
+        assertEquals("k" + "x".repeat(500), raw.joinToString("") { p -> p.tokens.filterIsInstance<DocPiece.Token.Content>().joinToString("") { it.text } })
+        // Never between a backslash and what it escapes.
+        val esc = DocPiece.raw(DocumentPresentation.RawLine(1, null, DocumentPresentation.RawValue.Str(ShownText.of("\"".repeat(300), escaped = true)), false))
+        for (p in esc) for (c in p.tokens.filterIsInstance<DocPiece.Token.Content>()) assertEquals(0, c.text.length % 2)
+    }
+
+    @Test
+    fun spokenLinesNameTheirLevelAndQuoteEveryString() {
+        fun spoken(v: DocumentPresentation.RawValue, key: String? = "amount", comma: Boolean = true) =
+            DocSpoken.of(DocPiece.raw(DocumentPresentation.RawLine(1, key?.let { ShownText.of(it, escaped = true) }, v, comma)).single(), raw = true, level)
+        fun str(s: String) = DocumentPresentation.RawValue.Str(ShownText.of(s, escaped = true))
+        // As drawn, with the level first: the string "10" and the number 10 read differently.
+        assertEquals("level 2, \"amount\": \"10\",", spoken(str("10")).text)
+        assertEquals("level 2, \"amount\": 10,", spoken(DocumentPresentation.RawValue.Number("10")).text)
+        assertEquals("level 2, \"amount\": true", spoken(DocumentPresentation.RawValue.Bool(true), comma = false).text)
+        assertEquals("level 2, \"\"", spoken(str(""), key = null, comma = false).text)
+        // The quotation marks and the punctuation are voiced whatever TalkBack's punctuation level.
+        val q = spoken(str("10"))
+        assertEquals(listOf("\"", "\": ", "\"", "\"", ","), verbatims(q))
+    }
+
+    /** The texts of [s]'s VerbatimTtsAnnotation spans, in order, each exactly over what it covers. */
+    private fun verbatims(s: AnnotatedString): List<String> = s.getTtsAnnotations(0, s.length).map { r ->
+        val v = (r.item as VerbatimTtsAnnotation).verbatim
+        assertEquals(v, s.text.substring(r.start, r.end))
+        v
+    }
+
+    private val level: (Int) -> String = { "level $it" }
+
+    @Test
+    fun aRealMarkerAndTypedTextNeverReadTheSame() {
+        fun value(s: String) = DocSpoken.of(DocPiece.value(ShownText.of(s)).single(), raw = false, level)
+        val real = value("a\u202Eb")
+        val typed = value("a code point U+202E b")
+        val typedMarker = value("a\u27E8U+202E\u27E9b")
+        assertEquals("\"a\u27E8U+202E\u27E9b\"", real.text)
+        assertEquals(listOf("\"", "\u27E8U+202E\u27E9", "\""), verbatims(real))
+        assertEquals(listOf("\"", "\""), verbatims(typed))
+        // Typed brackets are markers themselves: what is heard differs from the real marker.
+        assertTrue(real.text != typedMarker.text)
+        assertEquals(listOf("\"", "\u27E8U+27E8\u27E9", "\u27E8U+27E9\u27E9", "\""), verbatims(typedMarker))
+        // A value's own quotation marks and backslashes are escaped, so it cannot close its quotes.
+        assertEquals("\"say \\\"hi\\\" \\\\\"", value("say \"hi\" \\").text)
+        assertEquals("\"\"", value("").text)
+    }
+
+    @Test
+    fun aPieceCutMidStringReopensItsQuotationMark() {
+        // A value cut inside a paragraph: the next piece starts with the mark and a voiced quotation mark.
+        val value = DocPiece.value(ShownText.of("x".repeat(300)))
+        assertTrue(value.size > 2)
+        val second = DocSpoken.of(value[1], raw = false, level)
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(second).take(2))
+        assertEquals(DocPiece.CONTINUES, verbatims(DocSpoken.of(value[0], raw = false, level)).last())
+        // A raw string cut inside: the same.
+        val raw = DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("k"), DocumentPresentation.RawValue.Str(ShownText.of("x".repeat(300), escaped = true)), false))
+        assertTrue(raw.size > 2)
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(DocSpoken.of(raw[1], raw = true, level)).take(2))
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(DocSpoken.of(raw.last(), raw = true, level)).take(2))
+    }
+
+    @Test
+    fun aKeyCannotReadAsAnotherLine() {
+        val forged = DocSpoken.of(
+            DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount: 500, level 2, fee", escaped = true), DocumentPresentation.RawValue.Number("1"), false)).single(),
+            raw = true, level,
+        )
+        val real = listOf(
+            DocumentPresentation.RawLine(1, ShownText.of("amount"), DocumentPresentation.RawValue.Number("500"), true),
+            DocumentPresentation.RawLine(1, ShownText.of("fee"), DocumentPresentation.RawValue.Number("1"), false),
+        ).map { DocSpoken.of(DocPiece.raw(it).single(), raw = true, level).text }
+        assertEquals("level 2, \"amount: 500, level 2, fee\": 1", forged.text)
+        assertTrue(forged.text !in real && forged.text != real.joinToString(" "))
+        // The key's text is inside its voiced quotation marks: what follows them is the app's.
+        val v = forged.getTtsAnnotations(0, forged.length)
+        assertEquals("\"", forged.text.substring(v[0].start, v[0].end))
+        assertEquals("amount: 500, level 2, fee", forged.text.substring(v[0].end, v[1].start))
+    }
+
+    @Test
+    fun aLiteralNoneMotionIsQuotedAndTheAppsNoneIsNot() {
+        val json = DocumentSamples.PROPOSAL.replace("Line one\\nLine two", "None").replace("{\"label\":\"No\"}", "{\"label\":\"Abstain\"}")
+        val values = DocumentRows.of(present(json)).filterIsInstance<DocRow.Value>().map { DocSpoken.of(it.piece, raw = false, level).text }
+        assertTrue(values.toString(), "\"None\"" in values && "\"Abstain\"" in values)
+        val empty = DocumentRows.of(present(DocumentSamples.PROPOSAL.replace("Line one\\nLine two", "")))
+        assertTrue(DocRow.NoneLabel in empty)
+        assertTrue(empty.filterIsInstance<DocRow.Value>().none { DocSpoken.of(it.piece, raw = false, level).text == "\"None\"" })
+    }
+
+    @Test
+    fun aLineBreakAtTheEndShows() {
+        val t = ShownText.of("x".repeat(70) + "\n", lineBreaks = true)
+        val pieces = t.pieces(DocCutting.USUAL.max - 4)
+        assertEquals(2, pieces.size)
+        assertTrue(pieces[1].text.isEmpty && !pieces[1].continues)
+        assertTrue(DocPiece.value(t).size != DocPiece.value(ShownText.of("x".repeat(70), lineBreaks = true)).size)
+        // A short one keeps its break in the piece, as before.
+        assertEquals(listOf(ShownText.Run.Text("ab"), ShownText.Run.LineBreak), ShownText.of("ab\n", lineBreaks = true).pieces().single().text.runs)
+    }
+
+    @Test
+    fun withAScreenReaderTheDocumentIsCutSmallerThenHalved() {
+        assertEquals(DocCutting.USUAL, DocCutting.of(screenReader = false, shrink = 3))
+        assertEquals(DocCutting(30, 4), DocCutting.of(screenReader = true, shrink = 0))
+        assertEquals(DocCutting(15, 2), DocCutting.of(screenReader = true, shrink = 1))
+        assertEquals(DocCutting(10, 1), DocCutting.of(screenReader = true, shrink = 2))
+        assertTrue(DocCutting.of(screenReader = true, shrink = 2).smallest)
+        val rows = DocumentRows.of(present(DocumentSamples.big(200)), DocCutting(30, 4))
+        assertTrue(rows.filterIsInstance<DocRow.Raw>().all { it.piece.length <= 33 })
+    }
+
+    @Test
+    fun rowKeysNameTheirShowingAndCutting() {
+        assertEquals(3, rowOf(rowKey(2, "u0", 3), 2, "u0"))
+        assertNull(rowOf(rowKey(1, "u0", 3), 2, "u0"))
+        assertNull(rowOf(rowKey(2, "r1", 3), 2, "u0"))
+        assertNull(rowOf("facts", 2, "u0"))
+    }
+
+    @Test
+    fun thePluralQuantityKeepsTheCountsLastDigits() {
+        assertEquals(1, pluralQuantity(1))
+        assertEquals(12, pluralQuantity(12))
+        assertEquals(Int.MAX_VALUE, pluralQuantity(Int.MAX_VALUE.toLong()))
+        val q = pluralQuantity(3_000_000_001)
+        assertEquals(1, q % 1_000_000_000)
+        assertTrue(q > 1)
+        assertEquals(1_000_000_000, pluralQuantity(3_000_000_000))
+    }
+
+    @Test
+    fun timesAreTheMembersZoneNamedThenUtcWithSecondsOnlyWhenNotZero() {
+        val t = DocumentTime.shown(1796720400, ZoneId.of("America/New_York"), Locale.US)
+        assertTrue(t.local, t.local.contains("2026") && (t.local.contains("EST") || t.local.contains("GMT-5")))
+        assertFalse(t.local, t.local.contains(":00:00"))
+        assertTrue(t.utc, t.utc.endsWith(" UTC") && t.utc.contains("2026"))
+        val s = DocumentTime.shown(1796720407, ZoneId.of("UTC"), Locale.US)
+        assertTrue(s.utc, s.utc.contains(":07"))
+        assertEquals("9999", Regex("9999").find(DocumentTime.shown(DocumentPresentation.MAX_TIME, ZoneId.of("UTC"), Locale.US).utc)?.value)
+    }
+
+    @Test
+    fun rowsFollowTheSpecsOrder() {
+        val rows = DocumentRows.of(present(DocumentSamples.EXTEND))
+        val headings = rows.filterIsInstance<DocRow.Heading>().map { it.label }
+        assertEquals(listOf(R.string.approvals_doc_asked, R.string.approvals_doc_description, R.string.approvals_doc_summary, R.string.approvals_doc_request), headings)
+        assertEquals(DocRow.Title(KnownAction.VOTE_EXTEND), rows[1])
+        val raw = DocumentRows.of(present("""{"action":"pay.out","payload":{},"summary":""}"""))
+        assertTrue(DocRow.UnknownWarning in raw)
+        assertEquals(R.string.approvals_doc_details, raw.filterIsInstance<DocRow.Heading>().last().label)
+        assertTrue("no label in a raw view", raw.none { it is DocRow.Label })
+    }
+}

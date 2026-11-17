@@ -632,7 +632,7 @@ class VaultApi(
      * has not fetched that document, `bad_request` for another hash or for a challenge without one, `update_required` for
      * none on a `document_required` challenge (each leaves the challenge open). Null sends none, as before 0.89.0.
      */
-    suspend fun authenticateApprove(requestId: String, documentSha256: String? = null) {
+    suspend fun authenticateApprove(requestId: String, documentSha256: String?) {
         device.op("connection.authenticate.approve", authenticateApproveBody(requestId, documentSha256))
     }
 
