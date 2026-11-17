@@ -565,6 +565,16 @@ class SharingManagerTest {
         assertTrue(m.colors.value.isEmpty())
     }
 
+    /** Rule 3: the release gate's lift reads the registry again (a `tag.changed` held back meanwhile); the colours stay. */
+    @Test
+    fun theReleaseGatesLiftMakesTheRegistryReadAgain() = runTest {
+        ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001"))))
+        m.refreshTags()
+        m.invalidateTags()
+        assertNull(m.tags.value)
+        assertEquals(mapOf("travel" to "#000001"), m.colors.value)
+    }
+
     @Test
     fun aTagFirstUsedOnAnItemMakesTheRegistryReadAgain() = runTest {
         ops.tagPages = ArrayDeque(listOf(page(4, TagInfo("travel", color = "#000001"))))

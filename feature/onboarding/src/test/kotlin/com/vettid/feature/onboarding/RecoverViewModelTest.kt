@@ -330,7 +330,6 @@ class RecoverViewModelTest {
         vm.submitPin()
         advanceUntilIdle()
         assertTrue("recoveryUnlock" in vault.calls)
-        assertNull(vault.lastApproved)
     }
 
     /** Registered, at the PIN: unlocks with [backup] as the result's `credential_backup` (0.10.6). */

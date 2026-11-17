@@ -761,7 +761,7 @@ class VaultManager(
         FINISH_MOVE_HOLD_MS,
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
-        unlock = { pin, taken -> unlockOnce(pin, null, false, holderApp = true, pinTaken = taken) },
+        unlock = { pin, taken -> unlockOnce(pin, false, holderApp = true, pinTaken = taken) },
     )
 
     /** (Release R, §11.14.10) This old phone took the vault back after a transfer that did not finish. */
@@ -1132,13 +1132,18 @@ class VaultManager(
 
     /** (Rule 3) The release gate's pause, followed: the votes' work stops; when it lifts the opened vault's reads run once. */
     private val releasePause = ReleasePauseSteps(
-        open = { phaseFlow.value == AppPhase.Unlocked && !phaseFlow.deleting },
+        unlocked = { phaseFlow.value == AppPhase.Unlocked && !phaseFlow.deleting },
+        // §3.6.3: nothing is read while the owner check is due or held; the lift's reads wait for it to lift.
+        checkGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
+        paused = { releaseUpdate.paused.value },
         stopVotes = { votes.stopSync() },
         gateChanged = { lifted -> location.onGateChanged(lifted) },
         reads = {
             gatedReads()
             presence.start()
             location.resume()
+            // A `tag.changed` held back meanwhile: the tags are read again by whoever shows them.
+            sharing.invalidateTags()
         },
     )
 
@@ -1170,7 +1175,10 @@ class VaultManager(
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },
                 // Rule 3: the release check and its retries end with the lock, unless an opening was published since.
-                clearReleaseCheck = { phaseFlow.unlessOpen { releaseUpdate.vaultClosed() } },
+                clearReleaseCheck = {
+                    phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }
+                    releasePause.reset()
+                },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -1195,8 +1203,8 @@ class VaultManager(
                     openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // whether the vault has presence, and the member's policy
                     location.resume() // the location shares this phone is the source of are taken up again
-                    // The release gate's check (Rule 3) and the proactive release notice: the manifest, read after every unlock.
-                    launch { releaseUpdate.refreshOffer() }
+                    // The release gate's check (Rule 3) and the proactive release notice: the manifest is read by the opening
+                    // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
                 }
             }
         }
@@ -1272,6 +1280,8 @@ class VaultManager(
                     steps.step { presence.start() }
                     steps.step { location.reopenReceived() } // events were not taken while the check was due
                 }
+                // Rule 3: the reads of a release gate's lift that came while the check was due or held run now.
+                if (gatedEnded) steps.step { releasePause.ownerCheckLifted() }
                 // Nor the member's own names, full email or photo; read again after the passed check.
                 steps.step {
                     when (OwnProfileStep.onCheck(wasHeld = wasHeld, held = now, phase = phaseFlow.value)) {
@@ -1291,7 +1301,7 @@ class VaultManager(
      * (Rule 3) Nothing of the vault's features is read or taken in: the owner check is due or held (§3.6.3), or the release
      * gate pauses them (the vault is behind its release, or the manifest could not be read in this opening).
      */
-    fun featuresGated(): Boolean = ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || releaseUpdate.paused.value
+    fun featuresGated(): Boolean = featuresGated(ownerCheck.ownerCheck.value?.gated(Instant.now()) == true, releaseUpdate.paused.value)
 
     /**
      * The opened vault's reads that the release gate holds back (Rule 3): after an unlock at once, unless it pauses them;
@@ -1973,8 +1983,8 @@ class VaultManager(
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
-            // Rule 3: not while the release gate pauses the vault's work (the feed is read when it lifts).
-            if (!releaseUpdate.paused.value) feed.catchUp()
+            // Not while the check is due or held, nor while the release gate pauses the vault's work (FeedManager.catchUp).
+            feed.catchUp()
         }
     }
 
@@ -2485,25 +2495,25 @@ class VaultManager(
         )
     }
 
-    override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true)
+    override suspend fun unlock(pin: String, cancelRecovery: Boolean): UnlockAttempt =
+        unlockOnce(pin, cancelRecovery, holderApp = true, twoStepScreen = true)
 
     /**
      * A locked vault past its owner-check deadline (§3.6.5): unlocks with [pin], reads `vault.status` and sends
      * the check with [pin] and [password] before the app opens, so that the member types both once.
      */
-    override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
+    override suspend fun unlockWithCheck(pin: String, password: String, cancelRecovery: Boolean): UnlockAttempt =
         // The foreground generation before the request: leaving and coming back while it runs keeps no PIN.
         ownerCheck.foregroundGeneration.let { gen ->
-            unlockOnce(pin, approve, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password, gen) }
+            unlockOnce(pin, cancelRecovery, holderApp = true, twoStepScreen = true) { ownerCheck.afterUnlock(pin, password, gen) }
         }
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") An unlock with `cancel_recovery`, then at once the owner check with the
      * PIN and the password, which records that the member is present (§11.14.5).
      */
-    override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt =
-        unlockOnce(pin, approve, cancelRecovery = true, holderApp = true, twoStepScreen = true) {
+    override suspend fun unlockCancellingRecovery(pin: String, password: String): UnlockAttempt =
+        unlockOnce(pin, cancelRecovery = true, holderApp = true, twoStepScreen = true) {
             ownerCheck.afterCancelledRecovery(pin, password)
         }
 
@@ -2514,7 +2524,6 @@ class VaultManager(
      */
     private suspend fun unlockOnce(
         pin: String,
-        approve: ReleaseView?,
         cancelRecovery: Boolean,
         holderApp: Boolean = false,
         /** (0.45.0 §11.14.9 step 5) Only the unlock screen's entry points: it asks for the previous PIN, then the new one. */
@@ -2525,7 +2534,8 @@ class VaultManager(
         beforeOpen: (suspend () -> Unit)? = null,
     ): UnlockAttempt = unlockStep(
         pin,
-        UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery),
+        // Rule 3: an unlock never approves a release; only the update's own unlock does (UpdateOps.unlock).
+        UnlockOptions(cancelRecovery = cancelRecovery),
         followMove = true,
         holderApp = holderApp,
         beforeOpen = beforeOpen,
@@ -4662,10 +4672,10 @@ class VaultManager(
         )
     }
 
-    override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+    override suspend fun recoveryUnlock(pin: String): UnlockAttempt {
         // Read before the unlock: a lock, a refusal or a wipe from here on keeps the phase it published (N3).
         val gen = generation
-        val r = unlockOnce(pin, approve, cancelRecovery = false)
+        val r = unlockOnce(pin, cancelRecovery = false)
         if (r != UnlockAttempt.Success) return r
         return try {
             // §11.11.5 step 2: the first handshake (purpose app, ctx = recovery id), accepted without approval.

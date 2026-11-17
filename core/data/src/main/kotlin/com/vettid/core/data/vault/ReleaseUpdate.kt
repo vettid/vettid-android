@@ -383,6 +383,13 @@ class ReleaseUpdateManager(
     private var open = false
     private var retry: Job? = null
     private var lastPaused = false
+
+    /** Counts the reads of the manifest as they begin: a result older than the last one taken is dropped. */
+    private var reads = 0
+    private var lastTaken = 0
+
+    /** The pause's notices, numbered under [gate] and told in that order ([PauseNotices]). */
+    private val notices = PauseNotices { paused -> onPausedChange?.invoke(paused) }
     private val checkingFlow = MutableStateFlow(false)
     private val failureFlow = MutableStateFlow<FailureKind?>(null)
     private val requiredFlow = MutableStateFlow(false)
@@ -409,7 +416,9 @@ class ReleaseUpdateManager(
 
     /**
      * The vault opened (an unlock, the end of setup, a start while open): [required] from now until a read of the manifest
-     * succeeds. Called before the phase is published, so that nothing of the open vault shows or rings before.
+     * succeeds. Called before the phase is published, so that nothing of the open vault shows or rings before. The
+     * opening's own read starts here, so that no opening is left unread (a close and an open the phase's followers saw
+     * conflated into one still open phase run no opened steps).
      */
     fun vaultOpened() {
         synchronized(gate) {
@@ -417,6 +426,7 @@ class ReleaseUpdateManager(
             checkingFlow.value = true
             settle(tell = false)
         }
+        scope.launch { refreshOffer() }
     }
 
     /** The vault locked: its check, and the retries, end with it. The offer stays. */
@@ -453,39 +463,49 @@ class ReleaseUpdateManager(
      * Publishes [required] and [paused] from the state now; [tell]: a change of [paused] is told ([onPausedChange]), else
      * it is only taken as the last one. Under [gate]; returns the change to tell, which the caller tells outside it.
      */
-    private fun settle(tell: Boolean): Boolean? {
+    private fun settle(tell: Boolean): PauseNotices.Notice? {
         val behind = behindNow()
         behindFlow.value = behind
         requiredFlow.value = checkingFlow.value || behind
         val paused = behind || failureFlow.value != null
         pausedFlow.value = paused
-        val changed = paused != lastPaused
+        if (paused == lastPaused) return null
         lastPaused = paused
-        return paused.takeIf { tell && changed }
+        // Every change is numbered, also one not told: a notice taken before a silent change is older than it, and is dropped.
+        val n = notices.next(paused)
+        return n.takeIf { tell }
     }
 
-    private fun tell(paused: Boolean?) {
-        if (paused != null) onPausedChange?.invoke(paused)
+    private fun tell(n: PauseNotices.Notice?) {
+        if (n != null) notices.tell(n)
     }
 
-    override suspend fun refreshOffer() = read(synchronized(gate) { generation })
+    override suspend fun refreshOffer() = synchronized(gate) { generation to ++reads }.let { (g, n) -> read(g, n) }
 
     override fun checkNow() {
         scope.launch { refreshOffer() }
     }
 
-    /** One read of the manifest, begun in generation [begun]. */
-    private suspend fun read(begun: Int) {
-        val o = try {
-            ops.offer()
+    /**
+     * One read of the manifest, begun in generation [begun] as read number [n]. Any failure but a cancellation is a failed
+     * read (fail closed: the check holds, and its retries and "Try again" start); an error (`Error`) is not caught.
+     */
+    @Suppress("TooGenericExceptionCaught") // any failure of the read keeps the check, never a spinner without retries
+    private suspend fun read(begun: Int, n: Int) {
+        var o: ReleaseUpdateOffer? = null
+        val failure = try {
+            o = ops.offer()
+            null
         } catch (e: CancellationException) {
             throw e
         } catch (e: VaultFailure) {
-            failed(begun, e.kind)
-            return
+            e.kind
+        } catch (_: Exception) {
+            FailureKind.OTHER
         }
+        if (failure != null) return failed(begun, n, failure)
         val change = synchronized(gate) {
-            if (begun != generation) return
+            if (!takes(begun, n)) return
             offerFlow.value = o
             knownFlow.value = true
             checkingFlow.value = false
@@ -499,9 +519,9 @@ class ReleaseUpdateManager(
      * A read failed: the last offer stays. While the vault is open the check holds (fail closed) and the manifest is read
      * again after [CHECK_RETRIES_S], until a read succeeds or the generation moves.
      */
-    private fun failed(begun: Int, kind: FailureKind) {
+    private fun failed(begun: Int, n: Int, kind: FailureKind) {
         val change = synchronized(gate) {
-            if (begun != generation || !open) return
+            if (!open || !takes(begun, n)) return
             failureFlow.value = kind
             if (retry?.isActive != true) retry = scope.launch { retryLoop(begun) }
             settle(tell = true)
@@ -509,12 +529,25 @@ class ReleaseUpdateManager(
         tell(change)
     }
 
+    /**
+     * A read's result is taken only in the generation it began in, and only when no read begun after it was taken already
+     * (overlapping reads: an older one ending last never undoes a newer one's answer). Under [gate].
+     */
+    private fun takes(begun: Int, n: Int): Boolean {
+        if (begun != generation || n < lastTaken) return false
+        lastTaken = n
+        return true
+    }
+
     private suspend fun retryLoop(begun: Int) {
         var attempt = 0
         while (true) {
             delay(CHECK_RETRIES_S[minOf(attempt++, CHECK_RETRIES_S.size - 1)] * MS_PER_S)
-            if (synchronized(gate) { begun != generation || failureFlow.value == null }) return
-            read(begun)
+            val n = synchronized(gate) {
+                if (begun != generation || failureFlow.value == null) return
+                ++reads
+            }
+            read(begun, n)
         }
     }
 
@@ -802,5 +835,28 @@ class ReleaseUpdateInbox {
 
     fun consume() {
         flow.value = false
+    }
+}
+
+/**
+ * (Rule 3) The release gate's pause notices in the order their changes were made: each is numbered under the gate's lock
+ * ([next]) and told outside it ([tell]), where one taken before another already told is dropped. A late "paused" never
+ * stops the work after a lift, and a late "lifted" never reads while paused.
+ */
+internal class PauseNotices(private val deliver: (Boolean) -> Unit) {
+    class Notice(val n: Long, val paused: Boolean)
+
+    @Volatile
+    private var numbered = 0L
+    private var told = 0L
+
+    /** The next change's notice (under the gate's lock): one per change of the pause, told or not. */
+    fun next(paused: Boolean): Notice = Notice(++numbered, paused)
+
+    /** Tells [notice] unless a newer change was told, or made since (told later by its own caller, or silent). */
+    fun tell(notice: Notice) = synchronized(this) {
+        if (notice.n <= told || notice.n != numbered) return
+        told = notice.n
+        deliver(notice.paused)
     }
 }

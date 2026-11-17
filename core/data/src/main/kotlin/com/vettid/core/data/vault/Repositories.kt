@@ -405,16 +405,19 @@ interface VaultRepository {
     /** The release check before the PIN (§11.10.6). */
     suspend fun preflight(): PreflightInfo
 
-    /** Unlocks (§11.4), optionally approving [approve] (§11.10.3) or cancelling a recovery (§11.11.4). */
-    suspend fun unlock(pin: String, approve: ReleaseView? = null, cancelRecovery: Boolean = false): UnlockAttempt
+    /**
+     * Unlocks (§11.4), optionally cancelling a recovery (§11.11.4). Never approves a release (Rule 3): the update is
+     * approved on the release gate's screen, through [ReleaseUpdateRepository].
+     */
+    suspend fun unlock(pin: String, cancelRecovery: Boolean = false): UnlockAttempt
 
     /**
      * (Release R, ANDROID-PLAN "Other screens") An unlock that cancels a pending recovery (`cancel_recovery`), followed
      * at once by the owner check with [pin] and [password], which records that the member is present. Before release R:
      * the unlock with `cancel_recovery` alone.
      */
-    suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView? = null): UnlockAttempt =
-        unlock(pin, approve, cancelRecovery = true)
+    suspend fun unlockCancellingRecovery(pin: String, password: String): UnlockAttempt =
+        unlock(pin, cancelRecovery = true)
 
     /**
      * Unlocks a vault past its owner-check deadline (VAULT-MESSAGING §3.6.5): the PIN unlocks; if `vault.status`
@@ -423,10 +426,9 @@ interface VaultRepository {
     suspend fun unlockWithCheck(
         pin: String,
         password: String,
-        approve: ReleaseView? = null,
         cancelRecovery: Boolean = false,
     ): UnlockAttempt =
-        unlock(pin, approve, cancelRecovery)
+        unlock(pin, cancelRecovery)
 
     suspend fun lock()
 
@@ -523,7 +525,7 @@ interface MoveRepository {
     suspend fun recoveryPreflight(): PreflightInfo
 
     /** Unlocks with the PIN (§11.11.5 step 1) and runs the first handshake (step 2). */
-    suspend fun recoveryUnlock(pin: String, approve: ReleaseView? = null): UnlockAttempt
+    suspend fun recoveryUnlock(pin: String): UnlockAttempt
 
     /**
      * Whether the vault keeps a copy of the credential, from this phone's recovery unlock (`credential_backup`,

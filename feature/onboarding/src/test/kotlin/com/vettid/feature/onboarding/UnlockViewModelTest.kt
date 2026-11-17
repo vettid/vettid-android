@@ -42,7 +42,6 @@ class UnlockViewModelTest {
         advanceUntilIdle()
         assertEquals(AppPhase.Unlocked, vault.phase.value)
         assertEquals("", vm.uiState.value.pin)
-        assertNull(vault.lastApproved)
     }
 
     /**
@@ -157,7 +156,6 @@ class UnlockViewModelTest {
         vm.submit()
         advanceUntilIdle()
         assertTrue("unlock" in vault.calls)
-        assertNull(vault.lastApproved)
     }
 
     @Test

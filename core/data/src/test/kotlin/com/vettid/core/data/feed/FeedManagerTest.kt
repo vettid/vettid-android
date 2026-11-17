@@ -481,4 +481,29 @@ class FeedManagerTest {
         const val SETTLE_TRIES = 500
         const val SETTLE_MS = 10L
     }
+
+    /**
+     * §3.6.3 and Rule 3: a catch-up reads nothing while the check is due or held or the release gate pauses the vault's work,
+     * whoever asks for it (the return to the foreground, the relay's reconnection, a push wake, `sync.event`).
+     */
+    @Test
+    fun aCatchUpReadsNothingWhileGated() = runTest {
+        val ops = Ops()
+        var gated = false
+        val m = opened(ops, item("i1", 1), gated = { gated })
+        val before = ops.lists.size
+        gated = true
+        m.catchUp()
+        // A read would run on the IO dispatcher: give it the time to land before saying none did.
+        repeat(5) {
+            advanceUntilIdle()
+            Thread.sleep(SETTLE_MS)
+        }
+        assertEquals(before, ops.lists.size)
+        gated = false
+        m.catchUp()
+        settle { ops.lists.size == before + 1 }
+        advanceUntilIdle()
+        assertEquals(before + 1, ops.lists.size)
+    }
 }

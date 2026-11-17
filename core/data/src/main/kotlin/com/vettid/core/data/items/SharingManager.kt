@@ -253,6 +253,14 @@ class SharingManager(
         if (m.type == "sync.event" && VaultJson.str(m.body, "kind") == "tag.changed") registry.value = null
     }
 
+    /**
+     * (Rule 3) The release gate's lift: a `tag.changed` held back while it paused the work may have been missed, so the
+     * registry is read again when next shown, as after one.
+     */
+    fun invalidateTags() {
+        registry.value = null
+    }
+
     override suspend fun refreshTags(): TagRegistry {
         val out = mutableListOf<TagView>()
         var version = 0L

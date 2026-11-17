@@ -112,7 +112,6 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     var lastPin: String? = null
     var lastPassword: String? = null
     var lastBackup: Boolean? = null
-    var lastApproved: ReleaseView? = null
     var lastCancelRecovery = false
 
     // --- recovery and transfer (MoveRepository) ---
@@ -430,10 +429,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return preflightInfo
     }
 
-    override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+    override suspend fun unlock(pin: String, cancelRecovery: Boolean): UnlockAttempt {
         call("unlock")
         lastPin = pin
-        lastApproved = approve
         lastCancelRecovery = cancelRecovery
         duringUnlock?.invoke()
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
@@ -448,9 +446,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** The password the last unlock that cancelled a recovery sent with its owner check (release R). */
     var lastCancelCheckPassword: String? = null
 
-    override suspend fun unlockCancellingRecovery(pin: String, password: String, approve: ReleaseView?): UnlockAttempt {
+    override suspend fun unlockCancellingRecovery(pin: String, password: String): UnlockAttempt {
         lastCancelCheckPassword = password
-        return unlock(pin, approve, true)
+        return unlock(pin, true)
     }
 
     /** The PIN and password of the last `vault.secret.renew` (release R). */
@@ -462,10 +460,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     }
 
 
-    override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+    override suspend fun unlockWithCheck(pin: String, password: String, cancelRecovery: Boolean): UnlockAttempt {
         lastPassword = password
         val gen = foregroundGen
-        val r = unlock(pin, approve, cancelRecovery)
+        val r = unlock(pin, cancelRecovery)
         calls += "unlockWithCheck"
         if (r == UnlockAttempt.Success || r is UnlockAttempt.UpdateRefused) {
             val o = checkResults.removeFirstOrNull() ?: passed()
@@ -653,10 +651,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return recoveryCredentialBackupValue
     }
 
-    override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+    override suspend fun recoveryUnlock(pin: String): UnlockAttempt {
         call("recoveryUnlock")
         lastPin = pin
-        lastApproved = approve
         return recoveryUnlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
     }
 

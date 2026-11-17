@@ -223,7 +223,9 @@ class FeedManager(
      * a full read.
      */
     fun catchUp() {
-        if (catchUpQueued) return
+        // §3.6.3 and Rule 3: nothing is read while the check is due or held, or the release gate pauses the vault's work
+        // (every caller: the return to the foreground, the relay's reconnection, a push wake, `sync.event`).
+        if (gated() || catchUpQueued) return
         catchUpQueued = true
         scope.launch {
             runCatching {

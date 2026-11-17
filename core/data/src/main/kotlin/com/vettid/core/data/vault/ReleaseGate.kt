@@ -8,6 +8,9 @@ import com.vettid.core.attestation.manifest.Release
  */
 internal enum class EventTaker { ITEMS, SHARING, DEVICES, VOTES, PRESENCE, LOCATION, PAIRING, SOCIAL, ATTACHMENTS }
 
+/** (Rule 3) Nothing of the vault's features is read or taken in: the owner check is due or held (§3.6.3), or the gate pauses them. */
+internal fun featuresGated(ownerCheckGated: Boolean, paused: Boolean): Boolean = ownerCheckGated || paused
+
 /** (Rule 3) The events the vault's features take while the release gate pauses them. */
 internal object ReleaseGateEvents {
     /**
@@ -32,24 +35,47 @@ internal object ReleaseGateEvents {
 /**
  * (Rule 3) What the vault manager does when the release gate's pause changes ([ReleaseUpdateManager.onPausedChange]):
  * paused, the votes' hourly work stops and location sharing pauses; lifted with the vault open and not being deleted
- * ([open]), the location sharing goes on and the opened vault's reads run once ([reads]), as after an unlock.
+ * ([unlocked]), the location sharing goes on and the opened vault's reads run once ([reads]), as after an unlock. Not while
+ * the owner check is due or held ([checkGated], §3.6.3): those reads then wait for the check to lift ([ownerCheckLifted]).
  */
 internal class ReleasePauseSteps(
-    private val open: () -> Boolean,
+    private val unlocked: () -> Boolean,
+    private val checkGated: () -> Boolean,
+    private val paused: () -> Boolean,
     private val stopVotes: () -> Unit,
     private val gateChanged: (lifted: Boolean) -> Unit,
     private val reads: () -> Unit,
 ) {
+    /** A lift came while the owner check was due or held: its reads wait for the check to lift. */
+    private var waiting = false
+
     fun onPaused(paused: Boolean) {
         val steps = ClearSteps()
         steps.step { gateChanged(!paused) }
         if (paused) {
+            synchronized(this) { waiting = false }
             steps.step { stopVotes() }
-        } else if (open()) {
-            steps.step { reads() }
+        } else if (unlocked()) {
+            if (checkGated()) synchronized(this) { waiting = true } else steps.step { reads() }
         }
         steps.finish()
     }
+
+    /**
+     * The owner check passed or its hold ended with the vault open: the reads of a lift that came while it was due or held
+     * run now, once (unless the gate paused the work again meanwhile).
+     */
+    fun ownerCheckLifted() {
+        val run = synchronized(this) {
+            val now = waiting && unlocked() && !checkGated() && !paused()
+            if (now) waiting = false
+            now
+        }
+        if (run) reads()
+    }
+
+    /** The vault locked: a lift's reads that waited for the owner check go with it. */
+    fun reset() = synchronized(this) { waiting = false }
 }
 
 /**
