@@ -41,6 +41,22 @@ class VaultCodesTest {
     private fun answer(code: String, type: String = "vault.owner-check", message: String = "", body: JsonObject? = null) =
         VaultOpException(type, code, message, body)
 
+    /**
+     * (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents") The approval's new refusals are not mapped: the usual failure
+     * for an error answer to `.approve`, `error_vault_code` naming the code, as an app before 0.89.0 shows them.
+     */
+    @Test
+    fun theApprovalDocumentCodesAreNamed() = runTest {
+        assertEquals("document_not_fetched", VaultCodes.DOCUMENT_NOT_FETCHED)
+        assertEquals("update_required", VaultCodes.UPDATE_REQUIRED)
+        for (code in listOf(VaultCodes.DOCUMENT_NOT_FETCHED, VaultCodes.UPDATE_REQUIRED)) {
+            val f = failureOf(answer(code, "connection.authenticate.approve"))
+            assertEquals(code, FailureKind.OTHER, f.kind)
+            assertEquals(code, f.code)
+            assertEquals(code, f.shownCode)
+        }
+    }
+
     @Test
     fun mappedCodesKeepTheirKinds() = runTest {
         val mapped = mapOf(

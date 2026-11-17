@@ -4,7 +4,9 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.VaultCodes
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.DeviceStateStore
 import com.vettid.core.vault.PendingPage
@@ -15,6 +17,7 @@ import com.vettid.core.vault.connectionAsksMute
 import com.vettid.core.vault.connectionAsksResume
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -92,6 +95,8 @@ class SocialManager internal constructor(
     private val feedWithdrawn: (com.vettid.core.data.feed.WithdrawnBatch) -> Unit = {},
     /** The three vault calls that decide a device request (a seam for tests; the vault client in the app). */
     private val deviceOps: suspend () -> DeviceDecisionOps = { VaultDeviceDecisions(api()) },
+    /** The vault calls behind approving a challenge and fetching its document (a seam for tests; the vault client in the app). */
+    private val authOps: suspend () -> AuthDecisionOps = { VaultAuthDecisions(api()) },
     /** The member's items with their field labels (the item cache): what a held `item.use` or `item.get` is shown against. */
     private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
     /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
@@ -1913,14 +1918,7 @@ class SocialManager internal constructor(
         try {
             run()
         } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_FOUND) {
-                // Only here: a decision the vault took keeps the question's batches (§10.12 rule 3).
-                if (key.startsWith("auth:")) noteNotFound(key)
-                forgetBatches(key)
-                closeFeedKey(key)
-                dropApproval(key)
-                listedFlow.update { l -> l.filterNot { it.key == key } }
-            }
+            if (e.kind == FailureKind.NOT_FOUND) endedAtVault(key)
             throw e
         }
         if (whole) {
@@ -1929,6 +1927,19 @@ class SocialManager internal constructor(
             listedFlow.update { l -> l.filterNot { it.key == key } }
             decided(key)
         }
+    }
+
+    /**
+     * The vault answered `not_found` about ask [key] (a decision, or the fetch of a challenge's document): it ended there,
+     * so it goes here too, with its feed item.
+     */
+    private suspend fun endedAtVault(key: String) {
+        // Only here: a decision the vault took keeps the question's batches (§10.12 rule 3).
+        if (key.startsWith("auth:")) noteNotFound(key)
+        forgetBatches(key)
+        closeFeedKey(key)
+        dropApproval(key)
+        listedFlow.update { l -> l.filterNot { it.key == key } }
     }
 
     /** Deciding an ask marks its feed item read (ANDROID-PLAN 0.1.23, §9 question 2). */
@@ -1977,9 +1988,60 @@ class SocialManager internal constructor(
     }
 
     override suspend fun approveAuthentication(requestId: String, password: String) {
+        // (0.89.0 §10.4 "Approval documents") No document hash is sent: the purpose form, as an app before 0.89.0 approves.
+        // A `document_required` challenge cannot count so: refused here as the vault refuses it (`update_required`), before
+        // the unlock window is opened for nothing. The challenge stays open.
+        if ((find("auth:$requestId") as? Approval.Authentication)?.documentRequired == true) {
+            throw refusedAsVault(TYPE_AUTH_APPROVE, VaultCodes.UPDATE_REQUIRED)
+        }
         credential.openUnlockWindow(password)
-        decide("auth:$requestId") { it.authenticateApprove(requestId) }
+        decideRun("auth:$requestId") { vaultGuard { authOps().approve(requestId, null) } }
     }
+
+    @Suppress("ReturnCount") // no document named, none in the answer, or the checked one
+    override suspend fun authenticationDocument(request: Approval.Authentication): ApprovalDocument.Check {
+        // Only a challenge that names a document is asked for one: for any other the vault answers not_found, which would
+        // drop a live ask.
+        if (!request.hasDocument) return ApprovalDocument.Check.Refused(ApprovalDocument.Failure.HASH)
+        val answer = try {
+            vaultGuard { authOps().document(request.requestId) }
+        } catch (e: VaultFailure) {
+            // This ask named a document, so not_found means it ended (decided, expired or withdrawn), as for a decision.
+            if (e.kind == FailureKind.NOT_FOUND) endedAtVault(request.key)
+            throw e
+        }
+        // An answer without a `document` string is no document.
+        val base64 = answer ?: return ApprovalDocument.Check.Refused(ApprovalDocument.Failure.ENCODING)
+        return ApprovalDocument.check(base64, request.documentSha256, request.documentSize, request.context)
+    }
+
+    @Suppress("ReturnCount") // approved at once, approved after the fetch again, or changed
+    override suspend fun approveAuthentication(
+        request: Approval.Authentication,
+        password: String,
+        document: ApprovalDocument,
+    ): DocumentApproval {
+        // Only the document this request announced, before anything is opened or sent.
+        if (!request.hasDocument || document.sha256 != request.documentSha256) {
+            throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_MISMATCH)
+        }
+        credential.openUnlockWindow(password)
+        try {
+            decideRun(request.key) { vaultGuard { authOps().approve(request.requestId, document.sha256) } }
+            return DocumentApproval.Approved
+        } catch (e: VaultFailure) {
+            if (e.code != VaultCodes.DOCUMENT_NOT_FETCHED) throw e
+        }
+        // The vault has no record of this device's fetch: fetch again, and approve again only the very bytes shown.
+        val again = authenticationDocument(request)
+        if (again !is ApprovalDocument.Check.Shown || again.document != document) return DocumentApproval.Changed(again)
+        decideRun(request.key) { vaultGuard { authOps().approve(request.requestId, again.document.sha256) } }
+        return DocumentApproval.Approved
+    }
+
+    /** A refusal the app makes itself exactly as the vault's answer [code] to [type] would read (its kind and its text). */
+    private fun refusedAsVault(type: String, code: String): VaultFailure =
+        VaultFailure(VaultManager.opFailure(code, type), code, cause = VaultOpException(type, code))
 
     override suspend fun denyAuthentication(requestId: String) = decide("auth:$requestId") { it.authenticateDeny(requestId) }
 
@@ -2197,12 +2259,34 @@ class SocialManager internal constructor(
         private const val MAX_NOT_FOUND = 100
         private const val MAX_WITHDRAWN = 256
         private const val CODE_TOO_LARGE = "response_too_large"
+        private const val TYPE_AUTH_APPROVE = "connection.authenticate.approve"
+
+        /** The app's own refusal of a document that is not the one its request announced (never sent to the vault). */
+        const val CODE_DOCUMENT_MISMATCH = "document_mismatch"
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
 
         /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
         private val NAME_RETENTION: Duration = Duration.ofDays(17)
         private val json = Json { ignoreUnknownKeys = true }
     }
+}
+
+/**
+ * The vault calls behind approving a member-authentication challenge (VAULT-MESSAGING §10.4) and, for one that carries a
+ * document, fetching it (0.89.0 "Approval documents").
+ */
+interface AuthDecisionOps {
+    /** `connection.authenticate.approve{request_id, document_sha256?}`: [documentSha256] only over a fetched document. */
+    suspend fun approve(requestId: String, documentSha256: String?)
+
+    /** `connection.authenticate.document{request_id}`: the `document` string of the answer, or null if it has none. */
+    suspend fun document(requestId: String): String?
+}
+
+internal class VaultAuthDecisions(private val api: VaultApi) : AuthDecisionOps {
+    override suspend fun approve(requestId: String, documentSha256: String?) = api.authenticateApprove(requestId, documentSha256)
+
+    override suspend fun document(requestId: String): String? = api.authenticateDocument(requestId)
 }
 
 /** The vault calls behind a decision on a device request (VAULT-MESSAGING §10.3): `device.session.approve`, `.deny`, `approval.decide`. */

@@ -625,10 +625,28 @@ class VaultApi(
         "request_id",
     ) ?: ""
 
-    /** Signs a challenge with the credential key (the unlock window must be open: credentialUnlock first). */
-    suspend fun authenticateApprove(requestId: String) {
-        op("connection.authenticate.approve") { put("request_id", requestId) }
+    /**
+     * Signs a challenge with the credential key (the unlock window must be open: credentialUnlock first).
+     * (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents") [documentSha256]: standard base64 of the SHA-256 of the document
+     * this device fetched and showed, so that the vault signs the document form; `document_not_fetched` when this device
+     * has not fetched that document, `bad_request` for another hash or for a challenge without one, `update_required` for
+     * none on a `document_required` challenge (each leaves the challenge open). Null sends none, as before 0.89.0.
+     */
+    suspend fun authenticateApprove(requestId: String, documentSha256: String? = null) {
+        op("connection.authenticate.approve") {
+            put("request_id", requestId)
+            documentSha256?.let { put("document_sha256", it) }
+        }
     }
+
+    /**
+     * `connection.authenticate.document{request_id}` (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"): the challenge's
+     * document, standard base64, whenever `pending.list` would list the ask for this device; `not_found` otherwise, and for
+     * a challenge without one. The vault records the fetch: only the device that fetched the document can approve it in
+     * the document form. Null when the answer has no `document` string.
+     */
+    suspend fun authenticateDocument(requestId: String): String? =
+        VaultJson.str(op("connection.authenticate.document") { put("request_id", requestId) }, "document")
 
     suspend fun authenticateDeny(requestId: String) {
         op("connection.authenticate.deny") { put("request_id", requestId) }
