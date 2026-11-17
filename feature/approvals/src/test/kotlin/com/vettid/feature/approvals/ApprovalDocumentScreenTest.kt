@@ -25,6 +25,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.performSemanticsAction
 import com.vettid.core.data.social.ApprovalDocument
 import com.vettid.core.data.vault.FailureKind
@@ -64,7 +65,20 @@ class ApprovalDocumentScreenTest {
      * The screen over [json]'s document, its state kept as the view model keeps it ([ApprovalDetailViewModel.documentSeen]),
      * at [fontScale], with a screen reader or not.
      */
-    private fun show(json: String, fontScale: Float? = null, screenReader: Boolean = false, seenBefore: Boolean = false, ime: Boolean = false) {
+    /** Whether a screen reader is on and the keyboard up, changeable while the screen is shown. */
+    private var reader by mutableStateOf(false)
+    private var keyboard by mutableStateOf(false)
+
+    private fun show(
+        json: String,
+        fontScale: Float? = null,
+        screenReader: Boolean = false,
+        seenBefore: Boolean = false,
+        ime: Boolean = false,
+        listMax: androidx.compose.ui.unit.Dp = androidx.compose.ui.unit.Dp.Infinity,
+    ) {
+        reader = screenReader
+        keyboard = ime
         val r = DocumentSamples.request(json)
         val shown = shownOf(json)
         state = ApprovalDetailUiState(
@@ -88,8 +102,9 @@ class ApprovalDocumentScreenTest {
                         },
                     ),
                     Modifier,
-                    imeVisible = ime,
-                    screenReader = screenReader,
+                    imeVisible = keyboard,
+                    screenReader = reader,
+                    listMaxHeight = listMax,
                 )
             }
         }
@@ -297,16 +312,118 @@ class ApprovalDocumentScreenTest {
         approve().assertIsEnabled()
     }
 
+    /** Scrolls in small steps to the end, back to the top, and to the end again: every row passes through the list. */
+    private fun scrollFine(step: Float = 15f, onEach: () -> Unit = {}) {
+        for (dir in listOf(1f, -1f, 1f)) {
+            repeat(MAX_STEPS) {
+                val range = list().fetchSemanticsNode().config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) ?: return
+                val atEnd = if (dir > 0) range.value() >= range.maxValue() else range.value() <= 0f
+                if (atEnd) return@repeat
+                list().performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, dir * step) }
+                rule.waitForIdle()
+                onEach()
+            }
+        }
+    }
+
+    private fun tooTallShown() = rule.onAllNodes(hasText("This request can't be shown at this text size")).fetchSemanticsNodes().isNotEmpty()
+
     @Test
     @Config(qualifiers = "w240dp-h2000dp")
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun aRowTooTallForTheScreenReaderAtTheSmallestCuttingSaysSo() {
-        show(DocumentSamples.big(400), fontScale = 12f, screenReader = true, ime = true)
-        scrollThrough()
-        rule.waitForIdle()
-        rule.onNodeWithTag("document_too_tall").assertExists()
-        rule.onNodeWithText("This request can't be shown at this text size").assertExists()
+        show(DocumentSamples.big(400), fontScale = 3f, screenReader = true, listMax = 20.dp)
+        // Every row passes through the list, the tall ones too: none of them ever counts.
+        scrollFine()
+        assertTrue(tooTallShown())
+        assertTrue(reports.toString(), reports.none { it })
         approve().assertIsNotEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w560dp-h2000dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun aRowJustTallerThanTheListDoesNotCountEither() {
+        val listMax = 55.dp
+        show("""{"action":"x","payload":{},"summary":"s"}""", fontScale = 3f, screenReader = true, listMax = listMax)
+        val heights = mutableSetOf<Int>()
+        scrollFine { if (tooTallShown()) heights += rule.onAllNodes(hasText("\"", substring = true)).fetchSemanticsNodes().map { it.size.height } }
+        // Each row of the document's text is over the list's height and under twice it, at the smallest cutting.
+        assertTrue(heights.toString(), heights.isNotEmpty() && heights.all { it > 55 && it < 110 })
+        assertTrue(tooTallShown())
+        assertTrue(reports.toString(), reports.none { it })
+        approve().assertIsNotEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w240dp-h2000dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun turningTheScreenReaderOnOrOffStartsOver() {
+        show(DocumentSamples.big(400), fontScale = 3f, screenReader = false, listMax = 20.dp)
+        scrollFine()
+        approve().assertIsEnabled()
+        val before = reports.size
+        reader = true
+        rule.waitForIdle()
+        assertEquals(false, reports[before])
+        approve().assertIsNotEnabled()
+        scrollFine()
+        assertTrue(tooTallShown())
+        // Off again: the usual cutting, nothing held over from the reader's ("can't be shown" goes at once).
+        reader = false
+        rule.waitForIdle()
+        assertTrue(!tooTallShown())
+        approve().assertIsNotEnabled()
+        list().performScrollToIndex(0)
+        rule.waitForIdle()
+        scrollFine()
+        approve().assertIsEnabled()
+    }
+
+    @Test
+    fun turningTheScreenReaderOnStartsOverWhenNothingIsCut() {
+        // Rows that fit the list at every cutting: the reader's cutting is another cutting all the same.
+        show(DocumentSamples.big(2_000))
+        scrollThrough()
+        approve().assertIsEnabled()
+        val before = reports.size
+        reader = true
+        rule.waitForIdle()
+        assertEquals(false, reports[before])
+        approve().assertIsNotEnabled()
+        list().performScrollToIndex(0)
+        rule.waitForIdle()
+        scrollThrough()
+        approve().assertIsEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w240dp-h2000dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun withTheKeyboardUpATallRowIsNotJudged() {
+        show(DocumentSamples.big(400), fontScale = 3f, screenReader = true, ime = true, listMax = 20.dp)
+        scrollFine()
+        // Not counted, and not cut: nothing sticks for when the keyboard goes.
+        assertTrue(!tooTallShown())
+        assertTrue(reports.none { it })
+        approve().assertIsNotEnabled()
+        keyboard = false
+        rule.waitForIdle()
+        list().performScrollToIndex(0)
+        rule.waitForIdle()
+        scrollFine()
+        assertTrue(tooTallShown())
+    }
+
+    @Test
+    fun theKeyboardsActionWaitsWhileBusy() {
+        show(DocumentSamples.big(8_000))
+        scrollThrough()
+        state = state.copy(busy = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("approval_password").performImeAction()
+        rule.waitForIdle()
+        assertEquals(0, approvals)
     }
 
     private fun scrollValue(): Float = list().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()

@@ -297,6 +297,9 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     /** What [approveAuthentication] over a document answers; only [DocumentApproval.Approved] takes the ask out. */
     var documentApproval: DocumentApproval = DocumentApproval.Approved
 
+    /** When set, [approveAuthentication] over a document waits for it before it answers (to order it against other work). */
+    var documentApprovalGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun authenticationDocument(request: Approval.Authentication): ApprovalDocument.Check {
         call("authenticationDocument")
         return authDocument
@@ -309,6 +312,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     ): DocumentApproval {
         call("approveAuthenticationDocument")
         lastPassword = password
+        documentApprovalGate?.await()
         if (documentApproval == DocumentApproval.Approved) drop("auth:${request.requestId}")
         return documentApproval
     }

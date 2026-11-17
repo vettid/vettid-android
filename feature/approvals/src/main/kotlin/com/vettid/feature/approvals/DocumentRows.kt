@@ -68,7 +68,6 @@ data class DocCutting(val max: Int, val maxBreaks: Int) {
         const val SMALLEST = 10
         private const val READER_MAX = 30
         private const val READER_BREAKS = 4
-        private const val MAX_BREAKS_SHRUNK = 8
 
         /** The cutting with a screen reader on or not, halved [shrink] times. */
         fun of(screenReader: Boolean, shrink: Int): DocCutting = when {
@@ -76,7 +75,7 @@ data class DocCutting(val max: Int, val maxBreaks: Int) {
             shrink <= 0 -> DocCutting(READER_MAX, READER_BREAKS)
             else -> DocCutting(
                 maxOf(READER_MAX shr shrink, SMALLEST),
-                maxOf(minOf(READER_BREAKS, MAX_BREAKS_SHRUNK) shr shrink, 1),
+                maxOf(READER_BREAKS shr shrink, 1),
             )
         }
     }
@@ -171,9 +170,12 @@ object DocumentRows {
  * or string, a value the service wrote under a form's label) between quotation marks, the drawn ones or, for a value, ones
  * added for speech, with its own `"` and `\` escaped as JSON writes them (a raw view's text already is); a raw view's line
  * with its level first ("level 2, "). The quotation marks, the markers and the app's punctuation (`: `, `,`, brackets, the
- * continuation marks) are [VerbatimTtsAnnotation]s, so TalkBack voices them at any punctuation level and no text can be
- * heard as the app's words or as another line. Numbers, `true`, `false`, `null` and the app's own words are read plainly.
- * Android has no counterpart of iOS's separate pitch for the document's text, so none is set.
+ * continuation marks) are [VerbatimTtsAnnotation]s, so TalkBack voices them at any punctuation level. Numbers, `true`,
+ * `false`, `null` and the app's own words are read plainly.
+ *
+ * Known limit: on Android the separation rests on those voiced spans alone. A document can type their sound as words
+ * (say "quotation mark colon … level 2"), and a listener may then hear what sounds like the app's punctuation or another
+ * line. iOS also reads the document's text at a pitch of its own; Android has no counterpart, so none is set.
  */
 object DocSpoken {
     private const val QUOTE = "\""

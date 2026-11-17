@@ -622,7 +622,7 @@ class ApprovalDetailViewModel @Inject constructor(
         if (!start) return
         viewModelScope.launch {
             try {
-                show(repo.authenticationDocument(x))
+                show(repo.authenticationDocument(x), DocumentKey.of(x))
             } catch (e: VaultFailure) {
                 local.update { it.copy(document = DocumentStep.Failed(e.kind, e.shownCode), documentSeen = null) }
             }
@@ -631,11 +631,20 @@ class ApprovalDetailViewModel @Inject constructor(
         }
     }
 
-    /** [checked] in place of whatever document the screen showed: it is shown from the start, not yet seen whole. */
-    private suspend fun show(checked: ApprovalDocument.Check) {
+    /**
+     * [checked], made for [key], in place of whatever document the screen showed: it is shown from the start, not yet seen
+     * whole. A result for a key the screen no longer holds (the request changed while it was made, or another result
+     * came first) is dropped, and the document of the request held now is fetched.
+     */
+    private suspend fun show(checked: ApprovalDocument.Check, key: DocumentKey) {
         // Laid out off the main thread: a document is up to 65 KB of text to clean, character by character.
         val step = withContext(documentCompute) { stepOf(checked) }
-        local.update { it.copy(document = step, documentSeen = null, documentGeneration = it.documentGeneration + 1) }
+        var taken = false
+        local.update { s ->
+            taken = s.documentFor == key
+            if (taken) s.copy(document = step, documentSeen = null, documentGeneration = s.documentGeneration + 1) else s
+        }
+        if (!taken) loadDocument()
     }
 
     /**
@@ -680,7 +689,7 @@ class ApprovalDetailViewModel @Inject constructor(
         val d = s.documentToApprove ?: throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_NOT_SHOWN)
         val r = repo.approveAuthentication(x, password, d)
         if (r is DocumentApproval.Changed) {
-            show(r.check)
+            show(r.check, DocumentKey.of(x))
             throw DocumentRestarted()
         }
     }
@@ -720,7 +729,8 @@ class ApprovalDetailViewModel @Inject constructor(
             deviceListed = uiState.value.deviceListed,
         )
         val a = s.approval ?: return
-        if (!s.canApprove || expiredNow(a)) return
+        // One decision at a time: a second one waits for the first (also while a changed document is being shown).
+        if (s.busy || !s.canApprove || expiredNow(a)) return
         val pw = s.password
         decide {
             when (a) {

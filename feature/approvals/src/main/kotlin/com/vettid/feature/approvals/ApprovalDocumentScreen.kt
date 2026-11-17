@@ -1,31 +1,30 @@
 package com.vettid.feature.approvals
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredHeightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -38,24 +37,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -64,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
@@ -104,6 +106,8 @@ internal fun DocumentApprovalScreen(
     imeVisible: Boolean = WindowInsets.isImeVisible,
     /** A screen reader explores by touch (TalkBack): the document is cut smaller ([DocCutting]). */
     screenReader: Boolean = rememberTouchExploration(),
+    /** TEST ONLY: the tallest the document's list may be, to judge rows against a list of a known height. */
+    listMaxHeight: Dp = Dp.Infinity,
 ) {
     val title = titleOf(a)
     val step = state.document
@@ -123,6 +127,7 @@ internal fun DocumentApprovalScreen(
     val rows = remember(shown, cutting) { shown?.let { DocumentRows.of(it.presentation, cutting) }.orEmpty() }
     var seenHere by remember(sha, generation, layout, cut) { mutableStateOf(false) }
     val report by rememberUpdatedState(actions.onDocumentSeen)
+    val imeLive by rememberUpdatedState(imeVisible)
     // The showing last brought to the top: a new one (a new document after Changed, the same hash sent again) starts there.
     var toppedFor by rememberSaveable { mutableIntStateOf(-1) }
     LaunchedEffect(sha, generation, layout, cut, rows) {
@@ -147,15 +152,20 @@ internal fun DocumentApprovalScreen(
                 val row = rowOf(item.key, generation, cut)?.takeIf { it in rows.indices && it !in whole } ?: continue
                 // With a screen reader a row of the document's text taller than the list is never seen: moving from node
                 // to node would leave part of it off screen. Cut smaller, or at the smallest say so (Approve stays off).
-                if (screenReader && rows[row].isContent && item.size > viewport) {
+                val tall = screenReader && rows[row].isContent && item.size > viewport
+                // With the keyboard up the list is small for a while: such a row is not counted, and the cutting is left
+                // as it is, so "can't be shown" never sticks once the keyboard goes.
+                if (tall && !imeLive) {
                     if (cutting.smallest) tooTall = true else shrink += 1
                     return@collect
                 }
-                val top = maxOf(info.viewportStartOffset - item.offset, 0).toFloat()
-                val bottom = minOf(info.viewportEndOffset - item.offset, item.size).toFloat()
-                val c = (coverage[row] ?: SeenCoverage()).saw(if (top < bottom) top..bottom else null, item.size.toFloat())
-                coverage[row] = c
-                if (c.whole) whole += row
+                if (!tall) {
+                    val top = maxOf(info.viewportStartOffset - item.offset, 0).toFloat()
+                    val bottom = minOf(info.viewportEndOffset - item.offset, item.size).toFloat()
+                    val c = (coverage[row] ?: SeenCoverage()).saw(if (top < bottom) top..bottom else null, item.size.toFloat())
+                    coverage[row] = c
+                    if (c.whole) whole += row
+                }
             }
             if (!seenHere && rows.isNotEmpty() && whole.size == rows.size) {
                 seenHere = true
@@ -179,7 +189,12 @@ internal fun DocumentApprovalScreen(
                 Column(Modifier.fillMaxSize()) {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.weight(1f).fillMaxWidth().onSizeChanged { width = it.width }.testTag(DOCUMENT_LIST_TAG),
+                        modifier = Modifier
+                            .weight(1f)
+                            .then(if (listMaxHeight != Dp.Infinity) Modifier.requiredHeightIn(max = listMaxHeight) else Modifier)
+                            .fillMaxWidth()
+                            .onSizeChanged { width = it.width }
+                            .testTag(DOCUMENT_LIST_TAG),
                     ) {
                         item(key = "facts") {
                             Column(Modifier.padding(horizontal = Spacing.xl)) {
@@ -265,7 +280,7 @@ internal fun DocumentApprovalScreen(
                                 // With the keyboard up the caption goes too.
                                 supporting = stringResource(R.string.approvals_password_hint).takeUnless { imeVisible },
                                 // The keyboard's action goes through the same guard as the button.
-                                onImeAction = { if (seen) actions.onApprove() },
+                                onImeAction = { if (seen && !state.busy) actions.onApprove() },
                                 modifier = Modifier.testTag("approval_password"),
                             )
                         }

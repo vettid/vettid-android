@@ -228,6 +228,21 @@ class DocumentPresentationTest {
     }
 
     @Test
+    fun aPieceCutMidStringReopensItsQuotationMark() {
+        // A value cut inside a paragraph: the next piece starts with the mark and a voiced quotation mark.
+        val value = DocPiece.value(ShownText.of("x".repeat(300)))
+        assertTrue(value.size > 2)
+        val second = DocSpoken.of(value[1], raw = false, level)
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(second).take(2))
+        assertEquals(DocPiece.CONTINUES, verbatims(DocSpoken.of(value[0], raw = false, level)).last())
+        // A raw string cut inside: the same.
+        val raw = DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("k"), DocumentPresentation.RawValue.Str(ShownText.of("x".repeat(300), escaped = true)), false))
+        assertTrue(raw.size > 2)
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(DocSpoken.of(raw[1], raw = true, level)).take(2))
+        assertEquals(listOf(DocPiece.CONTINUED, "\""), verbatims(DocSpoken.of(raw.last(), raw = true, level)).take(2))
+    }
+
+    @Test
     fun aKeyCannotReadAsAnotherLine() {
         val forged = DocSpoken.of(
             DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount: 500, level 2, fee", escaped = true), DocumentPresentation.RawValue.Number("1"), false)).single(),

@@ -176,6 +176,49 @@ class ApprovalDocumentViewModelTest {
     }
 
     @Test
+    fun oneApprovalAtATime() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vm.setPassword("pw-fake-1")
+        advanceUntilIdle()
+        vm.seeWhole()
+        advanceUntilIdle()
+        social.documentApprovalGate = kotlinx.coroutines.CompletableDeferred()
+        vm.approve()
+        vm.approve()
+        advanceUntilIdle()
+        social.documentApprovalGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "approveAuthenticationDocument" })
+    }
+
+    @Test
+    fun aChangedResultForARequestThatMovedOnIsDropped() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vm.setPassword("pw-fake-1")
+        advanceUntilIdle()
+        vm.seeWhole()
+        advanceUntilIdle()
+        // The approval is out; meanwhile the request comes to name another document, fetched and shown.
+        social.documentApprovalGate = kotlinx.coroutines.CompletableDeferred()
+        social.documentApproval = DocumentApproval.Changed(ApprovalDocument.Check.Refused(ApprovalDocument.Failure.HASH))
+        vm.approve()
+        advanceUntilIdle()
+        val other = DocumentSamples.request(DocumentSamples.PROPOSAL)
+        social.authDocument = DocumentSamples.check(DocumentSamples.PROPOSAL, other)
+        social.approvals.value = listOf(other)
+        advanceUntilIdle()
+        assertEquals(other.documentSha256, ((vm.uiState.value.document as DocumentStep.Shown).document.sha256))
+        // Then the old approval's Changed comes back: made for the old request, it is dropped.
+        social.documentApprovalGate!!.complete(Unit)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(other.documentSha256, (s.document as DocumentStep.Shown).document.sha256)
+        assertEquals(DocumentKey.of(other), s.documentFor)
+    }
+
+    @Test
     fun aStaleDocumentIsNeverApproved() = runTest {
         val vm = detail()
         advanceUntilIdle()
