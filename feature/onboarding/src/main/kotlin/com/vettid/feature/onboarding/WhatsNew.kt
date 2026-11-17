@@ -6,15 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -33,7 +30,6 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -66,13 +62,13 @@ internal var notesSheetProcess: String = UUID.randomUUID().toString()
 /**
  * The release offer at unlock, compact (owner decision 2026-11-07, as iOS; ANDROID-PLAN 0.1.122): shown below the PIN, it
  * says "Update available: release N", the security line (from the release log: the progress line while it loads,
- * "Release notes unavailable" when it can't be had), the offer with its fingerprint, "Approve the update with this unlock"
- * and "What's new in release N", which opens [ReleaseNotesSheet]. The approval is enabled whatever the notes' state and
- * never waits for the sheet; `security_text` is only in the sheet.
+ * "Release notes unavailable" when it can't be had), the offer with its fingerprint and "What's new in release N", which
+ * opens [ReleaseNotesSheet]; `security_text` is only in the sheet. Shown only (Rule 3): the PIN only unlocks, and the
+ * update is approved on the release gate's own screen once the vault is open.
  * Nothing for a rollback (the PIN is not sent) or without an offer. Shared by the unlock and the recovery's PIN step.
  */
 @Composable
-internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onApproveOffer: (Boolean) -> Unit, notes: ReleaseNotes?) {
+internal fun ReleaseOfferNotice(p: PreflightInfo, notes: ReleaseNotes?) {
     val offer = p.offer ?: return
     if (p.rollback) return
     // Saved, so a rotation keeps the sheet open; tied to this process and this offer, so a sheet saved open before the
@@ -98,18 +94,6 @@ internal fun ReleaseOfferNotice(p: PreflightInfo, approveOffer: Boolean, onAppro
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("release_offer_fingerprint"),
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = Spacing.touchTarget)
-                    .toggleable(value = approveOffer, role = Role.Checkbox, onValueChange = onApproveOffer)
-                    .testTag("approve_offer"),
-            ) {
-                Checkbox(checked = approveOffer, onCheckedChange = null)
-                Spacer(Modifier.width(Spacing.s))
-                Text(stringResource(R.string.unlock_offer_approve), style = MaterialTheme.typography.bodyMedium)
-            }
             TextButton(
                 onClick = { notesOpenFor = openKey },
                 modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("whats_new_open"),

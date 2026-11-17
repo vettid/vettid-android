@@ -143,17 +143,21 @@ class UnlockViewModelTest {
         assertFalse("unlock" in vault.calls)
     }
 
+    /**
+     * Rule 3 (the release gate): the PIN only unlocks, also with an offer shown below it; the update is approved on the
+     * gate's own screen once the vault is open.
+     */
     @Test
-    fun approvedOfferTravelsWithTheUnlock() = runTest {
+    fun theUnlockNeverCarriesAnApproval() = runTest {
         val offer = FakeVault.release(5)
         vault.preflightInfo = PreflightInfo(FakeVault.release(4, "deprecated"), 4, false, false, offer)
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        vm.setApproveOffer(true)
         vm.setPin("40281795")
         vm.submit()
         advanceUntilIdle()
-        assertEquals(offer, vault.lastApproved)
+        assertTrue("unlock" in vault.calls)
+        assertNull(vault.lastApproved)
     }
 
     @Test

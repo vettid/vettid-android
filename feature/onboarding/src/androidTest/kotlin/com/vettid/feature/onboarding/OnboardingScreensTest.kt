@@ -39,7 +39,6 @@ class LockedHostActivity : ComponentActivity() {
 private object NoUnlockActions : UnlockActions {
     override fun retryPreflight() = Unit
     override fun acknowledgeUpdate() = Unit
-    override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
     override fun setPassword(v: String) = Unit
     override fun submit() = Unit
@@ -135,7 +134,8 @@ class OnboardingScreensTest {
         val preflight = PreflightInfo(release(4), 4, false, false, release(5))
         rule.setContent { VettIdTheme { UnlockContent(UnlockUiState(loading = false, preflight = preflight), NoUnlockActions) } }
         rule.onNodeWithTag("release_offer").assertExists()
-        rule.onNodeWithTag("approve_offer").assertExists()
+        // Rule 3: shown only; the PIN only unlocks (the update is approved on the release gate's own screen).
+        rule.onNodeWithTag("approve_offer").assertDoesNotExist()
         rule.onNodeWithTag("whats_new").assertDoesNotExist()
         rule.onNodeWithTag("whats_new_open").performClick()
         rule.onNodeWithTag("whats_new_loading").assertExists()

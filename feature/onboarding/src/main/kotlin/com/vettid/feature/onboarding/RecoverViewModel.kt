@@ -151,7 +151,6 @@ data class RecoverUiState(
     val wrongCodes: Int = 0,
     val preflight: PreflightInfo? = null,
     val preflightError: FailureKind? = null,
-    val approveOffer: Boolean = false,
     /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the PIN. */
     val notes: ReleaseNotes? = null,
     val pin: String = "",
@@ -208,7 +207,6 @@ interface RecoverActions {
     /** **Continue** on the typed entry. */
     fun submitTyped()
     fun retryPreflight()
-    fun setApproveOffer(approve: Boolean)
     fun setPin(v: String)
     fun submitPin()
     fun setPassword(v: String)
@@ -455,7 +453,7 @@ class RecoverViewModel @Inject constructor(
     private fun toPin() {
         state.update {
             it.copy(
-                step = RecoverStep.PIN, preflight = null, preflightError = null, approveOffer = false, phoneSecret = vault.usesPhoneSecret,
+                step = RecoverStep.PIN, preflight = null, preflightError = null, phoneSecret = vault.usesPhoneSecret,
                 undecided = move.recoveryUndecided,
             )
         }
@@ -463,13 +461,12 @@ class RecoverViewModel @Inject constructor(
     }
 
     override fun retryPreflight() {
-        val before = state.value.preflight?.offer
         state.update { it.copy(busy = true, preflightError = null, error = null) }
         viewModelScope.launch {
             try {
                 val p = move.recoveryPreflight()
                 state.update {
-                    it.copy(busy = false, preflight = p, notes = null, approveOffer = keptApproval(it.approveOffer, before, p))
+                    it.copy(busy = false, preflight = p, notes = null)
                 }
                 p.offer?.takeIf { !p.rollback }?.let { offer ->
                     val n = releaseNotes.whatsNew(offer, p.between)
@@ -480,7 +477,7 @@ class RecoverViewModel @Inject constructor(
                 if (e.kind == FailureKind.UNAUTHORIZED) {
                     ended()
                 } else {
-                    state.update { it.copy(busy = false, preflightError = e.kind, approveOffer = false) }
+                    state.update { it.copy(busy = false, preflightError = e.kind) }
                 }
             }
         }
@@ -535,8 +532,6 @@ class RecoverViewModel @Inject constructor(
     private fun UnlockAttempt.Failed.recoveryEnded(): Boolean =
         kind == FailureKind.UNAUTHORIZED || code == UnlockViewModel.CODE_UNREADABLE || code == CODE_UNKNOWN_DEVICE
 
-    override fun setApproveOffer(approve: Boolean) = state.update { it.copy(approveOffer = approve) }
-
     override fun setPin(v: String) = state.update {
         it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), pinWrong = false, error = null)
     }
@@ -546,8 +541,8 @@ class RecoverViewModel @Inject constructor(
         if (!s.pinAllowed || s.pin.length < MIN_PIN) return
         state.update { it.copy(busy = true, pinWrong = false, error = null) }
         viewModelScope.launch {
-            val offer = if (s.approveOffer) s.preflight?.offer else null
-            when (val r = move.recoveryUnlock(s.pin, offer)) {
+            // The PIN only unlocks (Rule 3): the update is approved on the release gate's own screen once the vault is open.
+            when (val r = move.recoveryUnlock(s.pin)) {
                 UnlockAttempt.Success -> {
                     state.update { it.copy(busy = false, pin = "") }
                     afterUnlock()

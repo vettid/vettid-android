@@ -61,7 +61,6 @@ class RecoverTypeScreenTest {
         }
 
         override fun retryPreflight() = Unit
-        override fun setApproveOffer(approve: Boolean) = Unit
         override fun setPin(v: String) = Unit
         override fun submitPin() = Unit
         override fun setPassword(v: String) = Unit

@@ -11,9 +11,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsOff
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -44,8 +41,8 @@ import java.lang.reflect.Proxy
 
 /**
  * The release offer at unlock is compact (owner decision 2026-11-07, GC thread 01M6SQ6VMNMB0C2CRPNZYNWKBB): the PIN and
- * Unlock first and on screen, then "Update available: release N" with the security line, the fingerprint, the approval and
- * "What's new in release N", which opens the full notes in a sheet. The approval never waits for the sheet.
+ * Unlock first and on screen, then "Update available: release N" with the security line, the fingerprint and "What's new in
+ * release N", which opens the full notes in a sheet. No approval (Rule 3): the update is approved on the release gate.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h640dp")
@@ -75,7 +72,6 @@ class ReleaseOfferCompactTest {
             "hashCode" -> System.identityHashCode(p)
             else -> {
                 unlockCalls += m.name
-                if (m.name == "setApproveOffer") unlock = unlock.copy(approveOffer = args[0] as Boolean)
                 null
             }
         }
@@ -88,7 +84,6 @@ class ReleaseOfferCompactTest {
         when {
             m.name == "equals" -> p === args[0]
             m.name == "hashCode" -> System.identityHashCode(p)
-            m.name == "setApproveOffer" -> { recover = recover.copy(approveOffer = args[0] as Boolean); null }
             m.returnType == Boolean::class.javaPrimitiveType -> false
             else -> null
         }
@@ -161,36 +156,33 @@ class ReleaseOfferCompactTest {
     }
 
     @Test
-    fun whileTheNotesLoadTheNoticeShowsTheProgressLineAndTheApprovalWorks() {
+    fun whileTheNotesLoadTheNoticeShowsTheProgressLine() {
         unlock = unlock.copy(notes = null)
         rule.setContent { UnlockContent(unlock, unlockActions) }
         rule.onNodeWithTag("release_offer_loading", useUnmergedTree = true).assertExists()
         rule.onNodeWithTag("release_offer_notes").assertTextEquals("Loading the release notes…")
         rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
-        rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
-        rule.onNodeWithTag("approve_offer").assertIsOn()
     }
 
     @Test
-    fun unavailableNotesAreSaidAndTheApprovalWorks() {
+    fun unavailableNotesAreSaid() {
         unlock = unlock.copy(notes = ReleaseNotes.Unavailable)
         rule.setContent { UnlockContent(unlock, unlockActions) }
         rule.onNodeWithTag("release_offer_unavailable", useUnmergedTree = true).assertTextEquals("Release notes unavailable")
         rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
-        rule.onNodeWithTag("approve_offer").assertIsEnabled().performClick()
-        rule.onNodeWithTag("approve_offer").assertIsOn()
     }
 
     @Test
     @GraphicsMode(GraphicsMode.Mode.NATIVE) // real text measurement, so that the lines wrap as on a phone
-    fun theApprovalAndTheLinkDoNotMoveWhenTheNotesArrive() {
+    fun theFingerprintAndTheLinkDoNotMoveWhenTheNotesArrive() {
         // Review F2: the notes' line keeps its height whatever its state, also where its texts wrap differently.
         RuntimeEnvironment.setFontScale(2f)
         unlock = unlock.copy(notes = null)
         rule.setContent { UnlockContent(unlock, unlockActions) }
-        fun tops() = listOf("approve_offer", "whats_new_open").map { rule.onNodeWithTag(it).fetchSemanticsNode().positionInRoot.y }
+        fun tops() = listOf("release_offer_fingerprint", "whats_new_open")
+            .map { rule.onNodeWithTag(it, useUnmergedTree = true).fetchSemanticsNode().positionInRoot.y }
         val loading = tops()
         unlock = unlock.copy(notes = notes)
         rule.waitForIdle()
@@ -239,11 +231,12 @@ class ReleaseOfferCompactTest {
 
     @Test
     fun theCompactNoticeHoldsExactlyThePlansContents() {
-        // ANDROID-PLAN 0.1.122: "Update available: release N", the security line, the fingerprint,
-        // "Approve the update with this unlock" and the link; security_text stays in the sheet.
+        // ANDROID-PLAN 0.1.122: "Update available: release N", the security line, the fingerprint and the link;
+        // security_text stays in the sheet. No approval (Rule 3): the PIN only unlocks, and the update is approved on the
+        // release gate's own screen once the vault is open.
         rule.setContent { UnlockContent(unlock, unlockActions) }
         rule.onNodeWithText("Update available: release 5").assertExists()
-        rule.onNodeWithText("Approve the update with this unlock", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("approve_offer").assertDoesNotExist()
         rule.onNodeWithTag("whats_new_open").assertTextEquals("What's new in release 5")
         rule.onNodeWithText("Fixes the backoff.").assertDoesNotExist()
         rule.onNodeWithTag("whats_new_open").performClick()
@@ -251,13 +244,14 @@ class ReleaseOfferCompactTest {
         rule.onNodeWithText("Fixes the backoff.").assertExists()
     }
 
+    /** Rule 3 (the release gate): no checkbox at the unlock; nothing of the offer is an action but the notes' link. */
     @Test
-    fun theApprovalWorksWithoutOpeningTheSheet() {
+    fun theUnlockHasNoApproval() {
         rule.setContent { UnlockContent(unlock, unlockActions) }
-        rule.onNodeWithTag("approve_offer").assertIsOff().performClick()
-        rule.onNodeWithTag("approve_offer").assertIsOn()
-        assertEquals(listOf("setApproveOffer"), unlockCalls.filter { it == "setApproveOffer" })
-        rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
+        rule.onNodeWithTag("release_offer").assertExists()
+        rule.onNodeWithTag("approve_offer").assertDoesNotExist()
+        assertEquals(0, rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ToggleableState)).fetchSemanticsNodes().size)
+        assertTrue(unlockCalls.isEmpty())
     }
 
     @Test
@@ -337,9 +331,8 @@ class ReleaseOfferCompactTest {
     }
 
     @Test
-    fun aTickedBoxSurvivesTheSheetOpeningAndClosing() {
+    fun theSheetClosesWithItsOwnDismiss() {
         rule.setContent { UnlockContent(unlock, unlockActions) }
-        rule.onNodeWithTag("approve_offer").performClick()
         rule.onNodeWithTag("whats_new_open").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("whats_new_sheet").assertExists()
@@ -347,8 +340,7 @@ class ReleaseOfferCompactTest {
         rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).onFirst().performSemanticsAction(SemanticsActions.Dismiss)
         rule.waitForIdle()
         rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
-        rule.onNodeWithTag("approve_offer").assertIsOn()
-        assertEquals(listOf("setApproveOffer"), unlockCalls.filter { it == "setApproveOffer" })
+        rule.onNodeWithTag("release_offer").assertExists()
     }
 
     @Test
@@ -383,8 +375,8 @@ class ReleaseOfferCompactTest {
         rule.onNodeWithTag("release_offer_security", useUnmergedTree = true).assertTextEquals("Security fix: update urgently")
         rule.onNodeWithTag("release_offer_fingerprint", useUnmergedTree = true).assertTextContains(fingerprint, substring = true)
         rule.onNodeWithTag("whats_new_summary").assertDoesNotExist()
-        rule.onNodeWithTag("approve_offer").performClick()
-        rule.onNodeWithTag("approve_offer").assertIsOn()
+        // Rule 3: no approval at the recovery's PIN either.
+        rule.onNodeWithTag("approve_offer").assertDoesNotExist()
         rule.onNodeWithTag("whats_new_sheet").assertDoesNotExist()
         rule.onNodeWithTag("whats_new_open").performClick()
         rule.waitForIdle()
