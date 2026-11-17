@@ -110,4 +110,20 @@ class AccountSheetTest {
         show()
         rule.onNodeWithTag("account_email").performScrollTo().assertIsDisplayed()
     }
+
+    /** Rule 3 (the release gate's sheet): without "Change name" and "Shared profile"; Lock vault stays first. */
+    @Test
+    fun theGatesSheetHasNoNameOrProfileRows() {
+        rule.setContent {
+            Box(Modifier.height(640.dp)) {
+                AvatarSheetContent(name = "Sam Rivera", detail = "sam@example.org", optionsHeader = "Options") {
+                    AccountSheetOptions(account, "https://account.vettid.org", {}, now, onChangeName = null, onSharedProfile = null)
+                }
+            }
+        }
+        rule.onNodeWithTag("account_lock_vault", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("account_names", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("account_change_name", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("account_shared_profile", useUnmergedTree = true).assertDoesNotExist()
+    }
 }

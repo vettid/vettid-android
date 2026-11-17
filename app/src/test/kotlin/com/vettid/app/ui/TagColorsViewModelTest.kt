@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.testing.FakeReleaseUpdates
 import com.vettid.core.testing.FakeSharing
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.theme.TagColors
@@ -30,6 +31,7 @@ import java.time.Instant
 class TagColorsViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val vault = FakeVault(AppPhase.Unlocked)
+    private val updates = FakeReleaseUpdates()
     private val sharing = FakeSharing().apply {
         registry = TagRegistry(
             3,
@@ -48,7 +50,7 @@ class TagColorsViewModelTest {
 
     @Test
     fun theRegistryIsReadWhenTheVaultOpensAndEveryTagGetsADistinctColour() = runTest(dispatcher) {
-        val vm = TagColorsViewModel(sharing, vault)
+        val vm = TagColorsViewModel(sharing, vault, updates)
         advanceUntilIdle()
         assertTrue("refreshTags" in sharing.calls)
         val c = vm.colors.value
@@ -61,7 +63,7 @@ class TagColorsViewModelTest {
 
     @Test
     fun aDroppedRegistryIsReadAgainAndANewTagColoured() = runTest(dispatcher) {
-        val vm = TagColorsViewModel(sharing, vault)
+        val vm = TagColorsViewModel(sharing, vault, updates)
         advanceUntilIdle()
         sharing.registry = sharing.registry.copy(tags = sharing.registry.tags + TagView("garden", 1))
         sharing.tags.value = null // a tag.changed, or a tag first used on an item
@@ -72,7 +74,17 @@ class TagColorsViewModelTest {
     @Test
     fun nothingIsStoredWhileTheOwnerCheckIsDue() = runTest(dispatcher) {
         vault.ownerCheck.value = OwnerCheckView(OwnerCheckState.HELD, Instant.EPOCH, 86_400, 0, hold = true, holdOffUntil = null)
-        val vm = TagColorsViewModel(sharing, vault)
+        val vm = TagColorsViewModel(sharing, vault, updates)
+        advanceUntilIdle()
+        assertTrue(sharing.calls.none { it == "assignColors" })
+        assertEquals(mapOf("work" to "#123456"), vm.colors.value)
+    }
+
+    /** Rule 3: nor while the release gate pauses the vault's work (behind, or its release not verified). */
+    @Test
+    fun nothingIsStoredWhileTheReleaseGatePauses() = runTest(dispatcher) {
+        updates.paused.value = true
+        val vm = TagColorsViewModel(sharing, vault, updates)
         advanceUntilIdle()
         assertTrue(sharing.calls.none { it == "assignColors" })
         assertEquals(mapOf("work" to "#123456"), vm.colors.value)
@@ -81,7 +93,7 @@ class TagColorsViewModelTest {
     @Test
     fun aFailedReadKeepsTheHashColours() = runTest(dispatcher) {
         sharing.fail["refreshTags"] = VaultFailure(FailureKind.NETWORK)
-        val vm = TagColorsViewModel(sharing, vault)
+        val vm = TagColorsViewModel(sharing, vault, updates)
         advanceUntilIdle()
         assertTrue(vm.colors.value.isEmpty())
         assertTrue(sharing.calls.none { it == "assignColors" })

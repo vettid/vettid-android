@@ -115,7 +115,7 @@ object WalletModule {
         // A new credential destroys every wallet with the other critical items (VAULT-MESSAGING 0.48.0).
         manager.onCredentialReset { m.beginCredentialReset() }
         // The session's identity while open: a close and an open conflated into "still open" still move it.
-        val open = combine(manager.phase, manager.ownerCheck.ownerCheck, manager.opens, ::sessionOf)
+        val open = combine(manager.phase, manager.ownerCheck.ownerCheck, manager.opens, manager.releaseUpdate.required, ::sessionOf)
         val events = manager.vaultEvents.filterNotNull().flatMapLatest { it.events }.map { it.type to it.body }
         m.follow(open, events, onClosed = { servers.forgetChecks() })
     }
@@ -136,11 +136,15 @@ object WalletModule {
     internal fun shownOf(open: Boolean, availability: WalletAvailability): Boolean = open && availability != WalletAvailability.UNSUPPORTED
 
     /** The open session's identity ([opens], the vault's openings) while the wallets may be held ([openOf]); null while not. */
-    internal fun sessionOf(phase: AppPhase, check: OwnerCheckView?, opens: Int): Int? = opens.takeIf { openOf(phase, check) }
+    internal fun sessionOf(phase: AppPhase, check: OwnerCheckView?, opens: Int, releaseRequired: Boolean): Int? =
+        opens.takeIf { openOf(phase, check, releaseRequired) }
 
-    /** Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then). */
-    internal fun openOf(phase: AppPhase, check: OwnerCheckView?): Boolean =
-        phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK)
+    /**
+     * Whether the wallets may be held: the vault unlocked and not held or due (§3.6.3: nothing of them is kept or shown then),
+     * and no update of the vault's release required first (Rule 3, the release gate).
+     */
+    internal fun openOf(phase: AppPhase, check: OwnerCheckView?, releaseRequired: Boolean): Boolean =
+        phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK) && !releaseRequired
 
     /**
      * At a live wipe, before anything is erased: the generation moves and the wallets are forgotten; then the writes already in

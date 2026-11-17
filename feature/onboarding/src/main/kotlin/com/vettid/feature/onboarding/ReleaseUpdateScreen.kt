@@ -65,9 +65,12 @@ fun NavGraphBuilder.releaseUpdateDestination(onBack: () -> Unit) {
 /** A release's end date for display (the unlock screen's format). */
 fun releaseDate(t: Instant): String = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(t)
 
-/** The update screen for [state] (stateless). */
+/**
+ * The update screen for [state] (stateless). [onBack] null: the update is required (Rule 3, the release gate), and the
+ * screen has no way back.
+ */
 @Composable
-fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActions, onBack: () -> Unit) {
+fun ReleaseUpdateContent(state: ReleaseUpdateUiState, actions: ReleaseUpdateActions, onBack: (() -> Unit)?) {
     val offer = state.offer
     FormScaffold(
         title = stringResource(R.string.release_update_title),
@@ -264,7 +267,12 @@ fun ReleaseUpdateFlowContent(state: ReleaseUpdateFlowUiState, actions: ReleaseUp
             primaryLabel = stringResource(if (badPin) R.string.release_update_approve else R.string.release_update_retry),
             onPrimary = actions::retry,
             primaryEnabled = state.retryAllowed,
-            secondaryLabel = stringResource(if (p.vaultOpen) R.string.release_update_not_now else R.string.release_update_unlock_only),
+            // Rule 3: no "Not now" while the update is required (the open vault shows only the update); "Unlock only" stays.
+            secondaryLabel = when {
+                !p.vaultOpen -> stringResource(R.string.release_update_unlock_only)
+                state.required -> null
+                else -> stringResource(R.string.release_update_not_now)
+            },
             onSecondary = actions::finish,
             modifier = Modifier.testTag(if (badPin) "release_update_bad_pin" else "release_update_failed"),
             header = { UpdateIcon() },
