@@ -33,8 +33,6 @@ import com.vettid.core.data.vault.RecoveryView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.ProfileRepository
-import com.vettid.core.data.vault.ReleaseUpdateOffer
-import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -66,8 +64,6 @@ data class SettingsUiState(
     val appLockMethod: AppLockMethod = AppLockMethod.BIOMETRICS,
     /** The phone has a screen lock: "Phone screen lock" can be chosen (read by the screen, not the ViewModel). */
     val screenLockSet: Boolean = true,
-    /** A release update to approve (ANDROID-PLAN 0.1.19): the "Update available" row. */
-    val update: ReleaseUpdateOffer? = null,
     /** "Allow screenshots" is on (A6 audit S1): the app is not kept out of screenshots, recordings and Recents. */
     val screenshotsAllowed: Boolean = false,
     /** A development build: the allowance does not end by itself (the row says so). */
@@ -90,7 +86,6 @@ class SettingsViewModel @Inject constructor(
     private val prefs: PreferencesRepository,
     private val appLock: AppLock,
     private val profiles: ProfileRepository,
-    updates: ReleaseUpdateRepository,
     private val screenshots: ScreenshotAllowance,
     presence: PresenceRepository = NoPresence,
     location: LocationRepository = NoLocation,
@@ -104,7 +99,6 @@ class SettingsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { screenshots.allowed.collect { on -> local.update { it.copy(screenshotsAllowed = on) } } }
-        viewModelScope.launch { updates.offer.collect { o -> local.update { it.copy(update = o) } } }
         viewModelScope.launch { appLock.method.collect { m -> local.update { it.copy(appLockMethod = m) } } }
         viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }

@@ -10,7 +10,7 @@ import androidx.annotation.RawRes
 /**
  * The notification channels (ANDROID-PLAN 0.1.23, Notification modes 6): stable ids, translated names, created at
  * first start; the member changes each in Android settings. Every notification is private on the lock screen
- * ([FeedNotifier]). "Vault updates" ([VAULT_UPDATES], 0.1.19) belongs to the app's release notice, which creates it.
+ * ([FeedNotifier]).
  *
  * Sounds (owner decision 2026-10-23): VettID's own sounds (`res/raw/vettid_*`, sources in `tools/sounds`). Android
  * fixes a channel's sound when the channel is first created, so every channel whose sound changed got a new id once
@@ -27,14 +27,16 @@ object Channels {
     const val SECURITY = "security_v2"
     const val OWNER_CHECK = "owner_check_v2"
     const val ACTIVITY = "activity"
-    const val VAULT_UPDATES = "vault_updates_v2"
     const val CONNECTION = "connection"
 
     /** The ongoing notification of sharing the member's location (ANDROID-PLAN §4 "Location"): low importance, silent. */
     const val LOCATION = "location_sharing"
 
-    /** The ids the channels had before their sounds; deleted at start, never posted to. */
-    val RETIRED = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates")
+    /**
+     * Deleted at start, never posted to: the ids the channels had before their sounds, and both ids of "Vault updates"
+     * (the release notice's own channel, gone with it: the release gate shows the update instead).
+     */
+    val RETIRED = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates", "vault_updates_v2")
 
     /** Each channel's sound (a raw resource); a channel not named here is silent. */
     val SOUNDS: Map<String, Int> = mapOf(
@@ -44,7 +46,6 @@ object Channels {
         MISSED_CALLS to R.raw.vettid_message,
         SECURITY to R.raw.vettid_urgent,
         OWNER_CHECK to R.raw.vettid_urgent,
-        VAULT_UPDATES to R.raw.vettid_general,
     )
 
     /** id → (name, description, importance). */
@@ -61,11 +62,8 @@ object Channels {
         Triple(LOCATION, R.string.notify_channel_location to R.string.notify_channel_location_body, NotificationManager.IMPORTANCE_LOW),
     )
 
-    /** The channels [ensure] creates ([VAULT_UPDATES] is the release notice's own). */
+    /** The channels [ensure] creates: every channel the app posts to. */
     val ids: List<String> get() = all.map { it.first }
-
-    /** Every channel the app posts to. */
-    val allIds: List<String> get() = ids + VAULT_UPDATES
 
     /**
      * Deletes the retired ids, then creates (or renames, in a new language) the channels; the member's own changes

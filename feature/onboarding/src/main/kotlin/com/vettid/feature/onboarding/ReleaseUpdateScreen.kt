@@ -25,8 +25,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.compose.composable
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateManager
 import com.vettid.core.data.vault.ReleaseUpdateOffer
@@ -43,24 +41,10 @@ import com.vettid.core.ui.components.StepList
 import com.vettid.core.ui.components.StepState
 import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.theme.Spacing
-import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-
-/** The update screen: "Update now" from the banner, the notification or Settings → Vault. */
-@Serializable
-data object ReleaseUpdateRoute
-
-/** Registers [ReleaseUpdateRoute] in the app shell. */
-fun NavGraphBuilder.releaseUpdateDestination(onBack: () -> Unit) {
-    composable<ReleaseUpdateRoute> {
-        val vm: ReleaseUpdateViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
-        ReleaseUpdateContent(state, vm, onBack)
-    }
-}
 
 /** A release's end date for display (the unlock screen's format). */
 fun releaseDate(t: Instant): String = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(t)

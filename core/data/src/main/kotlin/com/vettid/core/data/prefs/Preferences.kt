@@ -91,10 +91,6 @@ data class AppPreferences(
     val appLockMethod: AppLockMethod? = null,
     /** The Keystore slot (0 or 1) of the app-lock key that is current; 0 when never written (the alias the app always used). */
     val appLockKeySlot: Int = 0,
-    /** The release notice the member dismissed (ANDROID-PLAN 0.1.19): the target release, its kind, when (epoch ms). */
-    val releaseNoticeDismissed: ReleaseNoticeDismissal? = null,
-    /** The newest release a local notification was posted for (one per release). */
-    val releaseNotified: Long = 0,
     /** The notification permission (API 33+) was asked for once; never again. */
     val notificationsAsked: Boolean = false,
     /** Null: never chosen, which is [NotificationMode.SERVICE] for new and updated installs (§9 question 13). */
@@ -128,13 +124,6 @@ data class AppPreferences(
     val effectiveNotificationMode: NotificationMode get() = notificationMode ?: NotificationMode.SERVICE
 }
 
-/**
- * A dismissed release notice: [release] and [kind] (`UpdateNoticeKind` name) at [atMs] (epoch milliseconds), for
- * [forMs] (STAGING-TIME-SCALE, S16: 24 h divided by the vault's time scale at the dismissal; 0 for 24 h, as stored
- * before the scale).
- */
-data class ReleaseNoticeDismissal(val release: Long, val kind: String, val atMs: Long, val forMs: Long = 0)
-
 @Suppress("TooManyFunctions") // one setter per preference
 interface PreferencesRepository {
     val preferences: Flow<AppPreferences>
@@ -149,10 +138,6 @@ interface PreferencesRepository {
 
     /** Turns the lock on with [method] and the current key [slot] in one edit (a crash leaves all three or none). */
     suspend fun setAppLock(enabled: Boolean, method: AppLockMethod, slot: Int)
-
-    suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal)
-
-    suspend fun setReleaseNotified(release: Long)
 
     suspend fun setNotificationsAsked()
 
@@ -222,10 +207,6 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
             appLockTimeout = p[APP_LOCK_TIMEOUT]?.let { AppLockTimeout.of(it) } ?: AppLockTimeout.DEFAULT,
             appLockKeySlot = p[APP_LOCK_KEY_SLOT] ?: 0,
             appLockMethod = p[APP_LOCK_METHOD]?.let { runCatching { AppLockMethod.valueOf(it) }.getOrNull() },
-            releaseNoticeDismissed = p[RELEASE_DISMISSED]?.let { r ->
-                ReleaseNoticeDismissal(r, p[RELEASE_DISMISSED_KIND] ?: "", p[RELEASE_DISMISSED_AT] ?: 0, p[RELEASE_DISMISSED_FOR] ?: 0)
-            },
-            releaseNotified = p[RELEASE_NOTIFIED] ?: 0,
             notificationsAsked = p[NOTIFICATIONS_ASKED] ?: false,
             notificationMode = p[NOTIFICATION_MODE]?.let { runCatching { NotificationMode.valueOf(it) }.getOrNull() },
             notificationPreviews = p[NOTIFICATION_PREVIEWS]?.let { runCatching { NotificationPreviews.valueOf(it) }.getOrNull() }
@@ -297,19 +278,6 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         store.edit { it.remove(PreferencesFiles.RESET) }
     }
 
-    override suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal) {
-        store.edit {
-            it[RELEASE_DISMISSED] = d.release
-            it[RELEASE_DISMISSED_KIND] = d.kind
-            it[RELEASE_DISMISSED_AT] = d.atMs
-            it[RELEASE_DISMISSED_FOR] = d.forMs
-        }
-    }
-
-    override suspend fun setReleaseNotified(release: Long) {
-        store.edit { it[RELEASE_NOTIFIED] = release }
-    }
-
     override suspend fun setNotificationsAsked() {
         store.edit { it[NOTIFICATIONS_ASKED] = true }
     }
@@ -336,11 +304,6 @@ class DataStorePreferencesRepository internal constructor(private val store: Dat
         val APP_LOCK_TIMEOUT = intPreferencesKey("app_lock_timeout_s")
         val APP_LOCK_METHOD = stringPreferencesKey("app_lock_method")
         val APP_LOCK_KEY_SLOT = intPreferencesKey("app_lock_key_slot")
-        val RELEASE_DISMISSED = longPreferencesKey("release_notice_dismissed")
-        val RELEASE_DISMISSED_KIND = stringPreferencesKey("release_notice_dismissed_kind")
-        val RELEASE_DISMISSED_AT = longPreferencesKey("release_notice_dismissed_at_ms")
-        val RELEASE_DISMISSED_FOR = longPreferencesKey("release_notice_dismissed_for_ms")
-        val RELEASE_NOTIFIED = longPreferencesKey("release_notified")
         val NOTIFICATIONS_ASKED = booleanPreferencesKey("notifications_asked")
         val NOTIFICATION_MODE = stringPreferencesKey("notification_mode")
         val NOTIFICATION_PREVIEWS = stringPreferencesKey("notification_previews")
@@ -373,10 +336,6 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
 
     override suspend fun setAppLock(enabled: Boolean, method: AppLockMethod, slot: Int) =
         state.update { it.copy(appLockEnabled = enabled, appLockMethod = method, appLockKeySlot = slot) }
-
-    override suspend fun setReleaseNoticeDismissed(d: ReleaseNoticeDismissal) = state.update { it.copy(releaseNoticeDismissed = d) }
-
-    override suspend fun setReleaseNotified(release: Long) = state.update { it.copy(releaseNotified = release) }
 
     override suspend fun setNotificationsAsked() = state.update { it.copy(notificationsAsked = true) }
 

@@ -30,9 +30,7 @@ import com.vettid.feature.history.HistoryEntryUiState
 import com.vettid.feature.history.HistoryScreen
 import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
-import com.vettid.app.ui.ReleaseBannerState
 import com.vettid.app.ui.RelayRefusedNotice
-import com.vettid.app.ui.ReleaseUpdateBanner
 import com.vettid.core.data.vault.EarlierRelease
 import com.vettid.core.data.vault.ReleaseLogEntry
 import com.vettid.core.data.vault.ReleaseNotes
@@ -1758,25 +1756,7 @@ object ScreenCatalog {
                 SharedProfileActions(),
             )
         },
-        // The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19).
-        "shell.release_banner" to {
-            Column {
-                ReleaseUpdateBanner(ReleaseBannerState(updateOffer, visible = true), first = true, onUpdate = {}, onDismiss = {})
-            }
-        },
-        "shell.release_banner_ending" to {
-            Column {
-                ReleaseUpdateBanner(ReleaseBannerState(updateEnding, visible = true), first = true, onUpdate = {}, onDismiss = {})
-            }
-        },
-        "shell.release_banner_ended" to {
-            Column {
-                ReleaseUpdateBanner(
-                    ReleaseBannerState(ReleaseUpdateOffer(release(3, "removed"), release(5)), visible = true),
-                    first = true, onUpdate = {}, onDismiss = {},
-                )
-            }
-        },
+        // The release update (ANDROID-PLAN 0.1.19), shown by the release gate (Rule 3).
         "release_update" to {
             ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468", notes = whatsNew), NoUpdate) {}
         },
@@ -1824,9 +1804,6 @@ object ScreenCatalog {
         },
         "release_update.abandoning" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONING), NoUpdate) },
         "release_update.abandoned" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONED) { it.copy(vaultOpen = true) }, NoUpdate) },
-        "settings.release_update_row" to {
-            SettingsContent(SettingsUiState(account = sampleAccount, update = updateOffer), SettingsActions())
-        },
         "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
     )
 }

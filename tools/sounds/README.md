@@ -5,7 +5,7 @@ same glassy tone, in four moods:
 
 | Sound | Length | Used for (Android channel) |
 |---|---|---|
-| `vettid_general` | 1.4 s, D, soft | Vault updates |
+| `vettid_general` | 1.4 s, D, soft | none now (the "Vault updates" channel is gone; master kept, no export in the app) |
 | `vettid_message` | 1.7 s, G, with a tail note | Messages, Missed calls |
 | `vettid_urgent` | 2.2 s, C, twice, firmer | Requests, Security, Daily check |
 | `vettid_ringtone` | 8.0 s, D, seamless loop | Calls (ringing only) |

@@ -53,7 +53,6 @@ import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.AccountRepository
-import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CredentialRepository
@@ -69,9 +68,7 @@ import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.ReleaseNotesClient
 import com.vettid.core.data.vault.ReleaseNotesRepository
-import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.ReleaseUpdateRepository
-import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.TimeScaleSource
 import com.vettid.core.data.vault.VaultRepository
@@ -178,7 +175,6 @@ object AppModule {
         setupLinks: SetupLinkInbox,
         inviteLinks: InviteLinkInbox,
         canaryManifests: CanaryManifestInbox,
-        releaseUpdates: ReleaseUpdateInbox,
         moduleHooks: Set<@JvmSuppressWildcards WipeHook>,
     ): LocalWipe = LocalWipe(
         AndroidWipeTargets(context),
@@ -190,7 +186,6 @@ object AppModule {
                 { setupLinks.consume() },
                 { inviteLinks.consume() },
                 { canaryManifests.consume() },
-                { releaseUpdates.consume() },
             ),
         ),
     )
@@ -396,21 +391,6 @@ object AppModule {
 
     @Provides
     fun releaseUpdateRepository(m: VaultManager): ReleaseUpdateRepository = m.releaseUpdate
-
-    @Provides
-    @Singleton
-    fun releaseUpdateInbox(): ReleaseUpdateInbox = ReleaseUpdateInbox()
-
-    @Provides
-    @Singleton
-    fun releaseUpdateNotifier(
-        @ApplicationContext context: Context,
-        updates: ReleaseUpdateRepository,
-        prefs: PreferencesRepository,
-        @AppScope scope: CoroutineScope,
-        notes: ReleaseNotesRepository,
-        m: VaultManager,
-    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope, notes) { m.phase.value == AppPhase.SignedOut }
 
     /** VAULT-MESSAGING 0.45.0 §11.14.9 step 7: a lost answer's decision while the app is in the background. */
     @Provides

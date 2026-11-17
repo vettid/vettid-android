@@ -70,22 +70,11 @@ class ChannelSoundsTest {
         assertTrue(channel(Channels.CALLS).shouldVibrate())
     }
 
-    @Test
-    fun vaultUpdatesTakesTheGeneralSound() {
-        val c = NotificationChannel(Channels.VAULT_UPDATES, "Vault updates", NotificationManager.IMPORTANCE_DEFAULT)
-        Channels.applySound(app, c)
-        assertEquals(uri(R.raw.vettid_general), c.sound)
-        assertEquals(AudioAttributes.USAGE_NOTIFICATION, c.audioAttributes.usage)
-        assertEquals(AudioAttributes.CONTENT_TYPE_SONIFICATION, c.audioAttributes.contentType)
-    }
-
     /** Each channel's URI names its sound (never a resource id, which changes between builds) and resolves to it. */
     @Test
     fun eachChannelsSoundUriResolvesByName() {
         Channels.ensure(app)
-        val updates = NotificationChannel(Channels.VAULT_UPDATES, "v", NotificationManager.IMPORTANCE_DEFAULT)
-        Channels.applySound(app, updates)
-        val channels = (Channels.ids.map { channel(it) } + updates).filter { it.sound != null }
+        val channels = Channels.ids.map { channel(it) }.filter { it.sound != null }
         assertEquals(Channels.SOUNDS.keys, channels.map { it.id }.toSet())
         channels.forEach { c ->
             val s = c.sound
@@ -98,7 +87,7 @@ class ChannelSoundsTest {
     @Test
     fun theSoundsAreVettIdsRawResources() {
         val names = Channels.SOUNDS.values.map { app.resources.getResourceEntryName(it) }.toSet()
-        assertEquals(setOf("vettid_general", "vettid_message", "vettid_urgent", "vettid_ringtone"), names)
+        assertEquals(setOf("vettid_message", "vettid_urgent", "vettid_ringtone"), names)
         Channels.SOUNDS.values.forEach { app.resources.openRawResource(it).use { s -> assertTrue(s.read() >= 0) } }
     }
 
@@ -126,7 +115,7 @@ class ChannelSoundsTest {
 
     @Test
     fun theOldIdsAreDeletedAtStart() {
-        val old = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates")
+        val old = listOf("messages", "requests", "calls", "security", "owner_check", "vault_updates", "vault_updates_v2")
         assertEquals(old, Channels.RETIRED)
         nm.createNotificationChannels(
             (old + Channels.ACTIVITY).map { NotificationChannel(it, it, NotificationManager.IMPORTANCE_HIGH) },
@@ -140,9 +129,9 @@ class ChannelSoundsTest {
     @Test
     fun theNewIdsAreTheOldOnesWithV2() {
         val changed = listOf(
-            Channels.MESSAGES, Channels.REQUESTS, Channels.CALLS, Channels.SECURITY, Channels.OWNER_CHECK, Channels.VAULT_UPDATES,
+            Channels.MESSAGES, Channels.REQUESTS, Channels.CALLS, Channels.SECURITY, Channels.OWNER_CHECK,
         )
-        assertEquals(Channels.RETIRED.map { it + "_v2" }, changed)
+        assertEquals(Channels.RETIRED.filterNot { it.startsWith("vault_updates") }.map { it + "_v2" }, changed)
         assertEquals(changed.toSet() + Channels.MISSED_CALLS, Channels.SOUNDS.keys)
     }
 
