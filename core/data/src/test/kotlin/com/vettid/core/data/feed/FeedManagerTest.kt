@@ -178,6 +178,56 @@ class FeedManagerTest {
         assertEquals(listOf("i2"), arrived.map { it.itemId })
     }
 
+    /**
+     * A held event whose item already arrived among the held arrivals (a catch-up brought it during the check) is applied
+     * but not notified a second time when they are released.
+     */
+    @Test
+    fun aHeldEventOfAnItemThatJustArrivedIsNotNotifiedTwice() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
+        m.catchUp()
+        settle { m.seq == 2L }
+        m.onEvent(event(item("i2", 2)))
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        checking = false
+        m.releaseHeld()
+        settle { arrived.size >= 2 }
+        assertEquals("i2 once, then i3", listOf("i2", "i3"), arrived.map { it.itemId })
+        assertEquals("the events still applied", 3L, m.seq)
+    }
+
+    /**
+     * The check is over but its held events have not come yet (the gate's notice is on its way): a live event and a live
+     * arrival then wait behind them and release them first, so none overtakes them; the release that follows adds nothing.
+     */
+    @Test
+    fun aLiveEventAfterTheCheckNeverOvertakesTheHeldOnes() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        checking = false
+        m.onEvent(event(item("i4", 4)))
+        settle { arrived.size >= 3 }
+        assertEquals(listOf("i2", "i3", "i4"), arrived.map { it.itemId })
+        m.releaseHeld()
+        m.onEvent(event(item("i5", 5)))
+        settle { arrived.size >= 4 }
+        assertEquals("nothing twice; a later one comes as usual", listOf("i2", "i3", "i4", "i5"), arrived.map { it.itemId })
+    }
+
     // --- events held back until the vault was known to be open (a process started by a push wake) ---
 
     @Test

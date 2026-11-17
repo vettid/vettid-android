@@ -160,8 +160,9 @@ interface ReleaseUpdateOps {
     fun ownerCheckDue(): Boolean
 
     /**
-     * (Rule 3) The app is in front (the app's foreground signal): a failing release check is read again only then; the
-     * return to the foreground reads it at once.
+     * (Rule 3) The app is in front (the app's foreground signal): a check held by a verification failure is read again
+     * only then (a manifest only out of reach, [ReleaseCheckFailure], is read again in the background too); the return to
+     * the foreground reads it at once.
      */
     fun inFront(): Boolean = true
 
@@ -399,14 +400,20 @@ class ReleaseUpdateManager(
     /** A read succeeded in this opening: a later one that only could not reach the manifest keeps its answer. */
     private var verified = false
 
-    /** The last read taken in this opening failed: the retries go on until one succeeds (quietly, see [failed]). */
-    private var failing = false
+    /**
+     * Why the last read taken in this opening failed (null: it did not): the retries go on until one succeeds (quietly, see
+     * [failed]); in the background only while it is [ReleaseCheckFailure.unavailable].
+     */
+    private var failing: FailureKind? = null
 
     /** Wiped ([clear]): the work stays paused until the next opening. */
     private var wiped = false
 
     /** An opening lifted a failed check's pause without telling ([GateChange.owedReads]). */
     private var readsOwed = false
+
+    /** This opening's owed reads were told with the end of its check: its opened steps, if they run, read nothing more. */
+    private var owedTold = false
 
     /** Counts the reads of the manifest as they begin: a result older than the last one taken is dropped. */
     private var reads = 0
@@ -468,13 +475,27 @@ class ReleaseUpdateManager(
      * read for a vault on its way out), and the work stays paused until the next opening.
      */
     fun clear() {
-        val number = ops.releaseNumber()
         synchronized(gate) {
             restart(open = false)
             offerFlow.value = null
             wiped = true
-            settle(number, tell = false)
+            // No offer is left, so nothing is behind: the vault's release number is not needed (nor read from its state).
+            settle(null, tell = false)
         }
+    }
+
+    /**
+     * The opened steps of an opening are about to run its reads (an unlock the phase's followers saw, the lock before it
+     * included): they pay what that opening owed ([readsOwed]), so the end of its check reads nothing more. False when the
+     * end of the check already told the owed reads: the lift's reads run once, not again here.
+     */
+    fun openingReadsDue(): Boolean = synchronized(gate) {
+        if (owedTold) {
+            owedTold = false
+            return false
+        }
+        readsOwed = false
+        true
     }
 
     /** A new generation: the check, its failure and its retries end. Under [gate]. */
@@ -486,8 +507,9 @@ class ReleaseUpdateManager(
         checkingFlow.value = false
         failureFlow.value = null
         verified = false
-        failing = false
+        failing = null
         readsOwed = false
+        owedTold = false
     }
 
     /**
@@ -511,6 +533,7 @@ class ReleaseUpdateManager(
         // An owed lift is told with the first change after it (paused again: the lift will read; else read now).
         val owed = tell && readsOwed
         if (tell) readsOwed = false
+        if (owed) owedTold = true
         // Every change is numbered, also one not told: a notice taken before a silent change is older than it, and is dropped.
         val n = notices.next(GateChange(paused, required, pausedChanged, requiredChanged, owed))
         return n.takeIf { tell }
@@ -552,7 +575,7 @@ class ReleaseUpdateManager(
             checkingFlow.value = false
             failureFlow.value = null
             verified = true
-            failing = false
+            failing = null
             // The retries of an earlier failure end here: the next failure's start again at 2 s.
             retry?.cancel()
             retry = null
@@ -563,7 +586,8 @@ class ReleaseUpdateManager(
 
     /**
      * A read failed: the last offer stays, and while the vault is open the manifest is read again after [CHECK_RETRIES_S]
-     * (in the foreground only: [ReleaseUpdateOps.inFront]), until a read succeeds or the generation moves. Before this
+     * until a read succeeds or the generation moves: in the background too while the manifest is only out of reach
+     * ([ReleaseCheckFailure]), else in the foreground only ([ReleaseUpdateOps.inFront]). Before this
      * opening's first success, and for every failure that is not only the manifest out of reach after it
      * ([ReleaseCheckFailure]), the check holds (fail closed): [required], the failure shown, the work paused. Out of reach
      * after a success: the last verified answer stays, nothing is shown or paused, and the retries go on quietly.
@@ -573,12 +597,12 @@ class ReleaseUpdateManager(
         val front = ops.inFront()
         val change = synchronized(gate) {
             if (!open || !takes(begun, n)) return
-            failing = true
+            failing = kind
             if (!verified || !ReleaseCheckFailure.unavailable(kind)) {
                 checkingFlow.value = true
                 failureFlow.value = kind
             }
-            if (retry?.isActive != true && front) retry = scope.launch { retryLoop(begun) }
+            if (retry?.isActive != true && retriesNow(kind, front)) retry = scope.launch { retryLoop(begun) }
             settle(number, tell = true)
         }
         tell(change)
@@ -595,9 +619,15 @@ class ReleaseUpdateManager(
     }
 
     /**
-     * The retries of a failing check. Ends when the generation moves, a read succeeds, or the app is not in front (the
-     * return to the foreground and "Try again" read again, and a failure then starts the retries over); on its way out
-     * it is no longer [retry], so a failure that comes then starts a new one.
+     * Whether a check failing with [kind] is read again now: in front always; in the background only while the manifest is
+     * just out of reach (a verification failure waits for the member: the return to the foreground and "Try again").
+     */
+    private fun retriesNow(kind: FailureKind, front: Boolean): Boolean = front || ReleaseCheckFailure.unavailable(kind)
+
+    /**
+     * The retries of a failing check. Ends when the generation moves, a read succeeds, or the app is not in front and the
+     * last failure was a verification failure (the return to the foreground and "Try again" read again, and a failure then
+     * starts the retries over); on its way out it is no longer [retry], so a failure that comes then starts a new one.
      */
     private suspend fun retryLoop(begun: Int) {
         val self = currentCoroutineContext()[Job]
@@ -606,7 +636,8 @@ class ReleaseUpdateManager(
             delay(CHECK_RETRIES_S[minOf(attempt++, CHECK_RETRIES_S.size - 1)] * MS_PER_S)
             val front = ops.inFront()
             val n = synchronized(gate) {
-                if (begun != generation || !failing || !front) {
+                val kind = failing
+                if (begun != generation || kind == null || !retriesNow(kind, front)) {
                     if (retry === self) retry = null
                     return
                 }
