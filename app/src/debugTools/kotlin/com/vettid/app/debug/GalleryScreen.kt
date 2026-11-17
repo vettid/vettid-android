@@ -529,8 +529,8 @@ private fun NoticesGallery() {
         com.vettid.core.ui.components.UrgentBanner("Your credential was presented by another device", "Review", {})
         com.vettid.core.ui.components.InfoBanner("The vault service is paused for maintenance. Try again later.")
         com.vettid.core.ui.components.InfoBanner(
-            "A new vault release is available (release 5).",
-            actionLabel = "Update now",
+            "One or two lines of information, with an action and a close button.",
+            actionLabel = "Action",
             onDismiss = {},
         )
         Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {

@@ -2907,7 +2907,7 @@ class VaultManager(
         return phone
     }
 
-    // --- the proactive release update (owner decision 2026-10-09) ---
+    // --- the release gate's update (Rule 3) ---
 
     private inner class UpdateOps : ReleaseUpdateOps {
         /** Fails closed (Rule 3, the release gate): [ReleaseGateOffer]. */

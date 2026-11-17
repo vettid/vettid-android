@@ -209,12 +209,9 @@ data class UpdateProgress(
 /** Never required: the release gate's default for a repository without it. */
 private val NOT_REQUIRED: StateFlow<Boolean> = MutableStateFlow(false)
 
-/** The proactive release update: the offer the shell shows, and the one-step update. */
+/** The release gate's update: the offer it decides from, and the one-step update. */
 interface ReleaseUpdateRepository {
     val offer: StateFlow<ReleaseUpdateOffer?>
-
-    /** [offer] has been read from the manifest at least once in this process (before that, null means "not known"). */
-    val offerKnown: StateFlow<Boolean>
 
     /** Non-null while an update is under way or its outcome is shown; the root of the UI shows it over every phase. */
     val progress: StateFlow<UpdateProgress?>
@@ -323,8 +320,6 @@ class ReleaseUpdateManager(
     private val offerFlow = MutableStateFlow<ReleaseUpdateOffer?>(null)
     private val progressFlow = MutableStateFlow<UpdateProgress?>(null)
     override val offer: StateFlow<ReleaseUpdateOffer?> = offerFlow.asStateFlow()
-    private val knownFlow = MutableStateFlow(false)
-    override val offerKnown: StateFlow<Boolean> = knownFlow.asStateFlow()
     override val progress: StateFlow<UpdateProgress?> = progressFlow.asStateFlow()
     private var job: Job? = null
 
@@ -539,7 +534,6 @@ class ReleaseUpdateManager(
         val change = synchronized(gate) {
             if (!takes(begun, n)) return
             offerFlow.value = o
-            knownFlow.value = true
             checkingFlow.value = false
             failureFlow.value = null
             verified = true
