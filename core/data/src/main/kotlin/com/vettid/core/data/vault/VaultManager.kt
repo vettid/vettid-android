@@ -1807,10 +1807,11 @@ class VaultManager(
                     s.device.start(scope)
                     ownerCheck.onRelayReconnected()
                     // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2), and the manifest again
-                    // (Rule 3: a check that failed while the relay was away is read now).
+                    // (Rule 3: a check that failed while the relay was away is read now; not while its retries run, nor
+                    // within a minute of a read that succeeded).
                     if (phaseFlow.value == AppPhase.Unlocked) {
                         feed.catchUp()
-                        scope.launch { releaseUpdate.refreshOffer() }
+                        releaseUpdate.relayReconnected()
                     }
                     // §11.14.9: and an unresolved change is checked again.
                     if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()

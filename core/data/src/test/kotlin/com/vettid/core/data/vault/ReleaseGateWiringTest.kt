@@ -146,7 +146,7 @@ class ReleaseGateWiringTest {
         assertTrue("under the open phase", open >= 0)
         val inner = restart.subList(open, restart.size)
         assertEquals("feed.catchUp()", inner[1])
-        assertEquals("scope.launch { releaseUpdate.refreshOffer() }", inner[2])
+        assertEquals("releaseUpdate.relayReconnected()", inner[2])
         assertEquals("}", inner[3])
     }
 }

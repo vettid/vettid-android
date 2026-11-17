@@ -367,6 +367,8 @@ interface ReleaseUpdateRepository {
 class ReleaseUpdateManager(
     private val scope: CoroutineScope,
     private val ops: ReleaseUpdateOps,
+    /** A monotonic clock in milliseconds (tests: the virtual time). */
+    private val elapsedMs: () -> Long = { System.nanoTime() / NS_PER_MS },
 ) : ReleaseUpdateRepository {
     private val offerFlow = MutableStateFlow<ReleaseUpdateOffer?>(null)
     private val progressFlow = MutableStateFlow<UpdateProgress?>(null)
@@ -399,6 +401,9 @@ class ReleaseUpdateManager(
 
     /** A read succeeded in this opening: a later one that only could not reach the manifest keeps its answer. */
     private var verified = false
+
+    /** When ([elapsedMs]) a read last succeeded in this opening; null for none. */
+    private var lastSuccessMs: Long? = null
 
     /**
      * Why the last read taken in this opening failed (null: it did not): the retries go on until one succeeds (quietly, see
@@ -507,6 +512,7 @@ class ReleaseUpdateManager(
         checkingFlow.value = false
         failureFlow.value = null
         verified = false
+        lastSuccessMs = null
         failing = null
         readsOwed = false
         owedTold = false
@@ -550,6 +556,18 @@ class ReleaseUpdateManager(
     }
 
     /**
+     * The relay connection came back: the manifest is read again, unless the retries already read it (a loop runs) or a
+     * read succeeded within [RECONNECT_QUIET_MS] (a relay that comes and goes does not read it each time).
+     */
+    fun relayReconnected() {
+        val now = elapsedMs()
+        val quiet = synchronized(gate) {
+            retry?.isActive == true || lastSuccessMs?.let { now - it < RECONNECT_QUIET_MS } == true
+        }
+        if (!quiet) scope.launch { refreshOffer() }
+    }
+
+    /**
      * One read of the manifest, begun in generation [begun] as read number [n]. Any failure but a cancellation is a failed
      * read ([failed]); an error (`Error`) is not caught.
      */
@@ -575,6 +593,7 @@ class ReleaseUpdateManager(
             checkingFlow.value = false
             failureFlow.value = null
             verified = true
+            lastSuccessMs = elapsedMs()
             failing = null
             // The retries of an earlier failure end here: the next failure's start again at 2 s.
             retry?.cancel()
@@ -920,7 +939,11 @@ class ReleaseUpdateManager(
 
         /** (Rule 3) The waits between the reads of a failing check, in seconds: then every minute. */
         val CHECK_RETRIES_S = listOf(2L, 5L, 15L, 30L, 60L)
+
+        /** (Rule 3) A relay reconnect reads the manifest only when no read succeeded for this long. */
+        const val RECONNECT_QUIET_MS = 60_000L
         private const val MS_PER_S = 1000L
+        private const val NS_PER_MS = 1_000_000L
         private const val MAX_MOVED_AGAIN = 2
     }
 }

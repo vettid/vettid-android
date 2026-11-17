@@ -112,7 +112,7 @@ class ReleaseGateTest {
 
     private fun TestScope.manager(ops: Ops): ReleaseUpdateManager {
         ops.clock = { testScheduler.currentTime }
-        return ReleaseUpdateManager(backgroundScope, ops)
+        return ReleaseUpdateManager(backgroundScope, ops, elapsedMs = { testScheduler.currentTime })
     }
 
     // --- the state ---
@@ -368,6 +368,45 @@ class ReleaseGateTest {
         assertEquals("read again, and it succeeded", 11, ops.reads.size)
         advanceTimeBy(600_000)
         assertEquals(11, ops.reads.size)
+    }
+
+    /**
+     * A relay reconnect reads the manifest, but not within a minute of a read that succeeded, nor while the retries run
+     * (they read it); a check held in the background by a verification failure (no retries) is read.
+     */
+    @Test
+    fun aRelayReconnectReadsUnlessARecentReadOrTheRetriesDo() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(1, ops.reads.size)
+        advanceTimeBy(59_000)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals("a read succeeded within the minute", 1, ops.reads.size)
+        advanceTimeBy(1_000)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals(2, ops.reads.size)
+        // A manifest out of reach: the retries run, the reconnect leaves it to them.
+        ops.failing = true
+        advanceTimeBy(60_000)
+        m.refreshOffer()
+        assertEquals(3, ops.reads.size)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals("the retries read it", 3, ops.reads.size)
+        // A verification failure in the background: no retries, so the reconnect reads.
+        ops.failKind = FailureKind.MANIFEST
+        ops.front = false
+        advanceTimeBy(2_001)
+        assertEquals(4, ops.reads.size)
+        advanceTimeBy(600_000)
+        assertEquals("the retries ended", 4, ops.reads.size)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals(5, ops.reads.size)
     }
 
     @Test
