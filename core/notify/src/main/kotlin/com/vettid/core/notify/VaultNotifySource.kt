@@ -35,6 +35,9 @@ class VaultNotifySource(
     /** Open, not held or due, and no update of the vault's release required first (Rule 3, the release gate: [shellOpen]). */
     override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck, vault.releaseUpdate.required, ::shellOpen)
         .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** [open] from its sources now: the feed tells what it held during the release check once [required] is false. */
+    override fun openNow(): Boolean = shellOpen(vault.phase.value, vault.ownerCheck.ownerCheck.value, vault.releaseUpdate.required.value)
     override val lockedElsewhere: StateFlow<Boolean> = vault.lockedElsewhere
     override val idleLocked: StateFlow<com.vettid.core.data.vault.IdleLocked?> = vault.ownerCheck.idleLocked
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck

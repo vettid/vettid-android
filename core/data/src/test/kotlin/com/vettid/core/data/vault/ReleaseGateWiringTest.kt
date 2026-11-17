@@ -46,13 +46,16 @@ class ReleaseGateWiringTest {
         val clear = block("clearReleaseCheck = {")
         clear.has("phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }")
         clear.has("releasePause.reset()")
+        clear.has("heldAskReplay.drop()")
     }
 
     @Test
     fun aWipeAndBothDeletionsClearTheCheck() {
         val wipe = block("private suspend fun eraseAfterMark()")
         val at = wipe.indexOf("steps.step { releaseUpdate.clear() }")
-        assertTrue("the wipe's first step", at >= 0 && at < wipe.indexOf("steps.step { forgetDevices() }"))
+        val mailbox = wipe.indexOfFirst { it.contains("deleteMailbox()") }
+        assertTrue("the wipe's first step, before the mailbox goes", at in 0 until mailbox)
+        assertEquals("val steps = ClearSteps()", wipe[at - 1])
         // Each deletion: the update closed, then the check cleared, right after.
         val closes = code.indices.filter { code[it] == "releaseUpdate.close()" }
         assertEquals(2, closes.size)
@@ -67,8 +70,11 @@ class ReleaseGateWiringTest {
                 "releaseUpdate.paused.value)",
         )
         block("val feed = FeedManager(").has("gated = { featuresGated() },")
-        block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || featuresGated() },")
-        block("val location = LocationSharing(").has("due = { featuresGated() },")
+        block("val feed = FeedManager(").has("held = { releaseUpdate.checking.value },")
+        // What sends waits for the release check too.
+        code.has("private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)")
+        block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
+        block("val location = LocationSharing(").has("due = { sendsGated() },")
     }
 
     @Test
@@ -82,11 +88,14 @@ class ReleaseGateWiringTest {
     fun theOpeningsReadsAndTheChecksStepsWaitWhilePaused() {
         code.has("openedReads(releaseUpdate.paused.value) { gatedReads() }")
         code.has("onPassed = { if (!releaseUpdate.paused.value) social.refreshAllQuietly() },")
-        code.has("if (!releaseUpdate.paused.value) steps.step { votes.startSync() }")
+        code.has("if (!releaseUpdate.required.value) steps.step { votes.startSync() }")
         code.has("if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }")
         code.has("if (gatedEnded) steps.step { releasePause.ownerCheckLifted() }")
         val hold = block("private suspend fun afterHoldPassed(")
         assertEquals("if (releaseUpdate.paused.value) {", hold[1])
+        // The waiting-asks replay is kept for the lift, its window open (never ended here).
+        assertEquals("if (gen != null) heldAskReplay.hold(HeldAskReplay.Due(gen, listMark, token))", hold[2])
+        assertEquals("return", hold[3])
         code.has(
             "afterCredentialReset(releaseUpdate.paused.value, { refreshAlarm(s) }, { ownerCheck.onOpened() }, " +
                 "{ items.refreshQuietly() })",
@@ -95,17 +104,25 @@ class ReleaseGateWiringTest {
 
     @Test
     fun thePauseIsFollowed() {
-        code.has("releaseUpdate.onPausedChange = { paused -> releasePause.onPaused(paused) }")
+        code.has("releaseUpdate.onGateChange = { c -> releasePause.onGate(c) }")
         val pause = block("private val releasePause = ReleasePauseSteps(")
-        pause.has("unlocked = { phaseFlow.value == AppPhase.Unlocked && !phaseFlow.deleting },")
+        pause.has("unlocked = { phaseFlow.openNotDeleting },")
         pause.has("checkGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },")
         pause.has("paused = { releaseUpdate.paused.value },")
+        pause.has("required = { releaseUpdate.required.value },")
         pause.has("stopVotes = { votes.stopSync() },")
-        pause.has("gatedReads()")
-        pause.has("sharing.invalidateTags()")
-        val reads = block("private fun gatedReads()")
-        listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "votes.startSync()", "feed.open()").forEach { reads.has(it) }
-        assertTrue(reads.any { it.contains("attachments.probe()") })
+        val reads = pause.subList(pause.indexOf("reads = {"), pause.indexOf("sends = {"))
+        reads.has("gatedReads()")
+        reads.has("sharing.invalidateTags()")
+        reads.has("heldAskReplay.take()?.let { d -> scope.launch { afterHoldPassed(d.gen, d.listMark, d.token) } }")
+        val sends = pause.subList(pause.indexOf("sends = {"), pause.size)
+        listOf("votes.startSync()", "presence.start()", "location.resume()", "feed.releaseHeld()").forEach { sends.has(it) }
+        val opened = block("private fun gatedReads()")
+        listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "feed.open()").forEach { opened.has(it) }
+        assertTrue(opened.any { it.contains("attachments.probe()") })
+        assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
+        // Nothing in the opened steps starts the votes' work.
+        assertTrue(block("phaseSteps.onPhase(it) {").none { it.contains("votes.startSync()") })
     }
 
     @Test
@@ -114,5 +131,7 @@ class ReleaseGateWiringTest {
         offer.has("ReleaseGateOffer.checkNumber(st.releaseNumber)")
         offer.has("ReleaseGateOffer.of(st.release, st.releaseNumber, m.releases, m::byPcr0)")
         code.has("override fun releaseNumber(): Long? = session?.device?.altState?.releaseNumber")
+        // No retries in the background: the app's foreground signal.
+        code.has("override fun inFront(): Boolean = ownerCheck.inFront.value")
     }
 }

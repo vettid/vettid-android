@@ -33,6 +33,7 @@ import java.time.ZoneOffset
 
 /** Rule 3: the app requires the vault's current release. The release gate's state, its reads, its pause and its events. */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // one gate: its state, retries, pause, events and steps side by side
 class ReleaseGateTest {
     private fun rel(n: Long, status: String = "active") = ReleaseView(n, "%02d".format(n).repeat(48), status, null, "https://vettid.org/r/$n")
 
@@ -61,6 +62,12 @@ class ReleaseGateTest {
         /** The update's unlocks, in turn (then opened). */
         val results = ArrayDeque<UpdateStepResult>()
 
+        /** The app is in front ([ReleaseUpdateOps.inFront]). */
+        var front = true
+
+        /** When set, a read fails with this kind while [failing]. */
+        var failKind = FailureKind.NETWORK
+
         override suspend fun offer(): ReleaseUpdateOffer? {
             reads += clock()
             val answer = answers.removeFirstOrNull()
@@ -70,16 +77,29 @@ class ReleaseGateTest {
                 g.await()
             }
             bug?.let { throw it }
-            if (failing) throw VaultFailure(FailureKind.NETWORK)
+            if (failing) throw VaultFailure(failKind)
             return if (answer != null) answer.getOrThrow() else held
         }
 
         override fun releaseNumber() = release
         override fun ownerCheckDue() = false
         override suspend fun lock() = Unit
-        override suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit) =
-            results.removeFirstOrNull() ?: UpdateStepResult.Opened
+        /** Runs inside each of the update's unlocks, before it answers. */
+        var duringUnlock: suspend () -> Unit = {}
+
+        override suspend fun unlock(pin: TakenPin, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+            duringUnlock()
+            return results.removeFirstOrNull() ?: UpdateStepResult.Opened
+        }
         override fun canAbandon() = false
+        override fun inFront() = front
+    }
+
+    /** The pause's changes as they are told. */
+    private fun ReleaseUpdateManager.toldPauses(): MutableList<Boolean> {
+        val told = mutableListOf<Boolean>()
+        onGateChange = { c -> if (c.pausedChanged) told += c.paused }
+        return told
     }
 
     private fun failure() = Result.failure<ReleaseUpdateOffer?>(VaultFailure(FailureKind.MANIFEST_UNAVAILABLE))
@@ -95,8 +115,7 @@ class ReleaseGateTest {
     fun requiredFromTheOpeningUntilTheReadThenWhileBehind() = runTest {
         val ops = Ops()
         val m = manager(ops)
-        val told = mutableListOf<Boolean>()
-        m.onPausedChange = { told += it }
+        val told = m.toldPauses()
         assertFalse(m.required.value)
         m.vaultOpened()
         assertTrue("from the opening", m.required.value && m.checking.value)
@@ -132,8 +151,7 @@ class ReleaseGateTest {
     fun aFailedReadKeepsTheCheckAndPauses() = runTest {
         val ops = Ops()
         val m = manager(ops)
-        val told = mutableListOf<Boolean>()
-        m.onPausedChange = { told += it }
+        val told = m.toldPauses()
         m.vaultOpened()
         ops.answers += failure()
         m.refreshOffer()
@@ -143,20 +161,98 @@ class ReleaseGateTest {
         assertEquals(listOf(true), told)
     }
 
-    /** A read that fails after the check passed also pauses the background work (not the UI) until a read succeeds. */
+    /**
+     * After this opening's check passed, a read that could not reach the manifest keeps the last verified answer: nothing
+     * is shown or paused, and it is read again quietly (parity with iOS).
+     */
     @Test
-    fun aFailedReadAfterTheCheckPausesTheWorkOnly() = runTest {
+    fun aManifestOutOfReachAfterTheCheckKeepsTheLastAnswer() = runTest {
         val ops = Ops()
         val m = manager(ops)
+        val told = m.toldPauses()
         m.vaultOpened()
-        m.refreshOffer()
+        runCurrent()
         assertFalse(m.required.value)
         ops.answers += failure()
+        ops.answers += Result.failure(VaultFailure(FailureKind.NETWORK))
         m.refreshOffer()
-        assertTrue(m.paused.value)
+        assertFalse(m.paused.value || m.required.value || m.checking.value)
+        assertNull(m.checkFailure.value)
+        advanceTimeBy(2_001)
+        assertEquals("retried quietly", 3, ops.reads.size)
+        assertFalse(m.paused.value || m.required.value)
+        advanceTimeBy(5_000)
+        assertEquals("read again, and it succeeded", 4, ops.reads.size)
+        advanceTimeBy(600_000)
+        assertEquals(4, ops.reads.size)
+        assertTrue("never paused", told.isEmpty())
+    }
+
+    /** The same while behind: the last verified answer (behind) stays. */
+    @Test
+    fun aManifestOutOfReachWhileBehindStaysBehind() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.offer = behind
+        m.vaultOpened()
+        runCurrent()
+        ops.answers += failure()
+        m.refreshOffer()
+        assertTrue(m.behind.value && m.required.value && m.paused.value)
+        assertFalse(m.checking.value)
+        assertNull(m.checkFailure.value)
+    }
+
+    /**
+     * After this opening's check passed, a read that fails verification (the signature, an older manifest, a release that
+     * does not match or is not listed) holds the gate as the first check does: required, the checking screen with the
+     * failure, "Try again" and the retries; the work pauses until a read succeeds.
+     */
+    @Test
+    fun aVerificationFailureAfterTheCheckHoldsTheGate() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val told = m.toldPauses()
+        m.vaultOpened()
+        runCurrent()
         assertFalse(m.required.value)
+        ops.answers += Result.failure(VaultFailure(FailureKind.MANIFEST, "manifest_older"))
         m.refreshOffer()
-        assertFalse(m.paused.value)
+        assertTrue(m.checking.value && m.required.value && m.paused.value)
+        assertEquals(FailureKind.MANIFEST, m.checkFailure.value)
+        assertEquals(listOf(true), told)
+        // A read that then cannot reach the manifest does not lift it: only a read that succeeds does.
+        ops.answers += failure()
+        advanceTimeBy(2_001)
+        assertTrue(m.checking.value && m.required.value && m.paused.value)
+        advanceTimeBy(5_000)
+        assertFalse(m.checking.value || m.required.value || m.paused.value)
+        assertEquals(listOf(true, false), told)
+    }
+
+    /** Anything not clearly "out of reach" counts as a verification failure (fail closed). */
+    @Test
+    fun onlyAManifestOutOfReachKeepsTheLastAnswer() {
+        val reach = setOf(
+            FailureKind.NETWORK, FailureKind.NO_RESPONSE, FailureKind.MANIFEST_UNAVAILABLE, FailureKind.VAULT_UNAVAILABLE,
+            FailureKind.SERVICE_PAUSED, FailureKind.RATE_LIMITED,
+        )
+        FailureKind.entries.forEach { assertEquals(it.name, it in reach, ReleaseCheckFailure.unavailable(it)) }
+        listOf(FailureKind.MANIFEST, FailureKind.RELEASE_UNKNOWN, FailureKind.ENCLAVE, FailureKind.OTHER, FailureKind.CLOCK).forEach {
+            assertFalse(it.name, ReleaseCheckFailure.unavailable(it))
+        }
+    }
+
+    /** Before this opening's first success, a manifest out of reach holds the gate as before. */
+    @Test
+    fun aManifestOutOfReachBeforeTheCheckHolds() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.answers += Result.failure(VaultFailure(FailureKind.NETWORK))
+        m.vaultOpened()
+        runCurrent()
+        assertTrue(m.checking.value && m.required.value && m.paused.value)
+        assertEquals(FailureKind.NETWORK, m.checkFailure.value)
     }
 
     // --- the retry ---
@@ -174,6 +270,58 @@ class ReleaseGateTest {
         assertNull(m.checkFailure.value)
         advanceTimeBy(600_000)
         assertEquals("no read after one succeeded", 8, ops.reads.size)
+    }
+
+    /** A read that succeeds ends the retries: a failure after it starts them over at 2 s, not where they were. */
+    @Test
+    fun aFailureAfterASuccessIsRetriedAt2sAgain() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        repeat(5) { ops.answers += failure() }
+        m.vaultOpened()
+        advanceTimeBy(52_001)
+        assertEquals(listOf(0L, 2_000L, 7_000L, 22_000L, 52_000L), ops.reads)
+        m.refreshOffer()
+        assertFalse(m.checking.value)
+        advanceTimeBy(7_999)
+        ops.answers += Result.failure(VaultFailure(FailureKind.MANIFEST))
+        m.refreshOffer()
+        assertTrue(m.checking.value)
+        advanceTimeBy(2_001)
+        assertEquals(listOf(0L, 2_000L, 7_000L, 22_000L, 52_000L, 52_001L, 60_000L, 62_000L), ops.reads)
+        assertFalse(m.checking.value || m.paused.value)
+    }
+
+    /**
+     * In the background a failing check is not read again (no polling every minute while nobody looks); the return to the
+     * foreground reads it (as VaultManager.onForeground does), and a failure then starts the retries over.
+     */
+    @Test
+    fun noRetriesInTheBackground() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        advanceTimeBy(1_000)
+        ops.front = false
+        advanceTimeBy(600_000)
+        assertEquals("the opening's read only", 1, ops.reads.size)
+        assertTrue("still held", m.checking.value && m.required.value && m.paused.value)
+        ops.front = true
+        m.refreshOffer()
+        assertEquals(2, ops.reads.size)
+        advanceTimeBy(2_001)
+        assertEquals("retried again in front", 3, ops.reads.size)
+        // Opened in the background: no retry either; "Try again" still reads.
+        ops.front = false
+        m.vaultOpened()
+        runCurrent()
+        advanceTimeBy(600_000)
+        assertEquals(4, ops.reads.size)
+        m.checkNow()
+        runCurrent()
+        assertEquals(5, ops.reads.size)
     }
 
     @Test
@@ -375,14 +523,19 @@ class ReleaseGateTest {
     fun aClearWhileBehindTellsNothing() = runTest {
         val ops = Ops()
         val m = manager(ops)
-        val told = mutableListOf<Boolean>()
         ops.offer = behind
         m.vaultOpened()
         m.refreshOffer()
-        m.onPausedChange = { told += it }
+        val told = m.toldPauses()
         m.clear()
-        assertFalse(m.required.value || m.paused.value || m.behind.value)
+        assertFalse(m.required.value || m.behind.value)
+        assertTrue("the work stays paused until the next opening", m.paused.value)
         assertNull(m.offer.value)
+        m.vaultClosed()
+        assertTrue("a lock after the wipe keeps it", m.paused.value)
+        ops.offer = null
+        m.vaultOpened()
+        assertFalse(m.paused.value)
         assertTrue(told.isEmpty())
     }
 
@@ -394,8 +547,7 @@ class ReleaseGateTest {
         ops.offer = behind
         m.vaultOpened()
         m.refreshOffer()
-        val told = mutableListOf<Boolean>()
-        m.onPausedChange = { told += it }
+        val told = m.toldPauses()
         ops.results += UpdateStepResult.Moved
         assertTrue(m.start("2468", behind))
         runCurrent()
@@ -403,6 +555,54 @@ class ReleaseGateTest {
         m.finish()
         assertFalse(m.paused.value || m.required.value)
         assertEquals(listOf(false), told)
+    }
+
+    /** The update done, and the opening on the new release already found a newer one: that offer stays (behind again). */
+    @Test
+    fun theUpdateDoneKeepsANewerOffer() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.offer = behind
+        m.vaultOpened()
+        m.refreshOffer()
+        ops.results += UpdateStepResult.Moved
+        assertTrue(m.start("2468", behind))
+        runCurrent()
+        assertEquals(UpdateStep.DONE, m.progress.value?.step)
+        // The opening on release 5 reads release 6.
+        ops.release = 5
+        ops.offer = ReleaseUpdateOffer(rel(5), rel(6))
+        m.vaultOpened()
+        runCurrent()
+        assertTrue(m.behind.value)
+        m.finish()
+        assertTrue("the newer offer stays", m.behind.value && m.required.value && m.paused.value)
+        assertEquals(6L, m.offer.value?.target?.number)
+    }
+
+    /** Also when that opening's read lands before the update says it is done. */
+    @Test
+    fun aNewerOfferReadBeforeTheUpdateIsDoneStays() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.offer = behind
+        m.vaultOpened()
+        m.refreshOffer()
+        ops.results += UpdateStepResult.Moved
+        var unlocks = 0
+        ops.duringUnlock = {
+            if (++unlocks == 2) {
+                ops.release = 5
+                ops.offer = ReleaseUpdateOffer(rel(5), rel(6))
+                m.vaultOpened()
+                m.refreshOffer()
+            }
+        }
+        assertTrue(m.start("2468", behind))
+        runCurrent()
+        assertEquals(UpdateStep.DONE, m.progress.value?.step)
+        assertTrue("the newer offer stays", m.behind.value && m.required.value)
+        assertEquals(6L, m.offer.value?.target?.number)
     }
 
     // --- the fail-closed offer ---
@@ -516,6 +716,7 @@ class ReleaseGateTest {
             unlocked = { true },
             checkGated = { false },
             paused = { m.paused.value },
+            required = { m.required.value },
             stopVotes = {},
             gateChanged = {},
             reads = {
@@ -523,8 +724,9 @@ class ReleaseGateTest {
                     social.refreshPendingFrom { PendingPage(listOf(VaultJson.parseObject("""{"kind":"authenticate","body":$ask}""".toByteArray())), null, base.plusSeconds(10)) }
                 }
             },
+            sends = {},
         )
-        m.onPausedChange = steps::onPaused
+        m.onGateChange = steps::onGate
         ops.offer = behind
         m.vaultOpened()
         m.refreshOffer()
@@ -544,23 +746,32 @@ class ReleaseGateTest {
         var open = true
         var checkGated = false
         var paused = false
+        var required = false
         val pause = ReleasePauseSteps(
             unlocked = { open },
             checkGated = { checkGated },
             paused = { paused },
+            required = { required },
             stopVotes = { log += "stopVotes" },
             gateChanged = { log += "gate:$it" },
             reads = { log += "reads" },
+            sends = { log += "sends" },
         )
     }
 
-    /** The lists are read again when the pause lifts with the vault open: once, as after an unlock. */
+    /** The pause lifts and the check is over (a read found the vault current). */
+    private val lift = GateChange(paused = false, required = false, pausedChanged = true, requiredChanged = true)
+
+    /** A read found the vault behind (or failed). */
+    private val pause = GateChange(paused = true, required = true, pausedChanged = true, requiredChanged = false)
+
+    /** The lists are read again when the pause lifts with the vault open: once, as after an unlock; and what sends starts. */
     @Test
     fun theListsAreReadAgainOnTheLift() = runTest {
         val ops = Ops()
         val m = manager(ops)
         val s = Steps()
-        m.onPausedChange = s.pause::onPaused
+        m.onGateChange = s.pause::onGate
         ops.offer = behind
         m.vaultOpened()
         m.refreshOffer()
@@ -569,7 +780,78 @@ class ReleaseGateTest {
         ops.offer = null
         m.refreshOffer()
         m.refreshOffer()
-        assertEquals(listOf("gate:true", "reads"), s.log)
+        assertEquals(listOf("gate:true", "reads", "sends"), s.log)
+    }
+
+    /** The first check over, the vault current: what sends starts (the opening read the lists already). */
+    @Test
+    fun theEndOfTheCheckStartsTheSends() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val s = Steps()
+        m.onGateChange = s.pause::onGate
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        m.vaultOpened()
+        runCurrent()
+        assertTrue(s.log.isEmpty())
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("gate:true", "sends"), s.log)
+        // A lock and the next opening: its own check's end starts them again.
+        s.log.clear()
+        m.vaultClosed()
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(listOf("gate:true", "sends"), s.log)
+    }
+
+    /** The first check finds the vault behind: nothing sends until the lift. */
+    @Test
+    fun aCheckEndingBehindSendsNothingUntilTheLift() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val s = Steps()
+        m.onGateChange = s.pause::onGate
+        ops.offer = behind
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(listOf("gate:false", "stopVotes"), s.log)
+        s.log.clear()
+        ops.offer = null
+        m.refreshOffer()
+        assertEquals(listOf("gate:true", "reads", "sends"), s.log)
+    }
+
+    /**
+     * A lock and an unlock conflated into one open phase (no lock step, no opened steps) while a failed check paused the
+     * work: the opening's check, once over, runs the lift's reads it owed.
+     */
+    @Test
+    fun aConflatedLockAndUnlockWhileFailingReadsOnceTheCheckPasses() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val s = Steps()
+        m.onGateChange = s.pause::onGate
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(listOf("gate:false", "stopVotes"), s.log)
+        s.log.clear()
+        ops.failing = false
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(listOf("gate:true", "reads", "sends"), s.log)
+        // Not conflated (the lock's step ran): the opened steps read; the check's end only sends.
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        m.vaultClosed()
+        s.log.clear()
+        ops.failing = false
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(listOf("gate:true", "sends"), s.log)
     }
 
     /** Not when the vault is no longer open, or is being deleted. */
@@ -577,7 +859,7 @@ class ReleaseGateTest {
     fun noReadOnALiftWhileNotOpen() {
         val s = Steps()
         s.open = false
-        s.pause.onPaused(false)
+        s.pause.onGate(lift)
         assertEquals(listOf("gate:true"), s.log)
     }
 
@@ -589,14 +871,14 @@ class ReleaseGateTest {
     fun aLiftDuringAHoldReadsOnlyOnceTheHoldLifts() {
         val s = Steps()
         s.checkGated = true
-        s.pause.onPaused(false)
-        assertEquals("nothing read under the hold", listOf("gate:true"), s.log)
+        s.pause.onGate(lift)
+        assertEquals("nothing read or sent under the hold", listOf("gate:true"), s.log)
         s.pause.ownerCheckLifted()
         assertEquals("still held", listOf("gate:true"), s.log)
         s.checkGated = false
         s.pause.ownerCheckLifted()
         s.pause.ownerCheckLifted()
-        assertEquals("once, when the hold lifts", listOf("gate:true", "reads"), s.log)
+        assertEquals("once, when the hold lifts", listOf("gate:true", "reads", "sends"), s.log)
     }
 
     /** The hold lifts while the gate still pauses the work: nothing waits, and the gate's own lift reads (as before). */
@@ -604,12 +886,14 @@ class ReleaseGateTest {
     fun aHoldLiftingWhilePausedReadsOnlyOnTheGatesLift() {
         val s = Steps()
         s.paused = true
-        s.pause.onPaused(true)
+        s.required = true
+        s.pause.onGate(pause)
         s.pause.ownerCheckLifted()
         assertEquals(listOf("gate:false", "stopVotes"), s.log)
         s.paused = false
-        s.pause.onPaused(false)
-        assertEquals(listOf("gate:false", "stopVotes", "gate:true", "reads"), s.log)
+        s.required = false
+        s.pause.onGate(lift)
+        assertEquals(listOf("gate:false", "stopVotes", "gate:true", "reads", "sends"), s.log)
     }
 
     /** A lift's waiting reads go with a pause that comes back, or a lock. */
@@ -617,31 +901,31 @@ class ReleaseGateTest {
     fun waitingReadsGoWithAPauseOrALock() {
         val s = Steps()
         s.checkGated = true
-        s.pause.onPaused(false)
+        s.pause.onGate(lift)
         s.pause.reset()
         s.checkGated = false
         s.pause.ownerCheckLifted()
         s.checkGated = true
-        s.pause.onPaused(false)
-        s.pause.onPaused(true)
+        s.pause.onGate(lift)
+        s.pause.onGate(pause)
         s.checkGated = false
         s.pause.ownerCheckLifted()
-        assertFalse(s.log.contains("reads"))
+        assertFalse(s.log.contains("reads") || s.log.contains("sends"))
     }
 
     /** The pause's notices in the order of their changes: a late "paused" never stops the work after a lift. */
     @Test
     fun aLateNoticeIsDropped() {
         val told = mutableListOf<Boolean>()
-        val n = PauseNotices { told += it }
-        val paused = n.next(true)
-        val lifted = n.next(false)
+        val n = GateNotices { told += it.paused }
+        val paused = n.next(pause)
+        val lifted = n.next(lift)
         n.tell(lifted)
         n.tell(paused)
         assertEquals(listOf(false), told)
         // A notice taken before a silent change (a lock, an opening) is dropped too.
-        val again = n.next(true)
-        n.next(false)
+        val again = n.next(pause)
+        n.next(lift)
         n.tell(again)
         assertEquals(listOf(false), told)
     }
@@ -655,7 +939,7 @@ class ReleaseGateTest {
         ops.offer = behind
         m.vaultOpened()
         m.refreshOffer()
-        m.onPausedChange = s.pause::onPaused
+        m.onGateChange = s.pause::onGate
         runCurrent()
         val gate = CompletableDeferred<Unit>()
         ops.offer = null
@@ -686,37 +970,78 @@ class ReleaseGateTest {
         }
     }
 
-    /** A failed check stops the votes' hourly work: no run sends anything until a read succeeds; then it starts again. */
+    /** The vault's outward work as the gate's steps start it: the votes' hourly runs, presence's probe, location's sends. */
+    private class Outward(scope: kotlinx.coroutines.CoroutineScope, m: ReleaseUpdateManager) {
+        val votes = HourlyVotes(scope)
+        val log = mutableListOf<String>()
+        val steps = ReleasePauseSteps(
+            unlocked = { true },
+            checkGated = { false },
+            paused = { m.paused.value },
+            required = { m.required.value },
+            stopVotes = votes::stop,
+            gateChanged = { log += "location gate:$it" },
+            reads = {},
+            sends = {
+                votes.start()
+                log += "presence"
+                log += "location"
+            },
+        )
+    }
+
+    /**
+     * Nothing goes out during the check, nor while it fails: no votes run, and presence and location are gated
+     * ([sendsGated], their `closed`/`due`); the opening's reads run meanwhile. Once a read succeeds the work starts.
+     */
     @Test
     fun aVotesRunSendsNothingDuringAFailedCheck() = runTest {
         val ops = Ops()
         val m = manager(ops)
-        val votes = HourlyVotes(backgroundScope)
-        m.onPausedChange = ReleasePauseSteps(
-            unlocked = { true },
-            checkGated = { false },
-            paused = { m.paused.value },
-            stopVotes = votes::stop,
-            gateChanged = {},
-            reads = votes::start,
-        )::onPaused
-        m.vaultOpened()
-        // The opening's own reads start at once (the votes' first run with them).
-        openedReads(m.paused.value) { votes.start() }
-        runCurrent()
-        assertEquals(1, votes.runs)
+        val out = Outward(backgroundScope, m)
+        m.onGateChange = out.steps::onGate
         ops.failing = true
-        m.refreshOffer()
+        m.vaultOpened()
+        var read = false
+        // The opening's own reads start at once (not the votes: they send).
+        openedReads(m.paused.value) { read = true }
+        assertTrue(read)
+        assertTrue("presence and location wait during the check", sendsGated(featuresGated = false, checking = m.checking.value))
+        runCurrent()
         assertTrue(m.paused.value)
         advanceTimeBy(3 * 3_600_000L)
-        assertEquals("no run while the check fails", 1, votes.runs)
-        // While it fails, a pass of the owner check or a reset starts nothing either (openedReads, as the opened block).
-        openedReads(m.paused.value) { votes.start() }
-        runCurrent()
-        assertEquals(1, votes.runs)
+        assertEquals("no run while the check fails", 0, out.votes.runs)
+        assertTrue(sendsGated(featuresGated = false, checking = m.checking.value))
+        assertFalse(out.log.contains("presence") || out.log.contains("location"))
         ops.failing = false
         advanceTimeBy(60_001)
-        assertEquals("lifted: the work starts again", 2, votes.runs)
+        assertEquals("lifted: the work starts", 1, out.votes.runs)
+        assertEquals(listOf("location gate:false", "location gate:true", "presence", "location"), out.log)
+        assertFalse(sendsGated(featuresGated = false, checking = m.checking.value))
+    }
+
+    /** During a first check that passes, nothing goes out either; it starts once the check is over, the vault current. */
+    @Test
+    fun presenceLocationAndVotesWaitForTheFirstCheck() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val out = Outward(backgroundScope, m)
+        m.onGateChange = out.steps::onGate
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        m.vaultOpened()
+        runCurrent()
+        assertTrue(sendsGated(featuresGated = false, checking = m.checking.value))
+        assertFalse(m.paused.value)
+        assertEquals(0, out.votes.runs)
+        assertTrue(out.log.isEmpty())
+        gate.complete(Unit)
+        runCurrent()
+        assertFalse(sendsGated(featuresGated = false, checking = m.checking.value))
+        assertEquals(1, out.votes.runs)
+        assertEquals(listOf("location gate:true", "presence", "location"), out.log)
+        // The owner check still gates them on its own.
+        assertTrue(sendsGated(featuresGated = true, checking = false))
     }
 
     /** After a new credential the alarm is read whatever the gate says; the items wait while it pauses them. */

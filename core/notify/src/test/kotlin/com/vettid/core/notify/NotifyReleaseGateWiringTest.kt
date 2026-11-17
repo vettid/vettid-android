@@ -16,5 +16,11 @@ class NotifyReleaseGateWiringTest {
         val open = "override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck, " +
             "vault.releaseUpdate.required, ::shellOpen)"
         assertTrue(c.contains(open))
+        val now = "override fun openNow(): Boolean = shellOpen(vault.phase.value, vault.ownerCheck.ownerCheck.value, " +
+            "vault.releaseUpdate.required.value)"
+        assertTrue(c.contains(now))
+        // The notifier judges an arrival on that state now.
+        val n = File("src/main/kotlin/com/vettid/core/notify/FeedNotifier.kt").readLines().map { it.substringBefore("//").trim() }
+        assertTrue(n.contains("on && source.openNow() && item.status == FeedManager.STATUS_ACTIVE && !shownOnScreen(item)"))
     }
 }

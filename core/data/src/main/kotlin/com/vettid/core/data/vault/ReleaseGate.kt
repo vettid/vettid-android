@@ -33,49 +33,135 @@ internal object ReleaseGateEvents {
 }
 
 /**
- * (Rule 3) What the vault manager does when the release gate's pause changes ([ReleaseUpdateManager.onPausedChange]):
- * paused, the votes' hourly work stops and location sharing pauses; lifted with the vault open and not being deleted
- * ([unlocked]), the location sharing goes on and the opened vault's reads run once ([reads]), as after an unlock. Not while
- * the owner check is due or held ([checkGated], §3.6.3): those reads then wait for the check to lift ([ownerCheckLifted]).
+ * (Rule 3) A change of the release gate's state, told by [ReleaseUpdateManager.onGateChange] after a read or the update:
+ * [paused] and [required] as they are now, which of them moved ([pausedChanged], [requiredChanged]), and [owedReads]: an
+ * opening lifted a failed check's pause without telling (a lock and an unlock conflated into one open phase, which runs no
+ * opened steps), so the lift's reads are owed once this opening's check is over.
  */
+data class GateChange(
+    val paused: Boolean,
+    val required: Boolean,
+    val pausedChanged: Boolean,
+    val requiredChanged: Boolean,
+    val owedReads: Boolean = false,
+)
+
+/**
+ * (Rule 3) What the vault manager does when the release gate changes ([ReleaseUpdateManager.onGateChange]). Paused: the
+ * votes' hourly work stops. With the vault open and not being deleted ([unlocked]): a lifted pause (or reads an opening
+ * owed) runs the opened vault's reads once ([reads]), as after an unlock; the end of [required] (the check over, the vault
+ * not behind) starts what sends ([sends]: the votes' work, presence, location, the notifications held during the check).
+ * Not while the owner check is due or held ([checkGated], §3.6.3): those wait for the check to lift ([ownerCheckLifted]).
+ * The location sharing is told of every change ([gateChanged], lifted when nothing is [required]).
+ */
+@Suppress("LongParameterList") // each step named
 internal class ReleasePauseSteps(
     private val unlocked: () -> Boolean,
     private val checkGated: () -> Boolean,
     private val paused: () -> Boolean,
+    private val required: () -> Boolean,
     private val stopVotes: () -> Unit,
     private val gateChanged: (lifted: Boolean) -> Unit,
     private val reads: () -> Unit,
+    private val sends: () -> Unit,
 ) {
-    /** A lift came while the owner check was due or held: its reads wait for the check to lift. */
-    private var waiting = false
+    /** A lift's reads, and the end of the check's sends, that came while the owner check was due or held. */
+    private var readsWaiting = false
+    private var sendsWaiting = false
 
-    fun onPaused(paused: Boolean) {
+    fun onGate(c: GateChange) {
         val steps = ClearSteps()
-        steps.step { gateChanged(!paused) }
-        if (paused) {
-            synchronized(this) { waiting = false }
+        steps.step { gateChanged(!c.required) }
+        if (c.paused) {
+            synchronized(this) {
+                readsWaiting = false
+                sendsWaiting = false
+            }
             steps.step { stopVotes() }
         } else if (unlocked()) {
-            if (checkGated()) synchronized(this) { waiting = true } else steps.step { reads() }
+            val readsDue = c.pausedChanged || c.owedReads
+            val sendsDue = c.requiredChanged && !c.required
+            if (checkGated()) {
+                synchronized(this) {
+                    readsWaiting = readsWaiting || readsDue
+                    sendsWaiting = sendsWaiting || sendsDue
+                }
+            } else {
+                if (readsDue) steps.step { reads() }
+                if (sendsDue) steps.step { sends() }
+            }
         }
         steps.finish()
     }
 
     /**
-     * The owner check passed or its hold ended with the vault open: the reads of a lift that came while it was due or held
-     * run now, once (unless the gate paused the work again meanwhile).
+     * The owner check passed or its hold ended with the vault open: the reads and the sends that waited for it run now,
+     * once (unless the gate paused the work, or required the update, again meanwhile).
      */
     fun ownerCheckLifted() {
-        val run = synchronized(this) {
-            val now = waiting && unlocked() && !checkGated() && !paused()
-            if (now) waiting = false
-            now
+        val (r, s) = synchronized(this) {
+            if (!unlocked() || checkGated()) return
+            val r = readsWaiting && !paused()
+            val s = sendsWaiting && !required()
+            if (r) readsWaiting = false
+            if (s) sendsWaiting = false
+            r to s
         }
-        if (run) reads()
+        val steps = ClearSteps()
+        if (r) steps.step { reads() }
+        if (s) steps.step { sends() }
+        steps.finish()
     }
 
-    /** The vault locked: a lift's reads that waited for the owner check go with it. */
-    fun reset() = synchronized(this) { waiting = false }
+    /** The vault locked: what waited for the owner check goes with it. */
+    fun reset() = synchronized(this) {
+        readsWaiting = false
+        sendsWaiting = false
+    }
+}
+
+/**
+ * (Rule 3) What the vault's outward work (presence, location, the votes) waits for: the owner check, the gate's pause
+ * ([featuresGated]), and also the release check itself ([checking]): nothing is sent for a vault whose release is not
+ * known to be current. The reads of an opening run meanwhile.
+ */
+internal fun sendsGated(featuresGated: Boolean, checking: Boolean): Boolean = featuresGated || checking
+
+/**
+ * (Rule 3, parity with iOS) How a failed read of the manifest counts once this opening's check has passed. Only a failure
+ * that says the manifest could not be reached ([unavailable]: the network or the transport, no answer, the server answering
+ * without the document, busy or paused) keeps the last verified answer, retried quietly. Every other failure (the
+ * signature, `MANIFEST_OLDER`, a release that does not match or cannot be placed, anything unexpected) counts as a
+ * verification failure and holds the gate as the first check does: fail closed.
+ */
+internal object ReleaseCheckFailure {
+    val UNAVAILABLE: Set<FailureKind> = setOf(
+        FailureKind.NETWORK,
+        FailureKind.NO_RESPONSE,
+        FailureKind.MANIFEST_UNAVAILABLE,
+        FailureKind.VAULT_UNAVAILABLE,
+        FailureKind.SERVICE_PAUSED,
+        FailureKind.RATE_LIMITED,
+    )
+
+    fun unavailable(kind: FailureKind): Boolean = kind in UNAVAILABLE
+}
+
+/**
+ * (Rule 3) A waiting-asks replay (ANDROID-PLAN 0.1.132) that came due while the release gate paused the work: kept with
+ * its window open ([hold]) and run when the pause lifts ([take]), after the lift's reads. A lock drops it ([drop]); its
+ * window goes with the feed's clear anyway.
+ */
+internal class HeldAskReplay {
+    data class Due(val gen: Int, val listMark: Long, val token: Int)
+
+    private val due = java.util.concurrent.atomic.AtomicReference<Due?>(null)
+
+    fun hold(d: Due) = due.set(d)
+
+    fun take(): Due? = due.getAndSet(null)
+
+    fun drop() = due.set(null)
 }
 
 /**

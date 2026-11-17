@@ -512,6 +512,12 @@ internal class PhaseHolder(
     /** Whether "being deleted" holds. */
     val deleting: Boolean @Synchronized get() = held != null
 
+    /**
+     * Open and not being deleted, read under this holder's lock: told of an opening's check that ended before the opening was
+     * published (the read starts in [onOpen]), the reader waits for the publish and sees the vault open.
+     */
+    val openNotDeleting: Boolean @Synchronized get() = flow.value is AppPhase.Unlocked && held == null
+
     fun asStateFlow(): StateFlow<AppPhase> = flow.asStateFlow()
 
     suspend fun collect(c: FlowCollector<AppPhase>): Nothing = flow.collect(c)
