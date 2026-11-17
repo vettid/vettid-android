@@ -57,7 +57,11 @@ internal fun callName(c: ConnectionInfo): String? = AccountNames.cleaned(c.accou
  * The phone leaves its vault ([CallVault.vaultLeft]) when its phase becomes one with no vault set up on it: signed out
  * (after a sign-out, a wipe, the end of a deletion, or as a phone a transfer or a recovery replaced) or setting one up
  * (a new enrolment, a recovery, a transfer to this phone, each of which starts there). Once per leaving; a lock and an
- * unlock are not one.
+ * unlock are not one. An unlock of the same vault that passes through setup (`Setup` with `FINISHING`,
+ * `NEEDS_CREDENTIAL` or `RECOVERING`) counts as one too: clearing then forgets more than needed, which is harmless.
+ *
+ * [phase] is a conflated state flow, so a value can in principle be skipped. A signed-out or setup value is not skipped
+ * in practice: reaching another vault from here needs the member's input in between.
  */
 internal fun vaultLeavings(phase: Flow<AppPhase>): Flow<Unit> =
     phase.map { it == AppPhase.SignedOut || it is AppPhase.Setup }.distinctUntilChanged().filter { it }.map { }

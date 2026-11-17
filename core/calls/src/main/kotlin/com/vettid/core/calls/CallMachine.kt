@@ -271,8 +271,10 @@ internal class CallMachine(
 
     /**
      * The phone left the vault it was set up with (a sign-out, a wipe, the start of a new setup): a live call ends as at a
-     * lock, and the calls known to have ended ([endedWinners], [endedOthers]) are forgotten, in this order, so that the
-     * next vault opened here, which may be another one, starts with none of this one's. A lock keeps them.
+     * lock, and the calls known to have ended ([endedWinners], [endedOthers], [endedOtherEnds]) are forgotten, in this
+     * order, so that the next vault opened here, which may be another one, starts with none of this one's. A lock keeps
+     * them. A late event of the old vault (still in the inbox, or the echo of the end just sent) can put back a few of its
+     * call ids afterwards; call ids are ULIDs, so another vault never shares them, and they cost only memory.
      */
     fun vaultChanged() = post(Msg.VaultChanged)
 
