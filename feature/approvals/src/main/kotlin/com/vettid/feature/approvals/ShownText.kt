@@ -72,7 +72,10 @@ class ShownText internal constructor(val runs: List<Run>) {
             breaks = 0
             continues = !paragraph
         }
+        // The last run was a kept line break that closed a piece.
+        var brokeLast = false
         for (run in runs) {
+            brokeLast = false
             when (run) {
                 is Run.Marker -> {
                     val len = marker(run.codePoint).length
@@ -82,6 +85,7 @@ class ShownText internal constructor(val runs: List<Run>) {
                 }
                 Run.LineBreak -> if (n >= max / 2 || breaks >= maxBreaks) {
                     close(paragraph = true)
+                    brokeLast = true
                 } else {
                     cur += run
                     n += 1
@@ -110,7 +114,9 @@ class ShownText internal constructor(val runs: List<Run>) {
                 }
             }
         }
-        if (cur.isNotEmpty() || out.isEmpty()) close(paragraph = true)
+        // A kept line break that ended a piece and the text: an empty paragraph after it, so that the break shows (else
+        // 70 characters and a line break would look like the 70 characters alone).
+        if (cur.isNotEmpty() || out.isEmpty() || brokeLast) close(paragraph = true)
         return out
     }
 

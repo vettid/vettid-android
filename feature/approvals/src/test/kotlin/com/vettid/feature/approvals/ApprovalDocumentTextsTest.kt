@@ -70,7 +70,10 @@ class ApprovalDocumentTextsTest {
     @Test
     fun theAccessibilityTexts() {
         assertEquals("level 2", context.getString(R.string.approvals_doc_level_spoken, 2))
-        assertEquals("code point U+202E", context.getString(R.string.approvals_doc_marker_spoken, DocSpoken.markerName(0x202E)))
-        assertEquals("10, text", context.getString(R.string.approvals_doc_string_spoken, "10"))
+        assertEquals("This request can't be shown at this text size", context.getString(R.string.approvals_doc_too_tall))
+        assertEquals(
+            "Choose a smaller text size in Settings, then open the request again. You can deny it now.",
+            context.getString(R.string.approvals_doc_too_tall_body),
+        )
     }
 }

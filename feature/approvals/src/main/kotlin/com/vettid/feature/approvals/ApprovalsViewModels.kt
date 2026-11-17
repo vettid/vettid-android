@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import javax.inject.Inject
@@ -631,14 +632,26 @@ class ApprovalDetailViewModel @Inject constructor(
     }
 
     /** [checked] in place of whatever document the screen showed: it is shown from the start, not yet seen whole. */
-    private fun show(checked: ApprovalDocument.Check) {
-        val step = when (checked) {
+    private suspend fun show(checked: ApprovalDocument.Check) {
+        // Laid out off the main thread: a document is up to 65 KB of text to clean, character by character.
+        val step = withContext(documentCompute) { stepOf(checked) }
+        local.update { it.copy(document = step, documentSeen = null, documentGeneration = it.documentGeneration + 1) }
+    }
+
+    /**
+     * Where [show] lays a document out: [Dispatchers.Default] (a test sets its own dispatcher, so that its scheduler runs
+     * this too).
+     */
+    @androidx.annotation.VisibleForTesting
+    internal var documentCompute: kotlin.coroutines.CoroutineContext = kotlinx.coroutines.Dispatchers.Default
+
+    private fun stepOf(checked: ApprovalDocument.Check): DocumentStep {
+        return when (checked) {
             // Shown with the line it was checked against (the request's `context` it is bound to).
             is ApprovalDocument.Check.Shown -> DocumentPresentation.of(checked.document, checked.document.context)
                 ?.let { DocumentStep.Shown(checked.document, it) } ?: DocumentStep.Unshowable(ApprovalDocument.Failure.SHAPE)
             is ApprovalDocument.Check.Refused -> DocumentStep.Unshowable(checked.reason)
         }
-        local.update { it.copy(document = step, documentSeen = null, documentGeneration = it.documentGeneration + 1) }
     }
 
     /** The document's fetch failed: Try again. */

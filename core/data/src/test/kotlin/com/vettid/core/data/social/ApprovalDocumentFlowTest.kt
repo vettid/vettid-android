@@ -385,11 +385,15 @@ class ApprovalDocumentFlowTest {
     @Test
     fun anAskNoLongerHeldIsNeverApprovedWithoutItsDocument() = runTest {
         // It may carry a document this app can no longer tell of (gone from memory at a lock, or never listed here):
-        // refused, nothing opened or sent.
+        // refused as the vault's not_found reads ("no longer waiting"), nothing opened or sent.
         val m = manager()
         val f = failure { m.approveAuthentication("a1", "pw-fake-1") }
-        assertEquals(FailureKind.OTHER, f.kind)
-        assertEquals(SocialManager.CODE_DOCUMENT_NOT_SHOWN, f.code)
+        assertEquals(FailureKind.NOT_FOUND, f.kind)
+        assertEquals("not_found", f.code)
+        // As the vault's own answer reads.
+        val vault = runCatching { com.vettid.core.data.vault.vaultGuard { throw VaultOpException("connection.authenticate.approve", "not_found") } }
+            .exceptionOrNull() as VaultFailure
+        assertEquals(vault.kind to vault.shownCode, f.kind to f.shownCode)
         assertTrue(ops.calls.isEmpty())
         assertTrue(unlocked.isEmpty())
         // Its document overload still goes by the request it is handed, and only over the document that request names.

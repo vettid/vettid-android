@@ -40,7 +40,7 @@ class ApprovalDocumentViewModelTest {
     private fun detail() = ApprovalDetailViewModel(
         SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to r.key)), social, com.vettid.core.testing.FakeItems(),
         com.vettid.core.testing.FakeDevices(), FakeVault(), social, com.vettid.core.testing.FakePairing(),
-    )
+    ).apply { documentCompute = main.dispatcher }
 
     private fun ApprovalDetailViewModel.seeWhole() {
         val s = uiState.value
@@ -191,8 +191,13 @@ class ApprovalDocumentViewModelTest {
         assertNull(vm.uiState.value.documentToApprove)
         assertFalse(vm.uiState.value.canApprove)
         // Nor one shown with another line than the request's now.
-        val moved = r.copy(context = "Something else")
-        assertNull(vm.uiState.value.copy(approval = moved).documentToApprove)
+        // A Shown document, seen whole, whose request's line or request_id has moved: not approvable (isFor).
+        val d = DocumentSamples.document(DocumentSamples.EXTEND, r)
+        val shown = DocumentStep.Shown(d, DocumentPresentation.of(d, d.context)!!)
+        val seen = ApprovalDetailUiState(r.key, r, document = shown, documentSeen = d.sha256)
+        assertEquals(d, seen.documentToApprove)
+        assertNull(seen.copy(approval = r.copy(context = "Something else")).documentToApprove)
+        assertNull(seen.copy(approval = r.copy(requestId = "a9")).documentToApprove)
     }
 
     @Test
@@ -238,7 +243,7 @@ class ApprovalDocumentViewModelTest {
         // An ask the repository no longer holds is refused by the old path too.
         social.approvals.value = emptyList()
         val gone = runCatching { social.approveAuthentication(r.requestId, "pw-fake-1") }.exceptionOrNull() as VaultFailure
-        assertEquals(FailureKind.OTHER, gone.kind)
+        assertEquals(FailureKind.NOT_FOUND, gone.kind)
         // A request without a document still goes by it, as before.
         val plain = Approval.Authentication("a2", "c1", "Pay 40", DocumentSamples.now, null, "Sam")
         social.approvals.value = listOf(plain)

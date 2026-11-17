@@ -7,6 +7,8 @@ import com.vettid.feature.approvals.DocumentPresentation.Asked
 import com.vettid.feature.approvals.DocumentPresentation.KnownAction
 import com.vettid.feature.approvals.DocumentPresentation.Request
 import com.vettid.feature.approvals.ShownText.Run
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.VerbatimTtsAnnotation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -185,14 +187,102 @@ class DocumentPresentationTest {
     }
 
     @Test
-    fun spokenLinesNameTheirLevelAndTellStringsFromNumbers() {
-        val t = DocSpoken.Texts(level = { "level $it" }, marker = { "code point $it" }, string = { "$it, text" })
-        fun spoken(v: DocumentPresentation.RawValue) = DocSpoken.of(DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount"), v, true)).single(), t)
-        assertEquals("level 2, amount: 10, text", spoken(DocumentPresentation.RawValue.Str(ShownText.of("10"))))
-        assertEquals("level 2, amount: 10", spoken(DocumentPresentation.RawValue.Number("10")))
-        assertEquals("level 2, amount: a code point U+202E b, text", spoken(DocumentPresentation.RawValue.Str(ShownText.of("a\u202Eb"))))
-        // The string's own spaces are kept, never trimmed.
-        assertEquals("level 2, amount:  10 , text", spoken(DocumentPresentation.RawValue.Str(ShownText.of(" 10 "))))
+    fun spokenLinesNameTheirLevelAndQuoteEveryString() {
+        fun spoken(v: DocumentPresentation.RawValue, key: String? = "amount", comma: Boolean = true) =
+            DocSpoken.of(DocPiece.raw(DocumentPresentation.RawLine(1, key?.let { ShownText.of(it, escaped = true) }, v, comma)).single(), raw = true, level)
+        fun str(s: String) = DocumentPresentation.RawValue.Str(ShownText.of(s, escaped = true))
+        // As drawn, with the level first: the string "10" and the number 10 read differently.
+        assertEquals("level 2, \"amount\": \"10\",", spoken(str("10")).text)
+        assertEquals("level 2, \"amount\": 10,", spoken(DocumentPresentation.RawValue.Number("10")).text)
+        assertEquals("level 2, \"amount\": true", spoken(DocumentPresentation.RawValue.Bool(true), comma = false).text)
+        assertEquals("level 2, \"\"", spoken(str(""), key = null, comma = false).text)
+        // The quotation marks and the punctuation are voiced whatever TalkBack's punctuation level.
+        val q = spoken(str("10"))
+        assertEquals(listOf("\"", "\": ", "\"", "\"", ","), verbatims(q))
+    }
+
+    /** The texts of [s]'s VerbatimTtsAnnotation spans, in order, each exactly over what it covers. */
+    private fun verbatims(s: AnnotatedString): List<String> = s.getTtsAnnotations(0, s.length).map { r ->
+        val v = (r.item as VerbatimTtsAnnotation).verbatim
+        assertEquals(v, s.text.substring(r.start, r.end))
+        v
+    }
+
+    private val level: (Int) -> String = { "level $it" }
+
+    @Test
+    fun aRealMarkerAndTypedTextNeverReadTheSame() {
+        fun value(s: String) = DocSpoken.of(DocPiece.value(ShownText.of(s)).single(), raw = false, level)
+        val real = value("a\u202Eb")
+        val typed = value("a code point U+202E b")
+        val typedMarker = value("a\u27E8U+202E\u27E9b")
+        assertEquals("\"a\u27E8U+202E\u27E9b\"", real.text)
+        assertEquals(listOf("\"", "\u27E8U+202E\u27E9", "\""), verbatims(real))
+        assertEquals(listOf("\"", "\""), verbatims(typed))
+        // Typed brackets are markers themselves: what is heard differs from the real marker.
+        assertTrue(real.text != typedMarker.text)
+        assertEquals(listOf("\"", "\u27E8U+27E8\u27E9", "\u27E8U+27E9\u27E9", "\""), verbatims(typedMarker))
+        // A value's own quotation marks and backslashes are escaped, so it cannot close its quotes.
+        assertEquals("\"say \\\"hi\\\" \\\\\"", value("say \"hi\" \\").text)
+        assertEquals("\"\"", value("").text)
+    }
+
+    @Test
+    fun aKeyCannotReadAsAnotherLine() {
+        val forged = DocSpoken.of(
+            DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount: 500, level 2, fee", escaped = true), DocumentPresentation.RawValue.Number("1"), false)).single(),
+            raw = true, level,
+        )
+        val real = listOf(
+            DocumentPresentation.RawLine(1, ShownText.of("amount"), DocumentPresentation.RawValue.Number("500"), true),
+            DocumentPresentation.RawLine(1, ShownText.of("fee"), DocumentPresentation.RawValue.Number("1"), false),
+        ).map { DocSpoken.of(DocPiece.raw(it).single(), raw = true, level).text }
+        assertEquals("level 2, \"amount: 500, level 2, fee\": 1", forged.text)
+        assertTrue(forged.text !in real && forged.text != real.joinToString(" "))
+        // The key's text is inside its voiced quotation marks: what follows them is the app's.
+        val v = forged.getTtsAnnotations(0, forged.length)
+        assertEquals("\"", forged.text.substring(v[0].start, v[0].end))
+        assertEquals("amount: 500, level 2, fee", forged.text.substring(v[0].end, v[1].start))
+    }
+
+    @Test
+    fun aLiteralNoneMotionIsQuotedAndTheAppsNoneIsNot() {
+        val json = DocumentSamples.PROPOSAL.replace("Line one\\nLine two", "None").replace("{\"label\":\"No\"}", "{\"label\":\"Abstain\"}")
+        val values = DocumentRows.of(present(json)).filterIsInstance<DocRow.Value>().map { DocSpoken.of(it.piece, raw = false, level).text }
+        assertTrue(values.toString(), "\"None\"" in values && "\"Abstain\"" in values)
+        val empty = DocumentRows.of(present(DocumentSamples.PROPOSAL.replace("Line one\\nLine two", "")))
+        assertTrue(DocRow.NoneLabel in empty)
+        assertTrue(empty.filterIsInstance<DocRow.Value>().none { DocSpoken.of(it.piece, raw = false, level).text == "\"None\"" })
+    }
+
+    @Test
+    fun aLineBreakAtTheEndShows() {
+        val t = ShownText.of("x".repeat(70) + "\n", lineBreaks = true)
+        val pieces = t.pieces(DocCutting.USUAL.max - 4)
+        assertEquals(2, pieces.size)
+        assertTrue(pieces[1].text.isEmpty && !pieces[1].continues)
+        assertTrue(DocPiece.value(t).size != DocPiece.value(ShownText.of("x".repeat(70), lineBreaks = true)).size)
+        // A short one keeps its break in the piece, as before.
+        assertEquals(listOf(ShownText.Run.Text("ab"), ShownText.Run.LineBreak), ShownText.of("ab\n", lineBreaks = true).pieces().single().text.runs)
+    }
+
+    @Test
+    fun withAScreenReaderTheDocumentIsCutSmallerThenHalved() {
+        assertEquals(DocCutting.USUAL, DocCutting.of(screenReader = false, shrink = 3))
+        assertEquals(DocCutting(30, 4), DocCutting.of(screenReader = true, shrink = 0))
+        assertEquals(DocCutting(15, 2), DocCutting.of(screenReader = true, shrink = 1))
+        assertEquals(DocCutting(10, 1), DocCutting.of(screenReader = true, shrink = 2))
+        assertTrue(DocCutting.of(screenReader = true, shrink = 2).smallest)
+        val rows = DocumentRows.of(present(DocumentSamples.big(200)), DocCutting(30, 4))
+        assertTrue(rows.filterIsInstance<DocRow.Raw>().all { it.piece.length <= 33 })
+    }
+
+    @Test
+    fun rowKeysNameTheirShowingAndCutting() {
+        assertEquals(3, rowOf(rowKey(2, "u0", 3), 2, "u0"))
+        assertNull(rowOf(rowKey(1, "u0", 3), 2, "u0"))
+        assertNull(rowOf(rowKey(2, "r1", 3), 2, "u0"))
+        assertNull(rowOf("facts", 2, "u0"))
     }
 
     @Test

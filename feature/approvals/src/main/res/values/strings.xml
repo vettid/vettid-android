@@ -304,8 +304,9 @@
     <string name="approvals_doc_field_outage_from">Outage from</string>
     <string name="approvals_doc_field_outage_to">Outage to</string>
     <string name="approvals_doc_field_reported_by">Reported by</string>
-    <!-- Accessibility (TalkBack): a raw view's line's level, a marker, and a raw view's string ("10" and 10 sound different). -->
+    <!-- Accessibility (TalkBack): a raw view's line's level. -->
     <string name="approvals_doc_level_spoken">level %1$d</string>
-    <string name="approvals_doc_marker_spoken">code point %1$s</string>
-    <string name="approvals_doc_string_spoken">%1$s, text</string>
+    <!-- Owner-approved 2026-11-17 (as vettid-ios #300): a row that can't be read whole with a screen reader. -->
+    <string name="approvals_doc_too_tall">This request can\'t be shown at this text size</string>
+    <string name="approvals_doc_too_tall_body">Choose a smaller text size in Settings, then open the request again. You can deny it now.</string>
 </resources>

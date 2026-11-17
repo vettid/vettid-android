@@ -10,13 +10,16 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.compose.runtime.CompositionLocalProvider
@@ -50,25 +53,43 @@ class ApprovalDocumentScreenTest {
         return DocumentStep.Shown(d, DocumentPresentation.of(d, d.context)!!)
     }
 
+    /** The font scale the screen is drawn at (null: the configuration's), changeable while it is shown. */
+    private var scale by mutableStateOf<Float?>(null)
+
+    /** Every "seen" report, in order, and the approvals asked for. */
+    private val reports = mutableListOf<Boolean>()
+    private var approvals = 0
+
     /**
      * The screen over [json]'s document, its state kept as the view model keeps it ([ApprovalDetailViewModel.documentSeen]),
-     * at [fontScale].
+     * at [fontScale], with a screen reader or not.
      */
-    private fun show(json: String, fontScale: Float? = null) {
+    private fun show(json: String, fontScale: Float? = null, screenReader: Boolean = false, seenBefore: Boolean = false, ime: Boolean = false) {
         val r = DocumentSamples.request(json)
-        state = ApprovalDetailUiState(r.key, r, password = "pw-fake-1", document = shownOf(json), documentGeneration = 1)
+        val shown = shownOf(json)
+        state = ApprovalDetailUiState(
+            r.key, r, password = "pw-fake-1", document = shown, documentGeneration = 1,
+            documentSeen = shown.document.sha256.takeIf { seenBefore },
+        )
         fontScale?.let { org.robolectric.RuntimeEnvironment.setFontScale(it) }
+        scale = fontScale
         rule.setContent {
             val density = LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale ?: density.fontScale)) {
-                ApprovalDetailScreen(
+            CompositionLocalProvider(LocalDensity provides Density(density.density, scale ?: density.fontScale)) {
+                DocumentApprovalScreen(
+                    r,
                     state,
                     DecisionActions(
+                        onApprove = { approvals++ },
                         onDocumentSeen = { sha, gen, whole ->
+                            reports += whole
                             val d = (state.document as? DocumentStep.Shown)?.document
                             if (sha == d?.sha256 && gen == state.documentGeneration) state = state.copy(documentSeen = sha.takeIf { whole })
                         },
                     ),
+                    Modifier,
+                    imeVisible = ime,
+                    screenReader = screenReader,
                 )
             }
         }
@@ -85,7 +106,7 @@ class ApprovalDocumentScreenTest {
         var watched = false
         repeat(MAX_STEPS) {
             if (watch != null && !watched) {
-                watched = runCatching { rule.onNode(hasContentDescription(watch, substring = true)).assertIsDisplayed() }.isSuccess
+                watched = runCatching { rule.onNode(hasText(watch, substring = true)).assertIsDisplayed() }.isSuccess
             }
             val node = list().fetchSemanticsNode()
             val range = node.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) ?: return watched
@@ -105,7 +126,7 @@ class ApprovalDocumentScreenTest {
         show(json)
         approve().assertIsNotEnabled()
         // The string's last piece, with its last character, came on screen and is read as text.
-        assertTrue(scrollThrough(watch = "xZ, text"))
+        assertTrue(scrollThrough(watch = "xZ\""))
         approve().assertIsEnabled()
     }
 
@@ -143,6 +164,8 @@ class ApprovalDocumentScreenTest {
             rule.onNodeWithTag("deny_button").assertIsDisplayed()
         }
         rule.onNodeWithText("This request can't be shown").assertIsDisplayed()
+        // A notice of one sentence has no title: no empty text is read.
+        assertEquals(0, rule.onAllNodes(hasText("")).fetchSemanticsNodes().size)
     }
 
     @Test
@@ -162,7 +185,7 @@ class ApprovalDocumentScreenTest {
         val rows = DocumentRows.of(shownOf(json).presentation)
         val tall = rows.indexOfFirst { it is DocRow.Raw && it.piece.level == 3 }
         assertTrue(tall > 0)
-        val tallNode = rule.onNode(hasContentDescription("level 3, k:", substring = true))
+        val tallNode = rule.onNode(hasText("level 3, \"k\":", substring = true))
         // Read down until the tall row comes on screen: it is taller than the list, so only its top part is.
         repeat(MAX_STEPS) {
             if (runCatching { tallNode.assertIsDisplayed() }.isSuccess) return@repeat
@@ -188,6 +211,101 @@ class ApprovalDocumentScreenTest {
         state = state.copy(document = shownOf(DocumentSamples.big(8_000)), documentGeneration = 2, documentSeen = null)
         rule.waitForIdle()
         assertEquals(0f, scrollValue())
+        approve().assertIsNotEnabled()
+    }
+
+    @Test
+    fun aDisabledApproveSaysWhyUntilTheDocumentIsSeen() {
+        show(DocumentSamples.big(8_000))
+        val why = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Scroll to the end of the request to approve it.")
+        approve().assertIsNotEnabled().assert(why)
+        scrollThrough()
+        approve().assertIsEnabled().assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+        // Seen, but disabled for the password alone: the plain reading.
+        state = state.copy(password = "")
+        rule.waitForIdle()
+        approve().assertIsNotEnabled().assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h640dp")
+    fun withTheKeyboardUpTheListKeepsRoomAndTheHintAndCaptionGo() {
+        val json = DocumentSamples.big(8_000)
+        val r = DocumentSamples.request(json)
+        state = ApprovalDetailUiState(r.key, r, password = "pw-fake-1", document = shownOf(json), documentGeneration = 1)
+        var ime by mutableStateOf(false)
+        org.robolectric.RuntimeEnvironment.setFontScale(2f)
+        rule.setContent { DocumentApprovalScreen(r, state, DecisionActions(), Modifier, imeVisible = ime) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Scroll to the end of the request to approve it.").assertExists()
+        rule.onNodeWithText("This action uses your Protean Credential").assertExists()
+        ime = true
+        rule.waitForIdle()
+        assertEquals(0, rule.onAllNodes(hasText("Scroll to the end of the request to approve it.")).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodes(hasText("This action uses your Protean Credential")).fetchSemanticsNodes().size)
+        // The list keeps at least a quarter of the window (640dp here, at density 1: 160px).
+        val listHeight = list().fetchSemanticsNode().size.height
+        assertTrue("list $listHeight", listHeight >= (640 * LIST_MIN_FRACTION).toInt() - 1)
+        // Approve and Deny are still there, in the panel, which scrolls.
+        approve().assertExists()
+        rule.onNodeWithTag("deny_button").assertExists()
+    }
+
+    @Test
+    fun theKeyboardsActionApprovesNothingBeforeTheDocumentIsSeen() {
+        show(DocumentSamples.big(8_000))
+        rule.onNodeWithTag("approval_password").performImeAction()
+        rule.waitForIdle()
+        assertEquals(0, approvals)
+        scrollThrough()
+        rule.onNodeWithTag("approval_password").performImeAction()
+        rule.waitForIdle()
+        assertEquals(1, approvals)
+    }
+
+    @Test
+    fun aShowingSaysNotSeenFirst() {
+        // Seen whole in an earlier composition (another text size, a recreation): this one starts from nothing seen.
+        show(DocumentSamples.big(8_000), seenBefore = true)
+        assertEquals(false, reports.first())
+        approve().assertIsNotEnabled()
+    }
+
+    @Test
+    fun anotherTextSizeStartsOverAndCanBeReadAgain() {
+        show(DocumentSamples.big(8_000))
+        scrollThrough()
+        approve().assertIsEnabled()
+        scale = 1.3f
+        rule.waitForIdle()
+        approve().assertIsNotEnabled()
+        list().performScrollToIndex(0)
+        rule.waitForIdle()
+        scrollThrough()
+        approve().assertIsEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h1200dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun withAScreenReaderTheDocumentIsCutSmaller() {
+        show(DocumentSamples.big(3_000), screenReader = true)
+        // Raw rows of at most 30 characters (closing punctuation of up to 3 past it).
+        val raws = rule.onAllNodes(hasText("\"", substring = true)).fetchSemanticsNodes()
+        assertTrue(raws.isNotEmpty())
+        scrollThrough()
+        approve().assertIsEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w240dp-h2000dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun aRowTooTallForTheScreenReaderAtTheSmallestCuttingSaysSo() {
+        show(DocumentSamples.big(400), fontScale = 12f, screenReader = true, ime = true)
+        scrollThrough()
+        rule.waitForIdle()
+        rule.onNodeWithTag("document_too_tall").assertExists()
+        rule.onNodeWithText("This request can't be shown at this text size").assertExists()
         approve().assertIsNotEnabled()
     }
 

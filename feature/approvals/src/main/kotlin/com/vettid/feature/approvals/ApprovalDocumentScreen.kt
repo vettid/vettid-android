@@ -1,6 +1,14 @@
 package com.vettid.feature.approvals
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,7 +52,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.text
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -70,6 +78,9 @@ import com.vettid.core.ui.theme.Spacing
 /** The list's items before the document's rows: the title and the request's facts. */
 internal const val ROWS_FROM = 1
 
+/** With the keyboard up, the least share of the window's height the document's list keeps. */
+internal const val LIST_MIN_FRACTION = 0.25f
+
 /** The list of an approval's document (for tests: it scrolls). */
 const val DOCUMENT_LIST_TAG = "document_list"
 
@@ -82,28 +93,39 @@ const val DOCUMENT_LIST_TAG = "document_list"
  * field, the hint and the choices stay below the list (always composed, so the owner check still blanks the password).
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 internal fun DocumentApprovalScreen(
     a: Approval.Authentication,
     state: ApprovalDetailUiState,
     actions: DecisionActions,
     modifier: Modifier,
+    /** The keyboard is up (a parameter so tests can say so: Robolectric has no keyboard insets). */
+    imeVisible: Boolean = WindowInsets.isImeVisible,
+    /** A screen reader explores by touch (TalkBack): the document is cut smaller ([DocCutting]). */
+    screenReader: Boolean = rememberTouchExploration(),
 ) {
     val title = titleOf(a)
     val step = state.document
     val shown = step as? DocumentStep.Shown
-    val rows = remember(shown) { shown?.let { DocumentRows.of(it.presentation) }.orEmpty() }
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     var width by remember { mutableIntStateOf(0) }
     val sha = shown?.document?.sha256
     val generation = state.documentGeneration
     val layout = Triple(density.density, density.fontScale, width)
-    var seenHere by remember(sha, generation, layout) { mutableStateOf(false) }
+    // With a screen reader, halved for each row still taller than the list; at the smallest, "can't be shown at this text
+    // size" (as iOS). Another document, text size, width or reader starts from the usual cutting again.
+    var shrink by remember(sha, generation, layout, screenReader) { mutableIntStateOf(0) }
+    var tooTall by remember(sha, generation, layout, screenReader) { mutableStateOf(false) }
+    val cutting = DocCutting.of(screenReader, shrink)
+    val cut = "${if (screenReader) "r" else "u"}$shrink"
+    val rows = remember(shown, cutting) { shown?.let { DocumentRows.of(it.presentation, cutting) }.orEmpty() }
+    var seenHere by remember(sha, generation, layout, cut) { mutableStateOf(false) }
     val report by rememberUpdatedState(actions.onDocumentSeen)
     // The showing last brought to the top: a new one (a new document after Changed, the same hash sent again) starts there.
     var toppedFor by rememberSaveable { mutableIntStateOf(-1) }
-    LaunchedEffect(sha, generation, layout, rows) {
+    LaunchedEffect(sha, generation, layout, cut, rows) {
         if (sha == null) return@LaunchedEffect
         // Nothing of this showing seen yet, whatever an earlier one (another text size, width or composition) saw: said
         // before anything else, so that nothing reads as seen for a frame.
@@ -119,9 +141,16 @@ internal fun DocumentApprovalScreen(
         val expected = ROWS_FROM + rows.size + 1
         snapshotFlow { listState.layoutInfo }.collect { info ->
             if (info.totalItemsCount != expected) return@collect
+            val viewport = info.viewportEndOffset - info.viewportStartOffset
             for (item in info.visibleItemsInfo) {
-                // Only the rows of this showing count, by their keys.
-                val row = rowOf(item.key, generation)?.takeIf { it in rows.indices && it !in whole } ?: continue
+                // Only the rows of this showing and cutting count, by their keys.
+                val row = rowOf(item.key, generation, cut)?.takeIf { it in rows.indices && it !in whole } ?: continue
+                // With a screen reader a row of the document's text taller than the list is never seen: moving from node
+                // to node would leave part of it off screen. Cut smaller, or at the smallest say so (Approve stays off).
+                if (screenReader && rows[row].isContent && item.size > viewport) {
+                    if (cutting.smallest) tooTall = true else shrink += 1
+                    return@collect
+                }
                 val top = maxOf(info.viewportStartOffset - item.offset, 0).toFloat()
                 val bottom = minOf(info.viewportEndOffset - item.offset, item.size).toFloat()
                 val c = (coverage[row] ?: SeenCoverage()).saw(if (top < bottom) top..bottom else null, item.size.toFloat())
@@ -141,100 +170,131 @@ internal fun DocumentApprovalScreen(
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
             VettIdBackTopBar(onBackClick = actions.onBack)
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth().onSizeChanged { width = it.width }.testTag(DOCUMENT_LIST_TAG),
-            ) {
-                item(key = "facts") {
-                    Column(Modifier.padding(horizontal = Spacing.xl)) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.headlineSmall,
-                            modifier = Modifier.padding(top = Spacing.s, bottom = Spacing.m).semantics { heading() },
-                        )
-                        Facts(a)
-                    }
-                }
-                when (step) {
-                    is DocumentStep.Shown -> itemsIndexed(rows, key = { i, _ -> rowKey(generation, i) }) { _, row -> DocRowView(row, a) }
-                    DocumentStep.Loading, null -> item(key = "loading") {
-                        Row(
-                            Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l).semantics(mergeDescendants = true) {}
-                                .testTag("document_loading"),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.size(Spacing.s))
-                            Text(stringResource(R.string.approvals_doc_loading), style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    is DocumentStep.Failed -> item(key = "failed") {
-                        Column(Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l)) {
-                            Text(
-                                failureText(step.kind, null, null, step.code),
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.testTag("document_failure"),
-                            )
-                            TextButton(onClick = actions.onRetryDocument, modifier = Modifier.testTag("document_retry")) {
-                                Text(stringResource(R.string.approvals_doc_retry))
+            // With the keyboard up the list keeps at least LIST_MIN_FRACTION of the window's height (at most half the room
+            // above the keyboard), and the panel below scrolls in what is left.
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val window = LocalConfiguration.current.screenHeightDp.dp
+                val minList = if (imeVisible) minOf(window * LIST_MIN_FRACTION, maxHeight / 2) else 0.dp
+                val panelMax = (maxHeight - minList).coerceAtLeast(0.dp)
+                Column(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f).fillMaxWidth().onSizeChanged { width = it.width }.testTag(DOCUMENT_LIST_TAG),
+                    ) {
+                        item(key = "facts") {
+                            Column(Modifier.padding(horizontal = Spacing.xl)) {
+                                Text(
+                                    title,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    modifier = Modifier.padding(top = Spacing.s, bottom = Spacing.m).semantics { heading() },
+                                )
+                                Facts(a)
                             }
                         }
+                        when (step) {
+                            is DocumentStep.Shown -> itemsIndexed(rows, key = { i, _ -> rowKey(generation, cut, i) }) { _, row ->
+                                DocRowView(row, a)
+                            }
+                            DocumentStep.Loading, null -> item(key = "loading") {
+                                Row(
+                                    Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l).semantics(mergeDescendants = true) {}
+                                        .testTag("document_loading"),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.size(Spacing.s))
+                                    Text(stringResource(R.string.approvals_doc_loading), style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            is DocumentStep.Failed -> item(key = "failed") {
+                                Column(Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l)) {
+                                    Text(
+                                        failureText(step.kind, null, null, step.code),
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.testTag("document_failure"),
+                                    )
+                                    TextButton(onClick = actions.onRetryDocument, modifier = Modifier.testTag("document_retry")) {
+                                        Text(stringResource(R.string.approvals_doc_retry))
+                                    }
+                                }
+                            }
+                            is DocumentStep.Unshowable -> item(key = "cant_show") {
+                                NoticeCard(
+                                    kind = NoticeKind.WARNING,
+                                    title = "",
+                                    body = stringResource(R.string.approvals_doc_cant_show),
+                                    modifier = Modifier
+                                        .padding(horizontal = Spacing.xl, vertical = Spacing.l)
+                                        .testTag("document_cant_show"),
+                                )
+                            }
+                        }
+                        item(key = "end") { Spacer(Modifier.height(Spacing.xl)) }
                     }
-                    is DocumentStep.Unshowable -> item(key = "cant_show") {
-                        NoticeCard(
-                            kind = NoticeKind.WARNING,
-                            title = "",
-                            body = stringResource(R.string.approvals_doc_cant_show),
-                            modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l).testTag("document_cant_show"),
-                        )
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = panelMax)
+                            .verticalScroll(rememberScrollState())
+                            .navigationBarsPadding()
+                            .padding(horizontal = Spacing.xl, vertical = Spacing.l),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.s),
+                    ) {
+                        // With the keyboard up the hint goes (Approve's own reading still says it), so the document keeps room.
+                        if (shown != null && !seen && tooTall) {
+                            // Never silent: a row that cannot be read whole is never counted as seen.
+                            NoticeCard(
+                                kind = NoticeKind.WARNING,
+                                title = stringResource(R.string.approvals_doc_too_tall),
+                                body = stringResource(R.string.approvals_doc_too_tall_body),
+                                modifier = Modifier.testTag("document_too_tall"),
+                            )
+                        } else if (shown != null && !seen && !imeVisible) {
+                            Text(
+                                stringResource(R.string.approvals_doc_read_to_end),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("document_read_to_end"),
+                            )
+                        }
+                        if (!state.onlyDeny) {
+                            SecretField(
+                                value = state.password,
+                                onValueChange = actions.onPassword,
+                                label = stringResource(R.string.approvals_password),
+                                // With the keyboard up the caption goes too.
+                                supporting = stringResource(R.string.approvals_password_hint).takeUnless { imeVisible },
+                                // The keyboard's action goes through the same guard as the button.
+                                onImeAction = { if (seen) actions.onApprove() },
+                                modifier = Modifier.testTag("approval_password"),
+                            )
+                        }
+                        state.error?.let {
+                            Text(
+                                failureText(it, state.retryUntil, state.limit, state.errorCode),
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.testTag("failure"),
+                            )
+                        }
+                        if (!state.onlyDeny) {
+                            // Disabled because the document was not seen whole: TalkBack says why, in the hint's own words.
+                            val readToEnd = stringResource(R.string.approvals_doc_read_to_end)
+                            PrimaryButton(
+                                stringResource(R.string.approvals_auth_purpose_approve),
+                                { if (seen) actions.onApprove() },
+                                enabled = state.canApprove && seen && !state.busy,
+                                busy = state.busy,
+                                modifier = if (seen) Modifier else Modifier.semantics { stateDescription = readToEnd },
+                            )
+                        }
+                        TextButton(
+                            onClick = actions.onDeny,
+                            enabled = !state.busy,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("deny_button"),
+                        ) {
+                            Text(stringResource(R.string.approvals_deny), color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
-                }
-                item(key = "end") { Spacer(Modifier.height(Spacing.xl)) }
-            }
-            Column(
-                Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = Spacing.xl, vertical = Spacing.l),
-                verticalArrangement = Arrangement.spacedBy(Spacing.s),
-            ) {
-                if (shown != null && !seen) {
-                    Text(
-                        stringResource(R.string.approvals_doc_read_to_end),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("document_read_to_end"),
-                    )
-                }
-                if (!state.onlyDeny) {
-                    SecretField(
-                        value = state.password,
-                        onValueChange = actions.onPassword,
-                        label = stringResource(R.string.approvals_password),
-                        supporting = stringResource(R.string.approvals_password_hint),
-                        // The keyboard's action goes through the same guard as the button.
-                        onImeAction = { if (seen) actions.onApprove() },
-                        modifier = Modifier.testTag("approval_password"),
-                    )
-                }
-                state.error?.let {
-                    Text(
-                        failureText(it, state.retryUntil, state.limit, state.errorCode),
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.testTag("failure"),
-                    )
-                }
-                if (!state.onlyDeny) {
-                    PrimaryButton(
-                        stringResource(R.string.approvals_auth_purpose_approve),
-                        { if (seen) actions.onApprove() },
-                        enabled = state.canApprove && seen && !state.busy,
-                        busy = state.busy,
-                    )
-                }
-                TextButton(
-                    onClick = actions.onDeny,
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("deny_button"),
-                ) {
-                    Text(stringResource(R.string.approvals_deny), color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }
@@ -303,7 +363,7 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
-        is DocRow.Word -> Block(first = true, last = true, top = Spacing.m) {
+        is DocRow.Word -> Block(first = true, last = true) {
             Text(stringResource(row.text), style = MaterialTheme.typography.bodyLarge)
         }
         is DocRow.Time -> Block(first = true, last = true, merged = true) {
@@ -312,8 +372,8 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             Text(t.utc, style = MaterialTheme.typography.bodyMedium)
         }
         is DocRow.Value -> {
-            val spoken = DocSpoken.of(row.piece, spokenTexts())
-            Block(row.first, row.last, Modifier.clearAndSetSemantics { contentDescription = spoken }) {
+            val spoken = DocSpoken.of(row.piece, raw = false, spokenLevel())
+            Block(row.first, row.last, Modifier.clearAndSetSemantics { text = spoken }) {
                 Text(
                     pieceText(row.piece, raw = false, docStyle()),
                     style = MaterialTheme.typography.bodyLarge.copy(textDirection = TextDirection.Content),
@@ -321,10 +381,10 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             }
         }
         is DocRow.Raw -> {
-            val spoken = DocSpoken.of(row.piece, spokenTexts())
+            val spoken = DocSpoken.of(row.piece, raw = true, spokenLevel())
             // The raw view's base direction is left-to-right, whatever its isolates hold.
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                Block(row.first, row.last, Modifier.clearAndSetSemantics { contentDescription = spoken }) {
+                Block(row.first, row.last, Modifier.clearAndSetSemantics { text = spoken }) {
                     Text(
                         pieceText(row.piece, raw = true, docStyle()),
                         style = MaterialTheme.typography.bodyMedium.copy(
@@ -344,7 +404,6 @@ private fun Block(
     first: Boolean,
     last: Boolean,
     modifier: Modifier = Modifier,
-    top: androidx.compose.ui.unit.Dp = if (first) Spacing.xs else 0.dp,
     merged: Boolean = false,
     content: @Composable () -> Unit,
 ) {
@@ -352,7 +411,7 @@ private fun Block(
     val top = if (first) r else 0.dp
     val bottom = if (last) r else 0.dp
     val shape = RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
-    Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.xl).padding(top = top)) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = Spacing.xl).padding(top = if (first) Spacing.xs else 0.dp)) {
         Column(
             modifier
                 .fillMaxWidth()
@@ -380,12 +439,25 @@ private fun docStyle(): DocStyle {
 
 private const val MARKER_FILL_ALPHA = 0.14f
 
+/** "level N", as TalkBack reads a raw view's line. */
 @Composable
-private fun spokenTexts(): DocSpoken.Texts {
+private fun spokenLevel(): (Int) -> String {
     val level = stringResource(R.string.approvals_doc_level_spoken)
-    val marker = stringResource(R.string.approvals_doc_marker_spoken)
-    val string = stringResource(R.string.approvals_doc_string_spoken)
-    return DocSpoken.Texts(level = { level.format(it) }, marker = { marker.format(it) }, string = { string.format(it) })
+    return { level.format(it) }
+}
+
+/** Whether a screen reader explores by touch (TalkBack), followed while the screen is shown. */
+@Composable
+private fun rememberTouchExploration(): Boolean {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val am = remember(context) { context.getSystemService(android.view.accessibility.AccessibilityManager::class.java) }
+    var on by remember(am) { mutableStateOf(am?.isTouchExplorationEnabled == true) }
+    androidx.compose.runtime.DisposableEffect(am) {
+        val listener = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { on = it }
+        am?.addTouchExplorationStateChangeListener(listener)
+        onDispose { am?.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return on
 }
 
 private const val LRM = "\u200E"
@@ -436,11 +508,14 @@ private fun pieceText(p: DocPiece, raw: Boolean, style: DocStyle): AnnotatedStri
     }
 }
 
-/** A document row's item key: its showing and its index, so an item of an earlier showing is never counted for this one. */
-internal fun rowKey(generation: Int, index: Int): String = "$generation-$index"
+/**
+ * A document row's item key: its showing, its cutting and its index, so an item of an earlier showing or cutting is never
+ * counted for this one.
+ */
+internal fun rowKey(generation: Int, cut: String, index: Int): String = "$generation.$cut-$index"
 
-/** The index of the row of [generation] whose item key is [key], or null for any other item. */
-internal fun rowOf(key: Any, generation: Int): Int? = (key as? String)?.removePrefix("$generation-")
+/** The index of the row of [generation] and [cut] whose item key is [key], or null for any other item. */
+internal fun rowOf(key: Any, generation: Int, cut: String): Int? = (key as? String)?.removePrefix("$generation.$cut-")
     ?.takeIf { it != key }?.toIntOrNull()
 
 /**
