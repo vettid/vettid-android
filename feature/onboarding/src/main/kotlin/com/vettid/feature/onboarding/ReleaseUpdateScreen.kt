@@ -267,10 +267,11 @@ fun ReleaseUpdateFlowContent(state: ReleaseUpdateFlowUiState, actions: ReleaseUp
             primaryLabel = stringResource(if (badPin) R.string.release_update_approve else R.string.release_update_retry),
             onPrimary = actions::retry,
             primaryEnabled = state.retryAllowed,
-            // Rule 3: no "Not now" while the update is required (the open vault shows only the update); "Unlock only" stays.
+            // Rule 3: no "Not now" while the update is required (the open vault shows only the update): "Continue" leads back
+            // to the release gate's screen instead. "Unlock only" stays.
             secondaryLabel = when {
                 !p.vaultOpen -> stringResource(R.string.release_update_unlock_only)
-                state.required -> null
+                state.required -> stringResource(R.string.release_update_continue)
                 else -> stringResource(R.string.release_update_not_now)
             },
             onSecondary = actions::finish,

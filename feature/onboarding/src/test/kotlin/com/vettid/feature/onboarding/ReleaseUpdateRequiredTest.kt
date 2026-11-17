@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseView
@@ -19,6 +20,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -42,13 +44,17 @@ class ReleaseUpdateRequiredTest {
 
     private val offer = ReleaseUpdateOffer(rel(4), rel(5))
 
+    private var finished = 0
+
     private val flowActions = object : ReleaseUpdateFlowActions {
         override fun setPin(v: String) = Unit
         override fun retry() = Unit
         override fun askAbandon() = Unit
         override fun dismissAbandon() = Unit
         override fun confirmAbandon() = Unit
-        override fun finish() = Unit
+        override fun finish() {
+            finished++
+        }
     }
 
     private val actions = object : ReleaseUpdateActions {
@@ -59,15 +65,20 @@ class ReleaseUpdateRequiredTest {
     private fun failed(vaultOpen: Boolean) =
         UpdateProgress(UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NETWORK, vaultOpen = vaultOpen)
 
+    /** No "Not now" while required: "Continue" leads back to the gate's screen (the update's outcome is left). */
     @Test
     fun aFailedUpdateHasNoNotNowWhileRequired() {
         var state by mutableStateOf(ReleaseUpdateFlowUiState(progress = failed(vaultOpen = true), required = true))
         rule.setContent { ReleaseUpdateFlowContent(state, flowActions) }
         rule.onNodeWithTag("release_update_failed").assertExists()
         rule.onNodeWithText("Not now").assertDoesNotExist()
+        rule.onNodeWithText("Continue").performClick()
+        rule.waitForIdle()
+        assertEquals(1, finished)
         state = state.copy(required = false)
         rule.waitForIdle()
         rule.onNodeWithText("Not now").assertExists()
+        rule.onNodeWithText("Continue").assertDoesNotExist()
     }
 
     @Test
