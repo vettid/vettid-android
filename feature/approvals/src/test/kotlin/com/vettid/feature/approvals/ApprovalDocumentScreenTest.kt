@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
@@ -69,6 +70,9 @@ class ApprovalDocumentScreenTest {
     private var reader by mutableStateOf(false)
     private var keyboard by mutableStateOf(false)
 
+    /** The window's height the screen is told (null: the configuration's). */
+    private var windowH by mutableStateOf<androidx.compose.ui.unit.Dp?>(null)
+
     private fun show(
         json: String,
         fontScale: Float? = null,
@@ -105,6 +109,7 @@ class ApprovalDocumentScreenTest {
                     imeVisible = keyboard,
                     screenReader = reader,
                     listMaxHeight = listMax,
+                    windowHeight = windowH ?: androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp,
                 )
             }
         }
@@ -338,6 +343,71 @@ class ApprovalDocumentScreenTest {
         assertTrue(tooTallShown())
         assertTrue(reports.toString(), reports.none { it })
         approve().assertIsNotEnabled()
+        // Announced when it appears (polite, as iOS), and Approve says nothing more: scrolling would not help.
+        rule.onNode(
+            SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite) and
+                hasText("This request can't be shown at this text size", substring = true),
+        ).assertExists()
+        approve().assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+    }
+
+    @Test
+    @Config(qualifiers = "w240dp-h2000dp")
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun anotherWindowHeightStartsTheCuttingOverButTheKeyboardDoesNot() {
+        show(DocumentSamples.big(400), fontScale = 3f, screenReader = true, listMax = 20.dp)
+        scrollFine()
+        assertTrue(tooTallShown())
+        // The keyboard comes and goes: the cutting stays (typing the password never undoes it).
+        keyboard = true
+        rule.waitForIdle()
+        assertTrue(tooTallShown())
+        keyboard = false
+        rule.waitForIdle()
+        assertTrue(tooTallShown())
+        // Split screen, a fold or a rotation: the usual cutting again, judged anew.
+        windowH = 1500.dp
+        rule.waitForIdle()
+        assertTrue(!tooTallShown())
+        approve().assertIsNotEnabled()
+        scrollFine()
+        assertTrue(tooTallShown())
+    }
+
+    @Test
+    fun aValueRowIsReadAsItsSpokenTextWithVoicedSpans() {
+        show(DocumentSamples.EXTEND)
+        val shown = state.document as DocumentStep.Shown
+        val summary = DocumentRows.of(shown.presentation).filterIsInstance<DocRow.Value>()
+            .map { DocSpoken.of(it.piece, raw = false) { n -> "level $n" } }
+            .first { it.text == "\"Extend the budget vote\"" }
+        list().performScrollToNode(hasText(summary.text))
+        val node = rule.onNode(hasText(summary.text)).fetchSemanticsNode()
+        val text = node.config[SemanticsProperties.Text].single()
+        assertEquals(summary.text, text.text)
+        assertEquals(summary.getTtsAnnotations(0, summary.length), text.getTtsAnnotations(0, text.length))
+        assertEquals(listOf("\"", "\""), text.getTtsAnnotations(0, text.length).map { (it.item as androidx.compose.ui.text.VerbatimTtsAnnotation).verbatim })
+    }
+
+    @Test
+    fun approveIsOffWhileBusy() {
+        show(DocumentSamples.big(8_000))
+        scrollThrough()
+        approve().assertIsEnabled()
+        state = state.copy(busy = true)
+        rule.waitForIdle()
+        approve().assertIsNotEnabled()
+    }
+
+    @Test
+    @Config(qualifiers = "w320dp-h480dp")
+    fun withoutTheKeyboardTheListKeepsItsShareToo() {
+        show(DocumentSamples.big(8_000), fontScale = 2f)
+        rule.onNodeWithText("Scroll to the end of the request to approve it.").assertExists()
+        val listHeight = list().fetchSemanticsNode().size.height
+        assertTrue("list $listHeight", listHeight >= (480 * LIST_MIN_FRACTION).toInt() - 1)
+        approve().assertExists()
+        rule.onNodeWithTag("deny_button").assertExists()
     }
 
     @Test

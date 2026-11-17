@@ -634,17 +634,15 @@ class ApprovalDetailViewModel @Inject constructor(
     /**
      * [checked], made for [key], in place of whatever document the screen showed: it is shown from the start, not yet seen
      * whole. A result for a key the screen no longer holds (the request changed while it was made, or another result
-     * came first) is dropped, and the document of the request held now is fetched.
+     * came first) is dropped.
      */
     private suspend fun show(checked: ApprovalDocument.Check, key: DocumentKey) {
         // Laid out off the main thread: a document is up to 65 KB of text to clean, character by character.
         val step = withContext(documentCompute) { stepOf(checked) }
-        var taken = false
+        // (The fetch of the request held now is already on its way: the key changes only when one starts.)
         local.update { s ->
-            taken = s.documentFor == key
-            if (taken) s.copy(document = step, documentSeen = null, documentGeneration = s.documentGeneration + 1) else s
+            if (s.documentFor == key) s.copy(document = step, documentSeen = null, documentGeneration = s.documentGeneration + 1) else s
         }
-        if (!taken) loadDocument()
     }
 
     /**

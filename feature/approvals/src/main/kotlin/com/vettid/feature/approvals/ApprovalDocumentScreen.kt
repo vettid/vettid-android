@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
@@ -80,7 +81,7 @@ import com.vettid.core.ui.theme.Spacing
 /** The list's items before the document's rows: the title and the request's facts. */
 internal const val ROWS_FROM = 1
 
-/** With the keyboard up, the least share of the window's height the document's list keeps. */
+/** The least share of the window's height the document's list keeps, with or without the keyboard. */
 internal const val LIST_MIN_FRACTION = 0.25f
 
 /** The list of an approval's document (for tests: it scrolls). */
@@ -108,6 +109,8 @@ internal fun DocumentApprovalScreen(
     screenReader: Boolean = rememberTouchExploration(),
     /** TEST ONLY: the tallest the document's list may be, to judge rows against a list of a known height. */
     listMaxHeight: Dp = Dp.Infinity,
+    /** The window's height (split screen, a fold, a rotation change it; the keyboard does not). */
+    windowHeight: Dp = LocalConfiguration.current.screenHeightDp.dp,
 ) {
     val title = titleOf(a)
     val step = state.document
@@ -119,9 +122,10 @@ internal fun DocumentApprovalScreen(
     val generation = state.documentGeneration
     val layout = Triple(density.density, density.fontScale, width)
     // With a screen reader, halved for each row still taller than the list; at the smallest, "can't be shown at this text
-    // size" (as iOS). Another document, text size, width or reader starts from the usual cutting again.
-    var shrink by remember(sha, generation, layout, screenReader) { mutableIntStateOf(0) }
-    var tooTall by remember(sha, generation, layout, screenReader) { mutableStateOf(false) }
+    // size" (as iOS). Another document, text size, width, reader or window height starts from the usual cutting again; the
+    // keyboard does not (the window keeps its height), so typing the password never undoes the cutting.
+    var shrink by remember(sha, generation, layout, screenReader, windowHeight) { mutableIntStateOf(0) }
+    var tooTall by remember(sha, generation, layout, screenReader, windowHeight) { mutableStateOf(false) }
     val cutting = DocCutting.of(screenReader, shrink)
     val cut = "${if (screenReader) "r" else "u"}$shrink"
     val rows = remember(shown, cutting) { shown?.let { DocumentRows.of(it.presentation, cutting) }.orEmpty() }
@@ -180,11 +184,10 @@ internal fun DocumentApprovalScreen(
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
             VettIdBackTopBar(onBackClick = actions.onBack)
-            // With the keyboard up the list keeps at least LIST_MIN_FRACTION of the window's height (at most half the room
-            // above the keyboard), and the panel below scrolls in what is left.
+            // The list keeps at least LIST_MIN_FRACTION of the window's height (at most half the room there is, the keyboard's
+            // included), and the panel below scrolls in what is left.
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                val window = LocalConfiguration.current.screenHeightDp.dp
-                val minList = if (imeVisible) minOf(window * LIST_MIN_FRACTION, maxHeight / 2) else 0.dp
+                val minList = minOf(windowHeight * LIST_MIN_FRACTION, maxHeight / 2)
                 val panelMax = (maxHeight - minList).coerceAtLeast(0.dp)
                 Column(Modifier.fillMaxSize()) {
                     LazyColumn(
@@ -263,6 +266,8 @@ internal fun DocumentApprovalScreen(
                                 title = stringResource(R.string.approvals_doc_too_tall),
                                 body = stringResource(R.string.approvals_doc_too_tall_body),
                                 modifier = Modifier.testTag("document_too_tall"),
+                                // Said when it appears, as iOS says it (polite).
+                                announce = LiveRegionMode.Polite,
                             )
                         } else if (shown != null && !seen && !imeVisible) {
                             Text(
@@ -299,7 +304,8 @@ internal fun DocumentApprovalScreen(
                                 { if (seen) actions.onApprove() },
                                 enabled = state.canApprove && seen && !state.busy,
                                 busy = state.busy,
-                                modifier = if (seen) Modifier else Modifier.semantics { stateDescription = readToEnd },
+                                // Not while the notice says it can't be shown: scrolling would not help then.
+                                modifier = if (seen || tooTall) Modifier else Modifier.semantics { stateDescription = readToEnd },
                             )
                         }
                         TextButton(
@@ -470,6 +476,8 @@ private fun rememberTouchExploration(): Boolean {
     androidx.compose.runtime.DisposableEffect(am) {
         val listener = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { on = it }
         am?.addTouchExplorationStateChangeListener(listener)
+        // Read again once registered: a change between the first read and the registration is not missed.
+        on = am?.isTouchExplorationEnabled == true
         onDispose { am?.removeTouchExplorationStateChangeListener(listener) }
     }
     return on
