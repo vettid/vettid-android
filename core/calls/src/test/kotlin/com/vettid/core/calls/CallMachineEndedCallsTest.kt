@@ -536,6 +536,27 @@ class CallMachineEndedCallsTest {
         assertEquals("another vault's ended call is not known here", CallPhase.INCOMING, m.live().phase)
     }
 
+    /**
+     * The live call ends before the lists are cleared: what its end remembers (another call's end held by a start, an
+     * incoming call that rang here) is of the vault being left, and is gone with the rest.
+     */
+    @Test
+    fun aVaultChangeEndsTheLiveCallBeforeItClears() = runTest {
+        for (how in listOf("held end", "ringing")) {
+            val s = FakeSignalling()
+            val m = if (how == "held end") starting(s) else machine(s)
+            s.deliver(if (how == "held end") SignalEvent.End(OTHER_ID, CallReason.HANGUP) else offer(GLARE_ID))
+            runCurrent()
+            assertTrue(how, m.state.value is CallState.Live)
+            open = false
+            m.vaultChanged()
+            runCurrent()
+            assertTrue(how, m.state.value is CallState.Ended)
+            val left = listOf("endedWinners", "endedOthers", "endedOtherEnds").associateWith { m.known(it) }
+            assertTrue("$how: $left", left.values.all { it.isEmpty() })
+        }
+    }
+
     /** [vaultOpenings]: a close is put between two openings the phase alone would not tell apart. */
     @Test
     fun anOpeningAfterAConflatedCloseIsSeenAsACloseAndAnOpen() = runTest {
