@@ -282,9 +282,10 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     override suspend fun approveAuthentication(requestId: String, password: String) {
         call("approveAuthentication")
-        // As SocialManager: a challenge held with a document is approved only over it (0.89.0 §10.4).
+        // As SocialManager: a challenge held with a document is approved only over it (0.89.0 §10.4), and one not held at
+        // all (it may carry one) is refused too.
         val held = approvals.value.firstOrNull { it.key == "auth:$requestId" } as? Approval.Authentication
-        if (held?.hasDocument == true) throw VaultFailure(FailureKind.OTHER, "document_not_shown")
+        if (held == null || held.hasDocument) throw VaultFailure(FailureKind.OTHER, "document_not_shown")
         lastPassword = password
         drop("auth:$requestId")
     }

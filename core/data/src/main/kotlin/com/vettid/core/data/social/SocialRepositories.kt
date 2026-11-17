@@ -162,7 +162,8 @@ interface ApprovalsRepository {
      * document hash. Refused ([com.vettid.core.data.vault.FailureKind.OTHER], `document_not_shown`, before the unlock window
      * opens and with nothing sent) for a challenge held with a document (0.89.0 "Approval documents"), which is approved
      * only over its document from the screen that showed it, and for a challenge this app no longer holds, which may carry
-     * one.
+     * one. So a plain ask the app no longer holds gets `document_not_shown` rather than the vault's answer (`not_found`):
+     * intended, it fails closed.
      */
     suspend fun approveAuthentication(requestId: String, password: String)
 

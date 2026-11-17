@@ -132,7 +132,9 @@ object DocumentRows {
  * What TalkBack reads of a piece of the document (accessibility labels owner-approved 2026-11-17): a marker as "code point
  * U+202E"; a raw view's line with its level first ("level 2, amount: 10, text"), each string followed by ", text" so that
  * the string "10" and the number 10 sound different; the app's continuation marks, quotation marks and the line's comma are
- * not read. Android has no counterpart of iOS's separate pitch for the document's text, so none is set.
+ * not read. The document's spaces are kept as they are (never trimmed); TalkBack does not voice a space, so a leading or
+ * trailing space is in the description but not heard (no words are added for it). Android has no counterpart of iOS's
+ * separate pitch for the document's text, so none is set.
  */
 object DocSpoken {
     /** The three accessibility texts, as the screen has them from its resources. */
@@ -141,7 +143,7 @@ object DocSpoken {
     fun markerName(codePoint: Int): String = "U+%04X".format(codePoint)
 
     @Suppress("CyclomaticComplexMethod") // one case per kind of token
-    fun of(p: DocPiece, raw: Boolean, t: Texts): String {
+    fun of(p: DocPiece, t: Texts): String {
         val out = StringBuilder()
         p.level?.let { out.append(t.level(it)).append(", ") }
         var string: StringBuilder? = null
@@ -155,7 +157,7 @@ object DocSpoken {
                 }
                 is DocPiece.Token.Open -> if (!token.key) string = StringBuilder()
                 is DocPiece.Token.Close -> string?.let {
-                    out.append(t.string(it.toString().trim()))
+                    out.append(t.string(it.toString()))
                     string = null
                 }
                 is DocPiece.Token.Content -> sink().append(token.text)
@@ -166,7 +168,7 @@ object DocSpoken {
             }
         }
         // A string cut at the piece's end is read as text too.
-        string?.let { out.append(t.string(it.toString().trim())) }
-        return if (raw) out.toString().trim() else out.toString()
+        string?.let { out.append(t.string(it.toString())) }
+        return out.toString()
     }
 }

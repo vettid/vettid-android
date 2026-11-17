@@ -206,6 +206,16 @@ class ApprovalsViewModel @Inject constructor(
 /** What a decision needs from the member. */
 enum class Needs { NOTHING, PASSWORD }
 
+/**
+ * What a document is fetched and checked for: the hash, the line (`context`) and the `request_id` the request names. A
+ * change in any of them fetches and checks it again, so the screen never stays on a document the request no longer matches.
+ */
+data class DocumentKey(val sha256: String?, val context: String?, val requestId: String) {
+    companion object {
+        fun of(x: Approval.Authentication) = DocumentKey(x.documentSha256, x.context, x.requestId)
+    }
+}
+
 /** A challenge's document on the approval screen (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"). */
 sealed interface DocumentStep {
     /** Being fetched (`connection.authenticate.document`). */
@@ -309,8 +319,8 @@ data class ApprovalDetailUiState(
     val document: DocumentStep? = null,
     /** Counts the documents shown: the screen follows each from nothing seen, the same document shown again included. */
     val documentGeneration: Int = 0,
-    /** The `document_sha256` the request named when [document] was fetched: another one fetches again. */
-    val documentFor: String? = null,
+    /** What the request named when [document] was fetched (its hash, `context` and `request_id`): any change fetches again. */
+    val documentFor: DocumentKey? = null,
     /** The hash of the document whose whole the screen has shown (in [documentGeneration]): Approve is enabled only for it. */
     val documentSeen: String? = null,
 ) {
@@ -603,9 +613,10 @@ class ApprovalDetailViewModel @Inject constructor(
         if (!x.hasDocument) return
         var start = false
         local.update { s ->
-            start = s.document != DocumentStep.Loading && (s.document == null || s.documentFor != x.documentSha256)
+            val key = DocumentKey.of(x)
+            start = s.document != DocumentStep.Loading && (s.document == null || s.documentFor != key)
             // The password goes while there is nothing to approve; it does not come back filled.
-            if (start) s.copy(document = DocumentStep.Loading, documentFor = x.documentSha256, documentSeen = null, password = "") else s
+            if (start) s.copy(document = DocumentStep.Loading, documentFor = key, documentSeen = null, password = "") else s
         }
         if (!start) return
         viewModelScope.launch {

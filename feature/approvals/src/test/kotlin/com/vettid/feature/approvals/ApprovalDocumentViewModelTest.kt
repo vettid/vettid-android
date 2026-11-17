@@ -150,6 +150,32 @@ class ApprovalDocumentViewModelTest {
     }
 
     @Test
+    fun aRequestWhoseLineChangesFetchesAndChecksAgain() = runTest {
+        val vm = detail()
+        advanceUntilIdle()
+        vm.setPassword("pw-fake-1")
+        advanceUntilIdle()
+        vm.seeWhole()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.canApprove)
+        // The same hash under another line: fetched and checked again for it, not left with Approve off for good.
+        val moved = DocumentSamples.request(DocumentSamples.EXTEND, line = "Extend it")
+        social.authDocument = DocumentSamples.check(DocumentSamples.EXTEND, moved)
+        social.approvals.value = listOf(moved)
+        advanceUntilIdle()
+        assertEquals(2, social.calls.count { it == "authenticationDocument" })
+        val s = vm.uiState.value
+        assertEquals(moved.context, (s.document as DocumentStep.Shown).document.context)
+        assertEquals(DocumentKey(moved.documentSha256, moved.context, "a1"), s.documentFor)
+        assertNull("seen again from the start", s.documentToApprove)
+        vm.setPassword("pw-fake-1")
+        advanceUntilIdle()
+        vm.seeWhole()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.canApprove)
+    }
+
+    @Test
     fun aStaleDocumentIsNeverApproved() = runTest {
         val vm = detail()
         advanceUntilIdle()
@@ -209,6 +235,10 @@ class ApprovalDocumentViewModelTest {
             val f = runCatching { social.approveAuthentication(r.requestId, "pw-fake-1") }.exceptionOrNull() as VaultFailure
             assertEquals(FailureKind.OTHER, f.kind)
         }
+        // An ask the repository no longer holds is refused by the old path too.
+        social.approvals.value = emptyList()
+        val gone = runCatching { social.approveAuthentication(r.requestId, "pw-fake-1") }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.OTHER, gone.kind)
         // A request without a document still goes by it, as before.
         val plain = Approval.Authentication("a2", "c1", "Pay 40", DocumentSamples.now, null, "Sam")
         social.approvals.value = listOf(plain)

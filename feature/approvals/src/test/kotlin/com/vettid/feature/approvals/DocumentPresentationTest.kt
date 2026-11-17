@@ -187,10 +187,23 @@ class DocumentPresentationTest {
     @Test
     fun spokenLinesNameTheirLevelAndTellStringsFromNumbers() {
         val t = DocSpoken.Texts(level = { "level $it" }, marker = { "code point $it" }, string = { "$it, text" })
-        fun spoken(v: DocumentPresentation.RawValue) = DocSpoken.of(DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount"), v, true)).single(), raw = true, t)
+        fun spoken(v: DocumentPresentation.RawValue) = DocSpoken.of(DocPiece.raw(DocumentPresentation.RawLine(1, ShownText.of("amount"), v, true)).single(), t)
         assertEquals("level 2, amount: 10, text", spoken(DocumentPresentation.RawValue.Str(ShownText.of("10"))))
         assertEquals("level 2, amount: 10", spoken(DocumentPresentation.RawValue.Number("10")))
         assertEquals("level 2, amount: a code point U+202E b, text", spoken(DocumentPresentation.RawValue.Str(ShownText.of("a\u202Eb"))))
+        // The string's own spaces are kept, never trimmed.
+        assertEquals("level 2, amount:  10 , text", spoken(DocumentPresentation.RawValue.Str(ShownText.of(" 10 "))))
+    }
+
+    @Test
+    fun thePluralQuantityKeepsTheCountsLastDigits() {
+        assertEquals(1, pluralQuantity(1))
+        assertEquals(12, pluralQuantity(12))
+        assertEquals(Int.MAX_VALUE, pluralQuantity(Int.MAX_VALUE.toLong()))
+        val q = pluralQuantity(3_000_000_001)
+        assertEquals(1, q % 1_000_000_000)
+        assertTrue(q > 1)
+        assertEquals(1_000_000_000, pluralQuantity(3_000_000_000))
     }
 
     @Test

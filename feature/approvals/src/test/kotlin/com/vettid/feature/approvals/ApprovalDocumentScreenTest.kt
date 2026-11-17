@@ -17,6 +17,11 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasText
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.performSemanticsAction
 import com.vettid.core.data.social.ApprovalDocument
 import com.vettid.core.data.vault.FailureKind
@@ -27,6 +32,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /** VAULT-MESSAGING 0.89.0 §10.4 "Approval documents": the screen draws the largest documents and holds Approve until it is seen. */
 @RunWith(RobolectricTestRunner::class)
@@ -35,21 +41,36 @@ class ApprovalDocumentScreenTest {
     @get:Rule
     val rule = createComposeRule()
 
-    /** The screen over [json]'s document, its state kept as the view model keeps it ([ApprovalDetailViewModel.documentSeen]). */
-    private fun show(json: String) {
+    /** The state the screen shows, as the view model keeps it. */
+    private var state by mutableStateOf(ApprovalDetailUiState("auth:none"))
+
+    private fun shownOf(json: String): DocumentStep.Shown {
         val r = DocumentSamples.request(json)
         val d = DocumentSamples.document(json, r)
-        val shown = DocumentStep.Shown(d, DocumentPresentation.of(d, d.context)!!)
-        var state by mutableStateOf(ApprovalDetailUiState(r.key, r, password = "pw-fake-1", document = shown, documentGeneration = 1))
+        return DocumentStep.Shown(d, DocumentPresentation.of(d, d.context)!!)
+    }
+
+    /**
+     * The screen over [json]'s document, its state kept as the view model keeps it ([ApprovalDetailViewModel.documentSeen]),
+     * at [fontScale].
+     */
+    private fun show(json: String, fontScale: Float? = null) {
+        val r = DocumentSamples.request(json)
+        state = ApprovalDetailUiState(r.key, r, password = "pw-fake-1", document = shownOf(json), documentGeneration = 1)
+        fontScale?.let { org.robolectric.RuntimeEnvironment.setFontScale(it) }
         rule.setContent {
-            ApprovalDetailScreen(
-                state,
-                DecisionActions(
-                    onDocumentSeen = { sha, gen, whole ->
-                        if (sha == d.sha256 && gen == state.documentGeneration) state = state.copy(documentSeen = sha.takeIf { whole })
-                    },
-                ),
-            )
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale ?: density.fontScale)) {
+                ApprovalDetailScreen(
+                    state,
+                    DecisionActions(
+                        onDocumentSeen = { sha, gen, whole ->
+                            val d = (state.document as? DocumentStep.Shown)?.document
+                            if (sha == d?.sha256 && gen == state.documentGeneration) state = state.copy(documentSeen = sha.takeIf { whole })
+                        },
+                    ),
+                )
+            }
         }
         rule.waitForIdle()
     }
@@ -123,6 +144,54 @@ class ApprovalDocumentScreenTest {
         }
         rule.onNodeWithText("This request can't be shown").assertIsDisplayed()
     }
+
+    @Test
+    fun aQuorumAbove2To31BallotsIsShownAsItIs() {
+        show(DocumentSamples.PROPOSAL.replace("\"min_ballots\":1", "\"min_ballots\":3000000000"))
+        list().performScrollToNode(hasText("3000000000 ballots"))
+        rule.onNodeWithText("3000000000 ballots").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(qualifiers = "w240dp-h1600dp")
+    // Real text measurement, so that the row wraps to its true height.
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    fun aRowTallerThanTheScreenSeenPartwayThenJumpedPastDoesNotCount() {
+        val json = """{"action":"pay.out","payload":{"k":"${"word ".repeat(19)}end"},"summary":"S"}"""
+        show(json, fontScale = 3f)
+        val rows = DocumentRows.of(shownOf(json).presentation)
+        val tall = rows.indexOfFirst { it is DocRow.Raw && it.piece.level == 3 }
+        assertTrue(tall > 0)
+        val tallNode = rule.onNode(hasContentDescription("level 3, k:", substring = true))
+        // Read down until the tall row comes on screen: it is taller than the list, so only its top part is.
+        repeat(MAX_STEPS) {
+            if (runCatching { tallNode.assertIsDisplayed() }.isSuccess) return@repeat
+            val node = list().fetchSemanticsNode()
+            list().performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, node.size.height * 0.4f) }
+            rule.waitForIdle()
+        }
+        tallNode.assertIsDisplayed()
+        val viewport = list().fetchSemanticsNode().size.height
+        assertTrue("the row (${tallNode.fetchSemanticsNode().size.height}) is taller than the list ($viewport)", tallNode.fetchSemanticsNode().size.height > viewport)
+        // Jump past it, then read the rest down to the end.
+        list().performScrollToIndex(ROWS_FROM + tall + 1)
+        rule.waitForIdle()
+        scrollThrough()
+        approve().assertIsNotEnabled()
+    }
+
+    @Test
+    fun aNewShowingStartsAtTheTop() {
+        show(DocumentSamples.big(8_000))
+        scrollThrough()
+        assertTrue(scrollValue() > 0f)
+        state = state.copy(document = shownOf(DocumentSamples.big(8_000)), documentGeneration = 2, documentSeen = null)
+        rule.waitForIdle()
+        assertEquals(0f, scrollValue())
+        approve().assertIsNotEnabled()
+    }
+
+    private fun scrollValue(): Float = list().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 
     private companion object {
         const val MAX_STEPS = 4_000

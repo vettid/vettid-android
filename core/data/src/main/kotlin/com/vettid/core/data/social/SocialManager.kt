@@ -1990,7 +1990,9 @@ class SocialManager internal constructor(
         // document is approved only over it, from the screen that showed it whole (the overload below), never here: not
         // from a notification, the feed, a list or this path. An ask this app no longer holds may carry one, so it is
         // refused too. Refused before the unlock window is opened and before anything is sent; the challenge stays open.
-        // The screen decides from the request it shows as well.
+        // So a plain ask (without a document) that this app no longer holds now gets `document_not_shown` here instead of
+        // the vault's answer (`not_found` for one that ended): intended, it fails closed. The screen decides from the
+        // request it shows as well.
         val held = find("auth:$requestId") as? Approval.Authentication
         if (held == null || held.hasDocument) throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_NOT_SHOWN)
         credential.openUnlockWindow(password)

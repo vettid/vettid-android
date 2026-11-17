@@ -354,9 +354,14 @@ class ApprovalDocumentFlowTest {
         // The same request, held with another line than the one checked: refused too.
         val moved = m.auth("a1").copy(context = "Something else — ref ${ref(doc)}")
         assertEquals(SocialManager.CODE_DOCUMENT_MISMATCH, failure { m.approveAuthentication(moved, "pw-fake-1", d) }.code)
+        // The same document and the very same line under another request_id: refused too.
+        pending(m, challenge(id = "a3"))
+        assertEquals(m.auth("a1").context, m.auth("a3").context)
+        assertEquals(m.auth("a1").documentSha256, m.auth("a3").documentSha256)
+        assertEquals(SocialManager.CODE_DOCUMENT_MISMATCH, failure { m.approveAuthentication(m.auth("a3"), "pw-fake-1", d) }.code)
         assertTrue(ops.calls.isEmpty())
         assertTrue(unlocked.isEmpty())
-        assertEquals(2, open(m).size)
+        assertEquals(3, open(m).size)
         // Its own request approves.
         assertEquals(DocumentApproval.Approved, m.approveAuthentication(m.auth("a1"), "pw-fake-1", d))
         assertEquals(listOf("approve:a1:${sha(doc)}"), ops.calls)

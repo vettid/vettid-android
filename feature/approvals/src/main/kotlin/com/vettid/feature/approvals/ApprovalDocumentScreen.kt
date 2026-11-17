@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -67,7 +68,7 @@ import com.vettid.core.ui.components.VettIdBackTopBar
 import com.vettid.core.ui.theme.Spacing
 
 /** The list's items before the document's rows: the title and the request's facts. */
-private const val ROWS_FROM = 1
+internal const val ROWS_FROM = 1
 
 /** The list of an approval's document (for tests: it scrolls). */
 const val DOCUMENT_LIST_TAG = "document_list"
@@ -100,16 +101,27 @@ internal fun DocumentApprovalScreen(
     val layout = Triple(density.density, density.fontScale, width)
     var seenHere by remember(sha, generation, layout) { mutableStateOf(false) }
     val report by rememberUpdatedState(actions.onDocumentSeen)
+    // The showing last brought to the top: a new one (a new document after Changed, the same hash sent again) starts there.
+    var toppedFor by rememberSaveable { mutableIntStateOf(-1) }
     LaunchedEffect(sha, generation, layout, rows) {
-        if (sha == null || width == 0) return@LaunchedEffect
-        // Nothing of this showing seen yet, whatever an earlier one (another text size, width or composition) saw.
+        if (sha == null) return@LaunchedEffect
+        // Nothing of this showing seen yet, whatever an earlier one (another text size, width or composition) saw: said
+        // before anything else, so that nothing reads as seen for a frame.
         report(sha, generation, false)
+        if (width == 0) return@LaunchedEffect
+        if (toppedFor != generation) {
+            listState.scrollToItem(0)
+            toppedFor = generation
+        }
         val coverage = HashMap<Int, SeenCoverage>()
         val whole = HashSet<Int>()
+        // The facts, the rows and the end: a layout of another list (an earlier showing, a step before Shown) is no credit.
+        val expected = ROWS_FROM + rows.size + 1
         snapshotFlow { listState.layoutInfo }.collect { info ->
+            if (info.totalItemsCount != expected) return@collect
             for (item in info.visibleItemsInfo) {
-                val row = item.index - ROWS_FROM
-                if (row !in rows.indices || row in whole) continue
+                // Only the rows of this showing count, by their keys.
+                val row = rowOf(item.key, generation)?.takeIf { it in rows.indices && it !in whole } ?: continue
                 val top = maxOf(info.viewportStartOffset - item.offset, 0).toFloat()
                 val bottom = minOf(info.viewportEndOffset - item.offset, item.size).toFloat()
                 val c = (coverage[row] ?: SeenCoverage()).saw(if (top < bottom) top..bottom else null, item.size.toFloat())
@@ -144,7 +156,7 @@ internal fun DocumentApprovalScreen(
                     }
                 }
                 when (step) {
-                    is DocumentStep.Shown -> itemsIndexed(rows) { _, row -> DocRowView(row, a) }
+                    is DocumentStep.Shown -> itemsIndexed(rows, key = { i, _ -> rowKey(generation, i) }) { _, row -> DocRowView(row, a) }
                     DocumentStep.Loading, null -> item(key = "loading") {
                         Row(
                             Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.l).semantics(mergeDescendants = true) {}
@@ -197,7 +209,8 @@ internal fun DocumentApprovalScreen(
                         onValueChange = actions.onPassword,
                         label = stringResource(R.string.approvals_password),
                         supporting = stringResource(R.string.approvals_password_hint),
-                        onImeAction = actions.onApprove,
+                        // The keyboard's action goes through the same guard as the button.
+                        onImeAction = { if (seen) actions.onApprove() },
                         modifier = Modifier.testTag("approval_password"),
                     )
                 }
@@ -240,11 +253,12 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             color = colors.onSurfaceVariant,
             modifier = gutter.padding(top = Spacing.l, bottom = Spacing.s).semantics { heading() },
         )
+        // A form's label is a heading too, so TalkBack tells it from the value under it (no new words).
         is DocRow.Label -> Text(
             stringResource(row.label),
             style = MaterialTheme.typography.labelMedium,
             color = colors.onSurfaceVariant,
-            modifier = gutter.padding(top = Spacing.m, bottom = Spacing.xs),
+            modifier = gutter.padding(top = Spacing.m, bottom = Spacing.xs).semantics { heading() },
         )
         is DocRow.Note -> Text(
             stringResource(row.text),
@@ -283,8 +297,11 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             Text(stringResource(titleRes(row.action)), style = MaterialTheme.typography.bodyLarge)
         }
         is DocRow.Ballots -> Block(first = true, last = true) {
-            val n = row.count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            Text(pluralStringResource(R.plurals.approvals_doc_ballots, n, n), style = MaterialTheme.typography.bodyLarge)
+            // The count itself, never clamped, as the format's argument; the plural chosen from an Int with its low digits.
+            Text(
+                pluralStringResource(R.plurals.approvals_doc_ballots, pluralQuantity(row.count), row.count),
+                style = MaterialTheme.typography.bodyLarge,
+            )
         }
         is DocRow.Word -> Block(first = true, last = true, top = Spacing.m) {
             Text(stringResource(row.text), style = MaterialTheme.typography.bodyLarge)
@@ -295,7 +312,7 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             Text(t.utc, style = MaterialTheme.typography.bodyMedium)
         }
         is DocRow.Value -> {
-            val spoken = DocSpoken.of(row.piece, raw = false, spokenTexts())
+            val spoken = DocSpoken.of(row.piece, spokenTexts())
             Block(row.first, row.last, Modifier.clearAndSetSemantics { contentDescription = spoken }) {
                 Text(
                     pieceText(row.piece, raw = false, docStyle()),
@@ -304,7 +321,7 @@ private fun DocRowView(row: DocRow, a: Approval.Authentication) {
             }
         }
         is DocRow.Raw -> {
-            val spoken = DocSpoken.of(row.piece, raw = true, spokenTexts())
+            val spoken = DocSpoken.of(row.piece, spokenTexts())
             // The raw view's base direction is left-to-right, whatever its isolates hold.
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                 Block(row.first, row.last, Modifier.clearAndSetSemantics { contentDescription = spoken }) {
@@ -418,6 +435,22 @@ private fun pieceText(p: DocPiece, raw: Boolean, style: DocStyle): AnnotatedStri
         }
     }
 }
+
+/** A document row's item key: its showing and its index, so an item of an earlier showing is never counted for this one. */
+internal fun rowKey(generation: Int, index: Int): String = "$generation-$index"
+
+/** The index of the row of [generation] whose item key is [key], or null for any other item. */
+internal fun rowOf(key: Any, generation: Int): Int? = (key as? String)?.removePrefix("$generation-")
+    ?.takeIf { it != key }?.toIntOrNull()
+
+/**
+ * The plural quantity for a count of [n] (0 to 2^53 - 1): [n] itself when it fits an Int, else a number past 2^30 with the
+ * same last nine digits, which plural rules (by the last digits, or "large") read the same way.
+ */
+internal fun pluralQuantity(n: Long): Int =
+    if (n <= Int.MAX_VALUE) n.toInt() else (n % PLURAL_DIGITS + PLURAL_DIGITS).toInt()
+
+private const val PLURAL_DIGITS = 1_000_000_000L
 
 /** The app's own title for a known action (§10.4). */
 internal fun titleRes(a: DocumentPresentation.KnownAction): Int = when (a) {
