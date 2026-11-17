@@ -1990,7 +1990,9 @@ class SocialManager internal constructor(
     override suspend fun approveAuthentication(requestId: String, password: String) {
         // (0.89.0 §10.4 "Approval documents") No document hash is sent: the purpose form, as an app before 0.89.0 approves.
         // A `document_required` challenge cannot count so: refused here as the vault refuses it (`update_required`), before
-        // the unlock window is opened for nothing. The challenge stays open.
+        // the unlock window is opened for nothing. The challenge stays open. Accepted, as on the iPhone: since nothing is
+        // sent, an ask that already ended at the vault gets `update_required` here, not the vault's `not_found` (which comes
+        // first in its table), and the password is not checked; the screen that shows documents replaces this path.
         if ((find("auth:$requestId") as? Approval.Authentication)?.documentRequired == true) {
             throw refusedAsVault(TYPE_AUTH_APPROVE, VaultCodes.UPDATE_REQUIRED)
         }

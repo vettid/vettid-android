@@ -80,6 +80,9 @@ class ApprovalDocumentFlowTest {
     private val ops = Ops()
     private val unlocked = mutableListOf<String>()
 
+    /** The feed items marked read, by kinds and `ref`. */
+    private val feedReads = mutableListOf<Pair<Set<String>, String?>>()
+
     private val credential = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(CredentialRepository::class.java)) { _, m, args ->
         if (m.name == "openUnlockWindow") unlocked += args[0] as String else error("unexpected credential call ${m.name}")
         Unit
@@ -90,8 +93,23 @@ class ApprovalDocumentFlowTest {
         api = { throw VaultFailure(FailureKind.OTHER) },
         credential = credential,
         clock = Clock.fixed(at, ZoneOffset.UTC),
+        feedRead = { kinds, ref, _ -> feedReads += kinds to ref },
         authOps = { ops },
     )
+
+    /** Another open ask, of another kind: a grant request of the same connection. */
+    private val grant = """{"request_id":"g1","connection_id":"c1","items":[{"kind":"item","ref":"IT1","label":"Passport","available":true}],"uses":1,"expires_in":3600,"exp":"$exp"}"""
+
+    private suspend fun TestScope.grantPending(m: SocialManager) {
+        m.onEvent(VaultMessage(Inner(id = Ulid.new(), type = "grant.pending", ts = at, body = grant.toByteArray())))
+        runCurrent()
+    }
+
+    /** Only the ended ask went: the grant is still listed and its feed item was not marked read. */
+    private fun TestScope.onlyTheGrantIsLeft(m: SocialManager) {
+        assertEquals(listOf("grant:g1"), open(m).map { it.key })
+        assertTrue(feedReads.toString(), feedReads.none { (kinds, ref) -> ref == "g1" || kinds.any { it.startsWith("grant") } })
+    }
 
     private suspend fun TestScope.pending(m: SocialManager, body: String) {
         m.onEvent(VaultMessage(Inner(id = Ulid.new(), type = "connection.authenticate.pending", ts = at, body = body.toByteArray())))
@@ -173,6 +191,8 @@ class ApprovalDocumentFlowTest {
         assertEquals(listOf("pw-fake-1"), unlocked)
         assertEquals(listOf("document:a1", "approve:a1:${sha(doc)}"), ops.calls)
         assertTrue(open(m).isEmpty())
+        // Deciding marks the ask's own feed item read (what the not_found tests below check is not done for the grant).
+        assertEquals(listOf(setOf("connection.authenticate.requested") to "a1"), feedReads)
     }
 
     @Test
@@ -188,10 +208,12 @@ class ApprovalDocumentFlowTest {
     fun aFetchOfAnAskThatEndedDropsIt() = runTest {
         val m = manager()
         pending(m, challenge())
+        grantPending(m)
+        assertEquals(2, open(m).size)
         ops.fail("document", "not_found")
         val r = m.auth()
         assertEquals(FailureKind.NOT_FOUND, failure { m.authenticationDocument(r) }.kind)
-        assertTrue(open(m).isEmpty())
+        onlyTheGrantIsLeft(m)
     }
 
     @Test
@@ -265,11 +287,12 @@ class ApprovalDocumentFlowTest {
         ops.documents = listOf(b64(doc))
         val r = m.auth()
         val d = m.shown(r)
+        grantPending(m)
         ops.fail("approve", VaultCodes.DOCUMENT_NOT_FETCHED)
         ops.fail("document", "not_found")
         assertEquals(FailureKind.NOT_FOUND, failure { m.approveAuthentication(r, "pw-fake-1", d) }.kind)
         assertEquals(1, ops.calls.count { it.startsWith("approve") })
-        assertTrue(open(m).isEmpty())
+        onlyTheGrantIsLeft(m)
     }
 
     @Test
