@@ -430,11 +430,17 @@ object DeviceFeatures {
     const val HS_CONFIRM = "hs_confirm"
 
     /**
-     * What this app advertises, sorted: the inner `features` of every message it deposits to its vault and the
+     * (0.89.0, §10.4 "Approval documents") It fetches, checks and shows an approval's document and approves over it. Not
+     * sticky at the vault: an app without it in its list is never asked for a `document_required` approval.
+     */
+    const val APPROVAL_DOCUMENT = "approval_document"
+
+    /**
+     * What this app advertises, sorted and unique: the inner `features` of every message it deposits to its vault and the
      * `device.features` list. `relay_follow` is not implemented (the app does not follow relay-key rotations), so it is
      * not advertised (as vettid-vault's `client` and vettid-ios #238).
      */
-    val ALL: List<String> = listOf(HS_CONFIRM)
+    val ALL: List<String> = listOf(APPROVAL_DOCUMENT, HS_CONFIRM)
 }
 
 /** Constant-time check that a relay key equals the one on record (§6.3). */

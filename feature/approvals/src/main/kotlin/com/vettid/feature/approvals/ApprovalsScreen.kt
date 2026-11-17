@@ -152,6 +152,8 @@ fun NavGraphBuilder.approvalsDestination(
                 onPermissionAnswered = vm::permissionAnswered,
                 onShareWhile = { vm.shareWhileTarget()?.let { onShareLocation(it.connectionId, it.requestId) } },
                 onNotNow = vm::notNow,
+                onRetryDocument = vm::retryDocument,
+                onDocumentSeen = vm::documentSeen,
             ),
         )
     }
@@ -464,6 +466,10 @@ data class DecisionActions(
     val onPermissionAnswered: (Boolean) -> Unit = {},
     val onShareWhile: () -> Unit = {},
     val onNotNow: () -> Unit = {},
+    /** An approval's document (VAULT-MESSAGING 0.89.0 §10.4): its fetch again after a failure. */
+    val onRetryDocument: () -> Unit = {},
+    /** The whole of the document of that hash, in that showing, has (true) or has not (false) been on screen. */
+    val onDocumentSeen: (String, Int, Boolean) -> Unit = { _, _, _ -> },
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -491,6 +497,11 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     }
     if (a is Approval.LocationRequest) {
         LocationRequestScreen(a, state, actions, modifier)
+        return
+    }
+    // (0.89.0 §10.4 "Approval documents") Approved only from its document's screen.
+    if (a is Approval.Authentication && a.hasDocument) {
+        DocumentApprovalScreen(a, state, actions, modifier)
         return
     }
     FormScaffold(
@@ -1067,7 +1078,7 @@ internal fun Value(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 @Suppress("LongMethod", "CyclomaticComplexMethod")
-private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: String? = null) {
+internal fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: String? = null) {
     when (a) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
@@ -1178,8 +1189,13 @@ private fun Facts(a: Approval, withdrawn: Boolean = false, peerFingerprint: Stri
                 Value(fromName(a))
             }
             // The connection's own words, in full whatever the purpose, as plain text (no bidi controls, lines kept), isolated.
-            val note = a.context?.let { AuthContext.isolated(it) }
-                ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
+            // With a document (0.89.0) it is shown with the document instead, as "The service's description".
+            val note = if (a.hasDocument) {
+                null
+            } else {
+                a.context?.let { AuthContext.isolated(it) }
+                    ?: stringResource(R.string.approvals_auth_no_details).takeIf { a.purpose != AuthPurpose.NONE }
+            }
             note?.let {
                 Label(stringResource(R.string.approvals_context))
                 Value(it, Modifier.testTag("auth_context"))

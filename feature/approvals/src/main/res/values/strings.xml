@@ -261,4 +261,51 @@
     <string name="approvals_location_open_settings">Open settings</string>
     <!-- NEW: not in the plan (the asker already has a share from this phone; lead decision) -->
     <string name="approvals_location_already_sharing">You\'re already sharing your location with %1$s until %2$s.</string>
+    <!-- Owner-approved 2026-11-17 (as vettid-ios #300): VAULT-MESSAGING 0.89.0 §10.4 "Approval documents". -->
+    <string name="approvals_doc_asked">What is asked</string>
+    <string name="approvals_doc_description">The service\'s description</string>
+    <string name="approvals_doc_description_note">What you approve is the request below</string>
+    <string name="approvals_doc_summary">The service\'s summary</string>
+    <string name="approvals_doc_request">The request</string>
+    <string name="approvals_doc_details">Request details</string>
+    <string name="approvals_doc_title_proposal_create">New vote</string>
+    <string name="approvals_doc_title_vote_extend">Extend a vote</string>
+    <string name="approvals_doc_title_admin_set_add">Add an admin</string>
+    <string name="approvals_doc_title_admin_set_remove">Remove an admin</string>
+    <string name="approvals_doc_title_admin_repin">Re-pin an admin\'s key</string>
+    <string name="approvals_doc_title_contract_template_change">Change the contract template</string>
+    <string name="approvals_doc_title_assignment_push">Send an assignment</string>
+    <string name="approvals_doc_unknown_warning">%1$s asks for something this app doesn\'t know. Read all of it before you approve.</string>
+    <string name="approvals_doc_cant_show">This request can\'t be shown</string>
+    <string name="approvals_doc_loading">Getting the request…</string>
+    <string name="approvals_doc_retry">Try again</string>
+    <string name="approvals_doc_read_to_end">Scroll to the end of the request to approve it.</string>
+    <string name="approvals_doc_field_title">Title</string>
+    <string name="approvals_doc_field_motion">Motion</string>
+    <string name="approvals_doc_none">None</string>
+    <string name="approvals_doc_field_choices">Choices</string>
+    <string name="approvals_doc_abstain">Abstain</string>
+    <string name="approvals_doc_abstain_added">added by the service</string>
+    <string name="approvals_doc_field_quorum">Quorum</string>
+    <plurals name="approvals_doc_ballots">
+        <item quantity="one">%1$d ballot</item>
+        <item quantity="other">%1$d ballots</item>
+    </plurals>
+    <string name="approvals_doc_binding">Binding</string>
+    <string name="approvals_doc_advisory">Advisory</string>
+    <string name="approvals_doc_field_removed_may_vote">Members removed after the roster date may vote</string>
+    <string name="approvals_doc_yes">Yes</string>
+    <string name="approvals_doc_no">No</string>
+    <string name="approvals_doc_field_opens">Opens</string>
+    <string name="approvals_doc_field_closes">Closes</string>
+    <string name="approvals_doc_field_outage_rule">Outage rule</string>
+    <string name="approvals_doc_field_vote">Vote</string>
+    <string name="approvals_doc_field_new_close">New close</string>
+    <string name="approvals_doc_field_outage_from">Outage from</string>
+    <string name="approvals_doc_field_outage_to">Outage to</string>
+    <string name="approvals_doc_field_reported_by">Reported by</string>
+    <!-- Accessibility (TalkBack): a raw view's line's level, a marker, and a raw view's string ("10" and 10 sound different). -->
+    <string name="approvals_doc_level_spoken">level %1$d</string>
+    <string name="approvals_doc_marker_spoken">code point %1$s</string>
+    <string name="approvals_doc_string_spoken">%1$s, text</string>
 </resources>

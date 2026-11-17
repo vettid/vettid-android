@@ -8,6 +8,8 @@ import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.devices.PairingStage
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.ApprovalDocument
+import com.vettid.core.data.social.DocumentApproval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionsRepository
@@ -204,6 +206,21 @@ class ApprovalsViewModel @Inject constructor(
 /** What a decision needs from the member. */
 enum class Needs { NOTHING, PASSWORD }
 
+/** A challenge's document on the approval screen (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"). */
+sealed interface DocumentStep {
+    /** Being fetched (`connection.authenticate.document`). */
+    data object Loading : DocumentStep
+
+    /** Fetched and checked: shown, and approvable once it has all been on screen. */
+    data class Shown(val document: ApprovalDocument, val presentation: DocumentPresentation) : DocumentStep
+
+    /** Fetched, but it failed the app's checks: "This request can't be shown", Deny only. */
+    data class Unshowable(val reason: ApprovalDocument.Failure) : DocumentStep
+
+    /** The fetch failed (the vault could not be reached, say): said, with Try again; Deny stays. */
+    data class Failed(val kind: FailureKind, val code: String?) : DocumentStep
+}
+
 /** Why "Deny and end access now" did not end access: the failure's kind and the code its message names (or null). */
 data class EndFailure(val kind: FailureKind, val code: String?)
 
@@ -288,7 +305,33 @@ data class ApprovalDetailUiState(
     val locationIssue: com.vettid.core.data.location.SendIssue? = null,
     /** This phone already shares its location with the asker until then: Share once and Share for a while… are not offered. */
     val sharingUntil: Instant? = null,
+    /** (0.89.0 §10.4) The challenge's document, for a member authentication that carries one; null for any other request. */
+    val document: DocumentStep? = null,
+    /** Counts the documents shown: the screen follows each from nothing seen, the same document shown again included. */
+    val documentGeneration: Int = 0,
+    /** The `document_sha256` the request named when [document] was fetched: another one fetches again. */
+    val documentFor: String? = null,
+    /** The hash of the document whose whole the screen has shown (in [documentGeneration]): Approve is enabled only for it. */
+    val documentSeen: String? = null,
 ) {
+    /**
+     * A challenge with a document that is not shown (loading, failed, can't be shown): only Deny is offered, with no password
+     * field and no Approve (§10.4 "offers only Deny").
+     */
+    val onlyDeny: Boolean
+        get() = (approval as? Approval.Authentication)?.hasDocument == true && document !is DocumentStep.Shown
+
+    /**
+     * The document shown and checked, once it has all been on screen: the only one an approval signs. It is the document
+     * the request held now names, checked for this request and its line, so Approve is never enabled over an older one.
+     */
+    val documentToApprove: ApprovalDocument?
+        get() {
+            val d = (document as? DocumentStep.Shown)?.document ?: return null
+            val x = approval as? Approval.Authentication ?: return null
+            return d.takeIf { documentSeen == it.sha256 && it.isFor(x) }
+        }
+
     /**
      * A request is open for the member's decision (any kind, a device's or an agent's too), typed or not: the daily owner check
      * waits for it (VAULT-MESSAGING §3.6.5). Not once it was decided, left, withdrawn, or held.
@@ -339,6 +382,8 @@ data class ApprovalDetailUiState(
         is Approval.CriticalUse -> a.suitable != false &&
             a.payloadVerified && password.isNotEmpty() && (retryUntil == null || java.time.Instant.now().isAfter(retryUntil))
         is Approval.ShareDecision -> a.items.any { it.itemId !in shareExcluded }
+        // §10.4 "Approval documents": a challenge with a document only once it was shown, checked and seen whole.
+        is Approval.Authentication -> password.isNotEmpty() && (!a.hasDocument || documentToApprove != null)
         else -> needs == Needs.NOTHING || password.isNotEmpty()
     }
 
@@ -374,6 +419,8 @@ class ApprovalDetailViewModel @Inject constructor(
         viewModelScope.launch {
             repo.approvals.collect { l ->
                 l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } }
+                // A request that comes to name another document fetches it again.
+                loadDocument()
             }
         }
         viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
@@ -404,6 +451,10 @@ class ApprovalDetailViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    init {
+        loadDocument()
     }
 
     private val resumed = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -541,6 +592,75 @@ class ApprovalDetailViewModel @Inject constructor(
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
+    /**
+     * (0.89.0 §10.4 "Approval documents") A member authentication that carries a document: it is fetched and checked when
+     * the screen first holds the request, and again whenever the request it holds comes to name another document than the
+     * one fetched (from any state but a fetch on its way, which looks again once it is answered).
+     */
+    @Suppress("ReturnCount") // no document, nothing new to fetch, or the fetch
+    private fun loadDocument() {
+        val x = local.value.approval as? Approval.Authentication ?: return
+        if (!x.hasDocument) return
+        var start = false
+        local.update { s ->
+            start = s.document != DocumentStep.Loading && (s.document == null || s.documentFor != x.documentSha256)
+            // The password goes while there is nothing to approve; it does not come back filled.
+            if (start) s.copy(document = DocumentStep.Loading, documentFor = x.documentSha256, documentSeen = null, password = "") else s
+        }
+        if (!start) return
+        viewModelScope.launch {
+            try {
+                show(repo.authenticationDocument(x))
+            } catch (e: VaultFailure) {
+                local.update { it.copy(document = DocumentStep.Failed(e.kind, e.shownCode), documentSeen = null) }
+            }
+            // The request may have come to name another document meanwhile.
+            loadDocument()
+        }
+    }
+
+    /** [checked] in place of whatever document the screen showed: it is shown from the start, not yet seen whole. */
+    private fun show(checked: ApprovalDocument.Check) {
+        val step = when (checked) {
+            // Shown with the line it was checked against (the request's `context` it is bound to).
+            is ApprovalDocument.Check.Shown -> DocumentPresentation.of(checked.document, checked.document.context)
+                ?.let { DocumentStep.Shown(checked.document, it) } ?: DocumentStep.Unshowable(ApprovalDocument.Failure.SHAPE)
+            is ApprovalDocument.Check.Refused -> DocumentStep.Unshowable(checked.reason)
+        }
+        local.update { it.copy(document = step, documentSeen = null, documentGeneration = it.documentGeneration + 1) }
+    }
+
+    /** The document's fetch failed: Try again. */
+    fun retryDocument() {
+        if (local.value.document !is DocumentStep.Failed) return
+        local.update { it.copy(document = null, documentFor = null) }
+        loadDocument()
+    }
+
+    /**
+     * The screen has ([whole]), or no longer has (another text size or width: it follows the document again from nothing
+     * seen), shown the whole of the document whose hash is [sha256], from its top to its end without a gap, in
+     * [generation]. A report about a document no longer shown, or from an earlier showing, counts for nothing.
+     */
+    fun documentSeen(sha256: String, generation: Int, whole: Boolean) = local.update { s ->
+        val d = (s.document as? DocumentStep.Shown)?.document
+        if (d == null || d.sha256 != sha256 || generation != s.documentGeneration) s else s.copy(documentSeen = sha256.takeIf { whole })
+    }
+
+    /**
+     * Decided from the request in hand, never from what the repository still holds: a challenge with a document is
+     * approved only over the document shown here, whole (§10.4: nowhere else, and never without it).
+     */
+    private suspend fun approveOverDocument(s: ApprovalDetailUiState, password: String) {
+        val x = s.approval as Approval.Authentication
+        val d = s.documentToApprove ?: throw VaultFailure(FailureKind.OTHER, CODE_DOCUMENT_NOT_SHOWN)
+        val r = repo.approveAuthentication(x, password, d)
+        if (r is DocumentApproval.Changed) {
+            show(r.check)
+            throw DocumentRestarted()
+        }
+    }
+
     /** Ticks or unticks one entry of a grant request. */
     private fun chosen(s: ApprovalDetailUiState): Set<Int> =
         s.grantSelected ?: (uiState.value.approval as? Approval.GrantRequest)?.grantable?.toSet() ?: emptySet()
@@ -582,7 +702,8 @@ class ApprovalDetailViewModel @Inject constructor(
             when (a) {
                 is Approval.ConnectionRequest -> repo.approveConnection(a.pendingId)
                 is Approval.OutgoingRequest -> repo.approveOutgoing(a.connectionId)
-                is Approval.Authentication -> repo.approveAuthentication(a.requestId, pw)
+                // Decided from the request on screen: one with a document only over it, never by the old path.
+                is Approval.Authentication -> if (a.hasDocument) approveOverDocument(s, pw) else repo.approveAuthentication(a.requestId, pw)
                 is Approval.GrantRequest -> repo.decideGrant(
                     a.requestId,
                     GrantDecision(
@@ -788,6 +909,9 @@ class ApprovalDetailViewModel @Inject constructor(
                 block()
                 // A critical use stays on screen with its result; everything else closes.
                 local.update { it.copy(busy = false, done = it.criticalResult == null && it.outcome == null, password = "") }
+            } catch (_: DocumentRestarted) {
+                // Another document than the one shown: nothing was approved, and it is shown from the start; no failure.
+                local.update { it.copy(busy = false, password = "") }
             } catch (e: VaultFailure) {
                 // AA5: `not_found` (VAULT-MESSAGING 0.83.0 §10.3: replaced, decided elsewhere, dropped) is "no longer
                 // waiting"; any other failure shows its error and keeps the request.
@@ -856,5 +980,14 @@ class ApprovalDetailViewModel @Inject constructor(
     private companion object {
         /** How long a `not_found` waits for the withdrawal's sync event before it reads as an ordinary closed request. */
         const val WITHDRAWN_WAIT_MS = 2_000L
+
+        /** The app's own refusal to approve a challenge with a document that is not shown whole (never sent). */
+        const val CODE_DOCUMENT_NOT_SHOWN = "document_not_shown"
     }
 }
+
+/**
+ * The approval found another document than the one shown (`document_not_fetched`, then other bytes): nothing was approved
+ * and the screen shows what it has now from the start; no failure is said for it.
+ */
+private class DocumentRestarted : Exception()

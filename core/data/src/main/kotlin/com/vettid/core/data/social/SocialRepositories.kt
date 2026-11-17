@@ -158,12 +158,11 @@ interface ApprovalsRepository {
     val withdrawn: StateFlow<Set<String>> get() = NO_WITHDRAWN
 
     /**
-     * Opens the credential's unlock window with [password] and signs the challenge (§10.4), sending no document hash: the
-     * purpose form, as an app before 0.89.0 approves. A `document_required` challenge is refused (`update_required`)
-     * before the unlock window opens, so an ask that already ended at the vault gets `update_required` rather than
-     * `not_found`, and the password is not checked (accepted: the screen's document approval replaces this path). Until
-     * the screen that shows documents comes (with `approval_document` in `device.features`), this is how a challenge that
-     * merely carries a document is approved too.
+     * Opens the credential's unlock window with [password] and signs the challenge (§10.4) in the purpose form, sending no
+     * document hash. Refused ([com.vettid.core.data.vault.FailureKind.OTHER], `document_not_shown`, before the unlock window
+     * opens and with nothing sent) for a challenge held with a document (0.89.0 "Approval documents"), which is approved
+     * only over its document from the screen that showed it, and for a challenge this app no longer holds, which may carry
+     * one.
      */
     suspend fun approveAuthentication(requestId: String, password: String)
 

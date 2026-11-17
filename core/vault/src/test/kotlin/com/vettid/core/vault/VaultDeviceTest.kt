@@ -195,7 +195,7 @@ class VaultDeviceTest {
             val p = PendingInit.open(raw, { k -> if (k == kem.publicKey.kid) kem else null }, at)
             assertEquals(Purpose.APP, p.body.purpose)
             assertEquals(vaultId, p.body.ctx)
-            assertEquals(listOf("hs_confirm"), p.inner.features) // §5.3, §10.8 (0.87.0): every message the device deposits
+            assertEquals(listOf("approval_document", "hs_confirm"), p.inner.features) // §5.3, §10.8 (0.87.0): every message the device deposits
             val (r, env) = p.respond(
                 ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk(), now = at),
             )
@@ -205,7 +205,7 @@ class VaultDeviceTest {
 
         fun fin(raw: ByteArray, d: VaultDevice) {
             val fr = responder!!.handleFin(raw, d.relayAddr.pk(), Instant.now())
-            assertEquals(listOf("hs_confirm"), fr.inner.features)
+            assertEquals(listOf("approval_document", "hs_confirm"), fr.inner.features)
             // The enrollment handshake carries the commitment (0.10.3); no code is shown, but both sides have it.
             assertEquals(6, fr.sas!!.length)
             keyring.activate(fr.epoch, Instant.now())
@@ -231,11 +231,11 @@ class VaultDeviceTest {
         assertNull(c.re)
         assertNull(c.exp)
         assertEquals("{}", String(c.body))
-        assertEquals(listOf("hs_confirm"), c.features)
+        assertEquals(listOf("approval_document", "hs_confirm"), c.features)
         val f = epoch.open(Envelope.parse(nextDeposit().second))
         assertEquals("device.features", f.type)
-        assertEquals("""{"features":["hs_confirm"]}""", String(f.body))
-        assertEquals(listOf("hs_confirm"), f.features)
+        assertEquals("""{"features":["approval_document","hs_confirm"]}""", String(f.body))
+        assertEquals(listOf("approval_document", "hs_confirm"), f.features)
     }
 
     /**
@@ -245,8 +245,8 @@ class VaultDeviceTest {
     private fun takeFeatures(v: FakeVault): Inner {
         val m = v.open(nextDeposit().second)
         assertEquals("device.features", m.type)
-        assertEquals("""{"features":["hs_confirm"]}""", String(m.body))
-        assertEquals(listOf("hs_confirm"), m.features)
+        assertEquals("""{"features":["approval_document","hs_confirm"]}""", String(m.body))
+        assertEquals(listOf("approval_document", "hs_confirm"), m.features)
         assertNull(m.re)
         return m
     }
@@ -7344,7 +7344,7 @@ class VaultDeviceTest {
         val ini = v.rekeyInit(d)
         d.handle(v.msg(ini.envelope()))
         val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), deviceNow())
-        assertEquals("hs.resp carries the list too", listOf("hs_confirm"), res.inner.features)
+        assertEquals("hs.resp carries the list too", listOf("approval_document", "hs_confirm"), res.inner.features)
         d.handle(v.msg(res.fin))
         expectConfirm(res.epoch)
         return Rekeyed(d, v, old, res.epoch, store, secrets)
@@ -9364,19 +9364,19 @@ class VaultDeviceTest {
             val (d, v) = pairedDevice(this)
             val once = async(Dispatchers.IO) { d.opOnce("vault.status") }
             val r1 = v.open(nextDeposit().second)
-            assertEquals("vault.status" to listOf("hs_confirm"), r1.type to r1.features)
+            assertEquals("vault.status" to listOf("approval_document", "hs_confirm"), r1.type to r1.features)
             d.handle(v.seal("vault.status", "{}", re = r1.id, status = Inner.STATUS_OK))
             once.await()
             val op = async(Dispatchers.IO) { d.op("vault.status") }
             val r2 = v.open(nextDeposit().second)
-            assertEquals(listOf("hs_confirm"), r2.features)
+            assertEquals(listOf("approval_document", "hs_confirm"), r2.features)
             d.handle(v.seal("vault.status", "{}", re = r2.id, status = Inner.STATUS_OK))
             op.await()
             d.send("call.end")
-            assertEquals(listOf("hs_confirm"), v.open(nextDeposit().second).features)
+            assertEquals(listOf("approval_document", "hs_confirm"), v.open(nextDeposit().second).features)
             // An answer the device sends (a token refresh's).
             d.handle(v.seal("relay.token.refresh", "{}"))
-            assertEquals(listOf("hs_confirm"), v.open(nextDeposit().second).features)
+            assertEquals(listOf("approval_document", "hs_confirm"), v.open(nextDeposit().second).features)
         }
     }
 
