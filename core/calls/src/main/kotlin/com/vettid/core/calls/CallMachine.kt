@@ -106,14 +106,17 @@ internal class CallMachine(
      * push out an incoming call remembered here; and a start's own end remembered here (the held events full) can be
      * pushed out before the start is answered by about as many more, which then leaves the call to its usual end. Both
      * lists are memory only, and kept across a lock on purpose: a call that ended before a lock is still ended after it.
+     * They are forgotten, with [endedOtherEnds], when the phone leaves its vault ([vaultChanged]): the next vault opened
+     * here may be another one.
      */
     private val endedOthers = ArrayDeque<String>()
 
     /**
-     * The reason of an end remembered among [endedOthers] while a start had no id (its own end may be one of them, when
-     * the held events were full): what the placed call shows if it is ([onPlaced]). Kept with its id, gone with it.
+     * An end remembered among [endedOthers] while a start had no id (its own end may be one of them, when the held events
+     * were full): if it is, its reason is what the placed call shows, and a glare's end (`superseded_by`) counts for the
+     * winners' rule as a held one does ([onPlaced]). Kept with its id, gone with it.
      */
-    private val endedOtherReasons = HashMap<String, String>()
+    private val endedOtherEnds = HashMap<String, SignalEvent.End>()
 
     private sealed interface Msg {
         data class Call(val connectionId: String) : Msg
@@ -122,6 +125,9 @@ internal class CallMachine(
         data class HangUp(val reason: CallEnd) : Msg
         data class Mute(val muted: Boolean) : Msg
         data object Dismiss : Msg
+
+        /** The phone left its vault: see [vaultChanged]. */
+        data object VaultChanged : Msg
         class Signal(val event: SignalEvent) : Msg
         class Media(val seq: Int, val event: MediaEvent) : Msg
         class Placed(val seq: Int, val call: PlacedCall, val atMs: Long) : Msg
@@ -263,6 +269,13 @@ internal class CallMachine(
      */
     fun vaultLocking() = post(Msg.HangUp(CallEnd.LOCKED))
 
+    /**
+     * The phone left the vault it was set up with (a sign-out, a wipe, the start of a new setup): a live call ends as at a
+     * lock, and the calls known to have ended ([endedWinners], [endedOthers]) are forgotten, in this order, so that the
+     * next vault opened here, which may be another one, starts with none of this one's. A lock keeps them.
+     */
+    fun vaultChanged() = post(Msg.VaultChanged)
+
     fun setMuted(muted: Boolean) = post(Msg.Mute(muted))
 
     /** Clears an ended call. */
@@ -293,6 +306,12 @@ internal class CallMachine(
                 publish(s)
             }
             Msg.Dismiss -> if (s == null) stateFlow.value = CallState.Idle
+            Msg.VaultChanged -> {
+                if (s != null) hangUp(s, CallEnd.LOCKED)
+                endedWinners.clear()
+                endedOthers.clear()
+                endedOtherEnds.clear()
+            }
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
             is Msg.Offered -> onOffered(s, m)
@@ -446,11 +465,14 @@ internal class CallMachine(
         // An offer held before the call had its id, that turns out to carry this very id, is no other call.
         if (s.glareOffer?.callId == m.call.callId) s.glareOffer = null
         forgetEndedGlareOffer(s, early)
-        rememberHeldWinners(early, m.call.callId)
         // The vault's end for this very call came while it had no id and was not held (the held events full): the call
-        // is over, nothing is sent for it, no address is gathered, and what was held goes where it belongs.
-        if (ownEndRemembered(m.call.callId, early)) {
-            endPlacedAtOnce(s, m.call.callId, early)
+        // is over, nothing is sent for it, no address is gathered, and what was held goes where it belongs. That end is
+        // the remembered one, not a held one, and counts for the winners' rule all the same.
+        val atOnce = ownEndRemembered(m.call.callId, early)
+        val carried = if (atOnce) endedOtherEnds[m.call.callId] else null
+        val lostToEnded = rememberHeldWinners(early, m.call.callId, carried)
+        if (atOnce) {
+            endPlacedAtOnce(s, early, carried, lostToEnded)
             return
         }
         s.formTwo = m.call.formTwo
@@ -477,16 +499,22 @@ internal class CallMachine(
      * Before a replay: the winner of a glare this call [callId] lost, when the winner's own end is among the held events too
      * (or already known), is remembered among the winners first, so that the other calls' ends held with it cannot push it
      * out before the glare's end is applied. Only this call's own glare end counts, under the rule [superseded] applies
-     * (`busy`, a lower winner): other calls' ends that name a winner do not fill the winners' list.
+     * (`busy`, a lower winner): other calls' ends that name a winner do not fill the winners' list. On the at-once path
+     * ([endPlacedAtOnce]) the glare's end is the one remembered while the start had no id ([carried]), not a held one: it
+     * counts the same, so that a winner known to have ended only among [endedOthers] is not pushed out by the ends held
+     * with the start. True when [carried] put its winner among the winners: the call lost a glare to a call that has ended.
      */
-    private fun rememberHeldWinners(early: List<SignalEvent>, callId: String) {
+    private fun rememberHeldWinners(early: List<SignalEvent>, callId: String, carried: SignalEvent.End? = null): Boolean {
         val ended = early.filterIsInstance<SignalEvent.End>().map { it.callId }.toSet()
-        for (e in early) {
-            val by = (e as? SignalEvent.End)?.takeIf { it.callId == callId && it.reason == CallReason.BUSY }?.supersededBy
-            val heldWinner = by?.takeIf { it < callId && (it in ended || hasEnded(it)) }
-            if (heldWinner != null) rememberEnded(heldWinner)
-        }
+        for (e in early) (e as? SignalEvent.End)?.let { endedWinner(it, callId, ended) }?.let(::rememberEnded)
+        val carriedWinner = carried?.let { endedWinner(it, callId, ended) } ?: return false
+        rememberEnded(carriedWinner)
+        return true
     }
+
+    /** The winner [e] names, when it is the call [callId]'s own glare end (`busy`, a lower winner) and the winner has ended. */
+    private fun endedWinner(e: SignalEvent.End, callId: String, ended: Set<String>): String? =
+        e.supersededBy?.takeIf { e.callId == callId && e.reason == CallReason.BUSY && it < callId && (it in ended || hasEnded(it)) }
 
     /**
      * A held event left once the replay has finished the call, or handed the session to a glare's winner (or a held offer
@@ -697,9 +725,9 @@ internal class CallMachine(
         } else if (s.callId != e.callId) {
             // Another call's end (its offer not here yet, or one turned away as busy): its late offer is not rung. While
             // the call has no id its own end may be among these (the early events full): no offer for this device's own
-            // call comes here, and [onPlaced] ends the call at once when its id turns out to be one of them (its reason
-            // kept for that, unless it was a glare's).
-            rememberEndedOther(e.callId, e.reason.takeIf { s.callId == null && e.supersededBy == null })
+            // call comes here, and [onPlaced] ends the call at once when its id turns out to be one of them (the end kept
+            // for that: its reason, or the glare's winner).
+            rememberEndedOther(e.callId, e.takeIf { s.callId == null })
         }
     }
 
@@ -751,21 +779,30 @@ internal class CallMachine(
         callId in endedOthers && early.none { it is SignalEvent.End && it.callId == callId }
 
     /**
-     * The placed call [callId] ended already: it shows the remembered reason (a lost glare's winner rings: §10.10 allows a
-     * device that does not answer it by itself to ring it), and what was held goes where it belongs.
+     * The placed call ended already ([carried], its remembered end): it shows that end's reason. A glare it lost shows
+     * missed when the winner has ended ([lostToEnded]: kept among the winners, its late offer is not rung, as on the live
+     * path), else failed (the winner rings: §10.10 allows a device that does not answer it by itself to ring it). What was
+     * held goes where it belongs.
      */
-    private fun endPlacedAtOnce(s: Session, callId: String, early: List<SignalEvent>) {
-        val reason = endedOtherReasons[callId]
-        finish(s, if (reason == null) CallEnd.FAILED else ended(s, reason), null)
+    private fun endPlacedAtOnce(s: Session, early: List<SignalEvent>, carried: SignalEvent.End?, lostToEnded: Boolean) {
+        val reason = when {
+            lostToEnded -> CallEnd.MISSED
+            carried == null || carried.supersededBy != null -> CallEnd.FAILED
+            else -> ended(s, carried.reason)
+        }
+        finish(s, reason, null)
         for (e in early) afterReplay(e)
     }
 
-    /** [callId] ended (another call's end, see [endedOthers]); a repeat moves it to the newest. */
-    private fun rememberEndedOther(callId: String, reason: String? = null) {
+    /**
+     * [callId] ended (another call's end, see [endedOthers]; [end] kept with it in [endedOtherEnds]);
+     * a repeat moves it to the newest.
+     */
+    private fun rememberEndedOther(callId: String, end: SignalEvent.End? = null) {
         endedOthers.remove(callId)
         endedOthers.addLast(callId)
-        if (reason != null) endedOtherReasons[callId] = reason
-        if (endedOthers.size > MAX_ENDED_OTHERS) endedOtherReasons.remove(endedOthers.removeFirst())
+        if (end != null) endedOtherEnds[callId] = end
+        if (endedOthers.size > MAX_ENDED_OTHERS) endedOtherEnds.remove(endedOthers.removeFirst())
     }
 
     /** Whether the call [callId] is known to have ended here ([endedWinners], [endedOthers]). */

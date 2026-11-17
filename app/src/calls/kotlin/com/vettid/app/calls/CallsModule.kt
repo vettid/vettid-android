@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
@@ -51,6 +52,15 @@ import javax.inject.Singleton
  * shows anything.
  */
 internal fun callName(c: ConnectionInfo): String? = AccountNames.cleaned(c.accountName) ?: AccountNames.cleaned(c.name)
+
+/**
+ * The phone leaves its vault ([CallVault.vaultLeft]) when its phase becomes one with no vault set up on it: signed out
+ * (after a sign-out, a wipe, the end of a deletion, or as a phone a transfer or a recovery replaced) or setting one up
+ * (a new enrolment, a recovery, a transfer to this phone, each of which starts there). Once per leaving; a lock and an
+ * unlock are not one.
+ */
+internal fun vaultLeavings(phase: Flow<AppPhase>): Flow<Unit> =
+    phase.map { it == AppPhase.SignedOut || it is AppPhase.Setup }.distinctUntilChanged().filter { it }.map { }
 
 /**
  * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
@@ -79,6 +89,8 @@ object CallsModule {
         )
 
         override val unlockedNow: Boolean get() = m.phase.value == AppPhase.Unlocked
+
+        override val vaultLeft: Flow<Unit> = vaultLeavings(m.phase)
 
         /** The root UI shows the release update over every phase while its progress is non-null (VettIdApp). */
         override val updateShowing: Boolean get() = m.releaseUpdate.progress.value != null
