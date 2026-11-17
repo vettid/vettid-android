@@ -344,7 +344,7 @@ class CallMachineEndedCallsTest {
         repeat(MAX_EARLY) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
         repeat(OVER + 8) { signalling.deliver(SignalEvent.End(other(it), CallReason.DECLINE)) }
         runCurrent()
-        val field = CallMachine::class.java.getDeclaredField("endedOtherReasons").apply { isAccessible = true }
+        val field = CallMachine::class.java.getDeclaredField("endedOtherEnds").apply { isAccessible = true }
         assertEquals(32, (field.get(m) as Map<*, *>).size)
         release()
     }
@@ -406,6 +406,155 @@ class CallMachineEndedCallsTest {
         assertEquals("no engine for the held offer", 1, engines.created.size)
         assertTrue(GLARE_ID in signalling.dropped)
         assertTrue(!signalling.sentAny("ringing(") && !signalling.sentAny("answer("))
+    }
+
+    /** The machine's list [name] of calls known to have ended (memory only, private). */
+    private fun CallMachine.known(name: String): Collection<*> {
+        val field = CallMachine::class.java.getDeclaredField(name).apply { isAccessible = true }
+        return when (val v = field.get(this)) {
+            is Map<*, *> -> v.keys
+            else -> v as Collection<*>
+        }
+    }
+
+    /** A start held ([FakeSignalling.startGate]) after [winner] ended while the phone was idle. */
+    private fun TestScope.startingAfterAnIdleEnd(s: FakeSignalling, winner: String): CallMachine {
+        s.startGate = Channel(Channel.UNLIMITED)
+        val m = machine(s)
+        runCurrent()
+        s.deliver(SignalEvent.End(winner, CallReason.HANGUP))
+        runCurrent()
+        m.call("conn-1")
+        runCurrent()
+        assertEquals(CallPhase.STARTING, m.live().phase)
+        return m
+    }
+
+    /** The placed call ended at once, missed; its winner is kept among the winners only, and its late offer goes unrung. */
+    private fun TestScope.missedAtOnceAndTheWinnerNotRung(m: CallMachine) {
+        assertEquals(CallEnd.MISSED, m.ended().reason)
+        assertTrue(GLARE_ID in m.known("endedWinners"))
+        // The case this is about: the other calls' ends replayed have pushed the winner out of the other calls' list.
+        assertTrue(GLARE_ID !in m.known("endedOthers"))
+        assertTrue(signalling.sent.none { it.startsWith("end(") || it.startsWith("ice(") })
+        assertTrue(engines.last.calls.none { it.startsWith("startGathering") })
+        notRung(m, signalling, GLARE_ID)
+    }
+
+    /**
+     * The winner ended while the phone was idle; then a start gets more than 32 other ends held, the held events fill, and
+     * its own glare end comes past them (remembered, not held). The placed call ends at once, and that remembered end keeps
+     * the winner among the winners before the held ends are replayed: its late offer is neither answered nor rung.
+     */
+    @Test
+    fun aWinnerEndedBeforeACallThatEndsAtOnceIsKeptAmongTheWinners() = runTest {
+        val m = startingAfterAnIdleEnd(signalling, GLARE_ID)
+        repeat(OVER) { signalling.deliver(SignalEvent.End(other(it), CallReason.HANGUP)) }
+        repeat(MAX_EARLY - OVER) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        release()
+        missedAtOnceAndTheWinnerNotRung(m)
+    }
+
+    /** The same with the held events full of other calls' ends ([MAX_EARLY]), the own glare end coming past them. */
+    @Test
+    fun aWinnerEndedBeforeACallThatEndsAtOnceIsKeptWithTheHeldEventsFull() = runTest {
+        val m = startingAfterAnIdleEnd(signalling, GLARE_ID)
+        repeat(MAX_EARLY) { signalling.deliver(SignalEvent.End(other(it), CallReason.HANGUP)) }
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        release()
+        missedAtOnceAndTheWinnerNotRung(m)
+    }
+
+    /** The remembered own end of another kind, or naming a winner that is not lower, is no glare's: it fills no winners. */
+    @Test
+    fun aRememberedOwnEndThatIsNoGlaresDoesNotFillTheWinners() = runTest {
+        val higher = "01JB2Z6V9K3M4N5P6Q7R8S9TZZ"
+        for ((reason, by) in listOf(CallReason.DECLINE to GLARE_ID, CallReason.BUSY to higher)) {
+            val s = FakeSignalling()
+            val m = startingAfterAnIdleEnd(s, by)
+            repeat(MAX_EARLY) { s.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
+            s.deliver(SignalEvent.End(CALL_ID, reason, supersededBy = by))
+            runCurrent()
+            release(s)
+            assertEquals("$reason $by", CallEnd.FAILED, m.ended().reason)
+            assertTrue("$reason $by", by !in m.known("endedWinners"))
+        }
+    }
+
+    /** Calls known to have ended, among the winners and the others, with a kept end. */
+    private fun TestScope.knownEnded(m: CallMachine) {
+        placed(m)
+        signalling.deliver(SignalEvent.End(GLARE_ID, CallReason.HANGUP))
+        signalling.deliver(SignalEvent.End(CALL_ID, CallReason.BUSY, supersededBy = GLARE_ID))
+        runCurrent()
+        assertEquals(CallEnd.MISSED, m.ended().reason)
+        m.dismiss()
+        signalling.startGate = Channel(Channel.UNLIMITED)
+        m.call("conn-1")
+        runCurrent()
+        repeat(MAX_EARLY) { signalling.deliver(SignalEvent.Ice(OTHER_ID, listOf(candidate(1)))) }
+        signalling.deliver(SignalEvent.End(OTHER_ID, CallReason.DECLINE))
+        runCurrent()
+        assertTrue(GLARE_ID in m.known("endedWinners") && OTHER_ID in m.known("endedOthers"))
+        assertTrue(OTHER_ID in m.known("endedOtherEnds"))
+    }
+
+    /** A lock and an unlock of the same vault keep the calls known to have ended: a late offer for one does not ring. */
+    @Test
+    fun theEndedCallListsSurviveALockAndAnUnlock() = runTest {
+        val m = machine()
+        knownEnded(m)
+        open = false
+        m.vaultLocking()
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        open = true
+        assertTrue(GLARE_ID in m.known("endedWinners") && OTHER_ID in m.known("endedOthers"))
+        assertTrue(OTHER_ID in m.known("endedOtherEnds"))
+        notRung(m, signalling, GLARE_ID)
+        notRung(m, signalling, OTHER_ID)
+    }
+
+    /** Leaving the vault ends a live call as a lock does, then forgets every call known to have ended: none reaches the next. */
+    @Test
+    fun aVaultChangeEmptiesTheEndedCallLists() = runTest {
+        val m = machine()
+        knownEnded(m)
+        open = false
+        m.vaultChanged()
+        runCurrent()
+        assertEquals(CallEnd.LOCKED, m.ended().reason)
+        assertTrue(m.known("endedWinners").isEmpty() && m.known("endedOthers").isEmpty() && m.known("endedOtherEnds").isEmpty())
+        open = true
+        m.dismiss()
+        runCurrent()
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals("another vault's ended call is not known here", CallPhase.INCOMING, m.live().phase)
+    }
+
+    /**
+     * The live call ends before the lists are cleared: what its end remembers (another call's end held by a start, an
+     * incoming call that rang here) is of the vault being left, and is gone with the rest.
+     */
+    @Test
+    fun aVaultChangeEndsTheLiveCallBeforeItClears() = runTest {
+        for (how in listOf("held end", "ringing")) {
+            val s = FakeSignalling()
+            val m = if (how == "held end") starting(s) else machine(s)
+            s.deliver(if (how == "held end") SignalEvent.End(OTHER_ID, CallReason.HANGUP) else offer(GLARE_ID))
+            runCurrent()
+            assertTrue(how, m.state.value is CallState.Live)
+            open = false
+            m.vaultChanged()
+            runCurrent()
+            assertTrue(how, m.state.value is CallState.Ended)
+            val left = listOf("endedWinners", "endedOthers", "endedOtherEnds").associateWith { m.known(it) }
+            assertTrue("$how: $left", left.values.all { it.isEmpty() })
+        }
     }
 
     /** [vaultOpenings]: a close is put between two openings the phase alone would not tell apart. */

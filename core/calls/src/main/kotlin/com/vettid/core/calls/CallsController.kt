@@ -70,6 +70,12 @@ interface CallVault {
      */
     val unlockedNow: Boolean
 
+    /**
+     * Emits each time this phone leaves the vault it was set up with (a sign-out, a wipe, a deletion's end, the start of a
+     * new setup, recovery or transfer to this phone): the next vault opened here may be another one. A lock is not that.
+     */
+    val vaultLeft: Flow<Unit>
+
     /** True while the release-update screen covers the app: no screen could answer a call, so none rings. */
     val updateShowing: Boolean get() = false
 
@@ -323,6 +329,8 @@ class CallsController(
             }
         }
         scope.launch { machine.state.collect { around(it) } }
+        // The calls known to have ended are kept across a lock of the vault, never into another vault.
+        scope.launch { vault.vaultLeft.collect { machine.vaultChanged() } }
         scope.launch { signalling.refused.collect { n -> diagnosticsFlow.update { it.copy(refused = n) } } }
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }

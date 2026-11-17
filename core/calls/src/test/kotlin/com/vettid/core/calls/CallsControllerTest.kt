@@ -156,6 +156,7 @@ class CallsControllerTest {
         var phaseClosed = false
 
         override val unlockedNow: Boolean get() = unlocked.value && !phaseClosed
+        override val vaultLeft = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         override var updateShowing = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -225,6 +226,34 @@ class CallsControllerTest {
 
     private fun record(id: String, state: String, direction: String = "out", started: Instant = T0, reason: String? = null, answered: Instant? = null, ended: Instant? = null) =
         CallRecord(id, "conn-1", direction, "audio", state, reason, started.toString(), answered?.toString(), ended?.toString())
+
+    /** The controller's machine's private list [name] of calls known to have ended. */
+    @Suppress("UNCHECKED_CAST")
+    private fun CallsController.endedList(name: String): ArrayDeque<String> {
+        val m = CallsController::class.java.getDeclaredField("machine").apply { isAccessible = true }.get(this)
+        return CallMachine::class.java.getDeclaredField(name).apply { isAccessible = true }.get(m) as ArrayDeque<String>
+    }
+
+    /** The calls known to have ended are kept across a lock and an unlock, and forgotten when the phone leaves its vault. */
+    @Test
+    fun theEndedCallListsAreKeptAcrossALockAndForgottenWhenThePhoneLeavesItsVault() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.endedList("endedWinners").addLast(GLARE_ID)
+        c.endedList("endedOthers").addLast(OTHER_ID)
+        vault.unlocked.value = false
+        runCurrent()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(listOf(GLARE_ID), c.endedList("endedWinners").toList())
+        assertEquals(listOf(OTHER_ID), c.endedList("endedOthers").toList())
+        vault.unlocked.value = false
+        runCurrent()
+        vault.vaultLeft.emit(Unit)
+        runCurrent()
+        assertTrue(c.endedList("endedWinners").isEmpty() && c.endedList("endedOthers").isEmpty())
+    }
 
     @Test
     fun aBuildWithoutCallsShowsNoButton() {
