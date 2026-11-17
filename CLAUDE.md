@@ -793,6 +793,17 @@ ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`ad
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
 
+## No backward compatibility before production users
+
+(Owner, 2026-11-17; Ground Control rule 3 once adopted.) VettID has no users yet; staging runs only the current release of every part, and compatibility work waits for the production-launch checklist.
+
+- Member vaults and apps pair only with the current release. Don't build, test or review rollback, downgrade, older-image or older-app behavior; if a change breaks old state, the test phones re-enroll (no migrations).
+- Review briefs say so, and reviewers don't raise findings about older releases.
+- This app requires the current vault release ("update required" otherwise). Don't add per-feature dormant paths or `device.features`-style gating against older vault releases; read old vault state only if the current vault still writes it.
+- Vault and service vault ship together on staging: keep the `contract` field and release tags, but the two-release support window waits for the first production service.
+- Staging data and keys may be reset instead of migrated, with the owner's go for anything public or permanent.
+- Never weakened: security checks, fail-closed behavior, the reviews themselves; version markers stay.
+
 ## Conventions
 
 - American English in all user-facing text (owner 2026-11-05), guarded by `AmericanEnglishTextTest` (`:app`).
