@@ -625,10 +625,25 @@ class VaultApi(
         "request_id",
     ) ?: ""
 
-    /** Signs a challenge with the credential key (the unlock window must be open: credentialUnlock first). */
-    suspend fun authenticateApprove(requestId: String) {
-        op("connection.authenticate.approve") { put("request_id", requestId) }
+    /**
+     * Signs a challenge with the credential key (the unlock window must be open: credentialUnlock first).
+     * (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents") [documentSha256]: standard base64 of the SHA-256 of the document
+     * this device fetched and showed, so that the vault signs the document form; `document_not_fetched` when this device
+     * has not fetched that document, `bad_request` for another hash or for a challenge without one, `update_required` for
+     * none on a `document_required` challenge (each leaves the challenge open). Null sends none, as before 0.89.0.
+     */
+    suspend fun authenticateApprove(requestId: String, documentSha256: String? = null) {
+        device.op("connection.authenticate.approve", authenticateApproveBody(requestId, documentSha256))
     }
+
+    /**
+     * `connection.authenticate.document{request_id}` (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"): the challenge's
+     * document, standard base64, whenever `pending.list` would list the ask for this device; `not_found` otherwise, and for
+     * a challenge without one. The vault records the fetch: only the device that fetched the document can approve it in
+     * the document form. Null when the answer has no `document` string.
+     */
+    suspend fun authenticateDocument(requestId: String): String? =
+        authenticateDocumentOf(device.op("connection.authenticate.document", authenticateDocumentBody(requestId)))
 
     suspend fun authenticateDeny(requestId: String) {
         op("connection.authenticate.deny") { put("request_id", requestId) }
@@ -958,3 +973,15 @@ class VaultApi(
         }
     }
 }
+
+/** The body of [VaultApi.authenticateApprove]: `{request_id}`, plus `document_sha256` only when given (0.89.0 §10.4). */
+internal fun authenticateApproveBody(requestId: String, documentSha256: String?): JsonObject = buildJsonObject {
+    put("request_id", requestId)
+    documentSha256?.let { put("document_sha256", it) }
+}
+
+/** The body of [VaultApi.authenticateDocument]: `{request_id}` (0.89.0 §10.4 "Approval documents"). */
+internal fun authenticateDocumentBody(requestId: String): JsonObject = buildJsonObject { put("request_id", requestId) }
+
+/** The `document` string of a `connection.authenticate.document` answer; null when it is absent or not a string. */
+internal fun authenticateDocumentOf(answer: JsonObject): String? = VaultJson.str(answer, "document")

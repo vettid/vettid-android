@@ -406,8 +406,22 @@ sealed interface Approval {
          */
         val matchCode: String? = null,
         override val connectionService: Boolean = false,
+        /**
+         * (0.89.0 §10.4 "Approval documents") On a challenge that carries a document: `document_sha256`, standard base64
+         * of its SHA-256, as the vault sent it, checked only against the fetched document ([ApprovalDocument.check]). A
+         * `document_sha256` that is present but not a string is kept as "": it still names a document, which then fails
+         * the hash check. Never the document itself, which `connection.authenticate.document` fetches.
+         */
+        val documentSha256: String? = null,
+        /** The document's byte length (`document_size`), when the vault sent a whole number; null otherwise. */
+        val documentSize: Int? = null,
+        /** `document_required: true`: an approval that does not sign the document cannot count (`update_required`). */
+        val documentRequired: Boolean = false,
     ) : Approval {
         override val key: String get() = "auth:$requestId"
+
+        /** Whether the challenge carries a document: it can then never be approved as if it had none. */
+        val hasDocument: Boolean get() = documentSha256 != null
     }
 
     /** `grant.pending` (§10.12): a connection asks to read items. */

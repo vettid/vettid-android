@@ -157,8 +157,32 @@ interface ApprovalsRepository {
      */
     val withdrawn: StateFlow<Set<String>> get() = NO_WITHDRAWN
 
-    /** Opens the credential's unlock window with [password] and signs the challenge (§10.4). */
+    /**
+     * Opens the credential's unlock window with [password] and signs the challenge (§10.4), sending no document hash: the
+     * purpose form, as an app before 0.89.0 approves. A `document_required` challenge is refused (`update_required`)
+     * before the unlock window opens, so an ask that already ended at the vault gets `update_required` rather than
+     * `not_found`, and the password is not checked (accepted: the screen's document approval replaces this path). Until
+     * the screen that shows documents comes (with `approval_document` in `device.features`), this is how a challenge that
+     * merely carries a document is approved too.
+     */
     suspend fun approveAuthentication(requestId: String, password: String)
+
+    /**
+     * Fetches the document of [request], a challenge that carries one (`connection.authenticate.document`), and checks it
+     * against what the vault said of it (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"): a
+     * [ApprovalDocument.Check.Refused] means it cannot be shown, and the request can only be denied. A vault failure is
+     * thrown; `not_found` (the ask ended) also drops the ask.
+     */
+    suspend fun authenticationDocument(request: Approval.Authentication): ApprovalDocument.Check
+
+    /**
+     * Opens the credential's unlock window with [password] and signs the challenge in the document form over [document],
+     * the document the screen showed whole: its `document_sha256` is of exactly the fetched bytes. When the vault answers
+     * `document_not_fetched`, the document is fetched again: the same bytes are approved again, once; anything else comes
+     * back as [DocumentApproval.Changed], nothing approved and the request still open. Every other refusal is thrown and
+     * leaves the request open (`not_found` drops it).
+     */
+    suspend fun approveAuthentication(request: Approval.Authentication, password: String, document: ApprovalDocument): DocumentApproval
 
     suspend fun denyAuthentication(requestId: String)
 

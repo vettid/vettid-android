@@ -33,6 +33,20 @@ object VaultCodes {
     /** (VAULT-MESSAGING 0.88.17 §3.3) The unlock's and a recovery's open refusal when a part others call does not read. */
     const val STATE_UNREADABLE = "state_unreadable"
 
+    /**
+     * (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents") `connection.authenticate.approve` with the hash of the document
+     * this device has not fetched (or whose fetch the vault no longer records): fetch it again, and approve again only the
+     * same bytes. The challenge stays open. Unmapped ([FailureKind.OTHER]): `error_vault_code` names it.
+     */
+    const val DOCUMENT_NOT_FETCHED = "document_not_fetched"
+
+    /**
+     * (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents") `connection.authenticate.approve` without the document of a
+     * `document_required` challenge: an approval that cannot count. The challenge stays open, among the asks. Unmapped
+     * ([FailureKind.OTHER]): the usual failure for an error answer to `.approve`, `error_vault_code` naming it.
+     */
+    const val UPDATE_REQUIRED = "update_required"
+
     private val SHOWN = Regex("[a-z0-9_]{1,40}")
 
     /** [code] as `error_vault_code` shows it: the code itself when it matches `[a-z0-9_]{1,40}`, otherwise `unknown`. */

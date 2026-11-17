@@ -42,6 +42,14 @@ yet merged; copy them again from `main` once it is:
 - Last commit touching them: d95fb2fe65c81638b8f0bff6d05e5002549cf92d ("Attachments 1/3", vettid-vault #92)
 - Copied: 2026-10-15. Checked by `BlobVectorsTest` in `:core:crypto`.
 
+`connauth_document.json` (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents", §16 `vms/peerwire`) has its own source:
+
+- Source commit (HEAD when copied): e135c1bcfaa74bcadcbd4cf9fed21d0a235e1e96 (vettid-vault `main`)
+- Last commit touching it: 9f23d2c0cb23eb6fae04263213544e578186ff57 (vettid-vault #262, the receiver's checks and the
+  document form); byte for byte the file vettid-ios copied from that commit
+- Copied: 2026-11-17. Checked by `ApprovalDocumentVectorTest` in `:core:crypto` (the canonical form, `d`, the reference
+  and the document-form signature) and read by `ApprovalDocumentTest` in `:core:data` (the app's checks).
+
 To refresh: copy the files again from a newer vettid-vault commit, update the
 commits above, and run `./gradlew :core:crypto:test :core:attestation:testDebugUnitTest`.
 A vector that no longer matches is a stop-and-report item, never a skip.
@@ -63,6 +71,7 @@ fe97dbdfcf870e1200f9292972aa5b5f78c3059c0167d883be9296f383e21c40  calls.json
 09540a0c78b03fb03cfdee762066a9f1171419d2958798b5b4cf054f7dda66a5  verdicts.json
 a890582a80e24cea9e10523f01f2f0040924aa47cd66cd8c442c0a1577e284b3  blob.json
 a8d86c76b9469f26526f8238d41bd07a6b74fcce3da6035879fc5910c5f36427  attachment.json
+eb5cda1bae3eadc90116f0eb615290701482fff8b03483cd5c288324cef5b496  connauth_document.json
 ```
 
 `vote.json` (VAULT-MESSAGING 0.81.0 §10.19, BALLOT-PROTOCOL §8.2: the Merkle trees, the rows and the results of a vote) is

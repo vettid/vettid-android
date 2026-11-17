@@ -4,7 +4,9 @@ import com.vettid.core.data.social.AcceptedConnection
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.AskState
 import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.ApprovalDocument
 import com.vettid.core.data.social.AuthenticationState
+import com.vettid.core.data.social.DocumentApproval
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.ConnectionsRepository
@@ -282,6 +284,28 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         call("approveAuthentication")
         lastPassword = password
         drop("auth:$requestId")
+    }
+
+    /** What [authenticationDocument] answers (VAULT-MESSAGING 0.89.0 §10.4 "Approval documents"). */
+    var authDocument: ApprovalDocument.Check = ApprovalDocument.Check.Refused(ApprovalDocument.Failure.HASH)
+
+    /** What [approveAuthentication] over a document answers; only [DocumentApproval.Approved] takes the ask out. */
+    var documentApproval: DocumentApproval = DocumentApproval.Approved
+
+    override suspend fun authenticationDocument(request: Approval.Authentication): ApprovalDocument.Check {
+        call("authenticationDocument")
+        return authDocument
+    }
+
+    override suspend fun approveAuthentication(
+        request: Approval.Authentication,
+        password: String,
+        document: ApprovalDocument,
+    ): DocumentApproval {
+        call("approveAuthenticationDocument")
+        lastPassword = password
+        if (documentApproval == DocumentApproval.Approved) drop("auth:${request.requestId}")
+        return documentApproval
     }
 
     override suspend fun denyAuthentication(requestId: String) {

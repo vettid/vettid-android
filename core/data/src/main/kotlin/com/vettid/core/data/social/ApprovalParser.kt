@@ -65,9 +65,15 @@ object ApprovalParser {
                 null
             } else {
                 val purpose = AuthPurpose.of(body.s("purpose"))
+                // (0.89.0 §10.4 "Approval documents") Kept whatever the purpose: a value the app cannot use only makes the
+                // document fail its checks, and a `document_sha256` that is not a string still names a document.
+                val doc = body.containsKey("document_sha256")
                 Approval.Authentication(
                     id, conn, body.s("context"), at, instant(body.s("exp")), purpose = purpose,
                     matchCode = AuthPurpose.matchCode(purpose, body.s("match_code")),
+                    documentSha256 = if (doc) body.s("document_sha256") ?: "" else null,
+                    documentSize = if (doc) body.l("document_size")?.takeIf { it in 0..Int.MAX_VALUE }?.toInt() else null,
+                    documentRequired = doc && body.b("document_required") == true,
                 )
             }
         }
