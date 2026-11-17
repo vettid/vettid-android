@@ -145,8 +145,15 @@ class TakenPin(val pin: String, val generation: Int) {
 
 /** What the update needs from the vault. */
 interface ReleaseUpdateOps {
-    /** The offer for the vault as this phone knows it, from the manifest it trusts; null for none. */
+    /**
+     * The offer for the vault as this phone knows it, from the manifest it trusts; null for none. Fails closed (Rule 3,
+     * the release gate): a manifest that cannot be read or verified, a release 0, a fingerprint whose entry has another
+     * number, or a release the manifest does not list with no newer `active` one throws a [VaultFailure].
+     */
     suspend fun offer(): ReleaseUpdateOffer?
+
+    /** The release the vault is on now, as this phone recorded it (its alternate-channel state); null with no session. */
+    fun releaseNumber(): Long?
 
     /** The owner check is due or held (§3.6.5): the check comes first, the update never bypasses it. */
     fun ownerCheckDue(): Boolean
@@ -241,6 +248,9 @@ data class UpdateProgress(
     }
 }
 
+/** Never required: the release gate's default for a repository without it. */
+private val NOT_REQUIRED: StateFlow<Boolean> = MutableStateFlow(false)
+
 /** The proactive release update: the offer the shell shows, and the one-step update. */
 interface ReleaseUpdateRepository {
     val offer: StateFlow<ReleaseUpdateOffer?>
@@ -251,7 +261,35 @@ interface ReleaseUpdateRepository {
     /** Non-null while an update is under way or its outcome is shown; the root of the UI shows it over every phase. */
     val progress: StateFlow<UpdateProgress?>
 
-    /** Reads the offer again (the manifest; quiet on failure: the last offer stays). */
+    /**
+     * (Rule 3, the release gate) Only the update and the ways to leave the vault: from an opening until the manifest is
+     * read ([checking]), and while the vault is behind (the offer is for the release it is on now). The UI, the calls and
+     * the notifications follow it.
+     */
+    val required: StateFlow<Boolean> get() = NOT_REQUIRED
+
+    /** (Rule 3) The vault opened and no read of the manifest has succeeded since. */
+    val checking: StateFlow<Boolean> get() = NOT_REQUIRED
+
+    /**
+     * (Rule 3) The vault is on a release older than the trusted manifest's newest `active` one: the offer is for the release
+     * the vault is on now (an offer read before the vault moved counts for nothing).
+     */
+    val behind: StateFlow<Boolean> get() = NOT_REQUIRED
+
+    /** (Rule 3) Why the last read of the manifest failed in this opening; null when none did, or one succeeded since. */
+    val checkFailure: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+
+    /**
+     * (Rule 3) The vault's background work waits: the vault is behind, or a read of the manifest failed in this opening
+     * (fail closed: not known to be current). The unlock's first reads start at once all the same.
+     */
+    val paused: StateFlow<Boolean> get() = NOT_REQUIRED
+
+    /** (Rule 3) The gate's "Try again": the manifest is read at once; the automatic retries go on. */
+    fun checkNow() {}
+
+    /** Reads the offer again (the manifest; on failure the last offer stays, and the release gate holds: [required]). */
     suspend fun refreshOffer()
 
     /** Whether the owner check must come first (§3.6.5). */
@@ -317,6 +355,7 @@ interface ReleaseUpdateRepository {
  * Nothing here sends an approval except [start] (and [retry] of a start that failed before anything moved): the
  * offer, its refresh and the notices never touch the vault.
  */
+@Suppress("TooManyFunctions") // the update's steps, and the release gate's state (Rule 3)
 class ReleaseUpdateManager(
     private val scope: CoroutineScope,
     private val ops: ReleaseUpdateOps,
@@ -329,15 +368,160 @@ class ReleaseUpdateManager(
     override val progress: StateFlow<UpdateProgress?> = progressFlow.asStateFlow()
     private var job: Job? = null
 
-    override suspend fun refreshOffer() {
-        try {
-            offerFlow.value = ops.offer()
-            knownFlow.value = true
+    // --- The release gate (Rule 3: the app requires the vault's current release) ---
+
+    /** Guards the gate's state below; never held while calling out (a lock taken under it would be a lock-order cycle). */
+    private val gate = Any()
+
+    /**
+     * Moves at every opening, lock, wipe and deletion: a read begun before the latest of them neither sets an offer nor
+     * ends or starts a check, and the retries of the one before end.
+     */
+    private var generation = 0
+
+    /** The vault opened in this generation ([vaultOpened]), and was not locked, wiped or deleted since. */
+    private var open = false
+    private var retry: Job? = null
+    private var lastPaused = false
+    private val checkingFlow = MutableStateFlow(false)
+    private val failureFlow = MutableStateFlow<FailureKind?>(null)
+    private val requiredFlow = MutableStateFlow(false)
+    private val behindFlow = MutableStateFlow(false)
+    private val pausedFlow = MutableStateFlow(false)
+    override val checking: StateFlow<Boolean> = checkingFlow.asStateFlow()
+    override val checkFailure: StateFlow<FailureKind?> = failureFlow.asStateFlow()
+    override val required: StateFlow<Boolean> = requiredFlow.asStateFlow()
+    override val behind: StateFlow<Boolean> = behindFlow.asStateFlow()
+
+    override val paused: StateFlow<Boolean> = pausedFlow.asStateFlow()
+
+    /**
+     * Told when [paused] changes because of a read or the update (not at an opening, a lock, a wipe or a deletion, which
+     * set it without telling): the vault manager stops the votes' work, or reads the lists when it lifts.
+     */
+    @Volatile
+    var onPausedChange: ((Boolean) -> Unit)? = null
+
+    private fun behindNow(): Boolean {
+        val o = offerFlow.value ?: return false
+        return o.current.number == ops.releaseNumber()
+    }
+
+    /**
+     * The vault opened (an unlock, the end of setup, a start while open): [required] from now until a read of the manifest
+     * succeeds. Called before the phase is published, so that nothing of the open vault shows or rings before.
+     */
+    fun vaultOpened() {
+        synchronized(gate) {
+            restart(open = true)
+            checkingFlow.value = true
+            settle(tell = false)
+        }
+    }
+
+    /** The vault locked: its check, and the retries, end with it. The offer stays. */
+    fun vaultClosed() {
+        synchronized(gate) {
+            restart(open = false)
+            settle(tell = false)
+        }
+    }
+
+    /**
+     * The vault is being wiped from this phone: the check ends and the offer goes, with nothing told (no list is to be
+     * read for a vault on its way out).
+     */
+    fun clear() {
+        synchronized(gate) {
+            restart(open = false)
+            offerFlow.value = null
+            settle(tell = false)
+        }
+    }
+
+    /** A new generation: the check, its failure and its retries end. Under [gate]. */
+    private fun restart(open: Boolean) {
+        generation++
+        this.open = open
+        retry?.cancel()
+        retry = null
+        checkingFlow.value = false
+        failureFlow.value = null
+    }
+
+    /**
+     * Publishes [required] and [paused] from the state now; [tell]: a change of [paused] is told ([onPausedChange]), else
+     * it is only taken as the last one. Under [gate]; returns the change to tell, which the caller tells outside it.
+     */
+    private fun settle(tell: Boolean): Boolean? {
+        val behind = behindNow()
+        behindFlow.value = behind
+        requiredFlow.value = checkingFlow.value || behind
+        val paused = behind || failureFlow.value != null
+        pausedFlow.value = paused
+        val changed = paused != lastPaused
+        lastPaused = paused
+        return paused.takeIf { tell && changed }
+    }
+
+    private fun tell(paused: Boolean?) {
+        if (paused != null) onPausedChange?.invoke(paused)
+    }
+
+    override suspend fun refreshOffer() = read(synchronized(gate) { generation })
+
+    override fun checkNow() {
+        scope.launch { refreshOffer() }
+    }
+
+    /** One read of the manifest, begun in generation [begun]. */
+    private suspend fun read(begun: Int) {
+        val o = try {
+            ops.offer()
         } catch (e: CancellationException) {
             throw e
-        } catch (_: VaultFailure) {
-            // display only: the last offer stays
+        } catch (e: VaultFailure) {
+            failed(begun, e.kind)
+            return
         }
+        val change = synchronized(gate) {
+            if (begun != generation) return
+            offerFlow.value = o
+            knownFlow.value = true
+            checkingFlow.value = false
+            failureFlow.value = null
+            settle(tell = true)
+        }
+        tell(change)
+    }
+
+    /**
+     * A read failed: the last offer stays. While the vault is open the check holds (fail closed) and the manifest is read
+     * again after [CHECK_RETRIES_S], until a read succeeds or the generation moves.
+     */
+    private fun failed(begun: Int, kind: FailureKind) {
+        val change = synchronized(gate) {
+            if (begun != generation || !open) return
+            failureFlow.value = kind
+            if (retry?.isActive != true) retry = scope.launch { retryLoop(begun) }
+            settle(tell = true)
+        }
+        tell(change)
+    }
+
+    private suspend fun retryLoop(begun: Int) {
+        var attempt = 0
+        while (true) {
+            delay(CHECK_RETRIES_S[minOf(attempt++, CHECK_RETRIES_S.size - 1)] * MS_PER_S)
+            if (synchronized(gate) { begun != generation || failureFlow.value == null }) return
+            read(begun)
+        }
+    }
+
+    /** The offer changed by the update itself (done): the gate follows it. */
+    private fun offerGone() {
+        offerFlow.value = null
+        tell(synchronized(gate) { settle(tell = true) })
     }
 
     override fun ownerCheckDue(): Boolean = ops.ownerCheckDue()
@@ -452,7 +636,7 @@ class ReleaseUpdateManager(
         job = null
         val done = progressFlow.value?.step == UpdateStep.DONE
         progressFlow.value = null
-        if (done) offerFlow.value = null
+        if (done) offerGone()
     }
 
     private fun running(): Boolean = job?.isActive == true
@@ -525,7 +709,7 @@ class ReleaseUpdateManager(
         when (r) {
             UpdateStepResult.Opened, is UpdateStepResult.Refused -> {
                 set { it.copy(step = UpdateStep.DONE, vaultOpen = true, canAbandon = false) }
-                offerFlow.value = null
+                offerGone()
             }
             else -> newReleaseFailed(r)
         }
@@ -596,6 +780,9 @@ class ReleaseUpdateManager(
         /** Further waits after the API client's own (10 minutes): a release that cannot start is a failure. */
         const val MAX_START_RETRIES = 5
         private const val MAX_START_WAIT_S = 60L
+
+        /** (Rule 3) The waits between the reads of a failing check, in seconds: then every minute. */
+        val CHECK_RETRIES_S = listOf(2L, 5L, 15L, 30L, 60L)
         private const val MS_PER_S = 1000L
         private const val MAX_MOVED_AGAIN = 2
     }

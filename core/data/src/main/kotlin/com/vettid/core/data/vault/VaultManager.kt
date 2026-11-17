@@ -381,9 +381,8 @@ class VaultManager(
 
             override suspend fun afterwards() {
                 val s = runCatching { session() }.getOrNull() ?: return
-                runCatching { refreshAlarm(s) }
-                ownerCheck.onOpened()
-                items.refreshQuietly()
+                // Rule 3: the alarm whatever the release gate says; the items wait while it pauses them (read when it lifts).
+                afterCredentialReset(releaseUpdate.paused.value, { refreshAlarm(s) }, { ownerCheck.onOpened() }, { items.refreshQuietly() })
             }
         },
     )
@@ -618,8 +617,15 @@ class VaultManager(
     /** Proofs that this phone was replaced, and the wipe they start. */
     val holder = HolderWatch(scope) { wipeThisPhone() }
 
+    /**
+     * The release update the shell offers, the one-step update (ANDROID-PLAN 0.1.19), and the release gate (Rule 3: the
+     * app requires the vault's current release). Made before the phase: every opening starts its check
+     * ([ReleaseUpdateManager.vaultOpened]) before the open phase is published.
+     */
+    val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
+
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting)
+    private val phaseFlow = PhaseHolder(AppPhase.Starting, onOpen = { releaseUpdate.vaultOpened() })
 
     /** A lock not made here, and the phases published after vault calls (#242): [PhaseGate]. */
     private val phaseGate by lazy {
@@ -980,7 +986,7 @@ class VaultManager(
     val feed = FeedManager(
         scope,
         ops = { VaultFeedOps(openApi()) },
-        gated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
+        gated = { featuresGated() },
     )
 
     /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
@@ -1058,7 +1064,7 @@ class VaultManager(
     val presence = PresenceManager(
         scope,
         ops = { VaultPresenceOps(openApi()) },
-        closed = { phaseFlow.value != AppPhase.Unlocked || ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
+        closed = { phaseFlow.value != AppPhase.Unlocked || featuresGated() },
     )
 
     /**
@@ -1071,7 +1077,7 @@ class VaultManager(
         ops = { VaultLocationOps(openApi()) },
         store = KeystoreShareStore(KeystoreFileStore(File(app.noBackupFilesDir, LOCATION_FILE), "location-shares")),
         unlocked = { phaseFlow.value == AppPhase.Unlocked },
-        due = { ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true },
+        due = { featuresGated() },
         deviceId = { session?.device?.deviceId },
         isService = { id -> social.connections.value.any { it.id == id && it.service } },
     )
@@ -1110,7 +1116,7 @@ class VaultManager(
             persist = { f.save(it) },
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
             // A passed check also reads the approvals again here (§10.4.2), including one that came while the view was already OK.
-            onPassed = { social.refreshAllQuietly() },
+            onPassed = { if (!releaseUpdate.paused.value) social.refreshAllQuietly() },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
@@ -1124,10 +1130,20 @@ class VaultManager(
         )
     }
 
-    /** The release update the shell offers, and the one-step update (ANDROID-PLAN 0.1.19). */
-    val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
+    /** (Rule 3) The release gate's pause, followed: the votes' work stops; when it lifts the opened vault's reads run once. */
+    private val releasePause = ReleasePauseSteps(
+        open = { phaseFlow.value == AppPhase.Unlocked && !phaseFlow.deleting },
+        stopVotes = { votes.stopSync() },
+        gateChanged = { lifted -> location.onGateChanged(lifted) },
+        reads = {
+            gatedReads()
+            presence.start()
+            location.resume()
+        },
+    )
 
     init {
+        releaseUpdate.onPausedChange = { paused -> releasePause.onPaused(paused) }
         scope.launch { runCatching { canary.load() } }
         scope.launch { io { enclaveRecords.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
@@ -1153,6 +1169,8 @@ class VaultManager(
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },
+                // Rule 3: the release check and its retries end with the lock, unless an opening was published since.
+                clearReleaseCheck = { phaseFlow.unlessOpen { releaseUpdate.vaultClosed() } },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
                     when (OwnProfileStep.onPhase(p)) {
@@ -1173,14 +1191,11 @@ class VaultManager(
                     // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                     social.reopen() // the pending.list read below may merge again
                     resumeRelay() // after an unlock the notification service's connection comes back
-                    social.refreshAllQuietly()
-                    launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
-                    items.refreshQuietly()
-                    votes.startSync() // the list, the public site and the results that are due: now, then every hour
+                    // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts).
+                    openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // whether the vault has presence, and the member's policy
                     location.resume() // the location shares this phone is the source of are taken up again
-                    feed.open()
-                    // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
+                    // The release gate's check (Rule 3) and the proactive release notice: the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 }
             }
@@ -1238,10 +1253,12 @@ class VaultManager(
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
                     steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
-                    steps.step { votes.startSync() } // the votes the hold dropped, and the work with the public site
+                    // Rule 3: while the release gate pauses them, these are read when it lifts ([ReleasePauseSteps]).
+                    if (!releaseUpdate.paused.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
                     steps.step { presence.start() } // whether the vault has presence, and the policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
-                    steps.step { social.refreshAllQuietly() } // the lists the hold dropped: approvals and requests
+                    // The lists the hold dropped: approvals and requests.
+                    if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }
                 } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
                     steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
@@ -1268,6 +1285,24 @@ class VaultManager(
                 steps.finish()
             }
         }
+    }
+
+    /**
+     * (Rule 3) Nothing of the vault's features is read or taken in: the owner check is due or held (§3.6.3), or the release
+     * gate pauses them (the vault is behind its release, or the manifest could not be read in this opening).
+     */
+    fun featuresGated(): Boolean = ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || releaseUpdate.paused.value
+
+    /**
+     * The opened vault's reads that the release gate holds back (Rule 3): after an unlock at once, unless it pauses them;
+     * else when it lifts ([releasePause]).
+     */
+    private fun gatedReads() {
+        social.refreshAllQuietly()
+        scope.launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
+        items.refreshQuietly()
+        votes.startSync() // the list, the public site and the results that are due: now, then every hour
+        feed.open()
     }
 
     /**
@@ -1794,15 +1829,7 @@ class VaultManager(
         // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
         if (!lockGuard.takesEvents()) return
         try {
-            items.onEvent(m)
-            sharing.onEvent(m)
-            devices.onEvent(m)
-            votes.onEvent(m)
-            presence.onEvent(m)
-            location.onEvent(m)
-            pairing.onEvent(m)
-            social.onEvent(m)
-            attachments.onEvent(m.type, m.body)
+            takeIntoFeatures(m, releaseUpdate.paused.value)
             // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
             if (!heldBack.hold(m, phaseFlow.value)) feed.onEvent(m)
         } catch (e: CancellationException) {
@@ -1811,6 +1838,23 @@ class VaultManager(
             // one malformed event must not stop the observer
             android.util.Log.w("VaultManager", "event ${m.type} not handled: ${e.javaClass.simpleName}")
         }
+    }
+
+    /**
+     * The event for the vault's features. Rule 3: while the release gate pauses their work ([paused]), only what no list read
+     * gives back is taken ([ReleaseGateEvents]); the rest is read when it lifts. The feed follows its own predicate.
+     */
+    private suspend fun takeIntoFeatures(m: VaultMessage, paused: Boolean) {
+        fun takes(t: EventTaker) = ReleaseGateEvents.takes(t, m.type, paused)
+        if (takes(EventTaker.ITEMS)) items.onEvent(m)
+        if (takes(EventTaker.SHARING)) sharing.onEvent(m)
+        if (takes(EventTaker.DEVICES)) devices.onEvent(m)
+        if (takes(EventTaker.VOTES)) votes.onEvent(m)
+        if (takes(EventTaker.PRESENCE)) presence.onEvent(m)
+        if (takes(EventTaker.LOCATION)) location.onEvent(m)
+        if (takes(EventTaker.PAIRING)) pairing.onEvent(m)
+        if (takes(EventTaker.SOCIAL)) social.onEvent(m)
+        if (takes(EventTaker.ATTACHMENTS)) attachments.onEvent(m.type, m.body)
     }
 
     /** A `vault.locking` (not a stale one): this phone is locked, before anything else of the event is taken. */
@@ -1929,7 +1973,8 @@ class VaultManager(
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened(afterUnlock = false)
         if (phaseFlow.value is AppPhase.Unlocked) {
             scope.launch { releaseUpdate.refreshOffer() }
-            feed.catchUp()
+            // Rule 3: not while the release gate pauses the vault's work (the feed is read when it lifts).
+            if (!releaseUpdate.paused.value) feed.catchUp()
         }
     }
 
@@ -2829,10 +2874,12 @@ class VaultManager(
     // --- the proactive release update (owner decision 2026-10-09) ---
 
     private inner class UpdateOps : ReleaseUpdateOps {
+        /** Fails closed (Rule 3, the release gate): [ReleaseGateOffer]. */
         override suspend fun offer(): ReleaseUpdateOffer? = guard {
             val s = session()
             val st = s.device.altState
-            if (st.releaseNumber == 0L) return@guard null
+            // Before any read: a release 0 can be placed in no manifest.
+            ReleaseGateOffer.checkNumber(st.releaseNumber)
             val m = s.alt.manifest(st.manifestSerial)
             // ANDROID-PLAN 0.1.54 point 4: the release an unconfirmed move left is no longer in the trusted manifest.
             val from = st.movedFrom
@@ -2840,16 +2887,10 @@ class VaultManager(
                 runCatching { s.device.clearMove() }
                 syncMove()
             }
-            val sealed = (st.release.takeIf { it.isNotEmpty() }?.let { m.byPcr0(it) } ?: m.byNumber(st.releaseNumber))
-                ?.takeIf { it.number == st.releaseNumber }
-            val newest = m.newest()
-            val between = if (sealed != null && newest != null) {
-                m.releases.filter { it.number > sealed.number && it.number < newest.number }.map { view(it) }
-            } else {
-                emptyList()
-            }
-            ReleaseUpdateOffer.of(sealed?.let { view(it) }, newest?.let { view(it) }, between)
+            ReleaseGateOffer.of(st.release, st.releaseNumber, m.releases, m::byPcr0)
         }
+
+        override fun releaseNumber(): Long? = session?.device?.altState?.releaseNumber
 
         override fun ownerCheckDue(): Boolean =
             ownerCheckDue(
@@ -3165,6 +3206,8 @@ class VaultManager(
         }
         if (marker != null) {
             releaseUpdate.close()
+            // Rule 3: the release check ends with the vault, and nothing is read for it on its way out.
+            releaseUpdate.clear()
             scope.launch { closeForDeletion(marker) }
         }
     }
@@ -3236,6 +3279,7 @@ class VaultManager(
             }
         }
         releaseUpdate.close()
+        releaseUpdate.clear()
         scope.launch { closeForApiDeleted(marker, plan!!.lock) }
     }
 
@@ -3330,6 +3374,11 @@ class VaultManager(
      * Not at an unlock: only here.
      */
     private suspend fun afterHoldPassed(gen: Int?, listMark: Long, token: Int) {
+        // Rule 3: nothing is read while the release gate pauses it (the lists, the feed among them, are read when it lifts).
+        if (releaseUpdate.paused.value) {
+            if (gen != null) feed.endReplayWindow(token)
+            return
+        }
         runCatching { feed.refresh() }
         // Nothing for a held or due state not ended by a check passed with the vault open (gen null: an unlock's own
         // check, a status read). The first `pending.list` read begun after the check and merged counts, with the feed
@@ -5194,6 +5243,8 @@ class VaultManager(
         // anything is erased: nothing still on its way saves after the erase.
         // Every step runs even if one throws (fail secure), the erase too; the first failure is rethrown after the last.
         val steps = ClearSteps()
+        // Rule 3: first, so that no lift of the release gate reads a list for the vault being wiped.
+        steps.step { releaseUpdate.clear() }
         steps.step { forgetDevices() }
         steps.step { social.clear() }
         steps.step { attachments.reset() }

@@ -39,6 +39,11 @@ class ReleaseUpdateManagerTest {
 
         override suspend fun offer() = offer
 
+        /** The release the vault is on now (Rule 3: an offer counts only for it). */
+        var release: Long? = 4
+
+        override fun releaseNumber() = release
+
         override fun ownerCheckDue() = due
 
         var changeUnresolved = false

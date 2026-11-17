@@ -26,7 +26,8 @@ import java.io.IOException
 class SurvivingCollectorTest {
     private val lockOrder = listOf(
         PhaseSteps.REPLAY, PhaseSteps.SOCIAL, PhaseSteps.ATTACHMENTS, PhaseSteps.ITEMS, PhaseSteps.SHARING, PhaseSteps.FEED,
-        PhaseSteps.DEVICES, PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION, PhaseSteps.OWN_PROFILE,
+        PhaseSteps.DEVICES, PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION, PhaseSteps.RELEASE_CHECK,
+        PhaseSteps.OWN_PROFILE,
     )
     private val clears = lockOrder.drop(1)
 
@@ -52,6 +53,7 @@ class SurvivingCollectorTest {
             clearVotes = { run(PhaseSteps.VOTES) },
             clearPresence = { run(PhaseSteps.PRESENCE) },
             clearLocation = { run(PhaseSteps.LOCATION) },
+            clearReleaseCheck = { run(PhaseSteps.RELEASE_CHECK) },
             ownProfile = { run(PhaseSteps.OWN_PROFILE) },
         )
     }

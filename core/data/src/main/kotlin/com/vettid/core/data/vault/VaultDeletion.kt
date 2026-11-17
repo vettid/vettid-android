@@ -442,7 +442,14 @@ internal class DeletionWatch(
  * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
  * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
  */
-internal class PhaseHolder(initial: AppPhase) {
+internal class PhaseHolder(
+    initial: AppPhase,
+    /**
+     * (Rule 3, the release gate) Told of every opening under this holder's lock, after [opens] moved and before the phase is
+     * published: whoever reads the open phase reads the gate's check with it, so the shell never shows a frame before.
+     */
+    private val onOpen: () -> Unit = {},
+) {
     private val flow = MutableStateFlow(initial)
     private var held: AppPhase.Deleting? = null
 
@@ -470,7 +477,10 @@ internal class PhaseHolder(initial: AppPhase) {
      */
     private fun publish(v: AppPhase) {
         val was = flow.value
-        if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) opensFlow.value += 1
+        if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) {
+            opensFlow.value += 1
+            onOpen()
+        }
         flow.value = v
         val ends = when (v) {
             AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
@@ -489,6 +499,14 @@ internal class PhaseHolder(initial: AppPhase) {
         if (!still()) return false
         if (held == null) publish(v)
         true
+    }
+
+    /**
+     * Runs [block] under this holder's lock unless the vault is open now: a step that follows a lock (the phase
+     * collector's, which may run late) then never undoes an opening published since.
+     */
+    fun unlessOpen(block: () -> Unit) = synchronized(this) {
+        if (flow.value !is AppPhase.Unlocked) block()
     }
 
     /** Whether "being deleted" holds. */
