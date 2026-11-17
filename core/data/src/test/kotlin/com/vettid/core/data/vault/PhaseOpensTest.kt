@@ -43,4 +43,40 @@ class PhaseOpensTest {
         assertEquals(listOf(1), seen)
         job.cancel()
     }
+
+    /**
+     * Rule 3 (the release gate): the opening is told before the phase shows it, so a reader of the open phase reads the
+     * gate's check with it (no frame of the shell, no ring); a phase that stays open, or a close, tells nothing.
+     */
+    @Test
+    fun theOpeningIsToldBeforeThePhaseShowsIt() = runBlocking {
+        val told = mutableListOf<AppPhase>()
+        lateinit var phase: PhaseHolder
+        phase = PhaseHolder(AppPhase.Locked, onOpen = { told += phase.value })
+        val seen = mutableListOf<Int>()
+        val job = launch(Dispatchers.Unconfined) {
+            phase.asStateFlow().collect { if (it == AppPhase.Unlocked) seen += told.size }
+        }
+        phase.value = AppPhase.Unlocked
+        assertEquals("told while the phase was still locked", listOf<AppPhase>(AppPhase.Locked), told)
+        assertEquals("before the phase showed", listOf(1), seen)
+        phase.value = AppPhase.Unlocked
+        phase.value = AppPhase.Locked
+        assertEquals(1, told.size)
+        phase.value = AppPhase.Unlocked
+        assertEquals(2, told.size)
+        job.cancel()
+    }
+
+    /** A lock's late step never undoes an opening published since: it runs only while the vault is not open. */
+    @Test
+    fun aStepUnlessOpenRunsOnlyWhileTheVaultIsNotOpen() {
+        val phase = PhaseHolder(AppPhase.Locked)
+        var ran = 0
+        phase.unlessOpen { ran++ }
+        assertEquals(1, ran)
+        phase.value = AppPhase.Unlocked
+        phase.unlessOpen { ran++ }
+        assertEquals(1, ran)
+    }
 }

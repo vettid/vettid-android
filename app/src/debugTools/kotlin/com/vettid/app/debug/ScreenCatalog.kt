@@ -252,7 +252,6 @@ private object NoRecover : RecoverActions {
     override fun setTyped(v: String) = Unit
     override fun submitTyped() = Unit
     override fun retryPreflight() = Unit
-    override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
     override fun submitPin() = Unit
     override fun setPassword(v: String) = Unit
@@ -303,7 +302,6 @@ private object NoUnlock : UnlockActions {
     override fun setPassword(v: String) = Unit
     override fun retryPreflight() = Unit
     override fun acknowledgeUpdate() = Unit
-    override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
@@ -664,7 +662,7 @@ object ScreenCatalog {
         "recover.pin" to { Rec(pinState) },
         // The offer below the PIN, compact; the full notes in their sheet (owner decision 2026-11-07).
         "recover.pin_offer" to {
-            Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true, notes = whatsNew))
+            Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), notes = whatsNew))
         },
         "recover.pin_offer_notes" to {
             val p = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4))

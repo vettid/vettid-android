@@ -67,6 +67,26 @@ internal fun vaultLeavings(phase: Flow<AppPhase>): Flow<Unit> =
     phase.map { it == AppPhase.SignedOut || it is AppPhase.Setup }.distinctUntilChanged().filter { it }.map { }
 
 /**
+ * Whether the calls count the vault as open: unlocked, and no update of its release required first (Rule 3, the release
+ * gate: while its release is checked or the vault is behind, no call starts or rings, and a live one ends).
+ */
+internal fun callsOpen(phase: AppPhase, releaseRequired: Boolean): Boolean = phase == AppPhase.Unlocked && !releaseRequired
+
+/**
+ * [CallVault.unlocked] from the vault's [phase], its [opens] and the release gate's [required]. All read live, the phase
+ * first: an opening counts itself and starts its release check before the phase is published, so a phase read as open
+ * always comes with its own count and its own check (the flows' values, collected apart, could pair an open phase with
+ * the count before it and make an unlock look like a lock and an unlock, or with the gate before its check).
+ */
+internal fun callsUnlocked(phase: StateFlow<AppPhase>, opens: StateFlow<Int>, required: StateFlow<Boolean>): Flow<Boolean> =
+    vaultOpenings(
+        combine(phase, opens, required) { _, _, _ ->
+            val open = callsOpen(phase.value, required.value)
+            open to opens.value
+        }.distinctUntilChanged(),
+    )
+
+/**
  * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
  * app's vault. Nothing of calls shows until its `call.list` probe finds that the vault has calls.
  */
@@ -82,17 +102,9 @@ object CallsModule {
     /** What the calls use of the vault manager: its phase, its typed client, and its connections as the app shows them. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
-        // Both read live, the phase first: an opening counts itself before the phase is published, so a phase read as
-        // open always comes with its own count (the two flows' values, collected apart, could pair an open phase with the
-        // count before it and make an unlock look like a lock and an unlock).
-        override val unlocked: Flow<Boolean> = vaultOpenings(
-            combine(m.phase, m.opens) { _, _ ->
-                val open = m.phase.value == AppPhase.Unlocked
-                open to m.opens.value
-            }.distinctUntilChanged(),
-        )
+        override val unlocked: Flow<Boolean> = callsUnlocked(m.phase, m.opens, m.releaseUpdate.required)
 
-        override val unlockedNow: Boolean get() = m.phase.value == AppPhase.Unlocked
+        override val unlockedNow: Boolean get() = callsOpen(m.phase.value, m.releaseUpdate.required.value)
 
         override val vaultLeft: Flow<Unit> = vaultLeavings(m.phase)
 

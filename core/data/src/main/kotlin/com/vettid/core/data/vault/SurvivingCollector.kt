@@ -135,6 +135,9 @@ internal class PhaseSteps private constructor(
         const val VOTES = "votes"
         const val PRESENCE = "presence"
         const val LOCATION = "location"
+
+        /** (Rule 3) The release gate's check and its retries end with the lock. */
+        const val RELEASE_CHECK = "release check"
         const val OWN_PROFILE = "own profile"
 
         /**
@@ -154,6 +157,7 @@ internal class PhaseSteps private constructor(
             clearVotes: () -> Unit,
             clearPresence: () -> Unit,
             clearLocation: () -> Unit,
+            clearReleaseCheck: () -> Unit,
             ownProfile: (AppPhase) -> Unit,
         ) = PhaseSteps(
             replay,
@@ -167,6 +171,7 @@ internal class PhaseSteps private constructor(
                 VOTES to clearVotes,
                 PRESENCE to clearPresence,
                 LOCATION to clearLocation,
+                RELEASE_CHECK to clearReleaseCheck,
             ),
             ownProfile,
         )

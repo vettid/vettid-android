@@ -12,7 +12,6 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseNotesRepository
-import com.vettid.core.data.vault.ReleaseView
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -102,8 +101,6 @@ data class UnlockUiState(
     val preflightError: FailureKind? = null,
     /** The member read the "vault software was updated" notice (§11.10.6). */
     val updateAcknowledged: Boolean = false,
-    /** The member approves the offered release with this unlock (§11.10.3). */
-    val approveOffer: Boolean = false,
     /** What's new in the offered release (ANDROID-PLAN 0.1.31); null while it loads. Never gates the unlock. */
     val notes: ReleaseNotes? = null,
     val pin: String = "",
@@ -250,20 +247,11 @@ data class UnlockUiState(
     }
 }
 
-/**
- * The release-offer tick after a new release check ([p]): it is consent to one release, so it is kept only when [p] offers
- * the very same release as the check it was given under ([before]: the same number, PCR0 and the rest) and is not a
- * rollback; any other offer, or none, clears it. Shared by the unlock and the recovery's PIN step.
- */
-internal fun keptApproval(approve: Boolean, before: ReleaseView?, p: PreflightInfo): Boolean =
-    approve && before != null && !p.rollback && p.offer == before
-
 /** What the unlock screen can ask for. */
 @Suppress("TooManyFunctions")
 interface UnlockActions {
     fun retryPreflight()
     fun acknowledgeUpdate()
-    fun setApproveOffer(approve: Boolean)
     fun setPin(v: String)
 
     /** The credential password, asked for with the PIN when the owner check is due (§3.6.5). */
@@ -383,17 +371,16 @@ class UnlockViewModel @Inject constructor(
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
         // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
-        val before = state.value.preflight?.offer
         state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
                 state.update {
-                    it.copy(loading = false, preflight = p, notes = null, approveOffer = keptApproval(it.approveOffer, before, p))
+                    it.copy(loading = false, preflight = p, notes = null)
                 }
                 loadNotes(p)
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, preflightError = e.kind, approveOffer = false) }
+                state.update { it.copy(loading = false, preflightError = e.kind) }
                 if (e.kind == FailureKind.SERVICE_PAUSED) startServiceWait(e.retryAfterSeconds)
             }
         }
@@ -410,8 +397,6 @@ class UnlockViewModel @Inject constructor(
     }
 
     override fun acknowledgeUpdate() = state.update { it.copy(updateAcknowledged = true) }
-
-    override fun setApproveOffer(approve: Boolean) = state.update { it.copy(approveOffer = approve) }
 
     override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), message = null) }
 
@@ -485,14 +470,14 @@ class UnlockViewModel @Inject constructor(
         if (!s.submitAllowed || s.erasing) return
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
-            val offer = if (s.approveOffer) s.preflight?.offer else null
+            // The PIN only unlocks (Rule 3): the update is approved on the release gate's own screen once the vault is open.
             val r = if (cancelRecovery && s.phoneSecret) {
                 // Release R: after a cancel from the app, the owner check at once, which records the member's presence.
-                vault.unlockCancellingRecovery(s.pin, s.password, offer)
+                vault.unlockCancellingRecovery(s.pin, s.password)
             } else if (s.checkDue) {
-                vault.unlockWithCheck(s.pin, s.password, offer, cancelRecovery)
+                vault.unlockWithCheck(s.pin, s.password, cancelRecovery = cancelRecovery)
             } else {
-                vault.unlock(s.pin, offer, cancelRecovery)
+                vault.unlock(s.pin, cancelRecovery = cancelRecovery)
             }
             // §3.6.5: the password is not kept beyond the unlock and the check that follows it.
             state.update {

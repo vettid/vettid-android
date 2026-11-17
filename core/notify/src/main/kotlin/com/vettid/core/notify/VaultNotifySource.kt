@@ -32,9 +32,12 @@ class VaultNotifySource(
     override val items: StateFlow<List<FeedItem>> = vault.feed.items
     override fun coveredNow(): Boolean = coveredNow.invoke()
 
-    override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck) { p, v ->
-        p == AppPhase.Unlocked && (v == null || v.state == OwnerCheckState.OK)
-    }.stateIn(scope, SharingStarted.Eagerly, false)
+    /** Open, not held or due, and no update of the vault's release required first (Rule 3, the release gate: [shellOpen]). */
+    override val open: StateFlow<Boolean> = combine(vault.phase, vault.ownerCheck.ownerCheck, vault.releaseUpdate.required, ::shellOpen)
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** [open] from its sources now: the feed tells what it held during the release check once [required] is false. */
+    override fun openNow(): Boolean = shellOpen(vault.phase.value, vault.ownerCheck.ownerCheck.value, vault.releaseUpdate.required.value)
     override val lockedElsewhere: StateFlow<Boolean> = vault.lockedElsewhere
     override val idleLocked: StateFlow<com.vettid.core.data.vault.IdleLocked?> = vault.ownerCheck.idleLocked
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
@@ -68,6 +71,13 @@ class VaultNotifySource(
         return m?.let { notifyMessageText(it.text, it.attachment != null, res()) }
     }
 }
+
+/**
+ * Whether the notifications may speak of the open vault: unlocked, not held or due (§3.6.3), and no update of its release
+ * required first (Rule 3, the release gate): then only the update is shown, and nothing posts.
+ */
+internal fun shellOpen(phase: AppPhase, check: OwnerCheckView?, releaseRequired: Boolean): Boolean =
+    phase == AppPhase.Unlocked && (check == null || check.state == OwnerCheckState.OK) && !releaseRequired
 
 /**
  * A received message's text for a notification: the first line that shows something, cleaned and isolated

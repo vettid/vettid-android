@@ -21,6 +21,20 @@ class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepos
     override val changeHold = MutableStateFlow<FailureKind?>(null)
     var refreshed = 0
 
+    /** (Rule 3) The release gate, as the test sets it. */
+    override val required = MutableStateFlow(false)
+    override val checking = MutableStateFlow(false)
+    override val behind = MutableStateFlow(false)
+    override val checkFailure = MutableStateFlow<FailureKind?>(null)
+    override val paused = MutableStateFlow(false)
+
+    /** The gate's "Try again" taps. */
+    var checkedNow = 0
+
+    override fun checkNow() {
+        checkedNow++
+    }
+
     /** What [start] answers when the check is not due. */
     var startResult = true
 

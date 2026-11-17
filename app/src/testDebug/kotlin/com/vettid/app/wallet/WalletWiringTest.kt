@@ -23,11 +23,19 @@ class WalletWiringTest {
 
     @Test
     fun theWalletsAreHeldOnlyWhileTheVaultIsUnlockedAndNeitherHeldNorDue() {
-        assertTrue(WalletModule.openOf(AppPhase.Unlocked, null))
-        assertTrue(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.OK)))
-        assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.DUE)))
-        assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.HELD)))
-        assertFalse(WalletModule.openOf(AppPhase.Starting, null))
+        assertTrue(WalletModule.openOf(AppPhase.Unlocked, null, false))
+        assertTrue(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.OK), false))
+        assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.DUE), false))
+        assertFalse(WalletModule.openOf(AppPhase.Unlocked, check(OwnerCheckState.HELD), false))
+        assertFalse(WalletModule.openOf(AppPhase.Starting, null, false))
+    }
+
+    /** Rule 3 (the release gate): while the vault's update is required, or its release is checked, no wallet is held. */
+    @Test
+    fun noWalletIsHeldWhileTheReleaseUpdateIsRequired() {
+        assertFalse(WalletModule.openOf(AppPhase.Unlocked, null, true))
+        assertEquals(null, WalletModule.sessionOf(AppPhase.Unlocked, null, 9, true))
+        assertEquals(9, WalletModule.sessionOf(AppPhase.Unlocked, null, 9, false))
     }
 
     @Test
@@ -41,11 +49,11 @@ class WalletWiringTest {
 
     @Test
     fun theSessionIsTheOpeningsCountWhileOpenAndNoneWhileNot() {
-        assertEquals(7, WalletModule.sessionOf(AppPhase.Unlocked, null, 7))
+        assertEquals(7, WalletModule.sessionOf(AppPhase.Unlocked, null, 7, false))
         // The vault was closed and opened again: the same phase is another session.
-        assertEquals(8, WalletModule.sessionOf(AppPhase.Unlocked, null, 8))
-        assertEquals(null, WalletModule.sessionOf(AppPhase.Unlocked, check(OwnerCheckState.HELD), 8))
-        assertEquals(null, WalletModule.sessionOf(AppPhase.Starting, null, 8))
+        assertEquals(8, WalletModule.sessionOf(AppPhase.Unlocked, null, 8, false))
+        assertEquals(null, WalletModule.sessionOf(AppPhase.Unlocked, check(OwnerCheckState.HELD), 8, false))
+        assertEquals(null, WalletModule.sessionOf(AppPhase.Starting, null, 8, false))
     }
 
     @Test

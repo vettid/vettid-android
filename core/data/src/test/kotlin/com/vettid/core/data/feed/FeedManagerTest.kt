@@ -68,13 +68,14 @@ class FeedManagerTest {
     private fun item(id: String, seq: Long, minutesAgo: Long = seq, status: String = "active", kind: String = "message.received", priority: String = "normal") =
         FeedItem(id, seq, kind, now.minus(minutesAgo, ChronoUnit.MINUTES).toString(), status, priority, connectionId = "c1", ref = "r$id")
 
-    private fun TestScope.manager(ops: Ops, gated: () -> Boolean = { false }) = FeedManager(this, ops = { ops }, gated = gated, now = { now })
+    private fun TestScope.manager(ops: Ops, gated: () -> Boolean = { false }, held: () -> Boolean = { false }) =
+        FeedManager(this, ops = { ops }, gated = gated, now = { now }, held = held)
 
     /** Loads [items] as the open read's one page. */
-    private suspend fun TestScope.opened(ops: Ops, vararg items: FeedItem, gated: () -> Boolean = { false }): FeedManager {
+    private suspend fun TestScope.opened(ops: Ops, vararg items: FeedItem, gated: () -> Boolean = { false }, held: () -> Boolean = { false }): FeedManager {
         items.forEach { ops.known[it.itemId] = it }
         ops.pages += FeedPage(items.toList(), items.maxOfOrNull { it.seq } ?: 0)
-        return manager(ops, gated).also { it.refresh() }
+        return manager(ops, gated, held).also { it.refresh() }
     }
 
     /** The manager's vault calls run on the IO dispatcher (vaultGuard): let them finish. */
@@ -94,6 +95,88 @@ class FeedManagerTest {
     private fun sync(kind: String, id: String, seq: Long) = VaultMessage(
         Inner(id = Ulid.new(), type = "sync.event", ts = now, body = """{"kind":"$kind","item_id":"$id","seq":$seq}""".toByteArray()),
     )
+
+    // --- Rule 3: the release check holds the feed's events and arrivals ---
+
+    /**
+     * While the release is checked (and while that check fails, which pauses the feed), a live event and a held-back one
+     * replayed after a push wake wait; they arrive when the check is over with the vault not behind ([FeedManager.releaseHeld]).
+     */
+    @Test
+    fun eventsDuringTheReleaseCheckArriveWhenItIsOver() = runTest {
+        val ops = Ops()
+        var checking = true
+        var paused = false
+        val m = opened(ops, item("i1", 1), gated = { paused }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        // The check failed: the feed is paused, the push wake's held-back event waits all the same.
+        paused = true
+        m.replay(event(item("i3", 3)))
+        // A live one while the failed check pauses the feed waits too.
+        m.onEvent(event(item("i4", 4)))
+        settle { true }
+        assertTrue("nothing during the check", arrived.isEmpty())
+        // The check is over, the vault current.
+        checking = false
+        paused = false
+        m.releaseHeld()
+        settle { arrived.size >= 3 }
+        assertEquals(listOf("i2", "i3", "i4"), arrived.map { it.itemId })
+        m.releaseHeld()
+        assertEquals("once", 3, arrived.size)
+    }
+
+    /** Ended behind, they wait for the lift (nothing comes while paused); a lock (a clear) drops them. */
+    @Test
+    fun heldEventsWaitForTheLiftAndGoWithALock() = runTest {
+        val ops = Ops()
+        var checking = true
+        var paused = false
+        val m = opened(ops, item("i1", 1), gated = { paused }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        checking = false
+        paused = true
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        paused = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals("the one taken during the check; none while behind", listOf("i2"), arrived.map { it.itemId })
+        checking = true
+        m.onEvent(event(item("i4", 4)))
+        m.clear()
+        checking = false
+        m.releaseHeld()
+        settle { true }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /** A catch-up's arrivals during the check wait too, and come as the feed has them then (not at all once read). */
+    @Test
+    fun aCatchUpsArrivalsDuringTheCheckWait() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("i2", 2), item("i3", 3)), 3)
+        m.catchUp()
+        settle { m.seq == 3L }
+        assertTrue(arrived.isEmpty())
+        // i3 read on another device meanwhile.
+        ops.pages += FeedPage(listOf(item("i3", 4, status = "read")), 4)
+        m.catchUp()
+        settle { m.seq == 4L }
+        checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
 
     // --- events held back until the vault was known to be open (a process started by a push wake) ---
 
@@ -480,5 +563,30 @@ class FeedManagerTest {
         val json = kotlinx.serialization.json.Json { explicitNulls = false }
         const val SETTLE_TRIES = 500
         const val SETTLE_MS = 10L
+    }
+
+    /**
+     * §3.6.3 and Rule 3: a catch-up reads nothing while the check is due or held or the release gate pauses the vault's work,
+     * whoever asks for it (the return to the foreground, the relay's reconnection, a push wake, `sync.event`).
+     */
+    @Test
+    fun aCatchUpReadsNothingWhileGated() = runTest {
+        val ops = Ops()
+        var gated = false
+        val m = opened(ops, item("i1", 1), gated = { gated })
+        val before = ops.lists.size
+        gated = true
+        m.catchUp()
+        // A read would run on the IO dispatcher: give it the time to land before saying none did.
+        repeat(5) {
+            advanceUntilIdle()
+            Thread.sleep(SETTLE_MS)
+        }
+        assertEquals(before, ops.lists.size)
+        gated = false
+        m.catchUp()
+        settle { ops.lists.size == before + 1 }
+        advanceUntilIdle()
+        assertEquals(before + 1, ops.lists.size)
     }
 }

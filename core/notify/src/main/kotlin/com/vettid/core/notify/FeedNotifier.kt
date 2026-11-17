@@ -68,6 +68,12 @@ interface NotifySource {
     val open: StateFlow<Boolean>
 
     /**
+     * [open] read now from its sources, not through a flow that may lag a dispatch behind them: an arrival told right as
+     * the vault became open (the feed's items held during the release check, Rule 3) is judged on the state it came in.
+     */
+    fun openNow(): Boolean = open.value
+
+    /**
      * The app lock's cover is up (locked, or not yet known): the app may be in front but the member has not passed the
      * biometric or screen-lock gate, so no notification shows a name, a title or a text (heads-up and shade included).
      */
@@ -333,7 +339,7 @@ class FeedNotifier(
     }
 
     private fun notifiable(item: FeedItem): Boolean =
-        on && source.open.value && item.status == FeedManager.STATUS_ACTIVE && !shownOnScreen(item)
+        on && source.openNow() && item.status == FeedManager.STATUS_ACTIVE && !shownOnScreen(item)
 
     /** The Notifications screen, or the screen the item opens, is in front: the bell and the screen show it. */
     private fun shownOnScreen(item: FeedItem): Boolean = when (val v = visibility.value) {

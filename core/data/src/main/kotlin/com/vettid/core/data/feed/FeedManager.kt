@@ -111,6 +111,8 @@ interface FeedRepository {
  * - **Own changes** ([setStatus], [delete]) apply the answer at once: the vault sends no `sync.event` to the sender.
  * - **Retention**: items older than `feed.retention_days` (default 30) are dropped here as well.
  * - **Held or due** ([gated]): nothing is listed and events are ignored; after the check, a full read.
+ * - **The release check** ([held], Rule 3): `feed.event`s (live or replayed) and arrivals wait in memory, and come when
+ *   it is over with the vault not behind, or when the gate lifts ([releaseHeld]); a clear drops them.
  */
 @Suppress("TooManyFunctions")
 class FeedManager(
@@ -119,11 +121,17 @@ class FeedManager(
     /** True while the vault is held or due (VAULT-MESSAGING §3.6.3): nothing of the feed is shown. */
     private val gated: () -> Boolean = { false },
     private val now: () -> Instant = Instant::now,
+    /** (Rule 3) True while the release gate checks the vault's release: nothing notifies before it is known current. */
+    private val held: () -> Boolean = { false },
 ) : FeedRepository {
     private val lock = Any()
     private var byId: Map<String, FeedItem> = emptyMap()
     private var cursor = 0L
     private var retentionDays = DEFAULT_RETENTION_DAYS
+
+    /** (Rule 3) The `feed.event`s and arrivals that came while [held], in order (under [lock]; at most [ARRIVAL_BUFFER] each). */
+    private val heldEvents = ArrayDeque<VaultMessage>()
+    private val heldArrivals = LinkedHashMap<String, FeedItem>()
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
@@ -169,6 +177,8 @@ class FeedManager(
             byId = emptyMap()
             cursor = 0
             catchUpQueued = false
+            heldEvents.clear()
+            heldArrivals.clear()
             publish()
         }
         loadState.value = ListLoad.NOT_LOADED
@@ -178,8 +188,9 @@ class FeedManager(
     fun onEvent(m: VaultMessage) {
         when (m.type) {
             "feed.event" -> {
-                // While held only the clone alarm's item arrives; it opens the alarm path elsewhere, it is not listed.
-                if (gated()) return
+                // Held while the release is checked (Rule 3). While the owner check holds the vault only the clone alarm's
+                // item arrives; it opens the alarm path elsewhere, it is not listed.
+                if (holds(m) || gated()) return
                 val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
                 onItem(item)
             }
@@ -195,13 +206,41 @@ class FeedManager(
      * already brought the item, it arrives as the feed has it now (not at all once read, archived or deleted).
      */
     fun replay(m: VaultMessage) {
-        if (m.type != "feed.event" || gated()) return
+        if (m.type != "feed.event" || holds(m) || gated()) return
         val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
         // Whether the feed's read already covers the event, and the item as the list has it now (null: gone).
         val (covered, listed) = synchronized(lock) {
             (loadState.value == ListLoad.LOADED && item.seq <= cursor) to byId[item.itemId]
         }
         if (!covered) onItem(item) else if (listed?.status == STATUS_ACTIVE) emitArrival(listed)
+    }
+
+    /** (Rule 3) While the release is checked, [m] waits for [releaseHeld] (also while a failed check pauses the feed). */
+    private fun holds(m: VaultMessage): Boolean {
+        if (!held()) return false
+        synchronized(lock) {
+            heldEvents.addLast(m)
+            while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+        }
+        return true
+    }
+
+    /**
+     * (Rule 3) The release check is over with the vault not behind, or the gate lifted: what waited comes now, as it would
+     * have come live: the arrivals as the feed has them now (not at all once read, archived or deleted), then the events
+     * ([replay]). Nothing while the feed is [gated] (the owner check due or held: as live ones, they are not notified).
+     */
+    fun releaseHeld() {
+        val (events, arrived) = synchronized(lock) {
+            val e = heldEvents.toList()
+            val a = heldArrivals.values.toList()
+            heldEvents.clear()
+            heldArrivals.clear()
+            e to a
+        }
+        if (gated()) return
+        arrived.forEach { a -> (byIdNow(a.itemId) ?: a).takeIf { it.status == STATUS_ACTIVE }?.let(::emitArrival) }
+        events.forEach { replay(it) }
     }
 
     private fun onItem(item: FeedItem) {
@@ -223,7 +262,9 @@ class FeedManager(
      * a full read.
      */
     fun catchUp() {
-        if (catchUpQueued) return
+        // §3.6.3 and Rule 3: nothing is read while the check is due or held, or the release gate pauses the vault's work
+        // (every caller: the return to the foreground, the relay's reconnection, a push wake, `sync.event`).
+        if (gated() || catchUpQueued) return
         catchUpQueued = true
         scope.launch {
             runCatching {
@@ -338,7 +379,17 @@ class FeedManager(
     /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
     private fun emitArrival(item: FeedItem) {
         synchronized(lock) { arrivedSince?.add(item.itemId) }
-        if (!FeedKinds.historyOnly(item.kind)) arrivalFlow.tryEmit(item)
+        if (FeedKinds.historyOnly(item.kind)) return
+        // Rule 3: while the release is checked, nothing notifies yet ([releaseHeld]).
+        if (held()) {
+            synchronized(lock) {
+                heldArrivals.remove(item.itemId)
+                heldArrivals[item.itemId] = item
+                while (heldArrivals.size > ARRIVAL_BUFFER) heldArrivals.remove(heldArrivals.keys.first())
+            }
+            return
+        }
+        arrivalFlow.tryEmit(item)
     }
 
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */

@@ -148,11 +148,7 @@ fun NavGraphBuilder.credentialDestination(
             onNotNow = vm::putAwayReplaceKeys,
         )
     }
-    composable<CredentialRotateRoute> {
-        val vm: RotateViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
-        RotateContent(state, vm::setPassword, vm::submit, onBack)
-    }
+    rotateDestination(onBack)
     composable<CredentialNewRoute> {
         val vm: NewCredentialViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
@@ -164,6 +160,20 @@ fun NavGraphBuilder.credentialDestination(
             ),
         )
     }
+    alarmDestination(onBack)
+}
+
+/** "Replace the keys" alone: also the release gate's (Rule 3), where the relay's refusal of the vault's key leads. */
+fun NavGraphBuilder.rotateDestination(onBack: () -> Unit) {
+    composable<CredentialRotateRoute> {
+        val vm: RotateViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        RotateContent(state, vm::setPassword, vm::submit, onBack)
+    }
+}
+
+/** The clone alarm's screen alone (§3.5.9): also the release gate's (Rule 3), where its banner stays. */
+fun NavGraphBuilder.alarmDestination(onBack: () -> Unit) {
     composable<CredentialAlarmRoute> {
         val vm: AlarmViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()

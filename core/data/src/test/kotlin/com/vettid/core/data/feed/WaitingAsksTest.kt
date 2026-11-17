@@ -95,6 +95,37 @@ class WaitingAsksTest {
         override suspend fun retentionDays(): Int? = null
     }
 
+    /**
+     * (Rule 3) A check passed while the release gate paused the work: the replay is kept with its window open, and runs on
+     * the lift, after the lift's reads (a full read alone notifies nothing).
+     */
+    @Test
+    fun aReplayDueWhilePausedRunsOnTheLift() = runTest {
+        var paused = true
+        val m = FeedManager(this, ops = { Ops(listOf(item("1", WaitingAsks.SIGN_IN))) }, gated = { paused }, now = { now })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        val held = com.vettid.core.data.vault.HeldAskReplay()
+        held.hold(com.vettid.core.data.vault.HeldAskReplay.Due(gen = 1, listMark = 0, token = token))
+        assertTrue("the window stays open while paused", m.replayOwns(token))
+        // The lift: the lists are read, then the kept replay runs.
+        paused = false
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue("a full read notifies nothing", arrived.isEmpty())
+        val due = held.take()
+        assertEquals(token, due?.token)
+        assertTrue(m.replayWaitingAsks(due!!.token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        assertEquals(listOf("1"), arrived.map { it.itemId })
+        assertEquals("once", null, held.take())
+        // A lock drops a kept one.
+        held.hold(com.vettid.core.data.vault.HeldAskReplay.Due(gen = 1, listMark = 0, token = m.startReplayWindow()))
+        held.drop()
+        assertEquals(null, held.take())
+        job.cancel()
+    }
+
     /** The full read notifies nothing; the replay after the passed check makes each waiting ask arrive, once. */
     @Test
     fun theReplayMakesOnlyTheWaitingAsksArrive() = runTest {

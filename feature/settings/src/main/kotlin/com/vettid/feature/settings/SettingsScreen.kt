@@ -351,23 +351,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         val record by vm.record.collectAsStateWithLifecycle()
         AttestationContent(state, host.onBack, canary, vm::removeCanary, record)
     }
-    composable<DeleteVaultRoute> {
-        val vm: DeleteVaultViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
-        DeleteVaultContent(
-            state,
-            DeleteVaultActions(
-                vm::setPhrase,
-                vm::setPin,
-                vm::setPassword,
-                vm::setAcknowledged,
-                vm::submit,
-                vm::cancelConfirm,
-                vm::confirm,
-                host.onBack,
-            ),
-        )
-    }
+    deleteVaultDestination(host.onBack)
     composable<NotificationSettingsRoute> {
         NotificationSettingsRouteContent(hiltViewModel(), host.onBack)
     }
@@ -902,4 +886,25 @@ internal fun ShownWhileStarted(onShown: (Boolean) -> Unit) {
     LifecycleEventEffect(Lifecycle.Event.ON_START) { onShown(true) }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { onShown(false) }
     DisposableEffect(Unit) { onDispose { onShown(false) } }
+}
+
+/** "Delete vault" alone: also the release gate's (Rule 3), for enrolling anew when the update cannot complete. */
+fun NavGraphBuilder.deleteVaultDestination(onBack: () -> Unit) {
+    composable<DeleteVaultRoute> {
+        val vm: DeleteVaultViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        DeleteVaultContent(
+            state,
+            DeleteVaultActions(
+                vm::setPhrase,
+                vm::setPin,
+                vm::setPassword,
+                vm::setAcknowledged,
+                vm::submit,
+                vm::cancelConfirm,
+                vm::confirm,
+                onBack,
+            ),
+        )
+    }
 }

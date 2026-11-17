@@ -66,7 +66,8 @@ data class SheetPresence(
  * snapshot: every connection sees it) with "Change name" (the only place it changes, VAULT-MESSAGING 0.18.0 §10.8)
  * and the shared profile; the membership and subscription (read-only, §11.13), vault status, and the account portal
  * in the browser, where the other changes are made. The sheet scrolls ([AvatarSheet]). The app never signs in: no
- * sign-out.
+ * sign-out. [onChangeName] and [onSharedProfile] null: neither row (the release gate's sheet, Rule 3, where neither
+ * screen can be opened).
  */
 @Suppress("LongParameterList")
 @Composable
@@ -76,8 +77,8 @@ fun AccountSheet(
     onDismiss: () -> Unit,
     onLockVault: () -> Unit,
     now: Instant = Instant.now(),
-    onChangeName: () -> Unit = {},
-    onSharedProfile: () -> Unit = {},
+    onChangeName: (() -> Unit)? = {},
+    onSharedProfile: (() -> Unit)? = {},
     photo: androidx.compose.ui.graphics.ImageBitmap? = null,
     presence: SheetPresence? = null,
 ) {
@@ -105,8 +106,8 @@ fun AccountSheetOptions(
     portalUrl: String,
     onLockVault: () -> Unit,
     now: Instant = Instant.now(),
-    onChangeName: () -> Unit = {},
-    onSharedProfile: () -> Unit = {},
+    onChangeName: (() -> Unit)? = {},
+    onSharedProfile: (() -> Unit)? = {},
     presence: SheetPresence? = null,
 ) {
     val uri = LocalUriHandler.current
@@ -186,7 +187,7 @@ fun StatusGroup(presence: SheetPresence) {
  * name", the state of a requested change, and "Change name".
  */
 @Composable
-fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> Unit, onSharedProfile: () -> Unit) {
+fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: (() -> Unit)?, onSharedProfile: (() -> Unit)?) {
     SettingsGroup(Modifier.testTag("account_names")) {
         SettingsInfoRow(
             stringResource(R.string.account_names),
@@ -201,22 +202,26 @@ fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> U
                 .padding(horizontal = Spacing.gutter, vertical = Spacing.s)
                 .testTag("account_names_note"),
         )
-        SettingsDivider()
-        SettingsRow(
-            stringResource(R.string.account_change_name),
-            onChangeName,
-            icon = Icons.Outlined.Edit,
-            supporting = stringResource(R.string.account_change_name_body),
-            modifier = Modifier.testTag("account_change_name"),
-        )
-        SettingsDivider()
-        SettingsRow(
-            stringResource(R.string.account_shared_profile),
-            onSharedProfile,
-            icon = SharedProfileIcon,
-            supporting = stringResource(R.string.account_shared_profile_body),
-            modifier = Modifier.testTag("account_shared_profile"),
-        )
+        onChangeName?.let { change ->
+            SettingsDivider()
+            SettingsRow(
+                stringResource(R.string.account_change_name),
+                change,
+                icon = Icons.Outlined.Edit,
+                supporting = stringResource(R.string.account_change_name_body),
+                modifier = Modifier.testTag("account_change_name"),
+            )
+        }
+        onSharedProfile?.let { open ->
+            SettingsDivider()
+            SettingsRow(
+                stringResource(R.string.account_shared_profile),
+                open,
+                icon = SharedProfileIcon,
+                supporting = stringResource(R.string.account_shared_profile_body),
+                modifier = Modifier.testTag("account_shared_profile"),
+            )
+        }
     }
 }
 

@@ -138,7 +138,6 @@
     <string name="unlock_status_body">Update to the newest release to keep your vault working.</string>
     <string name="unlock_offer_title">Update available: release %1$d</string>
     <string name="unlock_offer_body">Your vault runs release %1$d. Release %2$d (fingerprint %3$s) is available. Anyone can rebuild it and compare the fingerprint.</string>
-    <string name="unlock_offer_approve">Approve the update with this unlock</string>
     <string name="unlock_bad_pin">That PIN is not correct.</string>
     <string name="unlock_wait">Too many wrong PINs. Try again in %1$s.</string>
     <string name="unlock_service_wait">Try again in %1$s.</string>

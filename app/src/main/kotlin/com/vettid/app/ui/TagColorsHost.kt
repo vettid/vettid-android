@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.items.TagView
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.ui.theme.LocalTagColors
 import com.vettid.core.ui.theme.TagColors
@@ -33,6 +34,7 @@ import javax.inject.Inject
 class TagColorsViewModel @Inject constructor(
     private val sharing: SharingRepository,
     private val ownerCheck: OwnerCheckRepository,
+    private val releaseUpdate: ReleaseUpdateRepository,
 ) : ViewModel() {
     val colors: StateFlow<Map<String, String>> = sharing.colors
 
@@ -53,8 +55,9 @@ class TagColorsViewModel @Inject constructor(
         }
     }
 
+    /** The owner check is due or held (§3.6.3), or the release gate pauses the vault's work (Rule 3). */
     private fun gated(): Boolean =
-        ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value
+        ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value || releaseUpdate.paused.value
 
     /** One assignment at a time; a registry listed meanwhile is looked at once it ends. */
     private fun assign() {

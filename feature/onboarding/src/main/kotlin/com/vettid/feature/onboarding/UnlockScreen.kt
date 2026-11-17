@@ -412,7 +412,7 @@ fun UnlockContent(
             }
             // The release offer last: after the PIN and every result of the unlock (their explanations and the erase come
             // first), compact, the full notes one tap away (owner decision 2026-11-07, ANDROID-PLAN 0.1.122).
-            if (p != null) ReleaseOfferNotice(p, state.approveOffer, actions::setApproveOffer, state.notes)
+            if (p != null) ReleaseOfferNotice(p, state.notes)
         }
     }
     state.move?.takeIf { state.returnConfirm }?.let { m ->
@@ -601,8 +601,9 @@ fun AppLockScreen(onUnlock: () -> Unit, method: AppLockMethod = AppLockMethod.BI
 
 /**
  * The release check's notices before the PIN (§11.10.6): an older release (the PIN is not sent), a newer
- * one to acknowledge, a deprecated or retired release. The newest active release to approve with this unlock is
- * [ReleaseOfferNotice], below the PIN. Shared by the unlock and the recovery's PIN step.
+ * one to acknowledge, a deprecated or retired release. The newest active release is [ReleaseOfferNotice], below the
+ * PIN (shown only: the update is approved on the release gate's own screen, Rule 3). Shared by the unlock and the
+ * recovery's PIN step.
  */
 @Composable
 internal fun PreflightNotices(p: PreflightInfo, updateAcknowledged: Boolean, onAcknowledgeUpdate: () -> Unit) {

@@ -147,6 +147,8 @@ data class ReleaseUpdateFlowUiState(
     val waitSeconds: Long = 0,
     /** "Return to release N" asks first. */
     val abandonConfirm: Boolean = false,
+    /** (Rule 3, the release gate) The update is required: an open vault shows nothing else, so there is no "Not now". */
+    val required: Boolean = false,
 ) {
     val pinAllowed: Boolean get() = waitSeconds == 0L && progress?.waiting == true
 
@@ -178,7 +180,7 @@ interface ReleaseUpdateFlowActions {
 @HiltViewModel
 class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: ReleaseUpdateRepository) :
     ViewModel(), ReleaseUpdateFlowActions {
-    private val state = MutableStateFlow(ReleaseUpdateFlowUiState(progress = updates.progress.value))
+    private val state = MutableStateFlow(ReleaseUpdateFlowUiState(progress = updates.progress.value, required = updates.required.value))
     val uiState: StateFlow<ReleaseUpdateFlowUiState> = state.asStateFlow()
     private var ticker: Job? = null
 
@@ -194,6 +196,7 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
 
     init {
         keypad.follow(state.value.pinAllowed)
+        viewModelScope.launch { updates.required.collect { r -> set { it.copy(required = r) } } }
         viewModelScope.launch {
             var last: UpdateProgress? = null
             updates.progress.collect { p ->

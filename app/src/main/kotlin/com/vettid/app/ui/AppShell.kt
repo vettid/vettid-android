@@ -221,6 +221,14 @@ fun AppShell(
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         releaseVm.permissionAnswered(granted)
     }
+    // Rule 3 (the release gate): while the vault's update is required, or its release is read, the gate replaces the shell
+    // below, inside the owner check's layer. Read straight from the repository: the first frame after an opening is the gate's.
+    val gateVmRelease: ReleaseGateViewModel = hiltViewModel()
+    val releaseRequired by gateVmRelease.required.collectAsStateWithLifecycle()
+    val releaseBehind by gateVmRelease.behind.collectAsStateWithLifecycle()
+    val releaseFailure by gateVmRelease.failure.collectAsStateWithLifecycle()
+    val openScreen = OpenAppScreen.of(releaseRequired, releaseBehind)
+    val gated = openScreen != OpenAppScreen.SHELL
     LaunchedEffect(release.visible, release.notificationsAsked) {
         if (release.visible && !release.notificationsAsked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted =
@@ -272,14 +280,37 @@ fun AppShell(
         }
     }
 
+    // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
+    val underCheck = (if (checkMode != null || cover.undecided) Modifier.clearAndSetSemantics {} else Modifier)
+        // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn,
+        // read out or touched.
+        .then(if (cover.undecided) Modifier.alpha(0f).consumeAllPointers() else Modifier)
     Box(Modifier.fillMaxSize()) {
-        ModalNavigationDrawer(
+        if (gated) {
+            ReleaseRequiredGate(
+                screen = openScreen,
+                failure = releaseFailure,
+                onTryAgain = gateVmRelease::tryAgain,
+                onAccount = { showAccount = true },
+                alarm = alarm,
+                relayRefused = relayRefused,
+                deletionBanner = { first ->
+                    deletion?.let { d ->
+                        PendingDeletionBanner(
+                            d,
+                            first = first,
+                            onCancel = deletionVm::cancel,
+                            onOpenSite = { uri.openUri(portal.trimEnd('/') + deletionPath) },
+                            failure = deletionFailure,
+                        )
+                    }
+                    deletion != null
+                },
+                modifier = underCheck,
+            )
+        } else ModalNavigationDrawer(
             drawerState = drawerState,
-            // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
-            modifier = (if (checkMode != null || cover.undecided) Modifier.clearAndSetSemantics {} else Modifier)
-                // A frame while it is not known whether the check waits (a new composition): nothing of the vault is drawn,
-                // read out or touched.
-                .then(if (cover.undecided) Modifier.alpha(0f).consumeAllPointers() else Modifier),
+            modifier = underCheck,
             gesturesEnabled = drawerState.isOpen,
             drawerContent = {
                 VettIdDrawerSheet(
@@ -521,21 +552,25 @@ fun AppShell(
         }
     }
 
-    LaunchedEffect(launchRoute) {
-        if (launchRoute != null) navController.navigateTopLevel(launchRoute)
+    // Below, while the release gate replaces the shell (Rule 3), nothing navigates the shell (its NavHost is not there):
+    // what waits for it waits until the gate lifts.
+    LaunchedEffect(launchRoute, gated) {
+        if (launchRoute != null && !gated) navController.navigateTopLevel(launchRoute)
     }
 
-    // A tap on the "Vault updates" notification: the update screen (the owner check, if due, still comes first).
-    LaunchedEffect(openUpdate) {
+    // A tap on the "Vault updates" notification: the update screen (the owner check, if due, still comes first). The gate
+    // already shows it.
+    LaunchedEffect(openUpdate, gated) {
         if (!openUpdate) return@LaunchedEffect
         releaseVm.openTaken()
-        navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true }
+        if (!gated) navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true }
     }
 
     // A notification's tap (ANDROID-PLAN 0.1.23): the item, read, then its target (or the list when it has none);
     // the on-phone service's own notification opens Settings → Notifications.
     val tap by shell.tap.collectAsStateWithLifecycle()
-    LaunchedEffect(tap) {
+    LaunchedEffect(tap, gated) {
+        if (gated) return@LaunchedEffect
         val t = tap ?: return@LaunchedEffect
         shell.tapTaken()
         when (t) {
@@ -556,7 +591,8 @@ fun AppShell(
 
     // An invitation link the app was opened with (§6.4): the accept screen, where the member confirms.
     val inviteLink by shell.inviteLink.collectAsStateWithLifecycle()
-    LaunchedEffect(inviteLink) {
+    LaunchedEffect(inviteLink, gated) {
+        if (gated) return@LaunchedEffect
         val link = inviteLink ?: return@LaunchedEffect
         shell.inviteLinkTaken()
         navController.navigate(AcceptRoute(link, opened = true)) { launchSingleTop = true }
@@ -571,19 +607,28 @@ fun AppShell(
             account = account,
             portalUrl = portal,
             photo = photo,
-            presence = presenceState?.let { SheetPresence(it, presenceError, presenceBusy, shell::setPresenceState) },
+            // Under the release gate (Rule 3) only Lock vault and what is read: no status to set, no name or profile screen.
+            presence = presenceState?.takeIf { !gated }?.let { SheetPresence(it, presenceError, presenceBusy, shell::setPresenceState) },
             onDismiss = { showAccount = false },
             onLockVault = {
                 showAccount = false
                 onLockVault()
             },
-            onChangeName = {
-                showAccount = false
-                navController.navigate(ChangeNameRoute) { launchSingleTop = true }
+            onChangeName = if (gated) {
+                null
+            } else {
+                {
+                    showAccount = false
+                    navController.navigate(ChangeNameRoute) { launchSingleTop = true }
+                }
             },
-            onSharedProfile = {
-                showAccount = false
-                navController.navigate(SharedProfileRoute) { launchSingleTop = true }
+            onSharedProfile = if (gated) {
+                null
+            } else {
+                {
+                    showAccount = false
+                    navController.navigate(SharedProfileRoute) { launchSingleTop = true }
+                }
             },
         )
     }

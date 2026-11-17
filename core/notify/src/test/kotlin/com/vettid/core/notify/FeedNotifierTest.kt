@@ -77,6 +77,11 @@ class FeedNotifierTest {
         var nowOverride: Boolean? = null
 
         override fun coveredNow() = nowOverride ?: covered.value
+
+        /** When set, what [openNow] says whatever the [open] flow still holds (the flow lags its sources). */
+        var openOverride: Boolean? = null
+
+        override fun openNow() = openOverride ?: open.value
         var namesCalls = 0
         var textCalls = 0
         override val lockedElsewhere = MutableStateFlow(false)
@@ -141,6 +146,23 @@ class FeedNotifierTest {
         source.items.value = listOf(item("f1", status = "read"))
         runCurrent()
         assertTrue(poster.shown.isEmpty())
+    }
+
+    /**
+     * (Rule 3) The feed tells what it held during the release check as soon as the check is over: the notifier judges it on
+     * the vault's state now ([NotifySource.openNow]), not on an [NotifySource.open] flow still a dispatch behind.
+     */
+    @Test
+    fun anArrivalIsJudgedOnTheStateNow() = runTest {
+        notifier()
+        source.open.value = false
+        runCurrent()
+        source.openOverride = true
+        arrive(item("f1"))
+        assertTrue(poster.isPosted("f1"))
+        source.openOverride = false
+        arrive(item("f2"))
+        assertFalse(poster.isPosted("f2"))
     }
 
     /** (ANDROID-PLAN 0.1.132) A waiting ask notified again after a passed check: one still posted goes first, then it comes anew. */
