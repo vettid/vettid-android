@@ -122,6 +122,7 @@ internal class CallMachine(
         data class Call(val connectionId: String) : Msg
         data object Answer : Msg
         data object Decline : Msg
+        data object StopRinging : Msg
         data class HangUp(val reason: CallEnd) : Msg
         data class Mute(val muted: Boolean) : Msg
         data object Dismiss : Msg
@@ -260,6 +261,12 @@ internal class CallMachine(
     /** Declines the ringing call. */
     fun decline() = post(Msg.Decline)
 
+    /**
+     * Stops the ringing call on this phone only, as its ring timer does: nothing is sent, so the member's other devices
+     * may still answer, and the call is shown as missed here.
+     */
+    fun stopRingingHere() = post(Msg.StopRinging)
+
     /** Ends the call in any phase (a ringing incoming call is declined). */
     fun hangUp() = post(Msg.HangUp(CallEnd.HUNG_UP))
 
@@ -297,6 +304,7 @@ internal class CallMachine(
             // Not answered while the vault is not open: the lock's hang-up behind this (the hook's, or the one the
             // controller posts at every close, a lock an unlock overtook included) declines the call.
             Msg.Answer -> if (s != null && s.phase == CallPhase.INCOMING && !closed) answerIncoming(s)
+            Msg.StopRinging -> if (s != null && s.phase == CallPhase.INCOMING) finish(s, CallEnd.MISSED, null)
             Msg.Decline -> if (s != null && s.phase == CallPhase.INCOMING) {
                 s.memberEnded = true
                 finish(s, CallEnd.DECLINED_HERE, CallReason.DECLINE)

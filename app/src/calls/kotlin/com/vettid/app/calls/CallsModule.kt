@@ -44,6 +44,11 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.transformLatest
+import kotlinx.coroutines.delay
+import com.vettid.core.data.vault.OwnerCheckView
+import java.time.Duration
+import java.time.Instant
 import javax.inject.Singleton
 
 /**
@@ -87,6 +92,21 @@ internal fun callsUnlocked(phase: StateFlow<AppPhase>, opens: StateFlow<Int>, re
     )
 
 /**
+ * Whether the daily owner check is due or held ([OwnerCheckView.gated]) as it changes: at each new [view], and again when
+ * its deadline passes with no new value (the vault says nothing then). Owner decision a, 2026-11-17: no ring meanwhile.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun ownerCheckGatings(view: Flow<OwnerCheckView?>, now: () -> Instant): Flow<Boolean> = view.transformLatest { v ->
+    while (true) {
+        val t = now()
+        val gated = v?.gated(t) == true
+        emit(gated)
+        val deadline = v?.deadline?.takeIf { !gated } ?: break
+        delay(Duration.between(t, deadline).toMillis().coerceAtLeast(1))
+    }
+}.distinctUntilChanged()
+
+/**
  * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
  * app's vault. Calls show while the vault is open on this phone and no release update is required ([callsOpen]).
  */
@@ -113,6 +133,8 @@ object CallsModule {
 
         /** The daily owner check due or held now (the rule presence and location follow): no ring (owner decision a, 2026-11-17). */
         override val ownerCheckGated: Boolean get() = m.ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true
+
+        override val ownerCheckGatings: Flow<Boolean> = ownerCheckGatings(m.ownerCheck.ownerCheck, Instant::now)
 
         /**
          * The events of the vault device in use, from the moment its session exists (before the vault is open): the

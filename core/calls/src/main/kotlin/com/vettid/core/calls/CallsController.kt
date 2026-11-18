@@ -85,6 +85,9 @@ interface CallVault {
      */
     val ownerCheckGated: Boolean
 
+    /** [ownerCheckGated] as it changes: by the vault's word, and when the deadline passes. */
+    val ownerCheckGatings: Flow<Boolean>
+
     val gateway: CallGateway
 
     /** The fingerprint of [connectionId]'s pinned identity key, as the connection's details show it; null if unknown. */
@@ -233,7 +236,7 @@ class CallsController(
         engines.suites,
         vault::refreshConnections,
         // An offer waits a moment for an unlock that is completing; it rings only once the vault is open on this phone.
-        mayRing = { mayRing() },
+        mayRing = { ringDecision() },
         peerKey = vault::identityKey,
         vaultIsC2 = { formTwo },
     )
@@ -290,19 +293,29 @@ class CallsController(
      * 2026-11-17): it is looked at before the wait, and again with the vault and the update screen after it, so a lock,
      * an update screen or a check that came due during the wait is not rung over.
      */
-    private suspend fun mayRing(): Boolean {
-        if (vault.ownerCheckGated) return false
+    private suspend fun ringDecision(): RingDecision {
+        if (vault.ownerCheckGated) return RingDecision.HOLD_BACK
         val opened = machine.state.value is CallState.Live ||
             withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { openFlow.first { it } } != null
-        return opened && open && !vault.updateShowing && !vault.ownerCheckGated
+        return when {
+            !opened || !open || vault.updateShowing -> RingDecision.REFUSE
+            vault.ownerCheckGated -> RingDecision.HOLD_BACK
+            else -> RingDecision.RING
+        }
     }
 
     /**
-     * (C2) Whether the vault is C2, as the after-unlock `call.list` read found it (`v: 2`); null until that read has gone
-     * through since the last unlock (nothing is cached across one).
+     * (C2) Whether the vault is C2, as this opening's `call.list` read found it (`v: 2`); null until that read has gone
+     * through since the last unlock (nothing is cached across one). Written only under [applyLock].
      */
     @Volatile
     private var vaultC2: Boolean? = null
+
+    /**
+     * Held while a read's result is applied and while [locked] resets: a read that finds the opening current applies all
+     * of it before a lock can reset, and a lock that came first leaves it nothing to apply.
+     */
+    private val applyLock = Any()
 
     /**
      * (C2) Whether this device calls in form 2 and answers with keep-alives: unless the read found a vault before C2.
@@ -343,6 +356,11 @@ class CallsController(
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
         scope.launch { vault.recheck.collect { if (open && vaultC2 == null) opened() } }
+        // Owner decision a, 2026-11-17: a call ringing when the check comes due (or the hold begins) stops ringing here.
+        scope.launch {
+            combine(machine.state, vault.ownerCheckGatings) { s, gated -> gated && s is CallState.Live && s.phase == CallPhase.INCOMING }
+                .collect { if (it) machine.stopRingingHere() }
+        }
         scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2 == true) permissionReads.trySend(Unit) } }
         scope.launch {
             while (true) {
@@ -356,6 +374,13 @@ class CallsController(
             }
         }
     }
+
+    /** Tests: called under [applyLock] between a read's check and its writes, where a lock must not get in. */
+    @Volatile
+    internal var beforeApplyForTest: () -> Unit = {}
+
+    /** Tests: the lock's resets alone, as a lock on another thread would make them. */
+    internal fun locksResetForTest() = locked()
 
     /** Tests: as if the after-unlock read had not gone through yet. */
     internal fun forgetListReadForTest() {
@@ -445,15 +470,18 @@ class CallsController(
                 delay(READ_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
-            if (!stillOpen(epoch)) return
-            vaultC2 = records.formTwo
-            // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
-            if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
-            noteSkipped(records)
+            synchronized(applyLock) {
+                if (!stillOpen(epoch)) return
+                beforeApplyForTest()
+                vaultC2 = records.formTwo
+                // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
+                if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
+                noteSkipped(records)
+            }
             if (records.formTwo) endStaleC2(records, epoch) else endStale(records.calls, epoch)
             if (testBuild) {
                 val signer = runCatching { vault.signerClass() }.getOrNull()
-                if (stillOpen(epoch)) testsAllowedFlow.value = signer == SIGNER_DEVELOPMENT
+                synchronized(applyLock) { if (stillOpen(epoch)) testsAllowedFlow.value = signer == SIGNER_DEVELOPMENT }
             }
             return
         }
@@ -612,20 +640,22 @@ class CallsController(
     private var lockEpoch = 0L
 
     private fun locked() {
-        lockEpoch++
+        synchronized(applyLock) {
+            lockEpoch++
+            vaultC2 = null
+            testsAllowedFlow.value = false
+            // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
+            // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
+            diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
+        }
         synchronized(permissionLock) {
             permissionEpoch++
             permissionsFlow.value = CallPermissions()
         }
-        vaultC2 = null
-        testsAllowedFlow.value = false
         machine.vaultLocking()
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
         // included, which nobody can see behind the unlock screen) would show then, long after.
         machine.dismiss()
-        // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
-        // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
-        diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
         publish()
     }
 
@@ -674,7 +704,12 @@ class CallsController(
         return try {
             val list = vault.gateway.list(HISTORY_LIMIT)
             // Not after a lock that came while the list was out: nothing of the history is kept while locked.
-            if (open && epoch == lockEpoch) noteSkipped(list)
+            synchronized(applyLock) {
+                if (stillOpen(epoch)) {
+                    beforeApplyForTest()
+                    noteSkipped(list)
+                }
+            }
             historyOf(list, connectionId, now())
         } catch (e: CancellationException) {
             throw e

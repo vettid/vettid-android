@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** Whether an offer may ring now: it rings, it is refused (counted), or this phone holds it back (not counted). */
+internal enum class RingDecision { RING, REFUSE, HOLD_BACK }
+
 /**
  * [CallSignalling] on the vault. **This is where a call's checks are asked for**: [CallMachine] trusts what comes
  * out of [events], so nothing reaches it that has not been through [CallGateway.incoming] or [CallGateway.accept]
@@ -57,7 +60,7 @@ internal class VaultCallSignalling(
      * from before the unlock is complete, so an offer can arrive in the moments before the app shows the open
      * vault: it rings only once it does, never over the unlock screen.
      */
-    private val mayRing: suspend () -> Boolean = { true },
+    private val mayRing: suspend () -> RingDecision = { RingDecision.RING },
     /**
      * (C2) The connection's identity key as this device's vault gives it (`connection.get`), for a form 2 start: the
      * callee this device names in `m2`, fixed for the call (VAULT-MESSAGING 0.88.16). Null for no such connection.
@@ -133,10 +136,17 @@ internal class VaultCallSignalling(
     }
 
     /** Rule 1. */
+    @Suppress("ReturnCount", "ThrowsCount") // one way each: refused (counted), held back (not counted), rung
     private suspend fun offer(e: CallEvent.Offer): SignalEvent.Offer? {
         val call = try {
-            // No connection named, or the vault not open on this phone: no ring.
-            val connectionId = e.connectionId?.takeIf { mayRing() } ?: throw CallMessageException("not an offer to ring for")
+            // No connection named, or the vault not open on this phone: no ring, counted as refused. Held back by the
+            // owner check: no ring and not counted (nothing was wrong with the offer).
+            val connectionId = e.connectionId ?: throw CallMessageException("not an offer to ring for")
+            when (mayRing()) {
+                RingDecision.RING -> Unit
+                RingDecision.HOLD_BACK -> return null
+                RingDecision.REFUSE -> throw CallMessageException("not an offer to ring for")
+            }
             gateway.incoming(e.message, identity(connectionId), suites)
         } catch (x: CancellationException) {
             throw x

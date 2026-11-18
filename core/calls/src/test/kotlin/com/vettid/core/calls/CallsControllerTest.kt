@@ -158,7 +158,13 @@ class CallsControllerTest {
         override val unlockedNow: Boolean get() = unlocked.value && !phaseClosed
         override val vaultLeft = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         override var updateShowing = false
-        override var ownerCheckGated = false
+        val gatings = MutableStateFlow(false)
+        override var ownerCheckGated: Boolean
+            get() = gatings.value
+            set(v) {
+                gatings.value = v
+            }
+        override val ownerCheckGatings: Flow<Boolean> = gatings
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
         override val recheck = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
@@ -1571,7 +1577,7 @@ class CallsControllerTest {
         assertEquals(CallState.Idle, c.state.value)
         assertTrue(vault.gateway.ringings.isEmpty())
         assertTrue(!audio.ringtone)
-        assertEquals(1, c.diagnostics.value.refused)
+        assertEquals("held back, not refused", 0, c.diagnostics.value.refused)
 
         vault.ownerCheckGated = false // the check was done
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T81", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
@@ -1593,10 +1599,10 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
         assertTrue(vault.gateway.ringings.isEmpty())
-        assertEquals(1, c.diagnostics.value.refused)
+        assertEquals("held back, not refused", 0, c.diagnostics.value.refused)
     }
 
-    /** An offer that comes while the check is due does not wait for the unlock at all: refused at once, nothing held up. */
+    /** An offer that comes while the check is due does not wait for the unlock at all: held back at once, nothing held up. */
     @Test
     fun anOfferWhileTheOwnerCheckIsDueIsRefusedAtOnce() = runTest {
         val c = controller()
@@ -1605,7 +1611,7 @@ class CallsControllerTest {
         vault.ownerCheckGated = true
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T83", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
         runCurrent()
-        assertEquals("refused before any wait", 1, c.diagnostics.value.refused)
+        assertEquals("held back, not refused", 0, c.diagnostics.value.refused)
         vault.ownerCheckGated = false
         vault.unlocked.value = true
         runCurrent()
@@ -1675,5 +1681,125 @@ class CallsControllerTest {
         gate.send(Unit)
         runCurrent()
         assertFalse(c.testsAllowed.value)
+    }
+
+    /**
+     * Owner decision a, 2026-11-17: a call already ringing stops ringing here when the check comes due (or the hold
+     * begins). Nothing is sent, so another device may still answer; it shows as missed here.
+     */
+    @Test
+    fun aRingingCallStopsRingingHereWhenTheOwnerCheckComesDue() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T84", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertTrue(audio.ringtone)
+        val sent = vault.gateway.sent.size
+        vault.ownerCheckGated = true
+        runCurrent()
+        assertEquals(CallEnd.MISSED, (c.state.value as CallState.Ended).reason)
+        assertTrue(!audio.ringtone)
+        assertEquals("nothing sent: another device may answer", sent, vault.gateway.sent.size)
+    }
+
+    /** A call answered before the check came due goes on: only a ringing one stops. */
+    @Test
+    fun aCallAlreadyAnsweredGoesOnWhenTheOwnerCheckComesDue() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T85", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        c.answer()
+        runCurrent()
+        vault.ownerCheckGated = true
+        runCurrent()
+        assertTrue(c.state.value.toString(), c.state.value is CallState.Live)
+    }
+
+    /**
+     * A lock and an unlock while a read a recheck started is out: the old read must not apply to the new opening (its
+     * skipped entries, its C2 flag, so that the new opening reads for itself).
+     */
+    @Test
+    fun aReadOfAnEarlierOpeningDoesNotApplyToTheNextOne() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val oldGate = Channel<Unit>(Channel.UNLIMITED)
+        val newGate = Channel<Unit>(Channel.UNLIMITED)
+        var reads = 0
+        vault.gateway.listGate = { if (reads++ == 0) oldGate.receive() else newGate.receive() }
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        vault.gateway.list = { emptyList() }
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000003", "conn-1"))
+        vault.recheck.emit(Unit)
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        vault.unlocked.value = true
+        runCurrent()
+        // The new opening waits for the old read (one read at a time); the old read answers first, as of the old opening.
+        val old = vault.gateway.sent.count { it.startsWith("list") }
+        oldGate.send(Unit)
+        runCurrent()
+        assertEquals("the old read applied nothing", emptyList<String>(), c.diagnostics.value.listSkippedIds)
+        assertEquals("the new opening reads for itself", old + 1, vault.gateway.sent.count { it.startsWith("list") })
+        vault.gateway.skipped = emptyList()
+        newGate.send(Unit)
+        runCurrent()
+        assertEquals("the new read's permission read alone", 1, vault.gateway.permissionReads)
+    }
+
+    /**
+     * A lock's resets cannot fall between a read's check and its writes (they share one monitor): a lock made on another
+     * thread at that moment waits, and resets after the writes, so the next read is not skipped and nothing of the old
+     * read is kept.
+     */
+    @Test
+    fun aLockCannotFallBetweenAReadsCheckAndItsWrites() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.list = { emptyList() }
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000004", "conn-1"))
+        var other: Thread? = null
+        c.beforeApplyForTest = {
+            other = Thread { c.locksResetForTest() }.also { it.start() }
+            other!!.join(300) // blocked by the monitor: it cannot reset before the writes
+        }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        other!!.join(5_000)
+        c.beforeApplyForTest = {}
+        assertEquals("the lock reset after the writes", emptyList<String>(), c.diagnostics.value.listSkippedIds)
+        val reads = vault.gateway.sent.count { it.startsWith("list") }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals("the C2 flag was reset: read again", reads + 1, vault.gateway.sent.count { it.startsWith("list") })
+    }
+
+    /** The same for a history read: its skipped entries are noted before a lock's reset, never after it. */
+    @Test
+    fun aLockCannotFallBetweenAHistoryReadsCheckAndItsWrite() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000005", "conn-1"))
+        var other: Thread? = null
+        c.beforeApplyForTest = {
+            other = Thread { c.locksResetForTest() }.also { it.start() }
+            other!!.join(300)
+        }
+        c.history("conn-1")
+        other!!.join(5_000)
+        assertEquals(emptyList<String>(), c.diagnostics.value.listSkippedIds)
     }
 }
