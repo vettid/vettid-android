@@ -21,8 +21,8 @@ object AccountSite {
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 
-/** No failure (a default for flows of a [FailureKind]). */
-val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
+/** No failure: the default of a flow of a [FailureKind] (a change hold, a release check's failure). */
+val NO_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
 
 /** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
 val NO_MOVE_FAILURE: StateFlow<MoveFailure?> = MutableStateFlow(null)
@@ -300,7 +300,7 @@ interface VaultRepository {
      * (0.45.0 §11.14.9 step 2) Why a flow that locks and unlocks with a PIN typed on its own screen ("Finish the move", the
      * release update) is held: the gate's text for an unresolved change or an uncertain PIN; null when it is not.
      */
-    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+    val changeHold: StateFlow<FailureKind?> get() = NO_FAILURE
 
     /** (Release R) `vault.secret.renew`: a new phone secret with the PIN unchanged (Settings → Security). */
     suspend fun renewPhoneSecret(pin: String, password: String): Unit = throw VaultFailure(FailureKind.NOT_SUPPORTED)

@@ -97,6 +97,10 @@ class FinishMoveHoldTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.noUserGuid)
         assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
+        // Typing again clears it with the failure.
+        vm.setPin("4")
+        assertFalse(vm.uiState.value.noUserGuid)
+        assertNull(vm.uiState.value.failure)
         // Any other refusal of the kind keeps its own text.
         vm.setPin("40281795")
         vm.finish()

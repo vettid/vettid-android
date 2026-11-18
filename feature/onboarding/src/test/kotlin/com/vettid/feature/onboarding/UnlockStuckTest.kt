@@ -2,6 +2,9 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -68,9 +71,13 @@ class UnlockStuckTest {
         for ((name, s) in recoverOnly) {
             assertTrue(name, s.recoverOnly)
             assertFalse("$name: no erase", s.eraseOffered)
+            assertFalse("$name: no recover-or-erase notice", s.copy(keysGone = true).stuckNoticeShown)
         }
         assertTrue(keysGone.eraseOffered)
+        assertTrue(keysGone.stuckNoticeShown)
         assertFalse(keysGone.recoverOnly)
+        assertFalse("the not-recognised notice instead", keysGone.copy(notRecognised = true).stuckNoticeShown)
+        assertFalse("no notice while a kept check waits", keysGone.copy(keptCheckWaiting = true).stuckNoticeShown)
         for ((name, s) in ordinary) {
             assertFalse(name, s.recoverOnly)
             assertFalse(name, s.eraseOffered)
@@ -209,7 +216,40 @@ class UnlockStuckTest {
         rule.onNodeWithText("This phone cannot open your vault").assertExists()
         rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertExists()
         rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
+        // The card's only action is Continue: no Recover, no Erase.
+        rule.onNode(hasText("Continue") and hasAnyAncestor(hasTestTag("unlock_move_failure"))).assertExists()
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+        rule.onNodeWithText("Recover your vault").assertDoesNotExist()
+        // With the recover-or-erase notice up (after the next PIN), the card goes: the notice says it once.
+        state = state.copy(keysGone = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("unlock_move_failure").assertDoesNotExist()
+        rule.onNodeWithTag("erase_phone").assertExists()
+        // With an ended release or a rollback (no erase anywhere), the card goes too: the recover-only notice is the way
+        // forward, and neither the erase advice nor "does not support this yet" is shown.
+        for (gone in listOf(false, true)) {
+            state = state.copy(keysGone = gone, stateRollback = true)
+            rule.waitForIdle()
+            rule.onNodeWithTag("unlock_move_failure").assertDoesNotExist()
+            rule.onNodeWithTag("unlock_recover_only").assertExists()
+            rule.onNodeWithText("Before you erase", substring = true).assertDoesNotExist()
+            rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
+        }
+        // While a kept check waits: the move card alone, not also the no-user_guid message card with the same words.
+        state = state.copy(
+            keysGone = true, stateRollback = false, keptTransfer = true, keptCheckWaiting = true, message = UnlockMessage.NoUserGuid,
+        )
+        rule.waitForIdle()
+        rule.onNodeWithTag("unlock_move_failure").assertExists()
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        // Any other move failure stays on the stuck and the recover-only screens alike: only the no-user_guid card steps aside.
+        val incomplete = com.vettid.core.data.vault.MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete")
+        for (other in listOf(ok.copy(keysGone = true, moveFailure = incomplete), ok.copy(stateRollback = true, moveFailure = incomplete))) {
+            state = other
+            rule.waitForIdle()
+            rule.onNodeWithTag("unlock_move_failure").assertExists()
+        }
         // Any other refusal of the kind keeps its own text.
         state = ok.copy(moveFailure = com.vettid.core.data.vault.MoveFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"))
         rule.waitForIdle()

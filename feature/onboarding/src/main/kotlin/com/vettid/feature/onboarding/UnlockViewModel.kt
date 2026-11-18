@@ -240,6 +240,12 @@ data class UnlockUiState(
      */
     val eraseOffered: Boolean get() = !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
 
+    /** The recover-or-erase notice of a phone without the vault's keys is on the screen (the screen's own choice). */
+    val stuckNoticeShown: Boolean get() = !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+
+    /** The last "Finish the move" was refused for want of a usable user_guid ([isNoUserGuid]). */
+    val moveNoUserGuid: Boolean get() = moveFailure?.let { isNoUserGuid(it.kind, it.code) } == true
+
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
 
