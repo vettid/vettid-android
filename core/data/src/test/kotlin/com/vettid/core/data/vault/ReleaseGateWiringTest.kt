@@ -38,7 +38,9 @@ class ReleaseGateWiringTest {
 
     @Test
     fun everyOpeningStartsTheCheckBeforeItShows() {
-        code.has("private val phaseFlow = PhaseHolder(AppPhase.Starting, onOpen = { releaseUpdate.vaultOpened() })")
+        // The opening's mark on the vault's clock, the clock of the messages' `ts` it is compared with.
+        block("private val phaseFlow = PhaseHolder(").has("feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())")
+        block("private val phaseFlow = PhaseHolder(").has("releaseUpdate.vaultOpened()")
     }
 
     @Test
@@ -71,6 +73,7 @@ class ReleaseGateWiringTest {
         )
         block("val feed = FeedManager(").has("gated = { featuresGated() },")
         block("val feed = FeedManager(").has("held = { releaseUpdate.checking.value },")
+        block("val feed = FeedManager(").has("ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },")
         // What sends waits for the release check too.
         code.has("private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)")
         block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")

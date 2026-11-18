@@ -626,7 +626,15 @@ class VaultManager(
     val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
 
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting, onOpen = { releaseUpdate.vaultOpened() })
+    private val phaseFlow = PhaseHolder(
+        AppPhase.Starting,
+        // The feed's mark first: the mailbox's events the check holds from now on are judged against it (Rule 3), on the
+        // vault's clock, the clock of their `ts` (the phone's only before any message from the vault in this process).
+        onOpen = {
+            feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())
+            releaseUpdate.vaultOpened()
+        },
+    )
 
     /** A lock not made here, and the phases published after vault calls (#242): [PhaseGate]. */
     private val phaseGate by lazy {
@@ -985,6 +993,8 @@ class VaultManager(
         gated = { featuresGated() },
         // Rule 3: while the release is checked, the feed's events and arrivals wait; told when the check is over (releasePause).
         held = { releaseUpdate.checking.value },
+        // Nothing waits for that end while the owner check is due or held (owner decision 2026-11-18).
+        ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
     /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
