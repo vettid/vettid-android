@@ -34,8 +34,8 @@ import org.junit.Test
  * (`src/testRelease`), and CI runs it (`:app:testFullReleaseUnitTest`):
  * - the release binds `:core:calls`' controller (the reference below does not compile without `src/calls`);
  * - nothing of the call tests is on: `CALLS_TEST` is false and the media config is the known-good default;
- * - what a member sees is gated by the vault's answer to the `call.list` probe alone: the conversation's button, Call
- *   and the calls row show only for READY (and, during a call, IN_CALL); a vault without calls shows nothing.
+ * - what a member sees follows whether the vault is open on this phone alone: the conversation's button, Call and the
+ *   calls row show only for READY (and, during a call, IN_CALL); a closed vault shows nothing.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReleaseCallGateTest {
@@ -61,9 +61,9 @@ class ReleaseCallGateTest {
     }
 
     @Test
-    fun theCallUiShowsOnlyOnceTheVaultSaidItHasCalls() = runTest(main) {
+    fun theCallUiShowsOnlyWhileTheVaultIsOpen() = runTest(main) {
         val social = FakeSocial().apply { seed(listOf(FakeSocial.connection("c1", "Ada Lovelace")), emptyMap()) }
-        val calls = FakeCalls(CallAvailability.UNKNOWN)
+        val calls = FakeCalls(CallAvailability.CLOSED)
         calls.permissions.value = CallPermissions(supported = true, known = true)
         val conversation = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c1")), social, social, FakeAttachments(), calls)
         val detail = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), calls = calls)
@@ -75,8 +75,7 @@ class ReleaseCallGateTest {
         assertEquals(
             mapOf(
                 CallAvailability.NOT_IN_BUILD to Triple(false, false, false),
-                CallAvailability.UNKNOWN to Triple(false, false, false),
-                CallAvailability.NOT_IN_VAULT to Triple(false, false, false),
+                CallAvailability.CLOSED to Triple(false, false, false),
                 CallAvailability.READY to Triple(true, true, true),
                 CallAvailability.IN_CALL to Triple(true, false, true),
             ),

@@ -206,9 +206,19 @@ class VaultCallSignallingTest {
         assertEquals(listOf("start(conn-1, [1])"), g1.asked)
     }
 
-    /** (C2) A form 2 offer is answered with `keepalive` even before the probe has found the vault C2. */
+    /** (C2) Unless told the vault is older, a start is in form 2: without the connection's key no call is placed. */
     @Test
-    fun aFormTwoOfferIsAnsweredWithKeepAlivesWhateverTheProbeSays() = runTest {
+    fun byDefaultAStartIsInFormTwoAndNeedsTheConnectionsKey() = runTest {
+        val g = Gateway().also { it.start = { outgoingCall() } }
+        val s = VaultCallSignalling(g, { identities[it] }, listOf(s1))
+        assertTrue(s.formTwo)
+        assertThrows(CallSecurityException::class.java) { kotlinx.coroutines.runBlocking { s.start("conn-1", "v=0", listOf(s1)) } }
+        assertTrue("nothing was sent", g.asked.isEmpty())
+    }
+
+    /** (C2) A form 2 offer is answered with `keepalive` even where the `call.list` read found the vault older. */
+    @Test
+    fun aFormTwoOfferIsAnsweredWithKeepAlivesWhateverTheListReadSays() = runTest {
         val s = signalling(c2 = false)
         gateway.incoming = { incomingCall(parties = CallWire.Parties(ByteArray(32) { 1 }, ByteArray(32) { 2 })) }
         gateway.channel.send(offerEvent())

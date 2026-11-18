@@ -14,9 +14,9 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Calls are in every build, release included (owner decision 2026-11-14), so the button is gated by what the vault
- * said alone: only a vault that answered the `call.list` probe (READY, or a call going on) shows it. A vault without
- * calls, one not asked yet and a build without calls show nothing. (`:app:testFullReleaseUnitTest` checks the same
+ * Calls are in every build, release included (owner decision 2026-11-14), and every vault the app opens has them, so
+ * the button follows whether the vault is open alone (READY, or a call going on). A closed vault and a build without
+ * calls show nothing. (`:app:testFullReleaseUnitTest` checks the same
  * table in the release's configuration: ReleaseCallGateTest.)
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -27,8 +27,8 @@ class ConversationCallGateTest {
     private val social = FakeSocial().apply { seed(listOf(FakeSocial.connection("c2", "Alex")), emptyMap()) }
 
     @Test
-    fun theButtonShowsOnlyOnceTheVaultSaidItHasCalls() = runTest {
-        val calls = FakeCalls(CallAvailability.UNKNOWN)
+    fun theButtonShowsOnlyWhileTheVaultIsOpen() = runTest {
+        val calls = FakeCalls(CallAvailability.CLOSED)
         calls.permissions.value = CallPermissions(supported = true, known = true)
         val vm = ConversationViewModel(SavedStateHandle(mapOf(ConversationRoute.ARG to "c2")), social, social, FakeAttachments(), calls)
         val shown = CallAvailability.entries.associateWith { a ->
@@ -41,8 +41,7 @@ class ConversationCallGateTest {
         assertEquals(
             mapOf(
                 CallAvailability.NOT_IN_BUILD to false,
-                CallAvailability.UNKNOWN to false,
-                CallAvailability.NOT_IN_VAULT to false,
+                CallAvailability.CLOSED to false,
                 CallAvailability.READY to true,
                 CallAvailability.IN_CALL to true,
             ),

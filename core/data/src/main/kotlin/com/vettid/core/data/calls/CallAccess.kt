@@ -10,11 +10,11 @@ enum class CallAvailability {
     /** This build has no calls ([NoCallAccess]: screens' defaults and tests; every app build has calls): no button. */
     NOT_IN_BUILD,
 
-    /** The vault has not been asked yet (it is locked, or was just opened): no button. */
-    UNKNOWN,
-
-    /** The vault's release has no calls: no button. */
-    NOT_IN_VAULT,
+    /**
+     * The vault is not open on this phone (locked, being opened, or its release must be updated first): no button. Every
+     * vault the app opens has calls (it requires the vault's current release), so an open vault is [READY] at once.
+     */
+    CLOSED,
 
     /** The button calls. */
     READY,
@@ -40,7 +40,7 @@ data class CallHistoryEntry(
 /**
  * (GC #7718) A conversation's calls: [entries], newest first, and [someNotShown] when the vault's list had entries for it
  * (or for a connection it could not tell) that did not read: the list then says "Some calls couldn't be shown.".
- * [failed]: the vault has calls but its list could not be read this time (a hiccup, the network): that is not an empty
+ * [failed]: the vault's list could not be read this time (a hiccup, the network): that is not an empty
  * history, so a conversation keeps the calls it already shows.
  */
 data class CallHistory(
