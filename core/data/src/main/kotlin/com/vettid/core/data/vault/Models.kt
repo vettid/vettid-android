@@ -240,8 +240,8 @@ sealed interface UnlockAttempt {
 
     companion object {
         /**
-         * [Failed]'s code when this phone has no `user_guid` to unlock with: it was set up by a direct transfer from
-         * a vault release before VAULT-MESSAGING 0.17.0, whose `device.paired` did not carry one (§6.7.1).
+         * [Failed]'s code when this phone has no `user_guid` to unlock with (§11.4): a damaged record, or a direct
+         * transfer an older app build completed without one (this build fails such a transfer, VAULT-MESSAGING §6.7.1).
          */
         const val CODE_NO_USER_GUID = "no_user_guid"
     }

@@ -3,6 +3,8 @@ package com.vettid.core.data.vault
 import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
+import com.vettid.core.vault.TransferWithoutUserGuidException
+import com.vettid.core.vault.VaultDevice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
@@ -45,6 +47,13 @@ internal object TransferInResume {
 
         /** No code was shown, so no `hs.fin` was sent: nothing can complete it, and it is dropped. */
         DROP,
+
+        /**
+         * (VAULT-MESSAGING §6.7.1) Paired, but stored without a valid `user_guid` ([completingGuid]: an older app build's
+         * record, or a damaged one; this build never applies such a `device.paired`): never completed, and nothing is taken
+         * over. The phone fails closed at the unlock (`no_user_guid`, [UnlockAttempt.CODE_NO_USER_GUID]).
+         */
+        NO_USER_GUID,
     }
 
     /** The transport bound added to a request's own wait (30 seconds); a request is never given less than wait + this. */
@@ -146,9 +155,39 @@ internal object TransferInResume {
         val holdMarginMs: Long = HOLD_MARGIN_MS,
     )
 
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.4) The member's `user_guid` a paired transfer completes with: its stored value when it
+     * passes [VaultDevice.validUserGuid], else null (an older app build's record, or a damaged one): never completed.
+     */
+    fun completingGuid(t: TransferInState?): String? =
+        t?.takeIf { it.paired }?.userGuid?.takeIf { VaultDevice.validUserGuid(it) }
+
+    /**
+     * (§11.4) The stored `user_guid` this phone may unlock with, and a transfer completed in the background is taken as
+     * complete with: only one that passes [VaultDevice.validUserGuid]; else null (fail closed: `no_user_guid`).
+     */
+    fun usableGuid(stored: String): String? = stored.takeIf { VaultDevice.validUserGuid(it) }
+
+    /** What the app makes of the transfer on the device after an unlock, while it holds no credential ([withoutCredential]). */
+    sealed interface NoCredential {
+        /** A paired transfer with a valid `user_guid`: completed (the take-over), FINISHING. */
+        data class Complete(val userGuid: String) : NoCredential
+
+        /** A paired transfer without one ([completingGuid]): never completed; the unlock screen, whose guard refuses. */
+        data object Locked : NoCredential
+
+        /** No paired transfer: the credential is created. */
+        data object NeedsCredential : NoCredential
+    }
+
+    fun withoutCredential(t: TransferInState?): NoCredential = when {
+        t?.paired != true -> NoCredential.NeedsCredential
+        else -> completingGuid(t)?.let { NoCredential.Complete(it) } ?: NoCredential.Locked
+    }
+
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
         t == null -> Action.NONE
-        t.paired && deviceId != null -> Action.COMPLETE
+        t.paired && deviceId != null -> if (completingGuid(t) == null) Action.NO_USER_GUID else Action.COMPLETE
         t.sas == null -> Action.DROP
         now.isBefore(t.startedAt.plus(TransferInWait.WAIT)) -> Action.WAIT
         else -> Action.DEADLINE
@@ -592,8 +631,8 @@ internal object TransferInResume {
         }
     }
 
-    /** The paired transfer's `user_guid` (null from a vault release before 0.17.0). */
-    data class Approved(val userGuid: String?)
+    /** The paired transfer's `user_guid`. */
+    data class Approved(val userGuid: String)
 
     /**
      * The wait for the approval: [await] for what is left until the one deadline, counted from the start the device stored
@@ -603,14 +642,15 @@ internal object TransferInResume {
     suspend fun awaitApproval(
         pending: () -> TransferInState?,
         now: () -> Instant,
-        await: suspend (Duration) -> String?,
+        await: suspend (Duration) -> String,
         atDeadline: suspend () -> TransferInState?,
     ): Approved? {
         val started = pending()?.startedAt ?: return null
         return try {
             Approved(await(TransferInWait.left(started, now())))
         } catch (_: TimeoutCancellationException) {
-            atDeadline()?.let { Approved(it.userGuid) }
+            // A paired transfer without the member's user_guid (stored by an older app build) is a failed transfer.
+            atDeadline()?.let { Approved(completingGuid(it) ?: throw TransferWithoutUserGuidException()) }
         }
     }
 
@@ -644,4 +684,14 @@ internal object TransferInResume {
             }
         }
     }
+}
+
+/**
+ * (VAULT-MESSAGING §6.7.1) Whether a start shows the transfer screen to say the move stopped: the device holds no vault
+ * and no transfer, and the last one was dropped for its `user_guid` with the member not told yet (a process that ended
+ * between the drop's save and the screen).
+ */
+internal object StoppedMove {
+    fun tells(deviceId: String?, pending: TransferInState?, droppedNoUserGuid: Boolean): Boolean =
+        droppedNoUserGuid && deviceId == null && pending == null
 }

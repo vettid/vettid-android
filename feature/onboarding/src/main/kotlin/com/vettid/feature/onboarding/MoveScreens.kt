@@ -662,16 +662,7 @@ fun TransferInContent(
             val finishState by finish.uiState.collectAsStateWithLifecycle()
             FinishMovePane(finishState, finish, actions::finish)
         } else {
-            MovedScreen(
-                stringResource(
-                    if (state.canUnlockLater) {
-                        R.string.onboarding_moved_transferred_body
-                    } else {
-                        R.string.onboarding_moved_transferred_no_guid_body
-                    },
-                ),
-                actions::finish,
-            )
+            MovedScreen(stringResource(R.string.onboarding_moved_transferred_body), actions::finish)
         }
         TransferInStep.REJECTED -> FormScaffold(
             title = stringResource(R.string.transfer_in_rejected_title),

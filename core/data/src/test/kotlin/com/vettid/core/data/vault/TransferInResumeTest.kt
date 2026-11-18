@@ -39,8 +39,11 @@ class TransferInResumeTest {
         assertEquals(Action.WAIT, TransferInResume.decide(shown, null, before))
         // Killed after device.paired was applied, before the credential was taken over: completed.
         assertEquals(Action.COMPLETE, TransferInResume.decide(paired, "dev-2", before))
-        // A vault release before 0.17.0 sends no user_guid: completed all the same.
-        assertEquals(Action.COMPLETE, TransferInResume.decide(paired.copy(userGuid = null), "dev-2", before))
+        // Paired without the member's user_guid (a record of an older app build; VAULT-MESSAGING §6.7.1): never completed,
+        // at any age.
+        assertEquals(Action.NO_USER_GUID, TransferInResume.decide(paired.copy(userGuid = null), "dev-2", before))
+        assertEquals(Action.NO_USER_GUID, TransferInResume.decide(paired.copy(userGuid = null), "dev-2", before.plus(Duration.ofDays(30))))
+        assertFalse("not a deadline step", TransferInResume.deadlineDue(paired.copy(userGuid = null), "dev-2", before))
     }
 
     /** One deadline, the stored start of the hs.init plus 11 minutes; a paired transfer completes at any age. */
@@ -441,13 +444,16 @@ class TransferInResumeTest {
     fun theWaitRunningOutGoesToTheDeadline() = runTest {
         val late = at.plus(Duration.ofMinutes(12))
         var asked: Duration? = null
-        val timeout: suspend (Duration) -> String? = { left ->
+        val timeout: suspend (Duration) -> String = { left ->
             asked = left
-            kotlinx.coroutines.withTimeout(1) { CompletableDeferred<String?>().await() }
+            kotlinx.coroutines.withTimeout(1) { CompletableDeferred<String>().await() }
         }
         assertEquals(TransferInResume.Approved("m-1"), TransferInResume.awaitApproval({ shown }, { late }, timeout) { paired })
         assertEquals("past the deadline: the least wait", Duration.ofSeconds(1), asked)
         assertEquals(null, TransferInResume.awaitApproval({ shown }, { late }, timeout) { null })
+        // Paired at the deadline without the member's user_guid (a record of an older app build): a failed transfer.
+        val failed = runCatching { TransferInResume.awaitApproval({ shown }, { late }, timeout) { paired.copy(userGuid = null) } }
+        assertTrue(failed.exceptionOrNull() is com.vettid.core.vault.TransferWithoutUserGuidException)
     }
 
     /**
@@ -505,5 +511,89 @@ class TransferInResumeTest {
         assertFalse(r)
         assertTrue("collected", collects >= 1)
         assertEquals("then decided: dropped", 1, drops)
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) A transfer whose `device.paired` had no valid `user_guid` failed on this phone: the transfer
+     * screen's existing "The move stopped on this phone" (RETRY, [MoveRepository.CODE_TRANSFER_SESSION_ENDED]).
+     */
+    @Test
+    fun aTransferWithoutAUserGuidEndsAsTheMoveStoppedOnThisPhone() = runTest {
+        val e = runCatching { vaultGuard { throw com.vettid.core.vault.TransferWithoutUserGuidException() } }.exceptionOrNull()
+        assertTrue(e is VaultFailure)
+        e as VaultFailure
+        assertEquals(FailureKind.RETRY, e.kind)
+        assertEquals(MoveRepository.CODE_TRANSFER_SESSION_ENDED, e.code)
+        assertTrue(e.cause is com.vettid.core.vault.TransferWithoutUserGuidException)
+    }
+
+    private val soon = at.plusSeconds(60)
+
+    /** Stored values that are no `user_guid` (§6.7.1, §11.4: 1-128 printable ASCII): empty, too long, a space, non-ASCII, controls. */
+    private val badGuids = listOf("", "a".repeat(129), "a b", "é", "a\u0007b", "a\nb", "\u007f", "a\tb", "\uD83D\uDE00")
+    private val goodGuids = listOf("m-1", "a".repeat(128), "!~", "8f14e45f-ceea-467f-a0e6-1e1e2c2b5a3d")
+
+    /**
+     * Every stored `user_guid` is read through the one check: a paired record with a malformed one is never completed at
+     * the start ([Action.NO_USER_GUID], not a deadline step), at the deadline (a failure), or after an unlock without a
+     * credential (the unlock screen), and the unlock and the background completion refuse it.
+     */
+    @Test
+    fun aStoredUserGuidIsCheckedWhereverItIsRead() = runTest {
+        val late = at.plus(Duration.ofMinutes(12))
+        val timeout: suspend (Duration) -> String = { kotlinx.coroutines.withTimeout(1) { CompletableDeferred<String>().await() } }
+        for (g in badGuids + listOf<String?>(null)) {
+            val record = paired.copy(userGuid = g)
+            val why = "guid ${g?.map { it.code }}"
+            assertEquals(why, Action.NO_USER_GUID, TransferInResume.decide(record, "dev-2", soon))
+            assertFalse(why, TransferInResume.deadlineDue(record, "dev-2", soon))
+            assertEquals(why, null, TransferInResume.completingGuid(record))
+            assertEquals(why, TransferInResume.NoCredential.Locked, TransferInResume.withoutCredential(record))
+            val failed = runCatching { TransferInResume.awaitApproval({ shown }, { late }, timeout) { record } }
+            assertTrue(why, failed.exceptionOrNull() is com.vettid.core.vault.TransferWithoutUserGuidException)
+            if (g != null) {
+                assertEquals(why, null, TransferInResume.usableGuid(g))
+                assertFalse(why, com.vettid.core.vault.VaultDevice.validUserGuid(g))
+            }
+        }
+        for (g in goodGuids) {
+            val record = paired.copy(userGuid = g)
+            assertEquals(g, Action.COMPLETE, TransferInResume.decide(record, "dev-2", soon))
+            assertEquals(g, g, TransferInResume.completingGuid(record))
+            assertEquals(g, TransferInResume.NoCredential.Complete(g), TransferInResume.withoutCredential(record))
+            assertEquals(g, TransferInResume.Approved(g), TransferInResume.awaitApproval({ shown }, { late }, timeout) { record })
+            assertEquals(g, g, TransferInResume.usableGuid(g))
+        }
+        // Not paired: nothing to complete; no transfer: the credential is created.
+        assertEquals(null, TransferInResume.completingGuid(shown.copy(userGuid = "m-1")))
+        assertEquals(TransferInResume.NoCredential.NeedsCredential, TransferInResume.withoutCredential(shown))
+        assertEquals(TransferInResume.NoCredential.NeedsCredential, TransferInResume.withoutCredential(null))
+    }
+
+    /**
+     * What a start makes of a paired record an older app build stored without a usable guid (the device's view, as
+     * `evaluate()` and `afterUnlocked()` read it): nothing is completed, the phone goes on as paired (the unlock screen),
+     * and an unlock refuses it, before anything is sent.
+     */
+    @Test
+    fun aPairedRecordWithoutAUsableGuidLeadsToTheUnlockScreen() {
+        for (g in badGuids + listOf<String?>(null)) {
+            val record = paired.copy(userGuid = g)
+            assertEquals(Action.NO_USER_GUID, TransferInResume.decide(record, "dev-2", soon.plus(Duration.ofDays(30))))
+            assertEquals(TransferInResume.NoCredential.Locked, TransferInResume.withoutCredential(record))
+            assertEquals(null, TransferInResume.usableGuid(g ?: ""))
+        }
+    }
+
+    /**
+     * (§6.7.1) A start shows the transfer screen to say the move stopped only for a drop for the user_guid the member was
+     * not told of, on a phone that holds no vault and no transfer (a new scan or a paired device: never).
+     */
+    @Test
+    fun aStartTellsAStoppedMoveOnlyForAnUntoldDropOnAnEmptyPhone() {
+        assertTrue(StoppedMove.tells(null, null, droppedNoUserGuid = true))
+        assertFalse("told already, or none", StoppedMove.tells(null, null, droppedNoUserGuid = false))
+        assertFalse("a paired phone", StoppedMove.tells("dev-2", null, droppedNoUserGuid = true))
+        assertFalse("a transfer under way", StoppedMove.tells(null, shown, droppedNoUserGuid = true))
     }
 }
