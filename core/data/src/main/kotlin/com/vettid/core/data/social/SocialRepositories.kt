@@ -204,9 +204,6 @@ interface ApprovalsRepository {
 
     suspend fun denyCriticalUse(requestId: String)
 
-    /** Includes or declines every listed item of a share rule (§10.12). */
-    suspend fun decideShare(ruleId: String, approve: Boolean)
-
     /** Includes [include] and declines [decline], items of one share rule's decision (§10.12). */
     suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>)
 

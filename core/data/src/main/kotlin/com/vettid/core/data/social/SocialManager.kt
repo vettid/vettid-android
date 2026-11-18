@@ -2103,12 +2103,6 @@ class SocialManager internal constructor(
 
     override suspend fun denyCriticalUse(requestId: String) = decide("critical:$requestId") { it.criticalUseDeny(requestId) }
 
-    override suspend fun decideShare(ruleId: String, approve: Boolean) {
-        val req = find("share:$ruleId") as? Approval.ShareDecision ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        val ids = req.items.map { i -> i.itemId }
-        decideShare(ruleId, include = if (approve) ids else emptyList(), decline = if (approve) emptyList() else ids)
-    }
-
     /**
      * Includes [include] and declines [decline] in one change (§10.12 `share.decide{include, decline}`, 0.21.0: one
      * flush, nothing changed on an error); declined items are not asked again. Any refusal, `bad_request` included, is

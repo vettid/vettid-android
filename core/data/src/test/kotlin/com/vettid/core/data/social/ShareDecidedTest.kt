@@ -676,6 +676,8 @@ class ShareDecidedTest {
         val m = manager()
         val ids = (1..501).map { "i$it" }
         var sends = 0
+        var rereads = 0
+        m.staleShareReread = { rereads++ }
         suspend fun refused(include: List<String>, decline: List<String>) {
             val e = runCatching { m.decideShareWith("r1", include, decline, send = { _, _ -> sends++; o("{}") }) }.exceptionOrNull()
             assertEquals("bad_request", (e as VaultFailure).code)
@@ -683,7 +685,10 @@ class ShareDecidedTest {
         refused(emptyList(), emptyList())
         refused(ids.take(250), ids.drop(250))
         refused(listOf("i1", "i2"), listOf("i2"))
+        runCurrent()
         assertEquals(0, sends)
+        // A refusal made here is not the vault's `bad_request`: the lists are not read again for it.
+        assertEquals(0, rereads)
         // 500 distinct ids and a repeat are sent as the 500, once each.
         var sent: Pair<List<String>, List<String>>? = null
         m.decideShareWith("r1", ids.take(400) + ids.first(), ids.subList(400, 500) + ids[450], send = { inc, dec -> sent = inc to dec; o("{}") })
