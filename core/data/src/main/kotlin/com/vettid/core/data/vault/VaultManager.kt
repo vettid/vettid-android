@@ -968,11 +968,14 @@ class VaultManager(
 
     /**
      * Photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1, ANDROID-PLAN 0.1.39): thumbnails, photos and pending uploads
-     * in memory only, cleared whenever the vault is not open, held or due, and at a wipe.
+     * in memory only, cleared whenever the vault is not open, held or due, and at a wipe. Every vault the app talks to has
+     * them (Rule 3: no probe). Nothing of photos is sent, fetched or kept while the vault is not open on this phone, the
+     * owner check is due or held, or the release gate checks or pauses, as for presence.
      */
     val attachments = com.vettid.core.data.social.AttachmentManager(
         com.vettid.core.data.social.VaultAttachmentOps { openApi() },
         onSent = { social.addSent(it) },
+        vaultClosed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },
     )
 
     /**
@@ -1320,7 +1323,7 @@ class VaultManager(
      */
     fun featuresGated(): Boolean = featuresGated(ownerCheck.ownerCheck.value?.gated(Instant.now()) == true, releaseUpdate.paused.value)
 
-    /** (Rule 3) Nothing of presence or location is sent: [featuresGated], or the vault's release is still being checked. */
+    /** (Rule 3) Nothing of presence, location or photos is sent: [featuresGated], or the vault's release is still being checked. */
     private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)
 
     /**
@@ -1330,7 +1333,6 @@ class VaultManager(
      */
     private fun gatedReads() {
         social.refreshAllQuietly()
-        scope.launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
         items.refreshQuietly()
         feed.open()
     }
@@ -1765,7 +1767,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             steps.step { social.clear() }
-            steps.step { attachments.reset() }
+            steps.step { attachments.clear() }
             steps.step { items.clear() }
             steps.step { feed.clear() }
             steps.step { devices.clear() }
@@ -3293,7 +3295,7 @@ class VaultManager(
         // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.clear() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -3366,7 +3368,7 @@ class VaultManager(
         lockedElsewhereFlow.value = false
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.clear() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -5310,7 +5312,7 @@ class VaultManager(
         // anything is erased: nothing still on its way saves after the erase.
         steps.step { forgetDevices() }
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.clear() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }

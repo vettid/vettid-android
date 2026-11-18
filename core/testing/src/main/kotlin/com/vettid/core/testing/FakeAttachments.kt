@@ -23,29 +23,40 @@ import java.time.Instant
 class FakeAttachments : AttachmentsRepository {
     val calls = mutableListOf<String>()
     val fail = mutableMapOf<String, Exception>()
-    val availableFlow = MutableStateFlow(true)
-    override val available: StateFlow<Boolean> = availableFlow
+
+    /** [closed]: the vault not open, the owner check due or held, or the release gate checking or pausing. */
+    @Volatile
+    var closedNow = false
+
+    /** Run at each [closed] check (a clear landing right after it). */
+    var duringClosedCheck: (() -> Unit)? = null
+
+    override fun closed(): Boolean = closedNow.also { duringClosedCheck?.invoke() }
+
     var seq = 0
 
     /** Every photo [prepare] made, to check that a cancel wiped them. */
     val prepared = mutableListOf<PreparedPhoto>()
+
+    /** Run while a picture or a shot is prepared (a clear landing then). */
+    var duringPrepare: (() -> Unit)? = null
 
     private fun call(name: String) {
         calls += name
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun probe() = call("probe")
-
     override suspend fun prepare(source: ByteArray): PreparedPhoto {
         call("prepare")
+        duringPrepare?.invoke()
         if (source.isEmpty()) throw PhotoException(PhotoFailure.UNREADABLE)
         return PreparedPhoto(source.copyOf(), byteArrayOf(1, 2, 3), 2_560, 1_920).also { prepared += it }
     }
 
     override suspend fun prepare(shot: Bitmap): PreparedPhoto {
         call("prepareShot")
-        return PreparedPhoto(ByteArray(10), byteArrayOf(1), shot.width, shot.height)
+        duringPrepare?.invoke()
+        return PreparedPhoto(ByteArray(10) { 5 }, byteArrayOf(1), shot.width, shot.height).also { prepared += it }
     }
 
     override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto {

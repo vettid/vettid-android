@@ -1224,12 +1224,12 @@ object ScreenCatalog {
                     attachment = com.vettid.core.data.social.AttachmentInfo("a$i", st, reason, width = 2_560, height = 1_920),
                 )
             }
-            ConversationScreen(ConversationUiState("c1", sam, photos, loading = false, photosAvailable = true), ConversationActions())
+            ConversationScreen(ConversationUiState("c1", sam, photos, loading = false), ConversationActions())
         },
         "messages.photo_draft" to {
             ConversationScreen(
                 ConversationUiState(
-                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    "c1", sam, thread, loading = false,
                     photoDraft = com.vettid.feature.messages.PhotoDraft(
                         photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
                         caption = "The view from here",
@@ -1241,7 +1241,7 @@ object ScreenCatalog {
         "messages.photo_draft_retry" to {
             ConversationScreen(
                 ConversationUiState(
-                    "c1", sam, thread, loading = false, photosAvailable = true,
+                    "c1", sam, thread, loading = false,
                     photoDraft = com.vettid.feature.messages.PhotoDraft(
                         photos = listOf(com.vettid.core.media.PreparedPhoto(ByteArray(4), ByteArray(4), 2_560, 1_920)),
                         problem = com.vettid.feature.messages.PhotoProblem.NO_ANSWER,

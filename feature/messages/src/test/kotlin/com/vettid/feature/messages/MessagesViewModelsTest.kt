@@ -484,7 +484,6 @@ class MessagesViewModelsTest {
     fun pickedPhotosAreSentOneByOneWithTheCaptionOnTheFirst() = runTest {
         val vm = conversation()
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.photosAvailable)
         vm.onPicked(picks(byteArrayOf(1), byteArrayOf(2)))
         advanceUntilIdle()
         assertEquals(2, vm.uiState.value.photoDraft!!.photos.size)
@@ -554,14 +553,6 @@ class MessagesViewModelsTest {
         advanceUntilIdle()
         assertEquals(PhotoProblem.UNREADABLE, vm.uiState.value.photoDraft!!.problem)
         assertFalse(vm.uiState.value.photoDraft!!.canSend)
-    }
-
-    @Test
-    fun withoutReleaseAThereIsNoPhotoButton() = runTest {
-        attachments.availableFlow.value = false
-        val vm = conversation()
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.photosAvailable)
     }
 
     private fun picks(vararg b: ByteArray): List<suspend () -> ByteArray?> = b.map { x -> suspend { x } }

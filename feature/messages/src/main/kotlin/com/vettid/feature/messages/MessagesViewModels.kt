@@ -166,8 +166,6 @@ data class ConversationUiState(
     val olderAvailable: Boolean = false,
     /** An older page is being read. */
     val loadingOlder: Boolean = false,
-    /** The vault has photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1): the composer offers the photo button. */
-    val photosAvailable: Boolean = false,
     /** The app's own camera screen is open (ANDROID-PLAN 0.1.39 "Take a photo"). */
     val capturing: Boolean = false,
     /** The vault answered `forbidden` to a message here (ANDROID-PLAN 0.1.90): the composer is gone for good. */
@@ -225,13 +223,11 @@ class ConversationViewModel @Inject constructor(
             messages.messages(connectionId),
             connections.connections,
             messages.olderAvailable(connectionId),
-            attachments.available,
-        ) { s, ms, cs, older, photos ->
+        ) { s, ms, cs, older ->
             s.copy(
                 messages = ms,
                 connection = cs.firstOrNull { it.id == connectionId } ?: s.connection,
                 olderAvailable = older,
-                photosAvailable = photos,
             )
         }.combine(calls.availability) { s, call -> s.copy(call = call) }
             .combine(calls.permissions) { s, p ->
@@ -424,8 +420,14 @@ class ConversationViewModel @Inject constructor(
     }
 
     // --- photos (ANDROID-PLAN 0.1.39) ---
+    // Every vault the app talks to has photos (Rule 3), so the composer always offers the button. While the vault is
+    // closed (not open, the owner check due or held, the release gate checking or pausing) the shell covers the screen,
+    // and nothing is taken in or sent from here: [AttachmentsRepository.closed] is asked at each entry.
 
-    fun startCapture() = local.update { it.copy(capturing = true) }
+    fun startCapture() {
+        if (attachments.closed()) return
+        local.update { it.copy(capturing = true) }
+    }
 
     fun stopCapture() = local.update { it.copy(capturing = false) }
 
@@ -435,7 +437,8 @@ class ConversationViewModel @Inject constructor(
      * pick that cannot be read or prepared is counted and said.
      */
     fun onPicked(sources: List<suspend () -> ByteArray?>) {
-        if (sources.isEmpty()) return
+        // Nothing is read while closed. A clear after this check cancels [photoJob] and wipes what it prepared (dropPhotos).
+        if (sources.isEmpty() || attachments.closed()) return
         photosCancelled = false
         local.update { it.copy(photoDraft = PhotoDraft(preparing = true)) }
         photoJob = viewModelScope.launch {
@@ -487,6 +490,14 @@ class ConversationViewModel @Inject constructor(
 
     /** A shot from the app's camera, upright, in memory (no file); recycled here once prepared. */
     fun onShot(shot: Bitmap) {
+        // The generation before the open check: a clear right after it voids what is prepared (this job is not
+        // [photoJob], so a clear's dropPhotos does not reach it).
+        val generation = attachments.cleared.value
+        if (attachments.closed()) {
+            shot.recycle()
+            local.update { it.copy(capturing = false) }
+            return
+        }
         local.update { it.copy(capturing = false, photoDraft = PhotoDraft(preparing = true)) }
         viewModelScope.launch {
             val draft = try {
@@ -495,6 +506,12 @@ class ConversationViewModel @Inject constructor(
                 PhotoDraft(problem = PhotoProblem.of(e.failure))
             } finally {
                 shot.recycle()
+            }
+            if (attachments.cleared.value != generation) {
+                // A clear while it was prepared: nothing of it is kept.
+                draft.photos.forEach { it.wipe() }
+                local.update { it.copy(photoDraft = null) }
+                return@launch
             }
             local.update { it.copy(photoDraft = draft) }
         }
@@ -520,6 +537,11 @@ class ConversationViewModel @Inject constructor(
             var d = draft
             while (d.photos.isNotEmpty()) {
                 if (photosCancelled) return@launch
+                if (attachments.closed()) {
+                    // Closed (before the first photo or between two): nothing more is begun; the draft waits for Send.
+                    local.update { it.copy(photoDraft = d.copy(sending = false, inFlight = false)) }
+                    return@launch
+                }
                 val p = pendingPhoto ?: attachments.begin(connectionId, if (d.sent == 0) d.caption.trim() else "", d.photos.first())
                 pendingPhoto = p
                 local.update { s -> s.copy(photoDraft = s.photoDraft?.copy(inFlight = true)) }

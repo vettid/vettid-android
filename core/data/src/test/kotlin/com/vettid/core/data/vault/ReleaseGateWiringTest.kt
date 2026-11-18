@@ -77,6 +77,19 @@ class ReleaseGateWiringTest {
         block("val location = LocationSharing(").has("due = { sendsGated() },")
         // The votes' sync runs and event-started checks too.
         block("val votes = VotesManager(").has("sendsGated = { sendsGated() },")
+        // Photos: nothing sent, fetched or kept while the vault is not open, the check is due or held, or the release is
+        // checked or paused (no availability probe: every vault the app talks to has attachments).
+        block("val attachments = com.vettid.core.data.social.AttachmentManager(")
+            .has("vaultClosed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
+    }
+
+    @Test
+    fun noAttachmentProbeAndTheClearsStay() {
+        assertTrue("no probe", code.none { it.contains("attachments.probe") })
+        assertTrue("no reset", code.none { it.contains("attachments.reset") })
+        // The lock's clear (PhaseSteps), the hold's, both deletions' and the wipe's.
+        code.has("clearAttachments = { attachments.clear() },")
+        assertEquals(5, code.count { it == "steps.step { attachments.clear() }" })
     }
 
     @Test
@@ -124,7 +137,6 @@ class ReleaseGateWiringTest {
         listOf("votes.startSync()", "presence.start()", "location.resume()", "feed.releaseHeld()").forEach { sends.has(it) }
         val opened = block("private fun gatedReads()")
         listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "feed.open()").forEach { opened.has(it) }
-        assertTrue(opened.any { it.contains("attachments.probe()") })
         assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
         // Nothing in the opened steps starts the votes' work.
         assertTrue(block("phaseSteps.onPhase(it) {").none { it.contains("votes.startSync()") })
