@@ -281,14 +281,6 @@ fun HistoryScreen(
             }
             SearchField(state.filter.query, actions.onQuery)
             FilterRow(state, actions)
-            if (state.localSearch && state.filter.q != null) {
-                Text(
-                    stringResource(R.string.history_search_local),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs).testTag("history_local_search"),
-                )
-            }
             val error = state.error
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {

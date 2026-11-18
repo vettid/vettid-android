@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.ExportFormat
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -210,15 +211,46 @@ class HistoryExportViewModelTest {
         assertTrue(docs.written.isEmpty())
     }
 
+    /** `bad_request` (a filter the vault refuses, §10.9) and `unsupported_type` to the preview are ordinary failures. */
     @Test
-    fun anOlderVaultSaysSo() = runTest(main.dispatcher) {
-        for (f in listOf(VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"), VaultFailure(FailureKind.OTHER, "bad_request"))) {
+    fun aRefusedPreviewIsAnOrdinaryFailure() = runTest(main.dispatcher) {
+        val bad = VaultFailure(FailureKind.OTHER, "bad_request", cause = VaultOpException("audit.export", "bad_request"))
+        val unsupported = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        for ((f, shown) in listOf(bad to ExportStep.Failed(FailureKind.OTHER, shownCode = "bad_request"),
+            unsupported to ExportStep.Failed(FailureKind.NOT_SUPPORTED))) {
             repo.previewResult = { throw f }
             val vm = vm()
             vm.start(ctx)
             advanceUntilIdle()
-            assertEquals(ExportStep.Refused(ExportRefusal.OLD_VAULT), vm.step.value)
+            assertEquals(shown, vm.step.value)
         }
+        assertTrue(repo.exports.isEmpty())
+        assertTrue(docs.written.isEmpty())
+    }
+
+    /** The same answers to the export keep the PIN step with the failure, the PIN cleared; nothing is read or written. */
+    @Test
+    fun aRefusedExportKeepsThePinStep() = runTest(main.dispatcher) {
+        repo.previewResult = { preview }
+        val bad = VaultOpException("audit.export", "bad_request")
+        repo.exportResults += { throw VaultFailure(FailureKind.OTHER, "bad_request", cause = bad) }
+        repo.exportResults += { throw VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type") }
+        val vm = toPin(ExportFormat.CSV)
+        vm.setPin("123456")
+        vm.submitPin()
+        advanceUntilIdle()
+        val refused = vm.step.value as ExportStep.Pin
+        assertEquals(FailureKind.OTHER, refused.error)
+        assertEquals("bad_request", refused.errorCode)
+        assertEquals("", refused.pin)
+        assertFalse(refused.busy)
+        vm.setPin("123456")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NOT_SUPPORTED, (vm.step.value as ExportStep.Pin).error)
+        assertEquals(2, repo.exports.size)
+        assertTrue(repo.reads.isEmpty())
+        assertTrue(docs.written.isEmpty())
     }
 
     private suspend fun kotlinx.coroutines.test.TestScope.toPin(format: ExportFormat): HistoryExportViewModel {
