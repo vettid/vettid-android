@@ -817,17 +817,26 @@ class ApprovalDetailViewModel @Inject constructor(
 
     /**
      * Whether this request may be answered by sharing at all: not from a service, not expired, still listed (it may have been closed
-     * elsewhere while the permission prompt was up), and no share to the asker active. Share once and Share for a while both follow it.
+     * elsewhere while the permission prompt was up), the daily check not due or held, and no share to the asker active. Share
+     * once and Share for a while both follow it.
      */
-    private fun mayShare(a: Approval.LocationRequest): Boolean = !a.connectionService && !expiredNow(a) &&
+    private fun mayShare(a: Approval.LocationRequest): Boolean = !a.connectionService && !expiredNow(a) && !checkGatedNow() &&
         repo.approvals.value.any { it.key == a.key } &&
         sharingUntil(location.outgoing.value, location.serviceState.value, a.connectionId, Instant.now()) == null
+
+    /**
+     * The daily owner check is due or held now ([OwnerCheckView.gated], the share sheet's gate), judged at the tap since a deadline
+     * passes by time alone: nothing is shared and the phone's permission is not asked for until it passes.
+     */
+    private fun checkGatedNow(): Boolean = ownerCheck.ownerCheck.value?.gated(Instant.now()) == true
 
     /** **Share for a while…**: the request to open the connection's share sheet for, or null when it may not be answered by sharing. */
     fun shareWhileTarget(): Approval.LocationRequest? = (uiState.value.approval as? Approval.LocationRequest)?.takeIf { mayShare(it) }
 
     /** The phone's permission is being asked for (the system's prompt is up): taps wait, and the result starts the share once. */
     fun permissionAsked(): Boolean {
+        // Not while the daily check is due or held: no system prompt then (the share could not start anyway).
+        if (checkGatedNow()) return false
         var taken = false
         local.update {
             taken = !it.busy

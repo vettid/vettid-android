@@ -53,6 +53,7 @@ class LocationRequestTest {
 
     private val now = Instant.now()
     private val social = FakeSocial()
+    private val vault = FakeVault()
     private val location = FakeLocation()
 
     private fun ask(service: Boolean = false, note: String? = "Are you near the station?", exp: Instant = now.plusSeconds(86_400)) =
@@ -61,7 +62,7 @@ class LocationRequestTest {
     private fun vm(a: Approval.LocationRequest): ApprovalDetailViewModel {
         social.approvals.value = listOf(a)
         return ApprovalDetailViewModel(
-            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, FakeItems(), FakeDevices(), FakeVault(), social, FakePairing(), location,
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, FakeItems(), FakeDevices(), vault, social, FakePairing(), location,
         )
     }
 
@@ -127,6 +128,40 @@ class LocationRequestTest {
         assertFalse(s.busy)
         assertFalse(s.done)
         assertEquals(listOf("location:r1"), social.approvals.value.map { it.key })
+    }
+
+    @Test
+    fun whileTheDailyCheckIsDueNothingIsSharedAndNoPermissionIsAsked() = runTest {
+        fun check(state: com.vettid.core.data.vault.OwnerCheckState) =
+            com.vettid.core.data.vault.OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+        val m = vm(ask())
+        runCurrent()
+        for (state in listOf(com.vettid.core.data.vault.OwnerCheckState.DUE, com.vettid.core.data.vault.OwnerCheckState.HELD)) {
+            vault.ownerCheck.value = check(state)
+            runCurrent()
+            assertFalse("the screen launches no system prompt", m.permissionAsked())
+            assertFalse(m.uiState.value.busy)
+            m.shareOnce()
+            runCurrent()
+            assertNull(m.shareWhileTarget())
+        }
+        // An OK check whose deadline passed by time alone is gated too, judged at the tap.
+        vault.ownerCheck.value = com.vettid.core.data.vault.OwnerCheckView(
+            com.vettid.core.data.vault.OwnerCheckState.OK, Instant.now().minusSeconds(1), 86_400, 0, hold = true, holdOffUntil = null,
+        )
+        runCurrent()
+        assertFalse(m.permissionAsked())
+        m.shareOnce()
+        runCurrent()
+        assertTrue(location.started.isEmpty())
+        assertEquals(0, location.refreshes)
+        // the check passes: both work again
+        vault.ownerCheck.value = check(com.vettid.core.data.vault.OwnerCheckState.OK)
+        runCurrent()
+        assertTrue(m.permissionAsked())
+        m.permissionAnswered(true)
+        runCurrent()
+        assertEquals(1, location.started.size)
     }
 
     @Test
