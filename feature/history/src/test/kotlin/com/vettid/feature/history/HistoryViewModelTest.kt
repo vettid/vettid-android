@@ -51,6 +51,9 @@ class HistoryViewModelTest {
         /** A vault that refuses the search (`bad_request`, §10.9: e.g. a `q` it does not take). */
         var refusesSearch = false
 
+        /** Every request fails before it reaches the vault (a transport failure). */
+        var unreachable = false
+
         override suspend fun auditList(
             connectionId: String?,
             kinds: List<String>?,
@@ -61,6 +64,7 @@ class HistoryViewModelTest {
             until: String?,
         ): AuditPage {
             calls += mapOf("connection_id" to connectionId, "before_seq" to beforeSeq, "q" to q, "limit" to limit)
+            if (unreachable) throw java.io.IOException("unreachable")
             if (refusesSearch && q != null) throw VaultOpException("audit.list", "bad_request")
             return queue.removeFirstOrNull()?.invoke() ?: error("unexpected request ${calls.last()}")
         }
@@ -176,7 +180,7 @@ class HistoryViewModelTest {
      */
     @Test
     fun aRefusedSearchIsAFailureAndIsNotSentAgainWithoutIt() = runTest(main.dispatcher) {
-        val vault = Vault({ page(900, 800) })
+        val vault = Vault({ page(900, 800) }, { page(900, 800) })
         val model = vm(vault)
         settle(model, ::idle)
         vault.refusesSearch = true
@@ -185,6 +189,48 @@ class HistoryViewModelTest {
         assertEquals(listOf(null, "unlock"), vault.calls.map { it["q"] })
         assertEquals(FailureKind.OTHER, s.error)
         assertEquals("bad_request", s.errorCode)
+        // The rows of the search before are not left under this one: the failure is shown in their place.
+        assertTrue(s.entries.isEmpty())
+        assertFalse(s.end)
+        assertFalse(s.partial)
+        // Try again sends the same search.
+        vault.refusesSearch = false
+        val before = vault.calls.size
+        model.retry()
+        val again = settle(model) { idle(it) && vault.calls.size > before && it.error == null }
+        assertEquals("unlock", vault.calls.last()["q"])
+        assertEquals(listOf(900L, 800L), again.entries.map { it.seq })
+    }
+
+    /** A new search that cannot reach the vault drops the rows of the one before and says why. */
+    @Test
+    fun aSearchThatCannotBeSentDropsTheRowsShownBefore() = runTest(main.dispatcher) {
+        // 20 entries (a whole load) of a search still going on with older entries.
+        val twenty = (900L downTo 881L).toList().toLongArray()
+        val vault = Vault({ page(*twenty, partial = true, next = 881) })
+        val model = vm(vault)
+        assertTrue(settle(model, ::idle).partial)
+        vault.unreachable = true
+        model.setQuery("unlock")
+        val s = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertTrue(s.entries.isEmpty())
+        assertFalse(s.end)
+        assertFalse(s.partial)
+    }
+
+    /** A failed older page under the same filter keeps the rows read so far (only a new filter drops them). */
+    @Test
+    fun aFailedOlderPageKeepsItsRows() = runTest(main.dispatcher) {
+        val twenty = (900L downTo 881L).toList()
+        val vault = Vault({ page(*twenty.toLongArray(), next = 881) })
+        val model = vm(vault)
+        settle(model, ::idle)
+        vault.unreachable = true
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertEquals(twenty, s.entries.map { it.seq })
     }
 
     @Test

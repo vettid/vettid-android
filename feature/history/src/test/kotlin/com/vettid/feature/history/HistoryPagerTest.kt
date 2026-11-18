@@ -27,7 +27,8 @@ class HistoryPagerTest {
     /**
      * A log of [n] entries, seq 1..n, one minute apart (seq n newest), properly chained; kinds cycle through [kinds],
      * even seqs belong to connection c1. [mode]: how the vault treats the search (§10.9; [Mode.LOOSE]: a vault that
-     * answers more than the filters say, which the list shows as answered; [Mode.REFUSES]: `bad_request`).
+     * ignores every filter, `connection_id` and `kinds` too, so the list shows what it answered; [Mode.REFUSES]:
+     * `bad_request`).
      */
     private class Log(
         n: Int,
@@ -83,8 +84,8 @@ class HistoryPagerTest {
             val untilAt = until?.let { Instant.parse(it) }
             val candidates = all.asReversed()
                 .filter { beforeSeq == null || it.seq < beforeSeq }
-                .filter { connectionId == null || it.connectionId == connectionId }
-                .filter { e -> kinds == null || kinds.any { e.kind == it || e.kind.startsWith("$it.") } }
+                .filter { !honour || connectionId == null || it.connectionId == connectionId }
+                .filter { e -> !honour || kinds == null || kinds.any { e.kind == it || e.kind.startsWith("$it.") } }
                 .filter { !honour || sinceAt == null || !Instant.parse(it.at).isBefore(sinceAt) }
                 .filter { !honour || untilAt == null || Instant.parse(it.at).isBefore(untilAt) }
             if (honour && q != null) {
@@ -199,16 +200,27 @@ class HistoryPagerTest {
 
     @Test
     fun theListIsWhatTheVaultAnsweredWithNothingFilteredOnThisPhone() = runTest {
-        // A vault that answers more than the search and dates select: the phone searches and filters nothing itself.
+        // A vault that answers more than the category, connection, search and dates select: the phone filters and
+        // searches nothing itself.
         val log = Log(50, listOf("vault.unlocked", "message.sent"), t0, Log.Mode.LOOSE)
         val pager = HistoryPager(HistoryManager { log })
         val since = t0.minus(Duration.ofMinutes(19))
-        val s = pager.reset(AuditFilter(query = "vault unlocked", since = since))
-        assertTrue(log.calls.all { it["q"] == "vault unlocked" && it["since"] == since.toString() })
-        assertEquals(50, s.entries.size)
+        val filter = AuditFilter(category = AuditCategory.VAULT_ACCESS, connectionId = "c1", query = "vault unlocked", since = since)
+        val s = pager.reset(filter)
+        assertTrue(
+            log.calls.all {
+                it["q"] == "vault unlocked" && it["since"] == since.toString() && it["connection_id"] == "c1" &&
+                    it["kinds"] == listOf("vault", "owner_check")
+            },
+        )
         assertEquals((50L downTo 1L).toList(), s.entries.map { it.seq })
+        // Listed as answered: entries of another category and of no connection or another one.
+        assertTrue(s.entries.any { it.kind == "message.sent" })
+        assertTrue(s.entries.any { it.connectionId == null })
         log.append("message.sent")
-        assertEquals(51L, pager.refresh().entries.first().seq)
+        val r = pager.refresh()
+        assertEquals(51L, r.entries.first().seq)
+        assertEquals("message.sent", r.entries.first().kind)
     }
 
     @Test

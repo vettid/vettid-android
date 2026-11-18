@@ -223,6 +223,13 @@ class HistoryExportViewModelTest {
             vm.start(ctx)
             advanceUntilIdle()
             assertEquals(shown, vm.step.value)
+            // Nothing goes on from the failure: no confirm, no PIN, no export.
+            vm.chooseFormat(ExportFormat.CSV)
+            vm.confirm()
+            vm.setPin("123456")
+            vm.submitPin()
+            advanceUntilIdle()
+            assertEquals(shown, vm.step.value)
         }
         assertTrue(repo.exports.isEmpty())
         assertTrue(docs.written.isEmpty())

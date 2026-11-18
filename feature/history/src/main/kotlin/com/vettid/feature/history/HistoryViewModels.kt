@@ -254,7 +254,7 @@ class HistoryViewModel @Inject constructor(
         state.update { it.copy(loading = true, error = null, entries = if (debounce) it.entries else emptyList()) }
         job = viewModelScope.launch {
             if (debounce) delay(SEARCH_DEBOUNCE_MS)
-            load { pager.reset(state.value.filter) }
+            load(reset = true) { pager.reset(state.value.filter) }
         }
     }
 
@@ -305,9 +305,10 @@ class HistoryViewModel @Inject constructor(
     /**
      * Runs one load of the pager and shows what it read (or its failure). Not named `run`: inside `launch { }` a call
      * `run { }` resolves to the standard library's `CoroutineScope.run`, which returned the snapshot without showing
-     * it, so History spun forever (owner, 2026-10-08).
+     * it, so History spun forever (owner, 2026-10-08). A [reset] (a new filter or search) that fails drops the rows
+     * kept while it was typed: they are another filter's, and the failure is then shown in their place.
      */
-    private suspend fun load(block: suspend () -> HistoryPager.Snapshot) {
+    private suspend fun load(reset: Boolean = false, block: suspend () -> HistoryPager.Snapshot) {
         try {
             val snap = block()
             state.update {
@@ -317,7 +318,10 @@ class HistoryViewModel @Inject constructor(
                 )
             }
         } catch (e: VaultFailure) {
-            state.update { it.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode) }
+            state.update { s ->
+                val failed = s.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode)
+                if (reset) failed.copy(entries = emptyList(), end = false, partial = false) else failed
+            }
         }
     }
 
