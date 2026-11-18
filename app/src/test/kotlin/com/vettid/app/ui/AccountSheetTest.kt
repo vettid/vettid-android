@@ -119,6 +119,22 @@ class AccountSheetTest {
         rule.onNodeWithText("s***@example.org", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
 
+    /** The top bar's and the sheet's name ([accountShellName]): names, else the address, else the placeholder; never the hint. */
+    @Test
+    fun theShellsNameIsNeverTheHint() {
+        val names = mutableListOf<String>()
+        rule.setContent {
+            names += accountShellName(
+                AccountInfo("s***@example.org", state = "member", firstName = "Sam", lastName = "Rivera", email = "sam@example.org"),
+            )
+            names += accountShellName(AccountInfo("s***@example.org", state = "member", email = "sam@example.org"))
+            names += accountShellName(AccountInfo("s***@example.org", state = "member"))
+            names += accountShellName(null)
+        }
+        rule.waitForIdle()
+        assertEquals(listOf("Sam Rivera", "sam@example.org", "VettID member", "VettID member"), names.take(4))
+    }
+
     @Test
     fun theOpenVaultsAddressIsShown() {
         show()

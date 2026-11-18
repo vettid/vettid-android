@@ -1455,7 +1455,8 @@ class VaultDevice private constructor(
     suspend fun openRecoveryOpenResult(raw: ByteArray, requestId: String): com.vettid.core.crypto.altchan.RecoveryOpen.Result =
         lock.withLock {
             val body = AltResults.open(raw, secrets.kem, com.vettid.core.crypto.altchan.RecoveryOpen.TYPE_RESULT, requestId)
-            val r = com.vettid.core.crypto.altchan.RecoveryOpen.Result.parse(body)
+            // A body that does not read (`attempt_used` missing, …) throws before anything is kept: an unreadable answer.
+            val r = AltResults.recoveryOpen(body)
             pendingRecoveryOpen = null
             if (r.ok) {
                 // (0.56.1) A recovery open is an opening: its `unlock_id` ("" from a release before L: none).

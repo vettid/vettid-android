@@ -17,56 +17,50 @@ class RecoveryOpenTextTest {
 
     @Test
     fun theAnswersOfTheTable() {
-        assertEquals(OpenAnswerText(R.string.onboarding_open_wrong, listOf(9)), openAnswerText(RecoveryOpenOutcome("wrong", 1, null), false))
-        assertEquals(OpenAnswerText(R.string.onboarding_open_wrong_wait, listOf(8), true), openAnswerText(RecoveryOpenOutcome("wrong", 2, at), false))
-        assertEquals(R.string.onboarding_open_wrong_again, openAnswerText(RecoveryOpenOutcome("wrong_again", 2, null), false).res)
-        assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("attempt_lost", 3, null), false))
-        // quiet and wait say how many attempts are left, never whether this request used one (the result does not tell).
-        assertEquals(
-            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, attemptsLeft = null),
-            openAnswerText(RecoveryOpenOutcome("quiet", null, at), false),
-        )
-        assertEquals(
-            OpenAnswerText(R.string.onboarding_open_quiet, emptyList(), withRetryAt = true, attemptsLeft = 6),
-            openAnswerText(RecoveryOpenOutcome("quiet", 4, at), false),
-        )
-        assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_nodate, attemptsLeft = 6), openAnswerText(RecoveryOpenOutcome("quiet", 4, null), false))
-        assertEquals(OpenAnswerText(R.string.onboarding_open_wait, withRetryAt = true, attemptsLeft = 8), openAnswerText(RecoveryOpenOutcome("wait", 2, at), false))
-        assertEquals(OpenAnswerText(R.string.onboarding_open_wait_nodate, attemptsLeft = 8), openAnswerText(RecoveryOpenOutcome("wait", 2, null), false))
-        assertEquals(R.string.onboarding_open_busy, openAnswerText(RecoveryOpenOutcome("busy"), false).res)
-        assertEquals(R.string.onboarding_open_retry, openAnswerText(RecoveryOpenOutcome("retry"), false).res)
-        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch"), false).res)
-        assertEquals(R.string.onboarding_open_exhausted, openAnswerText(RecoveryOpenOutcome("exhausted", 10, null), false).res)
-        assertEquals(R.string.onboarding_open_closed, openAnswerText(RecoveryOpenOutcome("closed"), false).res)
-        assertEquals(R.string.onboarding_open_not_armed, openAnswerText(RecoveryOpenOutcome("not_armed"), false).res)
-        assertEquals(R.string.onboarding_open_counter_unavailable, openAnswerText(RecoveryOpenOutcome("counter_unavailable"), false).res)
-        assertEquals(OpenAnswerText(R.string.onboarding_open_ok, listOf(3)), openAnswerText(RecoveryOpenOutcome("ok", 3, null), false))
-        assertEquals(R.string.onboarding_open_ok_plain, openAnswerText(RecoveryOpenOutcome("ok"), false).res)
+        assertEquals(OpenAnswerText(R.string.onboarding_open_wrong, listOf(9)), openAnswerText(RecoveryOpenOutcome("wrong", 1, null, attemptUsed = true), false))
+        assertEquals(OpenAnswerText(R.string.onboarding_open_wrong_wait, listOf(8), true), openAnswerText(RecoveryOpenOutcome("wrong", 2, at, attemptUsed = true), false))
+        assertEquals(R.string.onboarding_open_wrong_again, openAnswerText(RecoveryOpenOutcome("wrong_again", 2, null, attemptUsed = false), false).res)
+        assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("attempt_lost", 3, null, attemptUsed = true), false))
+        // quiet and wait without a date: nothing used, and no date to give.
+        assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_nodate), openAnswerText(RecoveryOpenOutcome("quiet", 4, null, attemptUsed = false), false))
+        assertEquals(OpenAnswerText(R.string.onboarding_open_wait_nodate), openAnswerText(RecoveryOpenOutcome("wait", 2, null, attemptUsed = false), false))
+        assertEquals(R.string.onboarding_open_busy, openAnswerText(RecoveryOpenOutcome("busy", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_retry, openAnswerText(RecoveryOpenOutcome("retry", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_exhausted, openAnswerText(RecoveryOpenOutcome("exhausted", 10, null, attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_closed, openAnswerText(RecoveryOpenOutcome("closed", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_not_armed, openAnswerText(RecoveryOpenOutcome("not_armed", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_counter_unavailable, openAnswerText(RecoveryOpenOutcome("counter_unavailable", attemptUsed = false), false).res)
+        assertEquals(OpenAnswerText(R.string.onboarding_open_ok, listOf(3)), openAnswerText(RecoveryOpenOutcome("ok", 3, null, attemptUsed = true), false))
+        assertEquals(R.string.onboarding_open_ok_plain, openAnswerText(RecoveryOpenOutcome("ok", attemptUsed = true), false).res)
         // The refusals before anything is counted have their own texts.
-        assertEquals(R.string.onboarding_open_no_recovery, openAnswerText(RecoveryOpenOutcome("no_recovery"), false).res)
-        assertEquals(R.string.onboarding_open_no_recovery_unanswered, openAnswerText(RecoveryOpenOutcome("no_recovery", afterUnanswered = true), false).res)
-        assertEquals(R.string.onboarding_open_expired, openAnswerText(RecoveryOpenOutcome("expired"), false).res)
-        assertEquals(R.string.onboarding_open_attestation, openAnswerText(RecoveryOpenOutcome("attestation"), false).res)
-        assertEquals(R.string.onboarding_open_manifest, openAnswerText(RecoveryOpenOutcome("manifest"), false).res)
-        assertEquals(R.string.onboarding_open_wrong_release, openAnswerText(RecoveryOpenOutcome("wrong_release"), false).res)
-        assertEquals(R.string.onboarding_open_bad_request, openAnswerText(RecoveryOpenOutcome("bad_request"), false).res)
+        assertEquals(R.string.onboarding_open_no_recovery, openAnswerText(RecoveryOpenOutcome("no_recovery", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_no_recovery_unanswered, openAnswerText(RecoveryOpenOutcome("no_recovery", afterUnanswered = true, attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_expired, openAnswerText(RecoveryOpenOutcome("expired", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_attestation, openAnswerText(RecoveryOpenOutcome("attestation", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_manifest, openAnswerText(RecoveryOpenOutcome("manifest", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_wrong_release, openAnswerText(RecoveryOpenOutcome("wrong_release", attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_bad_request, openAnswerText(RecoveryOpenOutcome("bad_request", attemptUsed = false), false).res)
         // This phone's own unlock while it finishes an ok recovery.
-        assertEquals(R.string.onboarding_open_finish_bad_pin, openAnswerText(RecoveryOpenOutcome("bad_pin", opened = true), false).res)
-        assertEquals(R.string.onboarding_open_finish_failed, openAnswerText(RecoveryOpenOutcome("device_secret", opened = true), false).res)
+        assertEquals(R.string.onboarding_open_finish_bad_pin, openAnswerText(RecoveryOpenOutcome("bad_pin", opened = true, attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_finish_failed, openAnswerText(RecoveryOpenOutcome("device_secret", opened = true, attemptUsed = false), false).res)
         // A right entry that could not be completed, then answered wait.
-        assertEquals(OpenAnswerText(R.string.onboarding_open_right_incomplete, listOf(7), true), openAnswerText(RecoveryOpenOutcome("wait", 3, at), true))
+        assertEquals(OpenAnswerText(R.string.onboarding_open_right_incomplete, listOf(7), true), openAnswerText(RecoveryOpenOutcome("wait", 3, at, attemptUsed = false), true))
     }
 
     /** (0.34.0) Whether this request used an attempt comes only from attempt_used (ANDROID-PLAN 0.1.41's table). */
     @Test
     fun theAttemptTextsFollowAttemptUsed() {
-        // quiet: nothing used (with the date), one used, unknown (neutral).
+        // quiet: nothing used (with the date, or without one), one used (with or without a date).
         assertEquals(
             OpenAnswerText(R.string.onboarding_open_quiet_nothing, withRetryAt = true),
             openAnswerText(RecoveryOpenOutcome("quiet", 3, at, attemptUsed = false), false),
         )
         assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(6)), openAnswerText(RecoveryOpenOutcome("quiet", 4, at, attemptUsed = true), false))
-        assertEquals(R.string.onboarding_open_quiet, openAnswerText(RecoveryOpenOutcome("quiet", 4, at), false).res)
+        assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(6)), openAnswerText(RecoveryOpenOutcome("quiet", 4, null, attemptUsed = true), false))
+        assertEquals(OpenAnswerText(R.string.onboarding_open_quiet_nodate), openAnswerText(RecoveryOpenOutcome("quiet", 3, null, attemptUsed = false), false))
+        // wait without a date and one used: attempt_lost.
+        assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("wait", 3, null, attemptUsed = true), false))
         // wait: nothing used; one used is shown as attempt_lost.
         assertEquals(OpenAnswerText(R.string.onboarding_open_wait_nothing, withRetryAt = true), openAnswerText(RecoveryOpenOutcome("wait", 2, at, attemptUsed = false), false))
         assertEquals(OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(7)), openAnswerText(RecoveryOpenOutcome("wait", 3, at, attemptUsed = true), false))
@@ -78,11 +72,11 @@ class RecoveryOpenTextTest {
         assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("vault_missing", 4, null, attemptUsed = true), false).res)
         assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 4, null, attemptUsed = true), false).res)
         assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("vault_missing", 3, null, attemptUsed = false), false).res)
-        // `attempts` alone (no attempt_used) says nothing about this request: never shown as a used attempt.
-        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 3, null), false).res)
-        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("vault_missing", 3, null), false).res)
+        // `attempts` says nothing about this request: with attempt_used false, nothing used however many were.
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 9, null, attemptUsed = false), false).res)
+        assertEquals(R.string.onboarding_open_retry, openAnswerText(RecoveryOpenOutcome("retry", 9, null, attemptUsed = false), false).res)
         // The resume of a lost ok that found no recovery here.
-        assertEquals(R.string.onboarding_open_lost_not_here, openAnswerText(RecoveryOpenOutcome("no_bundle", opened = true), false).res)
+        assertEquals(R.string.onboarding_open_lost_not_here, openAnswerText(RecoveryOpenOutcome("no_bundle", opened = true, attemptUsed = false), false).res)
     }
 
     @Test

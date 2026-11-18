@@ -71,6 +71,8 @@ import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.shellDetail
+import com.vettid.core.data.vault.shellName
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.data.vault.vaultCode
 import com.vettid.core.ui.components.ConfirmDialog
@@ -457,11 +459,11 @@ private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
             },
         )
     }
-    val detail = listOfNotNull(a?.fullName?.let { a.email }, membership)
+    val detail = listOfNotNull(a?.shellDetail(), membership)
         .joinToString("\n")
         .ifEmpty { stringResource(R.string.settings_account_detail) }
     SettingsAccountRow(
-        name = a?.fullName ?: a?.email ?: "",
+        name = a?.shellName() ?: "",
         detail = detail,
         onClick = onClick,
         modifier = Modifier.testTag("account_card"),

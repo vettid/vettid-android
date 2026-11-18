@@ -80,14 +80,14 @@ class ReleaseRVectorsTest {
 
     @Test
     fun aRecoveryOpenResultIsRead() {
-        val wrong = RecoveryOpen.Result.parse("""{"ok":false,"code":"wrong","attempts":{"used":3,"of":10},"retry_at":"2026-10-17T12:00:00Z"}""".toByteArray())
+        val wrong = RecoveryOpen.Result.parse("""{"ok":false,"code":"wrong","attempt_used":true,"attempts":{"used":3,"of":10},"retry_at":"2026-10-17T12:00:00Z"}""".toByteArray())
         assertEquals("wrong", wrong.code)
         assertTrue(wrong.counted)
         assertEquals(3, wrong.used)
         assertEquals(java.time.Instant.parse("2026-10-17T12:00:00Z"), wrong.retryAt)
-        val busy = RecoveryOpen.Result.parse("""{"ok":false,"code":"busy"}""".toByteArray())
+        val busy = RecoveryOpen.Result.parse("""{"ok":false,"code":"busy","attempt_used":false}""".toByteArray())
         assertTrue(!busy.counted && busy.retryAt == null)
-        val ok = RecoveryOpen.Result.parse("""{"ok":true,"state_seq":5,"header_seq":6,"token":"t","vault_bundle":"AAEC","release":"aa","release_number":13,"unlock_id":"00","attempts":{"used":1,"of":10}}""".toByteArray())
+        val ok = RecoveryOpen.Result.parse("""{"ok":true,"state_seq":5,"header_seq":6,"token":"t","vault_bundle":"AAEC","release":"aa","release_number":13,"unlock_id":"00","attempt_used":true,"attempts":{"used":1,"of":10}}""".toByteArray())
         assertTrue(ok.ok)
         assertEquals(1, ok.used)
     }

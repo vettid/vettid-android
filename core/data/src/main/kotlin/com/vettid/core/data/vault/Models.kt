@@ -131,6 +131,15 @@ data class AccountInfo(
  */
 fun AccountInfo?.shownInShell(): AccountInfo? = this?.takeIf { it.hasSnapshot }
 
+/**
+ * The name the top bar, the avatar sheet and the Settings card show for [shownInShell]'s account: "First Last", else the
+ * full address (VAULT-MESSAGING 0.20.0 `email`); null when it has neither (the caller's placeholder). Never the masked hint.
+ */
+fun AccountInfo.shellName(): String? = fullName ?: email
+
+/** The address under the names; null without names (the address is then the name) or without an address. Never the hint. */
+fun AccountInfo.shellDetail(): String? = fullName?.let { email }
+
 /** The member's subscription (§11.13): `trial`, `active`, `expired` or `canceled`. */
 data class SubscriptionInfo(val typeName: String?, val status: String?, val paid: Boolean, val expiresAt: Instant?) {
     /** The status to show at [now]: a trial (or any subscription) whose `expires_at` has passed reads `expired`. */
@@ -762,6 +771,18 @@ enum class RecoverOutcome {
             "no_backup" -> NO_BACKUP
             "credential_required" -> CREDENTIAL_REQUIRED
             else -> null
+        }
+
+        /**
+         * `credential.recover` sent by [recover]: [RECOVERED] when it returned, the outcome of a refusal [ofRefusal] knows,
+         * and any other refusal thrown as it came (the caller's guard makes it a [VaultFailure]; nothing is recovered and the
+         * recovery's registration stays).
+         */
+        suspend fun answering(recover: suspend () -> Unit): RecoverOutcome = try {
+            recover()
+            RECOVERED
+        } catch (e: com.vettid.core.vault.VaultOpException) {
+            ofRefusal(e.code) ?: throw e
         }
     }
 }

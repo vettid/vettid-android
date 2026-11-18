@@ -4097,10 +4097,10 @@ class VaultManager(
         // The handshake only when it has not completed yet: a phone paired earlier fetches the credential straight away.
         var refused = if (d.deviceId == null) pairRecovered(s, pin, resuming) else null
         if (refused == null) refused = fetchRecovered(s, pin, unlockFirst = resuming)
-        if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+        if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true, attemptUsed = false)
         // Only now, with the credential on this phone, is the recovery over (until then the phone resumes it).
         d.finishRecoveryOpen()
-        return RecoveryOpenOutcome("ok", used)
+        return RecoveryOpenOutcome("ok", used, attemptUsed = false)
     }
 
     /** The recovered phone's handshake; unanswered, an unlock with its own key and the handshake again. The unlock's refusal code. */
@@ -4635,15 +4635,15 @@ class VaultManager(
             is Pairing.Result.Paired -> {
                 val s = session()
                 val refused = fetchRecovered(s, pin, unlockFirst = resuming)
-                if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+                if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true, attemptUsed = false)
                 s.device.finishRecoveryOpen()
                 reuseCleanup(result.identity, openOk = true, pairingComplete = true)
-                RecoveryOpenOutcome("ok", used)
+                RecoveryOpenOutcome("ok", used, attemptUsed = false)
             }
             is Pairing.Result.Failed -> {
                 // Everything is kept; the identity whose open answered `ok` is the one in use again.
                 reuse.newSlot?.let { switchIdentity(it) }
-                RecoveryOpenOutcome(result.code, used, opened = true)
+                RecoveryOpenOutcome(result.code, used, opened = true, attemptUsed = false)
             }
         }
     }
@@ -4745,13 +4745,8 @@ class VaultManager(
         // Read before the vault's call: a lock, a refusal or a wipe from here on keeps the phase it published.
         val gen = generation
         val s = session()
-        val outcome = try {
-            s.openApi.credentialRecover(password)
-            RecoverOutcome.RECOVERED
-        } catch (e: VaultOpException) {
-            // 0.16.0: a vault without a backup copy cannot be recovered. Any other code is the vault's error.
-            RecoverOutcome.ofRefusal(e.code) ?: throw e
-        }
+        // 0.16.0: a vault without a backup copy cannot be recovered. Any other code is the vault's error.
+        val outcome = RecoverOutcome.answering { s.openApi.credentialRecover(password) }
         if (outcome == RecoverOutcome.RECOVERED) publishFinishing(gen)
         outcome
     }
@@ -5786,9 +5781,16 @@ internal fun com.vettid.core.vault.AccountSnapshot.toInfo(emailHint: String): Ac
     )
 }
 
-/** §11.13 (0.20.0): 3–1,016 bytes of UTF-8 with an `@` and no control characters. */
+/**
+ * §11.13 (0.20.0, 0.21.0): 3–1,016 bytes of UTF-8 with an `@` and no control characters, which for the email are C0, DEL,
+ * C1 (all three [Char.isISOControl]), U+2028 and U+2029.
+ */
 internal fun validEmail(e: String): Boolean =
-    e.toByteArray(Charsets.UTF_8).size in EMAIL_MIN_BYTES..EMAIL_MAX_BYTES && '@' in e && e.none { it.isISOControl() }
+    e.toByteArray(Charsets.UTF_8).size in EMAIL_MIN_BYTES..EMAIL_MAX_BYTES && '@' in e &&
+        e.none { it.isISOControl() || it == LINE_SEPARATOR || it == PARAGRAPH_SEPARATOR }
+
+private const val LINE_SEPARATOR = '\u2028'
+private const val PARAGRAPH_SEPARATOR = '\u2029'
 
 private const val EMAIL_MIN_BYTES = 3
 private const val EMAIL_MAX_BYTES = 1_016

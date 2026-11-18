@@ -30,6 +30,8 @@ import com.vettid.core.data.presence.PresenceState
 import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.SubscriptionInfo
+import com.vettid.core.data.vault.shellDetail
+import com.vettid.core.data.vault.shellName
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.AvatarSheet
 import com.vettid.core.data.vault.messageRes
@@ -88,8 +90,8 @@ fun AccountSheet(
     AvatarSheet(
         photo = photo,
         // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0).
-        name = shown?.fullName ?: shown?.email ?: stringResource(R.string.account_placeholder_name),
-        detail = shown?.fullName?.let { shown.email } ?: membershipLine(shown),
+        name = accountShellName(shown),
+        detail = shown?.shellDetail() ?: membershipLine(shown),
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
@@ -242,6 +244,13 @@ fun AccountEmailGroup(account: AccountInfo?) {
         )
     }
 }
+
+/**
+ * The name the top bar and the avatar sheet show for [shown] (the account as [shownInShell] gives it): [shellName], else
+ * "VettID member". Never the masked hint.
+ */
+@Composable
+fun accountShellName(shown: AccountInfo?): String = shown?.shellName() ?: stringResource(R.string.account_placeholder_name)
 
 /** The membership in one line, under the address when there are no names to show. */
 @Composable

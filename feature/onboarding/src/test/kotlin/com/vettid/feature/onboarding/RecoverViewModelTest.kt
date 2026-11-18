@@ -428,6 +428,21 @@ class RecoverViewModelTest {
         assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
     }
 
+    /** A refusal the app does not know (here `unsupported_type`) is an error: never "no backup", and the registration stays. */
+    @Test
+    fun anUnknownRefusalOfTheRecoverKeepsTheRegistration() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PASSWORD
+        vault.fail["recoverCredential"] = FakeVault.failure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPassword("whatever")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+        assertEquals("unsupported_type", vm.uiState.value.errorCode)
+        assertFalse("abandonRecovery" in vault.calls)
+    }
+
     @Test
     fun noRecoveryShowsWhatToDo() = runTest {
         val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
