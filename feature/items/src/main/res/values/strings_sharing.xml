@@ -215,6 +215,8 @@
 
     <!-- The effect of tags before saving an item -->
     <string name="items_impact_title">Sharing</string>
+    <!-- Owner-approved 2026-11-18: under the failure text when the dry run of a save failed -->
+    <string name="items_impact_unknown">Couldn\'t check what saving will share. Your sharing rules still apply when you save.</string>
     <string name="items_impact_auto">Saving shares this item with %1$s automatically.</string>
     <string name="items_impact_ask">You will be asked whether to share this item with %1$s.</string>
     <string name="items_impact_ask_because">Asks you first because %1$s for %2$s covers it.</string>

@@ -236,6 +236,9 @@ class ItemsScreenTest {
         }
         rule.onNodeWithTag("item_edit_share_impact_failed").assertTextContains("Sharing", substring = true)
         rule.onNodeWithTag("item_edit_share_impact_failed").assertTextContains("Your vault refused this item", substring = true)
+        // Owner-approved 2026-11-18, word for word.
+        rule.onNodeWithTag("item_edit_share_impact_failed")
+            .assertTextContains("Couldn't check what saving will share. Your sharing rules still apply when you save.", substring = true)
         rule.onNodeWithTag("item_edit_share_impact").assertDoesNotExist()
         rule.onNodeWithTag("item_edit_error").assertDoesNotExist()
         rule.onNodeWithText("Not saved").assertDoesNotExist()

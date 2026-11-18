@@ -498,11 +498,13 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
     )
     val impactError = state.impactError
     if (impactError != null) {
-        // The dry run failed: what saving does to sharing is not known, so the failure stands where the effect would.
+        // The dry run failed: what saving does to sharing is not known, so the failure stands where the effect would,
+        // with the sentence that saving still works and the rules still apply (owner decision a, 2026-11-18).
         NoticeCard(
             NoticeKind.WARNING,
             stringResource(R.string.items_impact_title),
-            ItemsText.failure(impactError, limit = state.impactLimit, shownCode = state.impactErrorCode),
+            ItemsText.failure(impactError, limit = state.impactLimit, shownCode = state.impactErrorCode) + "\n" +
+                stringResource(R.string.items_impact_unknown),
             modifier = Modifier.testTag("item_edit_share_impact_failed"),
         )
     } else if (state.shareImpact.isNotEmpty()) {
