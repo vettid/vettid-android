@@ -195,13 +195,14 @@ internal class LocationReceiving(
      * held, a locked vault). `not_found` ends the share here.
      */
     suspend fun open(connectionId: String) {
+        // Taken before the open check: a lock or a hold that lands just after it voids the answer.
+        val token = begin()
         requireOpen()
         // A share that ended while the phone slept (the timer runs on uptime) is not shown, nor asked about.
         val known = synchronized(lock) {
             sweep()
             shares.values.firstOrNull { it.connectionId == connectionId }
         }
-        val token = begin()
         val body = try {
             vaultGuard(resend = true) { ops().get(connectionId, history = known?.trail == true) }
         } catch (e: VaultFailure) {
@@ -263,12 +264,13 @@ internal class LocationReceiving(
     /** **Ask for location** (§10.16): one per connection per 10 minutes; never for a service connection. */
     suspend fun ask(connectionId: String, note: String?): AskResult {
         if (isService(connectionId)) throw VaultFailure(FailureKind.SERVICE_FORBIDDEN)
+        // Taken before the open check: a lock or a hold that lands just after it voids the answer.
+        val token = begin()
         requireOpen()
         val text = note?.takeIf { it.isNotBlank() }
         if (text != null && text.toByteArray(Charsets.UTF_8).size > LocationRequestLimits.NOTE_MAX_BYTES) {
             throw VaultFailure(FailureKind.OTHER, "bad_request")
         }
-        val token = begin()
         try {
             vaultGuard { ops().request(connectionId, text) }
         } catch (e: VaultFailure) {

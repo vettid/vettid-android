@@ -273,7 +273,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         }
         state.calls?.let { CallsCard(it.allowed, it.limited, firstOf(c, name), !state.callsChanging, actions.onSetCallsAllowed) }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
-        if (c.state == ConnectionState.ACTIVE && !c.service && state.locationOffered) {
+        if (c.state == ConnectionState.ACTIVE && !c.service) {
             LocationCard(
                 state.location, state.locationMissed, state.busy, actions.onShareLocation, actions.onStopSharingLocation, firstOf(c, name),
             )
