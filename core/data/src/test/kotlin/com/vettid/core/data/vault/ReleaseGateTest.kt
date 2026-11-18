@@ -81,7 +81,13 @@ class ReleaseGateTest {
             return if (answer != null) answer.getOrThrow() else held
         }
 
-        override fun releaseNumber() = release
+        /** How often the vault's release number was read. */
+        var numberReads = 0
+
+        override fun releaseNumber(): Long? {
+            numberReads++
+            return release
+        }
         override fun ownerCheckDue() = false
         override suspend fun lock() = Unit
         /** Runs inside each of the update's unlocks, before it answers. */
@@ -106,7 +112,7 @@ class ReleaseGateTest {
 
     private fun TestScope.manager(ops: Ops): ReleaseUpdateManager {
         ops.clock = { testScheduler.currentTime }
-        return ReleaseUpdateManager(backgroundScope, ops)
+        return ReleaseUpdateManager(backgroundScope, ops, elapsedMs = { testScheduler.currentTime })
     }
 
     // --- the state ---
@@ -293,13 +299,15 @@ class ReleaseGateTest {
     }
 
     /**
-     * In the background a failing check is not read again (no polling every minute while nobody looks); the return to the
-     * foreground reads it (as VaultManager.onForeground does), and a failure then starts the retries over.
+     * In the background a check held by a verification failure is not read again (no polling every minute while nobody
+     * looks); the return to the foreground reads it (as VaultManager.onForeground does), and a failure then starts the
+     * retries over.
      */
     @Test
-    fun noRetriesInTheBackground() = runTest {
+    fun noRetriesInTheBackgroundAfterAVerificationFailure() = runTest {
         val ops = Ops()
         val m = manager(ops)
+        ops.failKind = FailureKind.MANIFEST
         ops.failing = true
         m.vaultOpened()
         runCurrent()
@@ -320,6 +328,83 @@ class ReleaseGateTest {
         advanceTimeBy(600_000)
         assertEquals(4, ops.reads.size)
         m.checkNow()
+        runCurrent()
+        assertEquals(5, ops.reads.size)
+    }
+
+    /**
+     * A manifest only out of reach is read again in the background too (2, 5, 15, 30 s, then every minute), before the
+     * opening's first success as after it; a verification failure in the background then ends the retries.
+     */
+    @Test
+    fun aManifestOutOfReachIsRetriedInTheBackground() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.failing = true
+        ops.front = false
+        m.vaultOpened()
+        runCurrent()
+        advanceTimeBy(2_000 + 5_000 + 15_000 + 30_000 + 60_000 + 1)
+        assertEquals("opened in the background, retried there", listOf(0L, 2_000L, 7_000L, 22_000L, 52_000L, 112_000L), ops.reads)
+        assertTrue("still held", m.checking.value && m.paused.value)
+        // A verification failure: no more reads in the background.
+        ops.failKind = FailureKind.MANIFEST
+        advanceTimeBy(60_000)
+        assertEquals(7, ops.reads.size)
+        advanceTimeBy(600_000)
+        assertEquals(7, ops.reads.size)
+        // After a success, a manifest out of reach is retried quietly in the background as well.
+        ops.failing = false
+        m.refreshOffer()
+        assertFalse(m.checking.value)
+        ops.failKind = FailureKind.NETWORK
+        ops.failing = true
+        m.refreshOffer()
+        assertFalse("quiet", m.paused.value || m.checking.value)
+        advanceTimeBy(2_001)
+        assertEquals(10, ops.reads.size)
+        ops.failing = false
+        advanceTimeBy(5_000)
+        assertEquals("read again, and it succeeded", 11, ops.reads.size)
+        advanceTimeBy(600_000)
+        assertEquals(11, ops.reads.size)
+    }
+
+    /**
+     * A relay reconnect reads the manifest, but not within a minute of a read that succeeded, nor while the retries run
+     * (they read it); a check held in the background by a verification failure (no retries) is read.
+     */
+    @Test
+    fun aRelayReconnectReadsUnlessARecentReadOrTheRetriesDo() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.vaultOpened()
+        runCurrent()
+        assertEquals(1, ops.reads.size)
+        advanceTimeBy(59_000)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals("a read succeeded within the minute", 1, ops.reads.size)
+        advanceTimeBy(1_000)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals(2, ops.reads.size)
+        // A manifest out of reach: the retries run, the reconnect leaves it to them.
+        ops.failing = true
+        advanceTimeBy(60_000)
+        m.refreshOffer()
+        assertEquals(3, ops.reads.size)
+        m.relayReconnected()
+        runCurrent()
+        assertEquals("the retries read it", 3, ops.reads.size)
+        // A verification failure in the background: no retries, so the reconnect reads.
+        ops.failKind = FailureKind.MANIFEST
+        ops.front = false
+        advanceTimeBy(2_001)
+        assertEquals(4, ops.reads.size)
+        advanceTimeBy(600_000)
+        assertEquals("the retries ended", 4, ops.reads.size)
+        m.relayReconnected()
         runCurrent()
         assertEquals(5, ops.reads.size)
     }
@@ -516,6 +601,22 @@ class ReleaseGateTest {
         assertFalse(m.paused.value)
         advanceTimeBy(600_000)
         assertEquals(1, ops.reads.size)
+    }
+
+    /** The wipe's clear needs no release number: it reads none from the vault's state. */
+    @Test
+    fun aClearReadsNoReleaseNumber() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        ops.offer = behind
+        m.vaultOpened()
+        m.refreshOffer()
+        assertTrue(m.behind.value)
+        ops.numberReads = 0
+        m.clear()
+        assertEquals(0, ops.numberReads)
+        assertFalse(m.behind.value || m.required.value)
+        assertTrue(m.paused.value)
     }
 
     /** A wipe or a deletion while behind: the check ends and the offer goes, and nothing is told (no list is read). */
@@ -852,6 +953,52 @@ class ReleaseGateTest {
         m.vaultOpened()
         runCurrent()
         assertEquals(listOf("gate:true", "sends"), s.log)
+    }
+
+    /**
+     * The lock's step ran after the next opening was published (so it did not end the check), and the opened steps follow:
+     * the reads that opening owed run once, whichever comes first, the opened steps or the end of its check.
+     */
+    @Test
+    fun theOwedReadsRunOnceWithTheOpenedSteps() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val s = Steps()
+        m.onGateChange = s.pause::onGate
+        fun openedSteps() {
+            if (m.openingReadsDue()) openedReads(m.paused.value) { s.log += "reads" }
+        }
+        // The opened steps first, then the end of the check.
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        s.log.clear()
+        val gate = CompletableDeferred<Unit>()
+        ops.failing = false
+        ops.gate = gate
+        m.vaultOpened()
+        runCurrent()
+        openedSteps()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("reads", "gate:true", "sends"), s.log)
+        // The end of the check first, then the opened steps.
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        s.log.clear()
+        ops.failing = false
+        m.vaultOpened()
+        runCurrent()
+        openedSteps()
+        assertEquals(listOf("gate:true", "reads", "sends"), s.log)
+        // The next opening's opened steps read as usual.
+        m.vaultClosed()
+        m.vaultOpened()
+        runCurrent()
+        s.log.clear()
+        openedSteps()
+        assertEquals(listOf("reads"), s.log)
     }
 
     /** Not when the vault is no longer open, or is being deleted. */

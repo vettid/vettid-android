@@ -112,7 +112,8 @@ interface FeedRepository {
  * - **Retention**: items older than `feed.retention_days` (default 30) are dropped here as well.
  * - **Held or due** ([gated]): nothing is listed and events are ignored; after the check, a full read.
  * - **The release check** ([held], Rule 3): `feed.event`s (live or replayed) and arrivals wait in memory, and come when
- *   it is over with the vault not behind, or when the gate lifts ([releaseHeld]); a clear drops them.
+ *   it is over with the vault not behind, or when the gate lifts ([releaseHeld]); a clear drops them. Until they came,
+ *   a later event or arrival waits behind them, so none overtakes them ([queuesBehind]).
  */
 @Suppress("TooManyFunctions")
 class FeedManager(
@@ -205,45 +206,90 @@ class FeedManager(
      * by a push wake; `HeldBackEvents`), now that it is: an arrival like a live one. When the full read of the open
      * already brought the item, it arrives as the feed has it now (not at all once read, archived or deleted).
      */
-    fun replay(m: VaultMessage) {
+    fun replay(m: VaultMessage) = replay(m, notified = emptyMap())
+
+    /**
+     * [replay], except that an item [notified] (it just arrived from [releaseHeld], at that `seq`) is applied but not
+     * notified again for a change no newer than the one notified.
+     */
+    private fun replay(m: VaultMessage, notified: Map<String, Long>) {
         if (m.type != "feed.event" || holds(m) || gated()) return
         val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
+        val notify = notified[item.itemId]?.let { item.seq > it } ?: true
         // Whether the feed's read already covers the event, and the item as the list has it now (null: gone).
         val (covered, listed) = synchronized(lock) {
             (loadState.value == ListLoad.LOADED && item.seq <= cursor) to byId[item.itemId]
         }
-        if (!covered) onItem(item) else if (listed?.status == STATUS_ACTIVE) emitArrival(listed)
+        if (!covered) onItem(item, notify) else if (notify && listed?.status == STATUS_ACTIVE) emitArrival(listed)
     }
 
-    /** (Rule 3) While the release is checked, [m] waits for [releaseHeld] (also while a failed check pauses the feed). */
+    /**
+     * (Rule 3) While the release is checked, [m] waits for [releaseHeld] (also while a failed check pauses the feed). Once
+     * the check is over, an event that comes while what was held has not come yet waits behind it, and releases it first
+     * ([queuesBehind]). True when the caller takes it no further: held, or dropped while the feed is [gated] after the
+     * check (decided on the same reading as the queue, so a lift that comes meanwhile cannot let it overtake the held ones).
+     */
     private fun holds(m: VaultMessage): Boolean {
-        if (!held()) return false
-        synchronized(lock) {
-            heldEvents.addLast(m)
-            while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+        val checking = held()
+        val gatedNow = gated()
+        val queued = synchronized(lock) {
+            (checking || (!gatedNow && queuesBehind())).also { q ->
+                if (q) {
+                    heldEvents.addLast(m)
+                    while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+                }
+            }
         }
-        return true
+        if (queued) releaseIfOver()
+        return queued || gatedNow
     }
+
+    /**
+     * (Rule 3) After something was added to the held queues: if the check is over and the feed not [gated], it is released
+     * now. Read again after the add, not before: a check that ended (and a release that ran) between the first reading and
+     * the add would otherwise leave it waiting for the next release, or for a lock to drop it. Not while [gated] (a check
+     * that ended behind): what is held then waits for the lift, whose release delivers it.
+     */
+    private fun releaseIfOver() {
+        if (!held() && !gated()) releaseHeld()
+    }
+
+    /**
+     * (Rule 3) The check is over but what it held has not come yet ([releaseHeld] not run): a later event or arrival waits
+     * behind it, so that none overtakes it (the callers ask only while the feed is not [gated]). Under [lock].
+     */
+    private fun queuesBehind(): Boolean = heldEvents.isNotEmpty() || heldArrivals.isNotEmpty()
 
     /**
      * (Rule 3) The release check is over with the vault not behind, or the gate lifted: what waited comes now, as it would
      * have come live: the arrivals as the feed has them now (not at all once read, archived or deleted), then the events
-     * ([replay]). Nothing while the feed is [gated] (the owner check due or held: as live ones, they are not notified).
+     * ([replay]; an event of an item that just arrived here is applied, and notified again only for a newer change).
+     * Nothing while the feed is [gated] (the owner check due or held: as live ones, they are not notified).
+     *
+     * It all runs under [lock], the notifications' emission included (a non-suspending `tryEmit`): the queues are emptied at
+     * its start, so an event or arrival on another thread is kept behind them only by waiting for the lock. Emitting after
+     * the lock is let go would let one that comes then (the queues empty, nothing held) be notified before them.
      */
     fun releaseHeld() {
-        val (events, arrived) = synchronized(lock) {
-            val e = heldEvents.toList()
-            val a = heldArrivals.values.toList()
+        val gatedNow = gated()
+        synchronized(lock) {
+            val events = heldEvents.toList()
+            val arrived = heldArrivals.values.toList()
             heldEvents.clear()
             heldArrivals.clear()
-            e to a
+            if (gatedNow) return
+            val notified = HashMap<String, Long>()
+            arrived.forEach { a ->
+                (byId[a.itemId] ?: a).takeIf { it.status == STATUS_ACTIVE }?.let {
+                    notified[it.itemId] = it.seq
+                    emitArrival(it)
+                }
+            }
+            events.forEach { replay(it, notified) }
         }
-        if (gated()) return
-        arrived.forEach { a -> (byIdNow(a.itemId) ?: a).takeIf { it.status == STATUS_ACTIVE }?.let(::emitArrival) }
-        events.forEach { replay(it) }
     }
 
-    private fun onItem(item: FeedItem) {
+    private fun onItem(item: FeedItem, notify: Boolean = true) {
         val inOrder = synchronized(lock) {
             if (loadState.value != ListLoad.LOADED) return@synchronized false
             if (item.seq <= cursor) return // already applied
@@ -252,7 +298,7 @@ class FeedManager(
             if (next) cursor = item.seq
             next
         }
-        if (item.status == STATUS_ACTIVE) emitArrival(item)
+        if (notify && item.status == STATUS_ACTIVE) emitArrival(item)
         if (!inOrder) catchUp()
     }
 
@@ -380,16 +426,19 @@ class FeedManager(
     private fun emitArrival(item: FeedItem) {
         synchronized(lock) { arrivedSince?.add(item.itemId) }
         if (FeedKinds.historyOnly(item.kind)) return
-        // Rule 3: while the release is checked, nothing notifies yet ([releaseHeld]).
-        if (held()) {
-            synchronized(lock) {
-                heldArrivals.remove(item.itemId)
-                heldArrivals[item.itemId] = item
-                while (heldArrivals.size > ARRIVAL_BUFFER) heldArrivals.remove(heldArrivals.keys.first())
+        // Rule 3: while the release is checked, nothing notifies yet ([releaseHeld]); after it, nothing overtakes what it held.
+        val checking = held()
+        val gatedNow = gated()
+        val waits = synchronized(lock) {
+            (checking || (!gatedNow && queuesBehind())).also { w ->
+                if (w) {
+                    heldArrivals.remove(item.itemId)
+                    heldArrivals[item.itemId] = item
+                    while (heldArrivals.size > ARRIVAL_BUFFER) heldArrivals.remove(heldArrivals.keys.first())
+                }
             }
-            return
         }
-        arrivalFlow.tryEmit(item)
+        if (!waits) arrivalFlow.tryEmit(item) else releaseIfOver()
     }
 
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */

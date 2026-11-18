@@ -1215,8 +1215,9 @@ class VaultManager(
                     // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                     social.reopen() // the pending.list read below may merge again
                     resumeRelay() // after an unlock the notification service's connection comes back
-                    // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts).
-                    openedReads(releaseUpdate.paused.value) { gatedReads() }
+                    // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
+                    // end of this opening's check already ran the reads it owed (they run once).
+                    if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // whether the vault has presence, and the member's policy
                     location.resume() // the location shares this phone is the source of are taken up again
                     // The release gate's check (Rule 3) and the proactive release notice: the manifest is read by the opening
@@ -1805,8 +1806,13 @@ class VaultManager(
                     android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
                     s.device.start(scope)
                     ownerCheck.onRelayReconnected()
-                    // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
-                    if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
+                    // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2), and the manifest again
+                    // (Rule 3: a check that failed while the relay was away is read now; not while its retries run, nor
+                    // within a minute of a read that succeeded).
+                    if (phaseFlow.value == AppPhase.Unlocked) {
+                        feed.catchUp()
+                        releaseUpdate.relayReconnected()
+                    }
                     // §11.14.9: and an unresolved change is checked again.
                     if (phaseFlow.value == AppPhase.Unlocked && local.unresolvedChange != null) changes.kick()
                 }

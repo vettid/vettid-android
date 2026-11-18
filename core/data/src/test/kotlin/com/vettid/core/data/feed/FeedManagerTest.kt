@@ -28,6 +28,7 @@ import java.time.temporal.ChronoUnit
 
 /** The vault's feed in the app (ANDROID-PLAN 0.1.23 Notifications, 2 and 11; VAULT-MESSAGING §10.9). */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // one feed: its reads, events, the release check's hold and the replays side by side
 class FeedManagerTest {
     private val now = Instant.parse("2026-10-09T12:00:00Z")
 
@@ -173,6 +174,249 @@ class FeedManagerTest {
         m.catchUp()
         settle { m.seq == 4L }
         checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /**
+     * A held event whose item already arrived among the held arrivals (a catch-up brought it during the check) is applied
+     * but not notified a second time when they are released.
+     */
+    @Test
+    fun aHeldEventOfAnItemThatJustArrivedIsNotNotifiedTwice() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
+        m.catchUp()
+        settle { m.seq == 2L }
+        m.onEvent(event(item("i2", 2)))
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        checking = false
+        m.releaseHeld()
+        settle { arrived.size >= 2 }
+        assertEquals("i2 once, then i3", listOf("i2", "i3"), arrived.map { it.itemId })
+        assertEquals("the events still applied", 3L, m.seq)
+    }
+
+    /**
+     * The check is over but its held events have not come yet (the gate's notice is on its way): a live event and a live
+     * arrival then wait behind them and release them first, so none overtakes them; the release that follows adds nothing.
+     */
+    @Test
+    fun aLiveEventAfterTheCheckNeverOvertakesTheHeldOnes() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        checking = false
+        m.onEvent(event(item("i4", 4)))
+        settle { arrived.size >= 3 }
+        assertEquals(listOf("i2", "i3", "i4"), arrived.map { it.itemId })
+        m.releaseHeld()
+        m.onEvent(event(item("i5", 5)))
+        settle { arrived.size >= 4 }
+        assertEquals("nothing twice; a later one comes as usual", listOf("i2", "i3", "i4", "i5"), arrived.map { it.itemId })
+    }
+
+    /** A newer change of an item notified among the held arrivals is notified: only what is no newer is not notified twice. */
+    @Test
+    fun aNewerChangeOfAJustNotifiedItemIsNotified() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 4), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("x", 5)), 5)
+        m.catchUp()
+        settle { m.seq == 5L }
+        m.onEvent(event(item("x", 7)))
+        settle { true }
+        checking = false
+        m.releaseHeld()
+        settle { arrived.size >= 2 }
+        assertEquals(listOf("x" to 5L, "x" to 7L), arrived.map { it.itemId to it.seq })
+    }
+
+    /**
+     * A held event the feed's read does not cover yet (a full read runs), for an item just notified among the held arrivals:
+     * not notified again.
+     */
+    @Test
+    fun aHeldEventNotYetCoveredOfAJustNotifiedItemIsNotNotifiedTwice() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.pages += FeedPage(listOf(item("x", 2)), 2)
+        m.catchUp()
+        settle { m.seq == 2L }
+        m.onEvent(event(item("x", 2)))
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        m.open() // a full read, held at its list
+        settle { m.load.value == ListLoad.LOADING }
+        checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        gate.complete(Unit)
+        settle { m.load.value == ListLoad.LOADED }
+        assertEquals("once", listOf("x"), arrived.map { it.itemId })
+    }
+
+    /**
+     * After the check, a catch-up's arrival while its events are still held comes after them (they come first, and the
+     * held event of an item the catch-up brought is not notified again); the release that follows adds nothing.
+     */
+    @Test
+    fun aCatchUpAfterTheCheckComesAfterTheHeldOnes() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        settle { true }
+        checking = false
+        ops.pages += FeedPage(listOf(item("i2", 2), item("i3", 3)), 3)
+        m.catchUp()
+        settle { arrived.size >= 2 }
+        m.releaseHeld()
+        settle { true }
+        assertEquals(listOf("i2", "i3"), arrived.map { it.itemId })
+    }
+
+    /**
+     * The check ended behind (the feed gated): a live event is dropped, as while paused, and what the check held is kept
+     * for the lift, not released early.
+     */
+    @Test
+    fun aLiveEventWhileGatedAfterTheCheckIsDroppedAndTheHeldOnesWait() = runTest {
+        val ops = Ops()
+        var checking = true
+        var paused = false
+        val m = opened(ops, item("i1", 1), gated = { paused }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        checking = false
+        paused = true
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        paused = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals("the held one at the lift; the one while gated dropped", listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /**
+     * The check ends, and its release runs, between an event's reading of the check and its add to the queue: the event is
+     * released at once all the same, never left waiting for a later release (or dropped by a lock).
+     */
+    @Test
+    fun aCheckEndingBetweenTheReadingAndTheAddLeavesNothingBehind() = runTest {
+        val ops = Ops()
+        var checking = true
+        var endOnRead = false
+        lateinit var m: FeedManager
+        val held = {
+            if (endOnRead) {
+                // This reading still says "checking"; the check ends and its release runs right after it.
+                endOnRead = false
+                checking = false
+                m.releaseHeld()
+                true
+            } else {
+                checking
+            }
+        }
+        m = opened(ops, item("i1", 1), held = held)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        settle { true }
+        endOnRead = true
+        m.onEvent(event(item("i3", 3)))
+        settle { arrived.size >= 2 }
+        assertEquals(listOf("i2", "i3"), arrived.map { it.itemId })
+    }
+
+    /**
+     * The check ends behind (the feed gated) between an event's reading of the check and its add: nothing is released or
+     * dropped then; what was held, that event included, comes at the lift.
+     */
+    @Test
+    fun aCheckEndingBehindBetweenTheReadingAndTheAddKeepsItForTheLift() = runTest {
+        val ops = Ops()
+        var checking = true
+        var paused = false
+        var endOnRead = false
+        val held = {
+            if (endOnRead) {
+                endOnRead = false
+                checking = false
+                paused = true
+                true
+            } else {
+                checking
+            }
+        }
+        val m = opened(ops, item("i1", 1), gated = { paused }, held = held)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        endOnRead = true
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        paused = false
+        m.releaseHeld()
+        settle { arrived.size >= 2 }
+        assertEquals(listOf("i2", "i3"), arrived.map { it.itemId })
+    }
+
+    /**
+     * The lift comes between an event's reading of the gate (still paused) and its handling: the event is dropped on that
+     * reading, as while paused, and never overtakes what the check held (which comes with the lift's release).
+     */
+    @Test
+    fun aLiftBetweenTheReadingAndTheHandlingLetsNoEventOvertake() = runTest {
+        val ops = Ops()
+        var checking = true
+        var paused = false
+        var liftOnRead = false
+        val gated = {
+            if (liftOnRead) {
+                // This reading still says "paused"; the gate lifts right after it.
+                liftOnRead = false
+                paused = false
+                true
+            } else {
+                paused
+            }
+        }
+        val m = opened(ops, item("i1", 1), gated = gated, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        checking = false
+        paused = true
+        liftOnRead = true
+        m.onEvent(event(item("i3", 3)))
+        settle { true }
+        assertTrue("nothing before the lift's release", arrived.isEmpty())
         m.releaseHeld()
         settle { arrived.isNotEmpty() }
         assertEquals(listOf("i2"), arrived.map { it.itemId })

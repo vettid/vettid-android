@@ -86,7 +86,10 @@ class ReleaseGateWiringTest {
 
     @Test
     fun theOpeningsReadsAndTheChecksStepsWaitWhilePaused() {
-        code.has("openedReads(releaseUpdate.paused.value) { gatedReads() }")
+        // The opened steps read only what the end of this opening's check has not read already (once).
+        block("phaseSteps.onPhase(it) {").has(
+            "if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }",
+        )
         code.has("onPassed = { if (!releaseUpdate.paused.value) social.refreshAllQuietly() },")
         code.has("if (!releaseUpdate.required.value) steps.step { votes.startSync() }")
         code.has("if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }")
@@ -131,7 +134,19 @@ class ReleaseGateWiringTest {
         offer.has("ReleaseGateOffer.checkNumber(st.releaseNumber)")
         offer.has("ReleaseGateOffer.of(st.release, st.releaseNumber, m.releases, m::byPcr0)")
         code.has("override fun releaseNumber(): Long? = session?.device?.altState?.releaseNumber")
-        // No retries in the background: the app's foreground signal.
+        // No retries in the background after a verification failure: the app's foreground signal.
         code.has("override fun inFront(): Boolean = ownerCheck.inFront.value")
+    }
+
+    /** A relay reconnect reads the manifest again, with the feed's catch-up, while the vault is open. */
+    @Test
+    fun aRelayReconnectReadsTheManifest() {
+        val restart = block("CollectorSupervisor(this, restart = {")
+        val open = restart.indexOf("if (phaseFlow.value == AppPhase.Unlocked) {")
+        assertTrue("under the open phase", open >= 0)
+        val inner = restart.subList(open, restart.size)
+        assertEquals("feed.catchUp()", inner[1])
+        assertEquals("releaseUpdate.relayReconnected()", inner[2])
+        assertEquals("}", inner[3])
     }
 }
