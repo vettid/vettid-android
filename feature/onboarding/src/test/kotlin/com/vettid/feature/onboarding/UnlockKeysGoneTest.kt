@@ -52,7 +52,7 @@ class UnlockKeysGoneTest {
 
     /**
      * A phone with no usable user_guid (a move an older build completed without one) can never unlock: the same
-     * recover-or-erase notice, no failure text of its own (owner decision a, 2026-11-18).
+     * recover-or-erase notice (owner decision a, 2026-11-18); the erase still needs the confirmation.
      */
     @Test
     fun aPhoneWithoutAUserGuidGetsTheRecoverOrEraseNotice() = runTest {
@@ -66,24 +66,67 @@ class UnlockKeysGoneTest {
             advanceUntilIdle()
             assertTrue(vm.uiState.value.keysGone)
             assertTrue(vm.uiState.value.eraseOffered)
-            assertEquals(null, vm.uiState.value.message)
+            assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
         }
+        vm.confirmErase() // nothing without the dialog
+        advanceUntilIdle()
+        assertFalse("eraseThisPhone" in vault.calls)
         vm.askErase()
         assertTrue(vm.uiState.value.eraseConfirm)
+        vm.confirmErase()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
     }
 
-    /** While a kept check waits, the recover-or-erase notice is not shown, so the failure itself is said. */
+    /**
+     * An old phone that approved a move and is waiting for the vault's word (the 7 days over): no erase offer, and the
+     * failure is the no-user_guid message (the screen shows its words alone), never "the move back failed".
+     */
     @Test
     fun aPhoneWithoutAUserGuidIsToldWhileAKeptCheckWaits() = runTest {
+        vault.transferKeptSince.value = java.time.Instant.parse("2026-11-01T00:00:00Z")
         vault.transferCheckWaiting.value = true
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
+        assertTrue(vm.uiState.value.keptTransfer)
         vm.setPin("40281795")
         vm.submit()
         advanceUntilIdle()
         assertFalse(vm.uiState.value.eraseOffered)
-        assertTrue(vm.uiState.value.message != null)
+        assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
+    }
+
+    /** Inside the 7 days (kept, no check waiting): the notice with its erase, and not "the move back failed" beside it. */
+    @Test
+    fun aKeptPhoneWithoutAUserGuidIsNotToldTheMoveBackFailed() = runTest {
+        vault.transferKeptSince.value = java.time.Instant.parse("2026-11-17T00:00:00Z")
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.keptTransfer)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.eraseOffered)
+        assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
+    }
+
+    /** Only the guard's own refusal (kind and code) is a phone without a user_guid: neither half alone offers an erase. */
+    @Test
+    fun theCodeOrTheKindAloneOffersNoErase() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockAttempt.CODE_NO_USER_GUID)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        repeat(2) {
+            vm.setPin("40281795")
+            vm.submit()
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.keysGone)
+            assertFalse(vm.uiState.value.eraseOffered)
+            assertTrue(vm.uiState.value.message is UnlockMessage.Failed)
+        }
     }
 
     /** The offer goes with any other answer of the vault, and stays through a network failure. */

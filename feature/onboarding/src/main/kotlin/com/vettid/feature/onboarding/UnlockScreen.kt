@@ -372,6 +372,17 @@ fun UnlockContent(
                         stringResource(R.string.onboarding_move_back_failed),
                         modifier = Modifier.testTag("move_back_failed"),
                     )
+                    // No usable user_guid: the recover-or-erase notice below says it; where it is not shown (a kept check
+                    // waiting) its words alone, with no actions (owner decision a, 2026-11-18). Not beside an ended release
+                    // or a rollback, whose notice offers no erase.
+                    UnlockMessage.NoUserGuid -> if (!state.eraseOffered && !state.recoverOnly) {
+                        NoticeCard(
+                            NoticeKind.URGENT,
+                            stringResource(R.string.unlock_stuck_title),
+                            stringResource(R.string.unlock_stuck_body),
+                            modifier = Modifier.testTag("unlock_no_user_guid"),
+                        )
+                    }
                     is UnlockMessage.UpdateRefused -> NoticeCard(
                         NoticeKind.WARNING,
                         stringResource(R.string.unlock_title),

@@ -40,7 +40,17 @@ sealed interface UnlockMessage {
      * after approving a transfer. "Contact VettID within a day of the failed move: it may be repairable."
      */
     data object MoveBackFailed : UnlockMessage
+
+    /**
+     * No usable user_guid on this phone ([isNoUserGuid]): it can never unlock. The recover-or-erase notice says it, so the
+     * screen shows this only where that notice is not shown (a kept check waiting): its words as plain text, no actions.
+     */
+    data object NoUserGuid : UnlockMessage
 }
+
+/** The unlock's own guard refused for want of a usable user_guid: both the kind and the code, nothing else. */
+internal fun isNoUserGuid(r: UnlockAttempt.Failed): Boolean =
+    r.kind == FailureKind.NOT_SUPPORTED && r.code == UnlockAttempt.CODE_NO_USER_GUID
 
 /** Failures that say nothing about this phone's keys (the network, the service): never "the move back failed". */
 private val TRANSIENT_FAILURES = setOf(
@@ -62,7 +72,10 @@ private val NOT_AGAINST_THE_KEYS = TRANSIENT_FAILURES + KEYS_OPENED
  * failure that is not temporary means its own keys no longer open the vault (`device_secret`, an unreadable answer, …).
  */
 internal fun unlockFailedMessage(r: UnlockAttempt.Failed, keptTransfer: Boolean): UnlockMessage =
-    if (keptTransfer && r.kind !in NOT_AGAINST_THE_KEYS && !openedThenLocked(r.kind, r.code)) {
+    // Decided on this phone before anything is sent, so never "the move back failed" (the keys were not tried).
+    if (isNoUserGuid(r)) {
+        UnlockMessage.NoUserGuid
+    } else if (keptTransfer && r.kind !in NOT_AGAINST_THE_KEYS && !openedThenLocked(r.kind, r.code)) {
         UnlockMessage.MoveBackFailed
     } else {
         UnlockMessage.Failed(r.kind, r.code)
@@ -510,11 +523,8 @@ class UnlockViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
                 is UnlockAttempt.Failed -> {
-                    // No user_guid: the recover-or-erase notice says it all ([keysGone]), so no failure text of its own; but
-                    // while a kept check waits that notice is not shown, and the failure is said instead.
-                    val noticeShown = r.code == UnlockAttempt.CODE_NO_USER_GUID && !s.keptCheckWaiting
-                    val message = if (noticeShown) null else unlockFailedMessage(r, s.keptTransfer)
-                    state.update { it.copy(busy = false, pin = "", message = message) }
+                    // Always stored; the screen decides from the current state whether the notice already says it.
+                    state.update { it.copy(busy = false, pin = "", message = unlockFailedMessage(r, s.keptTransfer)) }
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
                 }
@@ -540,7 +550,7 @@ class UnlockViewModel @Inject constructor(
         r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
         // No usable user_guid (a move an older build completed without one, or a damaged record): nothing will ever add it,
         // so this phone cannot unlock; the same recover-or-erase notice (owner decision a, 2026-11-18).
-        r is UnlockAttempt.Failed && r.code == UnlockAttempt.CODE_NO_USER_GUID -> true
+        r is UnlockAttempt.Failed && isNoUserGuid(r) -> true
         r is UnlockAttempt.Failed && r.kind in TRANSIENT_FAILURES -> before
         else -> false
     }
