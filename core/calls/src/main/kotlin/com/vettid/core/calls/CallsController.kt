@@ -43,7 +43,7 @@ import java.time.Instant
  * [CallVault.unlocked] from the vault's phase and its count of openings (`VaultManager.opens`): open or not, with a
  * closed value put in between two open ones whose count differs. A lock and an unlock fast enough for the closed phase
  * to be conflated away are then still seen as a close, so nothing of the vault before the lock is kept after it (the
- * probe's answer, the C2 flag, the permissions). Each pair must be read together (the phase first, then the count, both
+ * after-unlock read, the C2 flag, the permissions). Each pair must be read together (the phase first, then the count, both
  * as they are now), so that an open phase never comes with the count from before its own opening. A close put in this
  * way ends a call that began during the collector's lag, as a lock would: fail-secure, since the vault did close.
  */
@@ -113,7 +113,7 @@ interface CallVault {
 
     /**
      * Something changed that may make the vault answer where it refused before (the daily check was done, a vault
-     * operation succeeded): if it is not yet known whether the vault has calls, it is asked again.
+     * operation succeeded): if the after-unlock `call.list` read has not gone through yet, it is made again.
      */
     val recheck: Flow<Unit>
 
@@ -163,11 +163,12 @@ data class CallsDiagnostics(
 /**
  * Calls in the app: the one [CallMachine] of the process and what goes on around a call (CALLS-PLAN 0.1.1 C1).
  *
- * - **Whether there are calls.** No message lists a vault release's features, so after every unlock the vault is
- *   asked for its call list: an answer means calls ([CallAvailability.READY]), `unsupported_type` means none.
- * - **Stale calls.** The vault of S10 has no timer and no liveness check: a call whose app died stays live there
- *   (and the vault busy) for up to 12 hours. With that same list, every call the vault still holds live while this
- *   app has none is ended.
+ * - **Whether there are calls.** Every vault the app opens has them (the app requires the vault's current release, and
+ *   [CallVault.unlocked] is false while that release is checked or must be updated): calls are
+ *   [CallAvailability.READY] as soon as the vault is open on this phone, [CallAvailability.CLOSED] otherwise.
+ * - **Stale calls.** After every unlock the vault's call list is read: every call the vault still holds live while
+ *   this app has none is ended (by the C2 rule when the list says `v: 2`, else by this phone's clock). The same read
+ *   says whether the vault is C2.
  * - **The microphone.** No call is placed or answered without the permission; [microphoneNeeded] asks the screen
  *   to ask for it.
  * - **Around a call.** The audio route, the ring-back tone and the ringtone, the foreground service, the end of a
@@ -225,11 +226,10 @@ class CallsController(
         vault::fingerprint,
         engines.suites,
         vault::refreshConnections,
-        // An offer waits a moment for an unlock that is completing and for the probe's answer; it rings only where the
-        // vault said it has calls (every build has calls since 2026-11-14: the probe is the gate, for incoming calls too).
+        // An offer waits a moment for an unlock that is completing; it rings only once the vault is open on this phone.
         mayRing = { mayRing() },
         peerKey = vault::identityKey,
-        vaultIsC2 = { vaultC2 },
+        vaultIsC2 = { formTwo },
     )
     private val machine =
         CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig }, vaultOpen = { vault.unlockedNow })
@@ -242,7 +242,7 @@ class CallsController(
     val callPaths: StateFlow<CallPaths> = machine.paths
     val audioState: StateFlow<AudioState> = audio.state
 
-    private val availabilityFlow = MutableStateFlow(CallAvailability.UNKNOWN)
+    private val availabilityFlow = MutableStateFlow(CallAvailability.CLOSED)
     override val availability: StateFlow<CallAvailability> = availabilityFlow.asStateFlow()
 
     private val permissionsFlow = MutableStateFlow(CallPermissions())
@@ -274,58 +274,58 @@ class CallsController(
     /** A call or an answer was held back for the microphone permission: ask for it, then call [call] or [answer] again. */
     val microphoneNeeded: SharedFlow<MicrophoneRequest> = microphoneFlow.asSharedFlow()
 
-    /** Whether the vault's release has calls; null until it has been asked since the last unlock. */
-    private val supportedFlow = MutableStateFlow<Boolean?>(null)
-    private var supported: Boolean?
-        get() = supportedFlow.value
-        set(v) {
-            supportedFlow.value = v
-        }
-
     /**
-     * Whether, within [wait], the vault is open on this phone and its probe answered that it has calls. An answer of
-     * none, a refusal that leaves it unknown, or no answer in time: false.
-     */
-    private suspend fun callsKnownWithin(wait: Duration): Boolean = withTimeoutOrNull(wait.toMillis()) {
-        if (!open) vault.unlocked.first { it }
-        supportedFlow.first { it != null }
-    } == true
-
-    /**
-     * Whether an offer may ring. The call events wait with it, on purpose: the offer's candidates and hang-up stay behind
-     * it. No call is live on this phone while it is locked or the probe has not answered, so nothing else is held up;
-     * during a live call it does not wait at all, so that call's events never wait (the phone drops such an offer, busy
-     * in another call, and the vault rings the member's other devices). The vault's lock and the update screen are
-     * looked at again after the wait: a lock or an update screen that came during it is not rung over. (A lock also sets
-     * the probe's answer back to unknown, which ends the wait without it: the look at [open] is defence in depth for a
-     * lock between the answer and the resumption, which no test reaches.)
+     * Whether an offer may ring: the vault is open on this phone, at once or within [UNLOCK_WAIT] (the vault's events
+     * are listened to from before the unlock is complete, so an offer can arrive in the moments before the app shows the
+     * open vault). The call events wait with it, on purpose: the offer's candidates and hang-up stay behind it. No call
+     * is live on this phone while the vault is not open, so nothing else is held up; during a live call it does not
+     * wait at all, so that call's events never wait (the phone drops such an offer, busy in another call, and the vault
+     * rings the member's other devices). The vault and the update screen are looked at again after the wait: a lock or
+     * an update screen that came during it is not rung over.
      */
     private suspend fun mayRing(): Boolean {
-        val known = if (machine.state.value is CallState.Live) open && supported == true else callsKnownWithin(UNLOCK_WAIT)
-        return known && open && !vault.updateShowing
+        val opened = machine.state.value is CallState.Live ||
+            withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { openFlow.first { it } } != null
+        return opened && open && !vault.updateShowing
     }
 
-    /** (C2) Whether the vault is C2 (`call.list` `v: 2`, read again after each unlock; nothing is cached across one). */
+    /**
+     * (C2) Whether the vault is C2, as the after-unlock `call.list` read found it (`v: 2`); null until that read has gone
+     * through since the last unlock (nothing is cached across one).
+     */
     @Volatile
-    private var vaultC2 = false
+    private var vaultC2: Boolean? = null
+
+    /**
+     * (C2) Whether this device calls in form 2 and answers with keep-alives: unless the read found a vault before C2.
+     * Before the read has gone through, form 2 (fail closed: it is the stricter form, the current vault is C2, and a
+     * vault before C2 passes on form 1 alone), so a call placed at once after an unlock is never in form 1 only.
+     */
+    private val formTwo: Boolean get() = vaultC2 != false
 
     /** (C2) The keep-alives of the active call, one loop per call id. */
     private var keepalive: Pair<String, Job>? = null
 
-    @Volatile
-    private var open = false
+    /** True while the vault is open on this phone, as the collector of [CallVault.unlocked] has seen it. */
+    private val openFlow = MutableStateFlow(false)
+    private val open: Boolean get() = openFlow.value
 
-    /** One probe at a time: the one an unlock starts and one a [CallVault.recheck] starts never run side by side. */
-    private val probing = Mutex()
+    /** One read at a time: the one an unlock starts and one a [CallVault.recheck] starts never run side by side. */
+    private val reading = Mutex()
     private var longCall: Job? = null
 
     init {
         scope.launch {
-            // collectLatest cancels an opening's probe when a close comes; locked() never suspends, so a close is
+            // collectLatest cancels an opening's read when a close comes; locked() never suspends, so a close is
             // never cut short by the opening after it.
             vault.unlocked.collectLatest { isOpen ->
-                open = isOpen
-                if (isOpen) opened() else locked()
+                openFlow.value = isOpen
+                if (isOpen) {
+                    publish()
+                    opened()
+                } else {
+                    locked()
+                }
             }
         }
         scope.launch { machine.state.collect { around(it) } }
@@ -334,8 +334,8 @@ class CallsController(
         scope.launch { signalling.refused.collect { n -> diagnosticsFlow.update { it.copy(refused = n) } } }
         scope.launch { signalling.errors.collect { n -> diagnosticsFlow.update { it.copy(errors = n) } } }
         scope.launch { machine.listenRestarts.collect { n -> diagnosticsFlow.update { it.copy(listenRestarts = n) } } }
-        scope.launch { vault.recheck.collect { if (open && supported == null) opened() } }
-        scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2) permissionReads.trySend(Unit) } }
+        scope.launch { vault.recheck.collect { if (open && vaultC2 == null) opened() } }
+        scope.launch { vault.gateway.permissionChanges.collect { if (open && vaultC2 == true) permissionReads.trySend(Unit) } }
         scope.launch {
             while (true) {
                 permissionReads.receive()
@@ -349,9 +349,9 @@ class CallsController(
         }
     }
 
-    /** Tests: as if the vault had not been asked yet. */
-    internal fun forgetProbeForTest() {
-        supported = null
+    /** Tests: as if the after-unlock read had not gone through yet. */
+    internal fun forgetListReadForTest() {
+        vaultC2 = null
     }
 
     // --- the member ---
@@ -386,9 +386,9 @@ class CallsController(
     // --- the vault ---
 
     private suspend fun opened() {
-        probing.withLock {
-            // Asked while another probe ran: it may have answered already.
-            if (open && supported == null) probe()
+        reading.withLock {
+            // Asked while another read ran: it may have gone through already.
+            if (open && vaultC2 == null) readList()
         }
     }
 
@@ -417,25 +417,23 @@ class CallsController(
         }.first { it }
     }
 
+    /**
+     * The after-unlock read of `call.list`: whether the vault is C2, its permissions, the stale sweep and, in a test build,
+     * the signer class. It decides nothing of whether calls are shown. A refusal (the daily check is due, …) leaves it
+     * to be made again at the next [CallVault.recheck]; a failure is tried again a few times.
+     */
     @Suppress("ReturnCount")
-    private suspend fun probe() {
-        supported = null
-        publish()
-        repeat(PROBE_ATTEMPTS) { attempt ->
+    private suspend fun readList() {
+        repeat(READ_ATTEMPTS) { attempt ->
             val records = try {
                 vault.gateway.list(HISTORY_LIMIT)
-            } catch (e: VaultOpException) {
-                // `unsupported_type`: a release without calls. Any other refusal (the daily check is due, …): not known.
-                if (e.code == UNSUPPORTED) supported = false
-                publish()
+            } catch (_: VaultOpException) {
                 return
             } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                delay(PROBE_RETRY.toMillis() * (attempt + 1))
+                delay(READ_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
             vaultC2 = records.formTwo
-            supported = true
-            publish()
             // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
             if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
             noteSkipped(records)
@@ -455,11 +453,11 @@ class CallsController(
      * (C2, VAULT-MESSAGING §10.10 "Liveness") The call's device sends `call.keepalive` to its own vault as soon as the
      * call is active on it ([CallState.Live.answerThrough]: the callee once its `call.answer` is with its vault, the
      * caller once it took the answer; one sent before is answered `call.end{unavailable}`), then every 30 s until it
-     * ends. Only to a C2 vault (an S10 vault answers an unknown type): one the probe found C2, or a call in form 2,
-     * which proves it for that call even before the probe has answered.
+     * ends. Only to a C2 vault (an S10 vault answers an unknown type): [formTwo] (the vault not found older), or a call
+     * in form 2, which proves it for that call.
      */
     private fun keepAlive(live: CallState.Live?) {
-        val id = live?.callId?.takeIf { (vaultC2 || live.formTwo) && live.answerThrough }
+        val id = live?.callId?.takeIf { (formTwo || live.formTwo) && live.answerThrough }
         if (id == keepalive?.first) return
         keepalive?.second?.cancel()
         keepalive = id?.let {
@@ -540,20 +538,20 @@ class CallsController(
     private suspend fun readPermissions() {
         val epoch = permissionEpochNow()
         val changes = synchronized(permissionLock) { ownChanges }
-        repeat(PROBE_ATTEMPTS) { attempt ->
-            if (!open || !vaultC2 || epoch != permissionEpochNow()) return
+        repeat(READ_ATTEMPTS) { attempt ->
+            if (!open || vaultC2 != true || epoch != permissionEpochNow()) return
             val list = try {
                 vault.gateway.permissions()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: VaultOpException) {
-                // `unsupported_type` from a vault the probe called C2 cannot happen; any refusal leaves things as they are.
+                // `unsupported_type` from a vault the read found C2 cannot happen; any refusal leaves things as they are.
                 if (e.code == UNSUPPORTED) {
                     synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
                 }
                 return
             } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                delay(PROBE_RETRY.toMillis() * (attempt + 1))
+                delay(READ_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
             val read = CallPermissions(
@@ -572,7 +570,7 @@ class CallsController(
     override suspend fun setAllowed(connectionId: String, allowed: Boolean) {
         val epoch = permissionEpochNow()
         vaultGuard {
-            if (!open || !vaultC2) throw VaultFailure(FailureKind.OTHER, CODE_NO_PERMISSION)
+            if (!open || vaultC2 != true) throw VaultFailure(FailureKind.OTHER, CODE_NO_PERMISSION)
             vault.gateway.setPermission(connectionId, allowed)
         }
         synchronized(permissionLock) {
@@ -588,13 +586,17 @@ class CallsController(
         permissionReads.trySend(Unit)
     }
 
+    /** Bumped by every lock (with [permissionEpoch]): a history read begun before one notes nothing after it. */
+    @Volatile
+    private var lockEpoch = 0L
+
     private fun locked() {
+        lockEpoch++
         synchronized(permissionLock) {
             permissionEpoch++
             permissionsFlow.value = CallPermissions()
         }
-        supported = null
-        vaultC2 = false
+        vaultC2 = null
         testsAllowedFlow.value = false
         machine.vaultLocking()
         // Nothing of a call is kept for the next unlock: an ended call's line (this one's "…your vault was locked"
@@ -608,8 +610,7 @@ class CallsController(
 
     private fun publish() {
         availabilityFlow.value = when {
-            supported == null -> CallAvailability.UNKNOWN
-            supported == false -> CallAvailability.NOT_IN_VAULT
+            !open -> CallAvailability.CLOSED
             machine.state.value is CallState.Live -> CallAvailability.IN_CALL
             else -> CallAvailability.READY
         }
@@ -645,13 +646,14 @@ class CallsController(
     }
 
     override suspend fun history(connectionId: String): CallHistory {
-        // A vault without calls (or not known to have them) has no history; one with calls whose list does not read this
-        // time says so ([CallHistory.failed]), so that a conversation keeps what it shows rather than emptying it.
-        if (supported != true) return historyOf(null, connectionId, now())
+        // A vault that is not open has no history here; a list that does not read this time says so
+        // ([CallHistory.failed]), so that a conversation keeps what it shows rather than emptying it.
+        if (!open) return historyOf(null, connectionId, now())
+        val epoch = lockEpoch
         return try {
             val list = vault.gateway.list(HISTORY_LIMIT)
             // Not after a lock that came while the list was out: nothing of the history is kept while locked.
-            if (supported == true) noteSkipped(list)
+            if (open && epoch == lockEpoch) noteSkipped(list)
             historyOf(list, connectionId, now())
         } catch (e: CancellationException) {
             throw e
@@ -689,8 +691,8 @@ class CallsController(
          * for a moment; erring short would end a call that is still ringing.
          */
         val RING_STALE: Duration = Duration.ofMinutes(2)
-        private val PROBE_RETRY: Duration = Duration.ofSeconds(2)
-        private const val PROBE_ATTEMPTS = 3
+        private val READ_RETRY: Duration = Duration.ofSeconds(2)
+        private const val READ_ATTEMPTS = 3
         private const val UNSUPPORTED = "unsupported_type"
         private const val SIGNER_DEVELOPMENT = "development"
 

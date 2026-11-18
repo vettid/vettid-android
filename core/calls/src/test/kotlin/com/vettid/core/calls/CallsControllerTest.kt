@@ -172,7 +172,9 @@ class CallsControllerTest {
 
         override suspend fun fingerprint(connectionId: String): String? = "aaaa bbbb"
 
-        override suspend fun identityKey(connectionId: String): ByteArray? = ByteArray(32) { 9 }
+        var ik: ByteArray? = ByteArray(32) { 9 }
+
+        override suspend fun identityKey(connectionId: String): ByteArray? = ik
 
         var me: String? = "dev-me"
 
@@ -260,54 +262,95 @@ class CallsControllerTest {
         assertEquals(CallAvailability.NOT_IN_BUILD, NoCallAccess.availability.value)
     }
 
+    /**
+     * Every vault the app opens has calls (Rule 3: the app requires the vault's current release, and the release gate
+     * keeps [CallVault.unlocked] false until it is known current): calls are available as soon as the vault is open,
+     * before the after-unlock `call.list` read has answered, and not while it is closed.
+     */
     @Test
-    fun theVaultIsAskedAfterEveryUnlockWhetherItHasCalls() = runTest {
+    fun callsAreAvailableOnceTheVaultIsOpen() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
         val c = controller()
         runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        assertEquals(CallAvailability.CLOSED, c.availability.value)
         assertTrue("a locked vault is not asked", vault.gateway.sent.isEmpty())
         c.call("conn-1")
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
+        assertTrue("a closed vault has no history here", c.history("conn-1").let { it.entries.isEmpty() && !it.failed })
+        assertTrue("and none is read", vault.gateway.sent.isEmpty())
 
         vault.unlocked.value = true
         runCurrent()
-        assertEquals(listOf("list(200)"), vault.gateway.sent)
+        assertEquals("the read is out, unanswered", listOf("list(200)"), vault.gateway.sent)
         assertEquals(CallAvailability.READY, c.availability.value)
+        c.call("conn-1")
+        runCurrent()
+        assertEquals(CallPhase.CALLING, (c.state.value as CallState.Live).phase)
+        assertEquals(CallAvailability.IN_CALL, c.availability.value)
 
         vault.unlocked.value = false
         runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        assertEquals(CallAvailability.CLOSED, c.availability.value)
+        assertEquals(CallState.Idle, c.state.value)
+    }
 
-        // A release without calls: this is how the app learns it (no message lists a release's features).
-        vault.gateway.list = { throw VaultOpException("call.list", "unsupported_type") }
+    /** What the after-unlock read answers decides nothing of whether calls are shown: a refusal of any kind leaves them. */
+    @Test
+    fun aRefusedListReadLeavesCallsAvailable() = runTest {
+        for (code in listOf("unsupported_type", "owner_check_required")) {
+            val v = Vault()
+            v.gateway.list = { throw VaultOpException("call.list", code) }
+            val c = CallsController(v, FakeEngines(), backgroundScope, audio, audio, { true }, { })
+            v.unlocked.value = true
+            runCurrent()
+            assertEquals(code, CallAvailability.READY, c.availability.value)
+            assertTrue(code, c.history("conn-1").failed)
+            c.call("conn-1")
+            runCurrent()
+            assertTrue(code, c.state.value is CallState.Live)
+        }
+    }
+
+    /**
+     * (C2) A call placed before the after-unlock read has said what the vault is goes in form 2 (fail closed: the current
+     * vault is C2, and form 1 alone would leave a relay by a shared connection undetected), so it needs the connection's
+     * identity key: without it no call is placed.
+     */
+    @Test
+    fun aCallPlacedBeforeTheListReadIsInFormTwo() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        val c = controller()
         vault.unlocked.value = true
         runCurrent()
-        assertEquals(CallAvailability.NOT_IN_VAULT, c.availability.value)
         c.call("conn-1")
         runCurrent()
-        assertEquals(CallState.Idle, c.state.value)
-        assertTrue(c.history("conn-1").entries.isEmpty())
-        assertFalse("a vault without calls has an empty history, not a failed one", c.history("conn-1").failed)
+        assertTrue(vault.gateway.sent.toString(), vault.gateway.sent.contains("start(conn-1) form2"))
+        c.hangUp()
+        runCurrent()
+        c.dismiss()
+        vault.ik = null
+        val starts = vault.gateway.sent.count { it.startsWith("start") }
+        c.call("conn-1")
+        runCurrent()
+        assertEquals("no key, no call placed", starts, vault.gateway.sent.count { it.startsWith("start") })
+        assertTrue(c.state.value !is CallState.Live)
     }
 
     @Test
-    fun anUnreachableVaultIsAskedAgainAndAnotherRefusalLeavesItUnknown() = runTest {
+    fun anUnreachableVaultIsReadAgainAndCallsStayAvailable() = runTest {
         var failures = 2
         vault.gateway.list = { if (failures-- > 0) throw java.io.IOException("relay") else emptyList() }
         val c = controller()
         vault.unlocked.value = true
         runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
-        advanceTimeBy(7_000)
         assertEquals(CallAvailability.READY, c.availability.value)
-
-        vault.unlocked.value = false
-        runCurrent()
-        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
-        vault.unlocked.value = true
-        runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        assertEquals(1, vault.gateway.sent.count { it.startsWith("list") })
+        advanceTimeBy(7_000)
+        assertEquals("tried again until it read", 3, vault.gateway.sent.count { it.startsWith("list") })
+        assertEquals(CallAvailability.READY, c.availability.value)
     }
 
     @Test
@@ -622,11 +665,11 @@ class CallsControllerTest {
     }
 
     /**
-     * (C2) An offer in form 2 proves the vault C2 for that call, whatever the probe found (here an S10 answer, as from
-     * a probe that has not read the vault's level yet): the callee answers with `keepalive` and its keep-alives go.
+     * (C2) An offer in form 2 proves the vault C2 for that call, whatever the after-unlock read found (here an S10
+     * answer): the callee answers with `keepalive` and its keep-alives go.
      */
     @Test
-    fun aFormTwoOfferStartsKeepAlivesBeforeTheProbeKnows() = runTest {
+    fun aFormTwoOfferStartsKeepAlivesWhateverTheListReadFound() = runTest {
         val c = controller()
         vault.unlocked.value = true
         runCurrent()
@@ -645,7 +688,7 @@ class CallsControllerTest {
         assertEquals(listOf(true), vault.gateway.answeredWithKeepalive)
     }
 
-    /** What the probe found is forgotten at the lock: the next unlock's probe decides again. */
+    /** What the read found is forgotten at the lock: the next unlock's read decides again. */
     @Test
     fun theVaultsLevelIsForgottenAtLock() = runTest {
         vault.gateway.version = 2
@@ -678,7 +721,7 @@ class CallsControllerTest {
         runCurrent()
         c.call("conn-1")
         runCurrent()
-        c.forgetProbeForTest()
+        c.forgetListReadForTest()
         vault.recheck.emit(Unit)
         runCurrent()
         assertEquals(2, asks)
@@ -862,69 +905,54 @@ class CallsControllerTest {
     }
 
     /**
-     * Calls are in every build (owner decision 2026-11-14): an offer rings only where the probe said the vault has
-     * calls. A vault that answered `unsupported_type` (every production vault today) never rings, sends no
-     * `call.ringing` and asks for no microphone.
+     * An offer rings once the vault is open, whatever the after-unlock read answered (a refusal, or no answer yet): it
+     * does not wait for that read.
      */
     @Test
-    fun anOfferDoesNotRingWhereTheVaultSaidItHasNoCalls() = runTest {
-        vault.gateway.list = { throw VaultOpException("call.list", "unsupported_type") }
-        val c = controller()
-        vault.unlocked.value = true
-        runCurrent()
-        assertEquals(CallAvailability.NOT_IN_VAULT, c.availability.value)
-        vault.gateway.incoming = true
-        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T70", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
-        advanceTimeBy(10_001)
-        assertEquals(CallState.Idle, c.state.value)
-        assertTrue(!audio.ringtone)
-        assertTrue(vault.gateway.ringings.isEmpty())
-        assertEquals(1, c.diagnostics.value.refused)
-
-        // A refusal that leaves it unknown (the daily check due): no ring either.
-        vault.unlocked.value = false
-        runCurrent()
-        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
-        vault.unlocked.value = true
-        runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
-        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T71", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
-        advanceTimeBy(10_001)
-        assertEquals(CallState.Idle, c.state.value)
-        assertTrue(vault.gateway.ringings.isEmpty())
-        assertEquals(2, c.diagnostics.value.refused)
-    }
-
-    /** An offer that arrives while the probe is out waits for its answer, and rings once the vault said it has calls. */
-    @Test
-    fun anOfferWaitsForTheProbesAnswer() = runTest {
+    fun anOfferRingsWithoutWaitingForTheListRead() = runTest {
         val gate = Channel<Unit>(Channel.UNLIMITED)
         vault.gateway.listGate = { gate.receive() }
         val c = controller()
         vault.unlocked.value = true
         runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
         vault.gateway.incoming = true
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T72", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
-        advanceTimeBy(3_000)
-        assertEquals("not before the probe answered", CallState.Idle, c.state.value)
-        gate.send(Unit)
         runCurrent()
+        assertEquals("the read is still out", 1, vault.gateway.sent.count { it.startsWith("list") })
         assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
         assertEquals(listOf(CALL_ID), vault.gateway.ringings)
+        // (C2) Answered before the read says what the vault is: with keep-alives (form 2 unless found older).
+        c.answer()
+        runCurrent()
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        runCurrent()
+        assertEquals(listOf(true), vault.gateway.answeredWithKeepalive)
+        advanceTimeBy(30_001)
+        assertEquals("and its keep-alives go", listOf(CALL_ID, CALL_ID), vault.gateway.keepalives)
+    }
+
+    /** A refused after-unlock read (the daily check due) holds back no ring: the vault decides what it delivers then. */
+    @Test
+    fun anOfferRingsAfterARefusedListRead() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T71", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertEquals(0, c.diagnostics.value.refused)
     }
 
     /**
-     * The call events are handled in order, also while an offer waits for the probe: a hang-up that arrives during the
-     * wait is handled after its offer, so the call does not ring on after the caller gave up. (Nothing else is held up
-     * that matters: no call can be live on this phone before the probe answered, CallAvailability.READY.)
+     * The call events are handled in order, also while an offer waits for an unlock that is completing: a hang-up that
+     * arrives during the wait is handled after its offer, so the call does not ring on after the caller gave up. (Nothing
+     * else is held up that matters: no call can be live on this phone while the vault is closed.)
      */
     @Test
     fun aHangUpThatArrivesWhileItsOfferWaitsEndsTheRing() = runTest {
-        val gate = Channel<Unit>(Channel.UNLIMITED)
-        vault.gateway.listGate = { gate.receive() }
         val c = controller()
-        vault.unlocked.value = true
         runCurrent()
         vault.gateway.incoming = true
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T73", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
@@ -932,7 +960,7 @@ class CallsControllerTest {
         vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
         advanceTimeBy(1_000)
         assertEquals(CallState.Idle, c.state.value)
-        gate.send(Unit)
+        vault.unlocked.value = true
         runCurrent()
         // It rang (the offer was let through), then the hang-up ended it: Idle would mean it never rang.
         assertTrue("the hang-up followed its offer: ${c.state.value}", c.state.value is CallState.Ended)
@@ -943,19 +971,16 @@ class CallsControllerTest {
         assertTrue(!audio.ringtone)
     }
 
-    /** The update screen is looked at after the wait: one that came up while the offer waited for the probe is not rung over. */
+    /** The update screen is looked at after the wait: one that came up while the offer waited for the unlock is not rung over. */
     @Test
     fun anOfferDoesNotRingOverAnUpdateScreenThatCameUpWhileItWaited() = runTest {
-        val gate = Channel<Unit>(Channel.UNLIMITED)
-        vault.gateway.listGate = { gate.receive() }
         val c = controller()
-        vault.unlocked.value = true
         runCurrent()
         vault.gateway.incoming = true
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T75", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
         advanceTimeBy(1_000)
         vault.updateShowing = true
-        gate.send(Unit)
+        vault.unlocked.value = true
         runCurrent()
         assertEquals(CallState.Idle, c.state.value)
         assertTrue(vault.gateway.ringings.isEmpty())
@@ -974,40 +999,12 @@ class CallsControllerTest {
         c.call("conn-1")
         runCurrent()
         assertTrue(c.state.value is CallState.Live)
-        // A state the controller does not reach today (the probe is not asked again while a call is live): if it ever
-        // did, an offer would otherwise wait for the answer with the live call's events behind it.
-        c.forgetProbeForTest()
         vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T74", type = "call.offer", ts = T0, body = """{"connection_id":"conn-2"}""".toByteArray()))))
         vault.gateway.channel.send(CallEvent.Ended(CALL_ID, "hangup"))
         runCurrent()
         assertTrue("the live call's hang-up was not held up: ${c.state.value}", c.state.value !is CallState.Live)
-        // The second offer did not ring: refused at once, as the vault had not said again that it has calls.
+        // The second offer did not ring (this fake's gateway refuses every offer's check here).
         assertTrue(vault.gateway.ringings.isEmpty())
-        assertEquals(1, c.diagnostics.value.refused)
-    }
-
-    /**
-     * A lock that comes while an offer waits for the probe: no ring, and nothing is sent for it. (The lock sets the probe's
-     * answer back to unknown, so the wait ends without it; mayRing's own look at the lock after the wait is defence in
-     * depth that no test here reaches.)
-     */
-    @Test
-    fun anOfferDoesNotRingWhenTheVaultLocksWhileItWaits() = runTest {
-        val gate = Channel<Unit>(Channel.UNLIMITED)
-        vault.gateway.listGate = { gate.receive() }
-        val c = controller()
-        vault.unlocked.value = true
-        runCurrent()
-        vault.gateway.incoming = true
-        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T76", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
-        advanceTimeBy(1_000)
-        val sent = vault.gateway.sent.size
-        vault.unlocked.value = false
-        gate.send(Unit)
-        advanceTimeBy(10_001)
-        assertEquals(CallState.Idle, c.state.value)
-        assertTrue(vault.gateway.ringings.isEmpty())
-        assertEquals(sent, vault.gateway.sent.size)
         assertEquals(1, c.diagnostics.value.refused)
     }
 
@@ -1026,9 +1023,9 @@ class CallsControllerTest {
         assertEquals(1, c.diagnostics.value.refused)
     }
 
-    /** Review D3: a probe that `recheck` starts does not run beside the one the unlock started. */
+    /** Review D3: a read that `recheck` starts does not run beside the one the unlock started. */
     @Test
-    fun oneProbeAtATime() = runTest {
+    fun oneListReadAtATime() = runTest {
         val gate = Channel<Unit>(Channel.UNLIMITED)
         var running = 0
         var most = 0
@@ -1048,7 +1045,7 @@ class CallsControllerTest {
         gate.send(Unit)
         runCurrent()
         assertEquals(CallAvailability.READY, c.availability.value)
-        // The rechecks that waited find the answer there and do not ask again.
+        // The rechecks that waited find the read done and do not read again.
         assertEquals(1, vault.gateway.sent.count { it.startsWith("list") })
     }
 
@@ -1093,7 +1090,7 @@ class CallsControllerTest {
         runCurrent()
         assertTrue(c.state.value is CallState.Live)
         // Asked again (the daily check was done, say) while the call is live.
-        c.forgetProbeForTest()
+        c.forgetListReadForTest()
         vault.recheck.emit(Unit)
         runCurrent()
         assertEquals(2, asks)
@@ -1101,19 +1098,23 @@ class CallsControllerTest {
         assertTrue(c.state.value is CallState.Live)
     }
 
-    /** Review N5: a refusal that is not "no calls" is asked about again when something changes. */
+    /** Review N5: a refused after-unlock read is made again when something changes, until it goes through. */
     @Test
-    fun aRefusedProbeIsRepeatedWhenTheVaultMayAnswer() = runTest {
+    fun aRefusedListReadIsRepeatedWhenTheVaultMayAnswer() = runTest {
         vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
         val c = controller()
         vault.unlocked.value = true
         runCurrent()
-        assertEquals(CallAvailability.UNKNOWN, c.availability.value)
+        assertEquals(1, vault.gateway.sent.count { it.startsWith("list") })
+        assertEquals(0, vault.gateway.permissionReads)
         vault.gateway.list = { emptyList() }
         vault.recheck.emit(Unit)
         runCurrent()
-        assertEquals(CallAvailability.READY, c.availability.value)
-        // Once known, it is not asked again for every change.
+        assertEquals(2, vault.gateway.sent.count { it.startsWith("list") })
+        assertEquals("what the read starts follows it", 1, vault.gateway.permissionReads)
+        // Once read, it is not read again for every change.
         val asked = vault.gateway.sent.count { it.startsWith("list") }
         vault.recheck.emit(Unit)
         runCurrent()
@@ -1443,5 +1444,46 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(0, c.diagnostics.value.listSkipped)
         assertEquals(emptyList<String>(), c.diagnostics.value.listSkippedIds)
+    }
+
+    /** (C2) The calls permission is not set before the after-unlock read has found the vault C2. */
+    @Test
+    fun noPermissionIsSetBeforeTheListReadFoundC2() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertThrows(com.vettid.core.data.vault.VaultFailure::class.java) { kotlinx.coroutines.runBlocking { c.setAllowed("conn-1", false) } }
+        assertTrue(vault.gateway.permissionSets.isEmpty())
+        gate.send(Unit)
+        runCurrent()
+        c.setAllowed("conn-1", false)
+        assertEquals(listOf("conn-1" to false), vault.gateway.permissionSets)
+    }
+
+    /** A history read that a lock overtook notes nothing, even once the vault is open again (the next opening's read does). */
+    @Test
+    fun aHistoryReadOvertakenByALockNotesNothing() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        var reads = 0
+        vault.gateway.listGate = { if (reads++ == 0) gate.receive() }
+        backgroundScope.launch { c.history("conn-1") }
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000001", "conn-1"))
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals("the new opening's read", 1, c.diagnostics.value.listSkipped)
+        vault.gateway.skipped = List(3) { com.vettid.core.vault.SkippedCall(null, "conn-1") }
+        gate.send(Unit)
+        runCurrent()
+        assertEquals("the old history read noted nothing", 1, c.diagnostics.value.listSkipped)
     }
 }

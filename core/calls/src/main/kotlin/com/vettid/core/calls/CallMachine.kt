@@ -546,7 +546,7 @@ internal class CallMachine(
         }
         val engine = s.engine ?: return
         // (C2, VAULT-MESSAGING "Key confirmation") A device answering a form 2 offer (it answers in form 2, whatever
-        // the vault probe has found yet) sends no media, microphone or camera, until its receiver first decrypts a
+        // the `call.list` read has found yet) sends no media, microphone or camera, until its receiver first decrypts a
         // frame: that proves the caller holds the same keys.
         if (offer.formTwo) {
             s.formTwo = true

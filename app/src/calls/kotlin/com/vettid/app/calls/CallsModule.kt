@@ -88,7 +88,7 @@ internal fun callsUnlocked(phase: StateFlow<AppPhase>, opens: StateFlow<Int>, re
 
 /**
  * Calls in every build, release included (owner decision 2026-11-14): the one [CallsController] of the process on the
- * app's vault. Nothing of calls shows until its `call.list` probe finds that the vault has calls.
+ * app's vault. Calls show while the vault is open on this phone and no release update is required ([callsOpen]).
  */
 @Module
 @InstallIn(SingletonComponent::class)

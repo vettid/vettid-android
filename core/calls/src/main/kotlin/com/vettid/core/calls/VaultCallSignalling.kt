@@ -63,7 +63,7 @@ internal class VaultCallSignalling(
      * callee this device names in `m2`, fixed for the call (VAULT-MESSAGING 0.88.16). Null for no such connection.
      */
     private val peerKey: suspend (connectionId: String) -> ByteArray? = { null },
-    /** (C2) Whether the vault is C2, as the `call.list` probe found it. */
+    /** (C2) Whether to call in form 2 and answer with keep-alives: the vault is C2, or not yet known to be older. */
     private val vaultIsC2: () -> Boolean = { false },
 ) : CallSignalling {
     override val formTwo: Boolean get() = vaultIsC2()
@@ -260,7 +260,7 @@ internal class VaultCallSignalling(
         // The suite was fixed when the offer was checked; an engine that cannot do it must not answer.
         if (call.negotiated.chosen !in suites) throw CallSecurityException("the engine cannot do the negotiated suite")
         return try {
-            // An offer in form 2 proves the vault C2 for this call, whatever the probe has found yet.
+            // An offer in form 2 proves the vault C2 for this call, whatever the `call.list` read has found yet.
             handOver(gateway.answer(call, sdp, keepalive = formTwo || call.formTwo))
         } catch (e: CallMessageException) {
             throw CallSecurityException("call.answer", e)

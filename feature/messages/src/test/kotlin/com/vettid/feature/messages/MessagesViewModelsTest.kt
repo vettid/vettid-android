@@ -317,10 +317,10 @@ class MessagesViewModelsTest {
         assertFalse(plain.uiState.value.callShown)
         plain.call()
 
-        val calls = FakeCalls(CallAvailability.UNKNOWN)
+        val calls = FakeCalls(CallAvailability.CLOSED)
         val vm = conversation(calls)
         advanceUntilIdle()
-        assertFalse("not before the vault was asked", vm.uiState.value.callShown)
+        assertFalse("not while the vault is closed", vm.uiState.value.callShown)
         assertEquals(0, calls.historyReads)
 
         calls.availability.value = CallAvailability.READY
@@ -336,8 +336,8 @@ class MessagesViewModelsTest {
         vm.call()
         assertEquals(1, calls.called.size)
 
-        // A vault whose release has no calls (every production vault today): no button, and a tap calls nobody.
-        calls.availability.value = CallAvailability.NOT_IN_VAULT
+        // The vault locked: no button, and a tap calls nobody.
+        calls.availability.value = CallAvailability.CLOSED
         advanceUntilIdle()
         assertFalse(vm.uiState.value.callShown)
         vm.call()
@@ -359,12 +359,12 @@ class MessagesViewModelsTest {
         advanceUntilIdle()
         assertFalse("the read again finds none skipped", vm.uiState.value.callsNotShown)
         calls.someNotShown = true
-        calls.availability.value = CallAvailability.UNKNOWN // locked
+        calls.availability.value = CallAvailability.CLOSED // locked
         advanceUntilIdle()
         calls.availability.value = CallAvailability.READY // read again: skipped again
         advanceUntilIdle()
         assertTrue("skipped again after the unlock", vm.uiState.value.callsNotShown)
-        calls.availability.value = CallAvailability.UNKNOWN // locked
+        calls.availability.value = CallAvailability.CLOSED // locked
         advanceUntilIdle()
         assertFalse(vm.uiState.value.callsNotShown)
         calls.someNotShown = false
@@ -398,7 +398,7 @@ class MessagesViewModelsTest {
         assertEquals(listOf("k1", "k3", "k4"), vm.uiState.value.calls.map { it.callId })
 
         // Review of #128: a vault not known to be open keeps none of its history in memory.
-        calls.availability.value = CallAvailability.UNKNOWN
+        calls.availability.value = CallAvailability.CLOSED
         advanceUntilIdle()
         assertTrue(vm.uiState.value.calls.isEmpty())
     }

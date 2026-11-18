@@ -108,7 +108,7 @@ sealed interface CallState {
         val answerThrough: Boolean = false,
         /**
          * (C2) The call is in form 2: placed in form 2, or answering an offer in form 2. That proves the vault C2 for
-         * this call, whatever the `call.list` probe has found yet: keep-alives go on it.
+         * this call, whatever the `call.list` read has found yet: keep-alives go on it.
          */
         val formTwo: Boolean = false,
     ) : CallState
