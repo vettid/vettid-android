@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -81,5 +82,32 @@ class FinishMoveHoldTest {
         vm.finish()
         advanceUntilIdle()
         assertEquals(listOf<Int?>(9), vault.finishMoveTaken)
+    }
+
+    /** A phone with no usable user_guid can never finish the move: the unlock screen's recover-or-erase text, not "not yet". */
+    @Test
+    fun aPhoneWithoutAUserGuidIsToldItCannotOpenTheVault() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockAttempt.CODE_NO_USER_GUID)
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
+        // Any other refusal of the kind keeps its own text.
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.noUserGuid)
+        assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
+        // Nor the code with another kind: only the unlock guard's own refusal.
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.noUserGuid)
+        assertEquals(FailureKind.OTHER, vm.uiState.value.failure)
     }
 }

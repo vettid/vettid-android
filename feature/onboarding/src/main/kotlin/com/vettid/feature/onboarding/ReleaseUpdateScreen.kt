@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateManager
 import com.vettid.core.data.vault.ReleaseUpdateOffer
+import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.UpdateStep
@@ -335,6 +336,9 @@ private fun steps(p: UpdateProgress, from: Int, to: Int): List<Pair<String, Step
 private fun failureText(p: UpdateProgress): String = when {
     p.failure == FailureKind.BAD_PIN -> stringResource(R.string.unlock_bad_pin)
     p.failure == FailureKind.BACKOFF -> stringResource(R.string.release_update_backoff)
+    // A phone with no usable user_guid can never open the vault: the unlock screen's recover-or-erase text.
+    p.failure == FailureKind.NOT_SUPPORTED && p.failureCode == UnlockAttempt.CODE_NO_USER_GUID ->
+        stringResource(R.string.unlock_stuck_body)
     p.failureCode == ReleaseUpdateManager.CODE_RELEASE_STARTING -> stringResource(R.string.release_update_start_failed)
     // ANDROID-PLAN 0.1.54: still routed to release N after the retries; the way back answered `wrong_release` or `410`.
     p.failure == FailureKind.ROUTE_PENDING -> stringResource(R.string.release_update_route_pending, p.to.number.toInt())
