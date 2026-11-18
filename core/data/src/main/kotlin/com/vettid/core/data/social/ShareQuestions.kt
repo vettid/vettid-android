@@ -8,6 +8,19 @@ package com.vettid.core.data.social
  * [ShareItem.alsoIn]. A rule left with no item of its own is not shown.
  */
 object ShareQuestions {
+    /** The most item ids one `share.decide` takes (§10.12: `include` and `decline` together 1–500). */
+    const val DECIDE_MAX = 500
+
+    /**
+     * Each question cut to its first [DECIDE_MAX] items (owner decision a, 2026-11-18): a rule can hold up to 4,096
+     * items pending, but a decision is one `share.decide`, so the member decides at most [DECIDE_MAX] at a time, and the
+     * rest are the next round once those leave the list. Applied after [dedupe], so an item asked in several rules is
+     * counted in the one that shows it.
+     */
+    fun capped(approvals: List<Approval>): List<Approval> = approvals.map { a ->
+        if (a is Approval.ShareDecision && a.items.size > DECIDE_MAX) a.copy(items = a.items.take(DECIDE_MAX)) else a
+    }
+
     fun dedupe(approvals: List<Approval>): List<Approval> {
         val shares = approvals.filterIsInstance<Approval.ShareDecision>()
         if (shares.size < 2) return approvals

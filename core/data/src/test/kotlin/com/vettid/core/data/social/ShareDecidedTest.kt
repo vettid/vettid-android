@@ -616,4 +616,42 @@ class ShareDecidedTest {
         runCurrent()
         assertEquals(setOf<String?>("r1", "r2"), feedReads.toSet())
     }
+
+    /**
+     * Owner decision a (2026-11-18): a question shows at most one `share.decide`'s items (§10.12: 500), and the rest are the
+     * next round once those are decided.
+     */
+    @Test
+    fun aQuestionOfMoreThanOneDecisionShowsTheFirst500AndTheRestComeNext() = runTest {
+        val m = manager()
+        val ids = (1..600).map { "i%03d".format(it) }
+        m.refresh(*ids.map { entry("r1", it) }.toTypedArray())
+        runCurrent()
+        assertEquals(ids.take(500), m.items("r1"))
+
+        var sent: Pair<List<String>, List<String>>? = null
+        val shown = m.items("r1")!!
+        m.decideShareWith("r1", shown.take(300), shown.drop(300), send = {
+            sent = shown.take(300) to shown.drop(300)
+            o("""{"included":[${shown.take(300).joinToString(",") { "\"$it\"" }}],"declined":[${shown.drop(300).joinToString(",") { "\"$it\"" }}]}""")
+        })
+        runCurrent()
+        assertEquals(500, sent!!.first.size + sent!!.second.size)
+        assertEquals(ids.drop(500), m.items("r1"))
+        // The question is still open, so its feed item stays unread.
+        assertTrue(feedReads.isEmpty())
+    }
+
+    @Test
+    fun moreThanOneDecisionsItemsIsRefusedWithNothingSent() = runTest {
+        val m = manager()
+        val ids = (1..501).map { "i$it" }
+        var sent = 0
+        val e = runCatching { m.decideShareWith("r1", ids.take(250), ids.drop(250), send = { sent++; o("{}") }) }.exceptionOrNull()
+        assertEquals("bad_request", (e as VaultFailure).code)
+        assertEquals(0, sent)
+        // 500 is still one decision (a repeated id counts once).
+        m.decideShareWith("r1", ids.take(500) + ids.first(), emptyList(), send = { sent++; o("{}") })
+        assertEquals(1, sent)
+    }
 }

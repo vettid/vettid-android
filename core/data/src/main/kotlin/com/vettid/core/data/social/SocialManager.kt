@@ -1863,12 +1863,12 @@ class SocialManager internal constructor(
         val all = (events + listed.filter { l -> events.none { it.key == l.key } })
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
-        // One question per item and subject (0.23.0 §10.12).
+        // One question per item and subject (0.23.0 §10.12), of at most one share.decide's items.
         val firsts = cs.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
         fun named(a: Approval): Approval = withName(a, names, services).let { n ->
             if (n is Approval.LocationRequest) n.copy(firstName = firsts[n.connectionId]) else n
         }
-        return ShareQuestions.dedupe(all.map(::named)).sortedByDescending { it.receivedAt }
+        return ShareQuestions.capped(ShareQuestions.dedupe(all.map(::named))).sortedByDescending { it.receivedAt }
     }
 
     private fun withName(a: Approval, names: Map<String, String>, services: Set<String>): Approval = when (a) {
@@ -2131,7 +2131,9 @@ class SocialManager internal constructor(
         decline: List<String>,
         send: suspend () -> JsonObject,
     ) {
-        if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        // None, or more than one share.decide takes (§10.12: 1–500; the questions shown never ask for more,
+        // ShareQuestions.capped): the vault would refuse it, so nothing is sent.
+        if ((include + decline).toSet().size !in 1..ShareQuestions.DECIDE_MAX) throw VaultFailure(FailureKind.OTHER, "bad_request")
         // The subject, before the decision takes the rule's question out of the list and the events.
         val subject = subjectOfRule(ruleId)
         var answer: JsonObject? = null
