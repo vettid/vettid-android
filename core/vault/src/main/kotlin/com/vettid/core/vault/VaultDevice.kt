@@ -1435,7 +1435,7 @@ class VaultDevice private constructor(
                 }
             }
             st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
-            droppedNoUserGuid = false // a new transfer: an earlier one's failure is not this one's
+            st.noUserGuidDrop = false // a new transfer: an earlier one's failure is not this one's (saved with its record)
             st.scanCode = null // the code is the transfer's from here on
             save()
         }
@@ -1537,13 +1537,23 @@ class VaultDevice private constructor(
     }
 
     /**
-     * The last transfer to this phone was dropped for a `device.paired` without a valid `user_guid` ([dropNoUserGuid]);
-     * cleared when a new transfer starts. Memory only: after a restart that transfer is simply gone. Read by the
-     * settlement, whose own drop may find the transfer already dropped by the handler.
+     * The last transfer to this phone was dropped for a `device.paired` without a valid `user_guid` ([dropNoUserGuid]),
+     * and the member has not been told yet ([DeviceState.noUserGuidDrop], saved with the drop, so it outlives a restart).
+     * Cleared when a new transfer starts and once told ([takeNoUserGuidDrop]). Read by the
+     * transfer's wait and by the settlement, whose own drop may find the transfer already dropped by the handler.
      */
-    @Volatile
-    var droppedNoUserGuid = false
-        private set
+    val droppedNoUserGuid: Boolean get() = st.noUserGuidDrop
+
+    /**
+     * The member is told now that the move stopped ([droppedNoUserGuid]): true once, and the mark is cleared and saved.
+     * False when there is nothing to tell.
+     */
+    suspend fun takeNoUserGuidDrop(): Boolean = lock.withLock {
+        if (!st.noUserGuidDrop) return@withLock false
+        st.noUserGuidDrop = false
+        save()
+        true
+    }
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
@@ -1790,7 +1800,7 @@ class VaultDevice private constructor(
     private fun dropNoUserGuid() {
         dropPairing()
         st.vault = null
-        droppedNoUserGuid = true
+        st.noUserGuidDrop = true // saved with the drop and the seen mark, by the handler
         inboxVersion.value++ // wakes the transfer's wait, which reads the mark
     }
 

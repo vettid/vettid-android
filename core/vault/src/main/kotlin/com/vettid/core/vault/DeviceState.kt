@@ -81,6 +81,13 @@ internal data class DeviceState(
      */
     var droppedTransfer: DroppedTransferRecord? = null,
     /**
+     * (VAULT-MESSAGING §6.7.1) The last transfer to this phone was dropped for a `device.paired` without a valid
+     * `user_guid` ([VaultDevice.droppedNoUserGuid]): the fact only, no key or id. Saved in the same write as that drop
+     * (and the message's seen mark), so that after a restart the member is still told the move stopped, once
+     * ([VaultDevice.takeNoUserGuidDrop]). Cleared once told (the transfer's wait or the start's screen) and by a new scan.
+     */
+    var noUserGuidDrop: Boolean = false,
+    /**
      * (VAULT-MESSAGING 0.88.3 §11.14.10 rule 5, "A second scan of the same code"; owner decision a, GC #6474) The code a
      * scan to this phone is under way for, from before its claim is fetched until its transfer is recorded
      * ([transferIn], which then carries the code) or the scan fails (a fetch or payload check that fails, an `hs.init`

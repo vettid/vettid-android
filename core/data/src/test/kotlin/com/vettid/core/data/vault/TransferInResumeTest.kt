@@ -584,4 +584,16 @@ class TransferInResumeTest {
             assertEquals(null, TransferInResume.usableGuid(g ?: ""))
         }
     }
+
+    /**
+     * (§6.7.1) A start shows the transfer screen to say the move stopped only for a drop for the user_guid the member was
+     * not told of, on a phone that holds no vault and no transfer (a new scan or a paired device: never).
+     */
+    @Test
+    fun aStartTellsAStoppedMoveOnlyForAnUntoldDropOnAnEmptyPhone() {
+        assertTrue(StoppedMove.tells(null, null, droppedNoUserGuid = true))
+        assertFalse("told already, or none", StoppedMove.tells(null, null, droppedNoUserGuid = false))
+        assertFalse("a paired phone", StoppedMove.tells("dev-2", null, droppedNoUserGuid = true))
+        assertFalse("a transfer under way", StoppedMove.tells(null, shown, droppedNoUserGuid = true))
+    }
 }

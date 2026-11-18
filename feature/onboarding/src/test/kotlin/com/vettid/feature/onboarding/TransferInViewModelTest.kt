@@ -77,6 +77,21 @@ class TransferInViewModelTest {
         assertNotEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
     }
 
+    /**
+     * (§6.7.1) The move stopped for its user_guid before a restart (the member was not told): the transfer screen opens on
+     * "The move stopped on this phone", once; the next visit starts at the beginning.
+     */
+    @Test
+    fun aMoveThatStoppedBeforeARestartIsToldOnce() = runTest {
+        vault.transferStopped = true
+        val vm = TransferInViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        val next = TransferInViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(TransferInStep.INTRO, next.uiState.value.step)
+    }
+
     @Test
     fun rejectedOnTheOldPhone() = runTest {
         val vm = TransferInViewModel(vault, vault)

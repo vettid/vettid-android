@@ -687,6 +687,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         phase.value = AppPhase.Setup(SetupStage.FINISHING)
     }
 
+    /** What [takeTransferStopped] answers, once (a move that stopped for its `user_guid` before a restart). */
+    var transferStopped = false
+
+    override suspend fun takeTransferStopped(): Boolean = transferStopped.also { transferStopped = false }
+
     override suspend fun abandonTransferIn() {
         call("abandonTransferIn")
         waitingTransfer = null

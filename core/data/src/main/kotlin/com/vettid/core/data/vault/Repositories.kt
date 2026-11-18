@@ -582,6 +582,13 @@ interface MoveRepository {
     suspend fun transferInWaiting(): TransferInWaiting? = null
 
     /**
+     * (VAULT-MESSAGING §6.7.1) True once when the last transfer to this phone was dropped for a `device.paired` without a
+     * valid `user_guid` and the member was not told (the process ended first): the screen then says the move stopped
+     * ([CODE_TRANSFER_SESSION_ENDED]'s screen). Reading it clears it; so does a new scan.
+     */
+    suspend fun takeTransferStopped(): Boolean = false
+
+    /**
      * Drops a transfer this phone started and has not completed. (A6 audit N1) Only on the member's confirmed cancel:
      * if the old phone already approved it, this phone loses the vault it was receiving.
      */

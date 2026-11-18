@@ -2654,13 +2654,70 @@ class VaultDeviceTest {
                     assertFalse(why, v.vaultId in saved)
                     assertTrue(why, "\"transferIn\":null" in saved)
                     assertNull("$why: nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
-                    // A restart finds nothing of it.
+                    // A restart finds nothing of it but the fact, to be told once (no key or id: checked on the file above).
+                    assertTrue(why, d.droppedNoUserGuid)
+                    assertTrue(why, "\"noUserGuidDrop\":true" in saved)
                     d.stop()
-                    val again = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)
-                    assertNull(why, again?.transferInPending)
-                    assertNull(why, again?.deviceId)
+                    val again = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)!!
+                    assertNull(why, again.transferInPending)
+                    assertNull(why, again.deviceId)
+                    assertTrue(why, again.droppedNoUserGuid)
+                    assertTrue("$why: told once", again.takeNoUserGuidDrop())
+                    assertFalse("$why: not twice", again.takeNoUserGuidDrop())
+                    again.stop()
+                    val third = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)!!
+                    assertFalse("$why: not after another restart", third.droppedNoUserGuid)
+                    third.stop()
                 }
             }
+        }
+    }
+
+    /**
+     * The drop for a missing user_guid and its mark are one save with the message's seen mark: a process that cannot save
+     * (or dies before it does) keeps the open transfer on disk and no mark; the redelivered device.paired is handled again,
+     * and dropped, with the mark, then.
+     */
+    @Test
+    fun aCrashBeforeTheNoGuidDropIsSavedLeavesNothingAndTheRedeliveryDropsIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val inner = InMemoryDeviceStateStore()
+            var failSave = false
+            val store = object : DeviceStateStore {
+                override fun load() = inner.load()
+                override fun save(state: ByteArray) {
+                    if (failSave) throw java.io.IOException("no space left")
+                    inner.save(state)
+                }
+                override fun clear() = inner.clear()
+            }
+            val secrets = appSecrets()
+            val phone = PhoneKeyStandIn(inner)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+            assertFalse("nothing to tell on a new device", d.droppedNoUserGuid)
+            val v = FakeVault()
+            d.scan(v, phone, "att-1")
+            v.answer(nextDeposit().second, d)
+            val started = d.transferInPending!!.startedAt
+            val msg = v.seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"${v.vaultId}","transfer":true}""")
+            failSave = true
+            assertTrue("the drop's save fails", runCatching { d.handle(msg) }.isFailure)
+            val before = String(inner.load()!!)
+            assertFalse("no mark without the drop", "\"noUserGuidDrop\":true" in before)
+            val reloaded = VaultDevice.load(config(inner, transferDropped = phone::onDrop), secrets)!!
+            assertEquals("the open transfer is still on disk", started, reloaded.transferInPending?.startedAt)
+            assertFalse(reloaded.droppedNoUserGuid)
+            assertTrue(phone.drops.isEmpty())
+            // The relay delivers it again: dropped, with the mark, in one save.
+            reloaded.handle(msg)
+            assertNull(reloaded.transferInPending)
+            assertNull(reloaded.deviceId)
+            assertTrue(reloaded.droppedNoUserGuid)
+            val after = String(inner.load()!!)
+            assertTrue("\"noUserGuidDrop\":true" in after)
+            assertTrue("\"transferIn\":null" in after)
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+            reloaded.stop()
         }
     }
 
@@ -2683,6 +2740,8 @@ class VaultDeviceTest {
                 "waits for its own answer",
                 runCatching { d.awaitTransfer(java.time.Duration.ofMillis(200)) }.exceptionOrNull() is kotlinx.coroutines.TimeoutCancellationException,
             )
+            assertFalse("the new scan clears the untold failure", d.droppedNoUserGuid)
+            assertFalse(String(store.load()!!).contains("\"noUserGuidDrop\":true"))
             d.handle(v2.transferPaired(d))
             assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
             assertEquals("dev-2", d.deviceId)

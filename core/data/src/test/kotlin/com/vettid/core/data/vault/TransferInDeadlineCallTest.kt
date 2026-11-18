@@ -147,4 +147,24 @@ class TransferInDeadlineCallTest {
         assertTrue(complete.first().contains("guid: String)"))
         assertFalse(complete.any { it.contains("guid != null") || it.contains("String?") })
     }
+
+    /**
+     * (§6.7.1) The untold drop for the user_guid outlives a restart: the start shows the transfer screen for it, before
+     * any other setup stage, and the transfer screen's wait clears it whenever it says the move stopped.
+     */
+    @Test
+    fun anUntoldStoppedMoveIsShownAtTheStartAndClearedWhenTold() {
+        val ev = body("private suspend fun evaluate()")
+        val tells = ev.indexOf("val untold = StoppedMove.tells(d.deviceId, d.transferInPending, d.droppedNoUserGuid)")
+        assertTrue(tells >= 0)
+        assertEquals("if (untold) return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)", ev[tells + 1])
+        assertTrue("before the stages of a phone without a vault", tells < ev.indexOf("if (d.deviceId == null) {"))
+        val wait = body("override suspend fun awaitTransferIn()")
+        assertEquals("told on both ways the screen says it", 2, wait.count { it == "tellNoUserGuidDrop(s)" })
+        val told = wait.indexOf("} catch (e: TransferWithoutUserGuidException) {")
+        assertEquals("tellNoUserGuidDrop(s)", wait[told + 1])
+        assertTrue(body("private suspend fun tellNoUserGuidDrop(").any { it == "s.device.takeNoUserGuidDrop()" })
+        val take = "override suspend fun takeTransferStopped(): Boolean = guard { session().device.takeNoUserGuidDrop() }"
+        assertTrue(code.any { it == take })
+    }
 }

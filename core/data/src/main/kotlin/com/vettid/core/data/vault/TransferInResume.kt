@@ -685,3 +685,13 @@ internal object TransferInResume {
         }
     }
 }
+
+/**
+ * (VAULT-MESSAGING §6.7.1) Whether a start shows the transfer screen to say the move stopped: the device holds no vault
+ * and no transfer, and the last one was dropped for its `user_guid` with the member not told yet (a process that ended
+ * between the drop's save and the screen).
+ */
+internal object StoppedMove {
+    fun tells(deviceId: String?, pending: TransferInState?, droppedNoUserGuid: Boolean): Boolean =
+        droppedNoUserGuid && deviceId == null && pending == null
+}

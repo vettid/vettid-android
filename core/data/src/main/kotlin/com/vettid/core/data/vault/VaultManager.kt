@@ -2114,6 +2114,10 @@ class VaultManager(
             TransferInResume.Action.DROP -> d.abandonTransfer()
             TransferInResume.Action.NONE -> Unit
         }
+        // (VAULT-MESSAGING §6.7.1) A transfer the handler dropped for its user_guid, the member not told yet (the process
+        // ended first): the transfer screen, which says "The move stopped on this phone" once ([takeTransferStopped]).
+        val untold = StoppedMove.tells(d.deviceId, d.transferInPending, d.droppedNoUserGuid)
+        if (untold) return@guard AppPhase.Setup(SetupStage.TRANSFER_WAITING)
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
@@ -4849,7 +4853,11 @@ class VaultManager(
         // Nothing to wait for (a wipe, a forget or a dead mailbox took the transfer, and it was not completed): the move
         // stopped on this phone; never a wait of 11 minutes counted from now.
         if (s.device.transferInPending == null) {
-            if (s.device.credentialVersion == null) throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
+            if (s.device.credentialVersion == null) {
+                // The screen says the move stopped: so a drop for the user_guid is told, and not again after a restart.
+                tellNoUserGuidDrop(s)
+                throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
+            }
             // Completed in the background (the settlement started at the start applied it and took the credential over):
             // the same result as a normal completion, not a timeout. Never without the member's user_guid (a transfer an
             // older app build completed without one): a failed transfer here, and the unlock's guard refuses later.
@@ -4859,12 +4867,17 @@ class VaultManager(
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
         // (kept across restarts; nothing the member does moves it); then collects for the settlement window (the relay's
         // advertised visibility timeout + the 25 s long-poll cap + 5 s), and applied or dropped.
-        val guid = TransferInResume.awaitApproval(
-            pending = { s.device.transferInPending },
-            now = Instant::now,
-            await = { left -> s.device.awaitTransfer(left) },
-            atDeadline = { atTransferDeadline(s) },
-        ) ?: throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED)
+        val guid = try {
+            TransferInResume.awaitApproval(
+                pending = { s.device.transferInPending },
+                now = Instant::now,
+                await = { left -> s.device.awaitTransfer(left) },
+                atDeadline = { atTransferDeadline(s) },
+            )
+        } catch (e: TransferWithoutUserGuidException) {
+            tellNoUserGuidDrop(s)
+            throw e
+        } ?: throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_TRANSFER_DROPPED)
         completeTransferIn(s, rec, guid.userGuid).also { publishFinishing(gen) }
     }
 
@@ -4958,6 +4971,17 @@ class VaultManager(
 
     /** (#187 recheck) Serializes [atTransferDeadline]. */
     private val transferDeadline = TransferInResume.Serial()
+
+    /** (§6.7.1) The transfer screen tells the member now: not again after a restart (the device's saved mark goes). */
+    private suspend fun tellNoUserGuidDrop(s: Session) {
+        try {
+            s.device.takeNoUserGuidDrop()
+        } catch (_: java.io.IOException) {
+            // Not saved: the start says it once more, which is the safe side.
+        }
+    }
+
+    override suspend fun takeTransferStopped(): Boolean = guard { session().device.takeNoUserGuidDrop() }
 
     override suspend fun transferInWaiting(): TransferInWaiting? = guard {
         val t = session().device.transferInPending ?: return@guard null

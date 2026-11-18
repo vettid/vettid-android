@@ -151,12 +151,26 @@ class TransferInViewModel @Inject constructor(
                 move.transferInWaiting()
             } catch (_: VaultFailure) {
                 null
-            } ?: return@launch
+            } ?: return@launch toldStoppedMove()
             if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return@launch
             val deadline = w.startedAt.plus(WINDOW)
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
             waiter = viewModelScope.launch { waitForApproval(deadline) { move.awaitTransferIn() } }
         }
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) No transfer waits: if the last one stopped for its `user_guid` before a restart, its
+     * existing "The move stopped on this phone", once (the repository clears it as it is read).
+     */
+    private suspend fun toldStoppedMove() {
+        if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return
+        val stopped = try {
+            move.takeTransferStopped()
+        } catch (_: VaultFailure) {
+            false
+        }
+        if (stopped) state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
     }
 
     override fun scan() = state.update { it.copy(step = TransferInStep.SCAN, inputProblem = null, error = null) }
