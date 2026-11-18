@@ -77,6 +77,8 @@ data class WalletDetailUiState(
     val deleteError: FailureKind? = null,
     /** The wallet is gone from this screen (deleted, locked, held, wiped): the screen leaves. */
     val closed: Boolean = false,
+    /** The read of the wallets failed before this wallet was shown: said, with Try again ([WalletDetailViewModel.retryList]). */
+    val listFailed: FailureKind? = null,
 ) {
     val idle: Boolean get() = !deleting && !typeBusy && !closed
 
@@ -121,6 +123,7 @@ class WalletDetailViewModel @Inject constructor(
         viewModelScope.launch {
             wallets.capsDuplicate.collect { d -> mutable.update { it.copy(capsDuplicate = walletId in d) } }
         }
+        viewModelScope.launch { wallets.listFailure.collect { f -> mutable.update { it.copy(listFailed = f) } } }
         viewModelScope.launch {
             combine(
                 wallets.wallets, wallets.listed, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
@@ -172,6 +175,19 @@ class WalletDetailViewModel @Inject constructor(
             wallets.setPrivacyNoteShown(walletId)
             mutable.update { it.copy(noteNeeded = false) }
             lookUp()
+        }
+    }
+
+    /** "Try again" on a read of the wallets that failed before this wallet was shown: the wallets are read again. */
+    fun retryList() {
+        if (mutable.value.loaded || mutable.value.closed) return
+        mutable.update { it.copy(listFailed = null) }
+        viewModelScope.launch {
+            try {
+                wallets.refresh()
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(listFailed = e.kind) }
+            }
         }
     }
 

@@ -50,6 +50,8 @@ data class SpendingLimitsActions(
     val onDismissError: () -> Unit = {},
     /** Back inside the screen (a confirm to its form, a form to the overview). */
     val onStepBack: () -> Unit = {},
+    /** Try again on a read of the wallets that failed before this wallet was shown. */
+    val onRetryList: () -> Unit = {},
 )
 
 /**
@@ -92,7 +94,9 @@ private fun Overview(state: SpendingLimitsUiState, actions: SpendingLimitsAction
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_limits"),
     ) {
+        val listFailed = state.listFailed
         when {
+            !state.loaded && listFailed != null -> WalletsFailed(listFailed, actions.onRetryList)
             !state.loaded -> Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }

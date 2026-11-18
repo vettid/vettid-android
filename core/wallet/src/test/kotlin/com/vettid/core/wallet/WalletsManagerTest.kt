@@ -135,6 +135,7 @@ class WalletsManagerTest {
         assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
         assertTrue(m.isOpen.value)
         assertFalse(m.listed.value)
+        assertEquals("the screens can say it", FailureKind.NOT_SUPPORTED, m.listFailure.value)
         assertTrue(m.wallets.value.isEmpty())
         assertTrue(runCatching { m.refresh() }.exceptionOrNull() is VaultFailure)
         assertEquals(2, ops.calls.count { it == "list" })
@@ -145,9 +146,13 @@ class WalletsManagerTest {
         ops.unsupported = false
         m.refresh()
         assertTrue(m.listed.value)
+        assertNull("a list shown clears the failure", m.listFailure.value)
         assertEquals(listOf("Savings"), m.wallets.value.map { it.name })
+        ops.unsupported = true
+        assertTrue(runCatching { m.refresh() }.exceptionOrNull() is VaultFailure)
         m.clear()
         assertFalse(m.listed.value)
+        assertNull("a clear forgets it", m.listFailure.value)
     }
 
     /**
@@ -420,6 +425,8 @@ class WalletsManagerTest {
     @Test
     fun createRevealsWithTheSamePasswordAndLeavesTheWalletNotBackedUp() = runBlocking {
         val m = manager()
+        m.open()
+        ops.calls.clear()
         val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         assertEquals(listOf("create:testnet4", "reveal"), ops.calls)
         assertEquals(24, c.phrase!!.wordCount)
@@ -435,6 +442,7 @@ class WalletsManagerTest {
     fun aRevealThatFailsKeepsTheWallet() = runBlocking {
         ops.revealFails = true
         val m = manager()
+        m.open()
         val c = m.create("Savings", Network.SIGNET, "pw".toCharArray())
         assertNull(c.phrase)
         assertNotNull(c.revealFailure)
@@ -458,6 +466,7 @@ class WalletsManagerTest {
     @Test
     fun deleteForgetsTheWalletAndItsFlag() = runBlocking {
         val m = manager()
+        m.open()
         val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         m.confirmBackup(c.wallet.id)
         m.delete(c.wallet.id, "pw".toCharArray())
@@ -598,6 +607,7 @@ class WalletsManagerTest {
                 }
         }
         m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        m.open()
         val e = runCatching { m.revealPhrase("01WALLET0000000000000000AA", "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CLEARED, e.code)
         assertTrue(revealed!!.words().isEmpty())

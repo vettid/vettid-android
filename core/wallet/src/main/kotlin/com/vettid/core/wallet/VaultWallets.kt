@@ -47,9 +47,9 @@ data class VaultWallet(
     val perTxSats: Long? = null,
     /** `caps.per_period_sats`: the most in the rolling period (24 hours; an hour on staging); null for no limit. */
     val perPeriodSats: Long? = null,
-    /** `caps.spent_sats` (0.56.0): what the wallet's signed transactions took out within the period; null when the vault says none. */
+    /** `caps.spent_sats` (0.56.0): what the wallet's signed transactions took out within the period; always in the vault's answer. */
     val spentSats: Long? = null,
-    /** `caps.period_seconds`: the period's length (86,400; 3,600 on staging); null when the vault says none. */
+    /** `caps.period_seconds`: the period's length (86,400; 3,600 on staging); always in the vault's answer. */
     val periodSeconds: Long? = null,
 ) {
     /** The chain, when the name alone says which; null for `testnet` (testnet3 or testnet4: ask, ANDROID-PLAN question 16). */
@@ -81,21 +81,37 @@ class WalletWireException(field: String) : IllegalStateException("wallet answer:
 
 /** Reads the §10.18 answers. Strict: a missing or mistyped field is a [WalletWireException]. */
 internal object WalletWire {
-    /** A wallet's spending limits (0.56.0): either one set makes it capped; `null` is no limit. */
-    private val CAP_KEYS = listOf("per_tx_sats", "per_period_sats")
+    /** The most a limit or an amount of sats may be (§10.18 "Spend caps": 1 to 2,100,000,000,000,000). */
+    const val MAX_SATS = 2_100_000_000_000_000L
 
-    private fun JsonObject.isNumber(k: String): Boolean = (this[k] as? JsonPrimitive)?.let { !it.isString && it.content != "null" } == true
+    /** The longest period (§10.18: 86,400 s, divided by `time_scale` on staging and rounded up, so never longer). */
+    const val MAX_PERIOD_SECONDS = 86_400L
 
-    private fun JsonObject.number(k: String): Long? = if (isNumber(k)) (this[k] as JsonPrimitive).longOrNull else null
+    private val LIMIT = 1..MAX_SATS
+    private val AMOUNT = 0..MAX_SATS
+
+    /**
+     * [k] as a JSON integer within [range]. Anything else (a string, a boolean, a fraction, `null`, out of range, missing) does not
+     * read: never "no limit".
+     */
+    private fun JsonObject.integer(k: String, range: LongRange): Long =
+        (this[k] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toLongOrNull()?.takeIf { it in range }
+            ?: throw WalletWireException(k)
+
+    /** [k] absent: null (no limit, or not said). Present: as [integer], so a mistyped value never reads as absent. */
+    private fun JsonObject.optionalInteger(k: String, range: LongRange): Long? = if (k in this) integer(k, range) else null
 
     fun wallets(o: JsonObject): List<VaultWallet> = (o["wallets"] as? JsonArray ?: throw WalletWireException("wallets")).map { wallet(it) }
 
     @Suppress("ThrowsCount") // one per field: the message names which
     fun wallet(e: JsonElement): VaultWallet {
         val o = e as? JsonObject ?: throw WalletWireException("wallet")
-        // `<wallet>.caps` is always there, an empty object when the wallet has no limit (VAULT-MESSAGING §10.18 "Spend caps",
+        // `<wallet>.caps` is always there, without limits when the wallet has none (VAULT-MESSAGING §10.18 "Spend caps",
         // "Defaults"). A wallet without it is an answer that does not read, never a wallet without limits: nothing is shown or spent.
         val caps = o["caps"] as? JsonObject ?: throw WalletWireException("caps")
+        // The limits are absent when unlimited; `period_seconds` and `spent_sats` are always there ("Defaults").
+        val perTx = caps.optionalInteger("per_tx_sats", LIMIT)
+        val perPeriod = caps.optionalInteger("per_period_sats", LIMIT)
         return VaultWallet(
             id = o.str("wallet_id"),
             version = o.long("version"),
@@ -107,11 +123,11 @@ internal object WalletWire {
             tags = (o["tags"] as? JsonArray)?.map { t ->
                 (t as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw WalletWireException("tags")
             } ?: emptyList(),
-            capped = CAP_KEYS.any { k -> caps.isNumber(k) },
-            perTxSats = caps.number("per_tx_sats"),
-            perPeriodSats = caps.number("per_period_sats"),
-            spentSats = caps.number("spent_sats"),
-            periodSeconds = caps.number("period_seconds"),
+            capped = perTx != null || perPeriod != null,
+            perTxSats = perTx,
+            perPeriodSats = perPeriod,
+            spentSats = caps.integer("spent_sats", AMOUNT),
+            periodSeconds = caps.integer("period_seconds", 1..MAX_PERIOD_SECONDS),
         )
     }
 
@@ -161,10 +177,10 @@ internal object WalletWire {
         val cap = (o["cap"] as? JsonObject ?: throw WalletWireException("cap")).let { c ->
             SpendCap(
                 ok = c.bool("ok"),
-                reason = (c["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
-                remainingSats = c.number("remaining_sats"),
-                allowedAfter = c.instant("allowed_after"),
-                limitSats = c.number("limit_sats") ?: c.number("limit"),
+                reason = if ("reason" in c) c.str("reason") else null,
+                remainingSats = c.optionalInteger("remaining_sats", AMOUNT),
+                allowedAfter = c.strictInstant("allowed_after"),
+                limitSats = c.optionalInteger("limit_sats", LIMIT),
             )
         }
         return PsbtInspection(summary, cap)
@@ -194,9 +210,6 @@ internal object WalletWire {
             invocationId = (t["invocation_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
         )
     }
-
-    private fun JsonObject.instant(key: String): Instant? =
-        (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { runCatching { Instant.parse(it) }.getOrNull() }
 
     /** A time that is absent or null is null; one that is there and does not read is a malformed entry, not "no time". */
     private fun JsonObject.strictInstant(key: String): Instant? {

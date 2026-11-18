@@ -306,6 +306,23 @@ class SpendingLimitsViewModelTest {
         assertFalse(early.state.value.loaded)
     }
 
+    /** A read that failed before the wallet was shown is said; Try again reads the wallets, and the limits are shown. */
+    @Test
+    fun aFailedFirstReadIsSaidAndTryAgainShowsTheLimits() = runTest {
+        ops.wallets[id] = ops.wallet(id).copy(capped = true, perTxSats = 500_000)
+        ops.listFails = true
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is com.vettid.core.data.vault.VaultFailure)
+        val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.listFailed != null }
+        assertFalse(vm.state.value.loaded)
+        ops.listFails = false
+        vm.retryList()
+        eventually { vm.state.value.loaded }
+        assertNull(vm.state.value.listFailed)
+        assertEquals(500_000L, vm.state.value.perTx)
+    }
+
     @Test
     fun aRaiseNeverGoesOverAPendingLowerThatHasNotReachedTheVault() = runTest {
         val w = ops.wallet(id)

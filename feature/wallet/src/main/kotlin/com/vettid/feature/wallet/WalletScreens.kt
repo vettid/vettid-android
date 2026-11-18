@@ -128,17 +128,7 @@ fun WalletsScreen(state: WalletsUiState, chrome: ShellChrome, actions: WalletsAc
         },
     ) {
         when {
-            state.failed != null -> Column(
-                Modifier.fillMaxSize().padding(Spacing.l).testTag("wallet_failed"),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(stringResource(R.string.wallet_list_failed), style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(state.failed.messageRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = actions.onRetry, modifier = Modifier.testTag("wallet_retry")) {
-                    Text(stringResource(R.string.wallet_try_again))
-                }
-            }
+            state.failed != null -> WalletsFailed(state.failed, actions.onRetry)
             state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             state.rows.isEmpty() -> Column(Modifier.fillMaxSize()) {
                 // Every wallet this build can make is on a test network: the banner is there before the first one too.
@@ -516,6 +506,25 @@ internal fun HiddenFromCapture() {
             view.importantForContentCapture = important
             if (dataSensitive) view.setAccessibilityDataSensitive(View.ACCESSIBILITY_DATA_SENSITIVE_AUTO)
             if (captureWasOn) capture?.setContentCaptureEnabled(true)
+        }
+    }
+}
+
+/**
+ * "Your wallets couldn't be read.", why, and Try again: the list's failure, and a wallet's screen opened before any list was read
+ * when that read fails (instead of loading for ever).
+ */
+@Composable
+internal fun WalletsFailed(kind: FailureKind, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier.fillMaxSize().padding(Spacing.l).testTag("wallet_failed"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(stringResource(R.string.wallet_list_failed), style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(kind.messageRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = onRetry, modifier = Modifier.testTag("wallet_retry")) {
+            Text(stringResource(R.string.wallet_try_again))
         }
     }
 }

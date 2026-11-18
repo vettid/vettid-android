@@ -156,9 +156,30 @@ class WalletDetailViewModelTest {
         assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         assertFalse(vm.state.value.closed)
+        // The screen says the read failed (it does not load for ever).
+        eventually { vm.state.value.listFailed == FailureKind.NOT_SUPPORTED }
         ops.unsupported = false
         m.refresh()
         eventually { vm.state.value.closed }
+    }
+
+    /** A read that failed before the wallet was shown: Try again reads the wallets, and the wallet is shown. */
+    @Test
+    fun tryAgainAfterAFailedFirstReadShowsTheWallet() = runTest {
+        ops.wallet(id)
+        ops.listFails = true
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
+        val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        eventually { vm.state.value.listFailed != null }
+        assertFalse(vm.state.value.loaded)
+        // Failing again: still said.
+        vm.retryList()
+        eventually { vm.state.value.listFailed != null }
+        ops.listFails = false
+        vm.retryList()
+        eventually { vm.state.value.loaded }
+        assertEquals(null, vm.state.value.listFailed)
     }
 
     private val emptyTotals = com.vettid.core.chain.ChainSummary(0, 0, 0, 0)

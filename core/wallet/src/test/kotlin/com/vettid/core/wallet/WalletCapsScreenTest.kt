@@ -71,8 +71,9 @@ class WalletCapsScreenTest {
         // Nor does `caps` that is not an object.
         assertTrue(runCatching { WalletFixtures.wallet(caps = "null") }.exceptionOrNull() is WalletWireException)
         assertTrue(runCatching { WalletFixtures.wallet(caps = "[]") }.exceptionOrNull() is WalletWireException)
-        // An empty object is a wallet without limits.
-        assertFalse(WalletFixtures.wallet(caps = "{}").capped)
+        // No limits: the period and what it holds, nothing else (an empty object misses those, so it does not read).
+        assertFalse(WalletFixtures.wallet(caps = WalletFixtures.DEFAULT_CAPS).capped)
+        assertTrue(runCatching { WalletFixtures.wallet(caps = "{}") }.exceptionOrNull() is WalletWireException)
     }
 
     /**

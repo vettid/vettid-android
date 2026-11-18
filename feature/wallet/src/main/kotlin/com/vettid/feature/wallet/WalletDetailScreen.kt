@@ -78,6 +78,8 @@ data class WalletDetailActions(
     val onAskReset: () -> Unit = {},
     val onCancelReset: () -> Unit = {},
     val onReset: () -> Unit = {},
+    /** Try again on a read of the wallets that failed before this wallet was shown. */
+    val onRetryList: () -> Unit = {},
 )
 
 /**
@@ -95,7 +97,10 @@ fun WalletDetailScreen(state: WalletDetailUiState, actions: WalletDetailActions,
         Column(Modifier.fillMaxSize()) {
             VettIdBackTopBar(onBackClick = actions.onBack, actions = { WalletMenu(state, actions) })
             CenteredTitle(state.name, Modifier.testTag("wallet_detail_title"))
-            if (!state.loaded) {
+            val listFailed = state.listFailed
+            if (!state.loaded && listFailed != null) {
+                WalletsFailed(listFailed, actions.onRetryList)
+            } else if (!state.loaded) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 PullToRefreshBox(isRefreshing = state.lookingUp, onRefresh = actions.onRefresh, modifier = Modifier.fillMaxSize()) {

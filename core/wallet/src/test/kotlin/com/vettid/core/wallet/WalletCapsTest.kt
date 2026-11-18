@@ -631,7 +631,7 @@ class WalletCapsTest {
         assertTrue(m.wallets.value.single().capped)
     }
 
-    /** With `caps` in the answer, even an empty object, the limits chosen are kept and pending as before. */
+    /** With `caps` in the answer (no limits yet), the limits chosen are kept and pending as before. */
     @Test
     fun withCapsInTheAnswerTheLimitsAreKeptAndSetAsBefore() = runBlocking {
         val m = manager()

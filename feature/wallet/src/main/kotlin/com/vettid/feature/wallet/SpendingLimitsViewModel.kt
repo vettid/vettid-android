@@ -64,6 +64,8 @@ data class SpendingLimitsUiState(
     /** The vault's code of [error] (or this app's: [WalletsManager.CAPS_PENDING]). */
     val errorCode: String? = null,
     val closed: Boolean = false,
+    /** The read of the wallets failed before this wallet was shown: said, with Try again ([SpendingLimitsViewModel.retryList]). */
+    val listFailed: FailureKind? = null,
 ) {
     /** What the form comes to against the limits as they stand. */
     val plan: CapsPlan get() = CapsEdit.plan(perTx, perPeriod, form, raiseForm)
@@ -121,8 +123,22 @@ class SpendingLimitsViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch { wallets.listFailure.collect { f -> mutable.update { it.copy(listFailed = f) } } }
         // The screen reads the wallet when it opens: the limits and the period's total are the vault's, not a memory of it.
         viewModelScope.launch { readAgain() }
+    }
+
+    /** "Try again" on a read of the wallets that failed before this wallet was shown. */
+    fun retryList() {
+        if (mutable.value.loaded || mutable.value.closed) return
+        mutable.update { it.copy(listFailed = null) }
+        viewModelScope.launch {
+            try {
+                wallets.refresh()
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(listFailed = e.kind) }
+            }
+        }
     }
 
     private suspend fun readAgain() {

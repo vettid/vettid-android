@@ -612,7 +612,18 @@ The A2 exit test:
   implements caps) and `wallet.psbt.inspect`'s `cap` (always returned) are required: an answer without them is a `WalletWireException`,
   which `WalletsManager.walletRead` turns into `VaultFailure(OTHER, unreadable_result)` for `wallet.list`, `wallet.get`,
   `wallet.create` and `wallet.psbt.inspect`: the list shows the failure with Try again, a create or import shows its failure (nothing kept, no phrase shown),
-  and a send stops before anything is signed; a wallet without `caps` is never "no limit". The limits step is always asked at creation and import.
+  and a send stops before anything is signed; a wallet without `caps` is never "no limit". The members are strict too (`WalletWire`):
+  `per_tx_sats` and `per_period_sats` absent (no limit) or a JSON integer 1 to 2,100,000,000,000,000; `spent_sats` (0 up) and
+  `period_seconds` (1 to 86,400) always there; `capped` is what those two limits read as; in `cap`, `ok` is required, `limit_sats` (1 up)
+  and `remaining_sats` (0 up) are absent or integers in range, `reason` a string and `allowed_after` an RFC 3339 time; anything else
+  (a string, a boolean, a fraction, `null`, out of range) makes the answer unreadable (`limit` is not read for `limit_sats`). Known
+  consequence, chosen to fail closed: an `unreadable_result` from `wallet.create` or an import comes after the vault made the wallet, so
+  that wallet is left without the limit chosen for it (nothing is kept pending for a wallet the app could not read). Every entry point
+  that sends to the vault takes its generation with the open check (`WalletsManager.openGen`): while the manager is closed (locked,
+  held, due, wiped, before the next open) nothing is sent or published, the call failing with `cleared` (or its result type's
+  `Cleared` / `NothingToSend`). A wallet's screen opened before any list read shows `WalletsManager.listFailure` (the list's
+  "Your wallets couldn't be read.", why, and Try again: `WalletsFailed`) on the detail and Spending limits instead of loading for ever.
+  The limits step is always asked at creation and import.
   W1d (spending limits at creation, import; VAULT-MESSAGING §10.18 0.56.0): `WalletApi.kt` adds `walletCapsSet` (a normal op, a null
   member absent), `walletCapsRaise` (a credential operation, sealed `{pin, password, item_id, payload_sha256}`; the hash is
   `WalletCapsBinding`, tested against the §16 vector, a mismatch is a stop-and-report item), `wallet.create{item}` (`WalletImport`) and

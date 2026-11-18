@@ -135,6 +135,16 @@ class WalletDetailScreensTest {
         assertEquals(2, again)
     }
 
+    /** A read of the wallets that failed before this wallet was shown: the list's failure, with Try again, not a spinner. */
+    @Test
+    fun aFailedFirstReadIsSaidWithTryAgain() {
+        var retried = 0
+        show(WalletDetailUiState(name = "Savings", listFailed = FailureKind.NETWORK), WalletDetailActions(onRetryList = { retried++ }))
+        rule.onNodeWithText("Your wallets couldn't be read.").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_retry").performClick()
+        assertEquals(1, retried)
+    }
+
     @Test
     fun theMenuHasItsFiveItemsAndNoPhraseItem() {
         val got = mutableListOf<String>()

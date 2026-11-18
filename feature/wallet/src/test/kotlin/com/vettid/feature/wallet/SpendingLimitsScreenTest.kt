@@ -70,6 +70,16 @@ class SpendingLimitsScreenTest {
         rule.onNodeWithText("Lower a limit").assertIsDisplayed()
     }
 
+    /** A read of the wallets that failed before this wallet was shown: the list's failure, with Try again, not a spinner. */
+    @Test
+    fun aFailedFirstReadIsSaidWithTryAgain() {
+        var retried = 0
+        show(state(loaded = false).copy(listFailed = FailureKind.NETWORK), SpendingLimitsActions(onRetryList = { retried++ }))
+        rule.onNodeWithText("Your wallets couldn't be read.").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_retry").performClick()
+        assertEquals(1, retried)
+    }
+
     @Test
     fun beforeTheWalletIsReadNothingCanBeChanged() {
         var lower = 0
