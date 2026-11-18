@@ -328,38 +328,35 @@ class ImportScreensTest {
     fun theDoneStepSaysEveryLineThatApplies() {
         rule.setContent {
             BackupScreen(
-                BackupUiState(BackupStep.DONE, backedUp = false, saveFailed = true, capsFailed = true, capsNotSaved = true, capsUnsupported = true),
+                BackupUiState(BackupStep.DONE, backedUp = false, saveFailed = true, capsFailed = true, capsNotSaved = true),
                 BackupActions(),
             )
         }
         rule.onNodeWithText("Your check passed", substring = true).assertExists()
         rule.onNodeWithText("Your spending limit isn't set yet", substring = true).assertExists()
         rule.onNodeWithText("This phone couldn't save your spending limit", substring = true).assertExists()
-        rule.onNodeWithText("Your vault can't enforce spending limits yet, so this wallet has none.", substring = true).assertExists()
     }
 
     @Test
     fun theNoticesShowUnderThePhrase() {
         rule.setContent {
             BackupScreen(
-                BackupUiState(BackupStep.PHRASE, words = PhraseWords(List(12) { "w$it".toCharArray() }), capsNotSaved = true, capsUnsupported = true),
+                BackupUiState(BackupStep.PHRASE, words = PhraseWords(List(12) { "w$it".toCharArray() }), capsNotSaved = true),
                 BackupActions(),
             )
         }
         rule.onNodeWithTag("phrase_caps_not_saved").performScrollTo().assertIsDisplayed()
-        rule.onNodeWithTag("phrase_caps_unsupported").performScrollTo().assertIsDisplayed()
     }
 
     @Test
-    fun anImportedWalletOnAVaultWithoutLimitsOffersOpenAndSaysSo() {
+    fun anImportedWalletNotRecordedOffersOpenAndSaysSo() {
         var open = 0
         rule.setContent {
             ImportScreen(
-                form.copy(step = ImportStep.DONE, importedId = "W", capsUnsupported = true, notRecorded = true),
+                form.copy(step = ImportStep.DONE, importedId = "W", notRecorded = true),
                 ImportActions(onOpen = { open++ }),
             )
         }
-        rule.onNodeWithText("Your vault can't enforce spending limits yet", substring = true).assertExists()
         rule.onNodeWithText("This phone couldn't record the wallet", substring = true).assertExists()
         rule.onNodeWithText("You can check the words again from its row.", substring = true).assertExists()
         rule.onNodeWithText("Open wallet").performClick()

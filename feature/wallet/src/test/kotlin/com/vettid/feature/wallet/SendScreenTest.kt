@@ -323,15 +323,15 @@ class SendScreenTest {
     @Test
     fun theLimitLineIsOnlyThereWhenTheViewModelHasOne() {
         show(review(sampleReview().let { r ->
-            Review(r.address, r.payeeSats, r.changeSats, r.feeSats, r.vsize, r.totalOutSats, r.toFeeSats, r.sendAll, r.leftBehind, true, null, LimitLine(41_200, 1_208_800))
+            Review(r.address, r.payeeSats, r.changeSats, r.feeSats, r.vsize, r.totalOutSats, r.toFeeSats, r.sendAll, r.leftBehind, null, LimitLine(41_200, 1_208_800))
         }))
         rule.onNodeWithTag("wallet_send_review_limit")
             .assertTextEquals("Counts toward your limit for the last 24 hours: 41,200 sats. Left after this: 1,208,800 sats")
     }
 
     @Test
-    fun aVaultWithoutCapsShowsNothingAboutLimits() {
-        show(review(sampleReview(hasCap = false)))
+    fun aWalletWithoutAPerPeriodLimitShowsNothingAboutLimits() {
+        show(review(sampleReview()))
         assertEquals(0, rule.onAllNodesWithText("limit", substring = true).fetchSemanticsNodes().size)
     }
 
@@ -353,9 +353,9 @@ class SendScreenTest {
 
     @Test
     fun aSendAllThatLeftCoinsBehindSaysSo() {
-        show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 2, true)))
+        show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 2)))
         rule.onNodeWithTag("wallet_send_review_left").assertTextEquals("2 coins were left out.")
-        show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 1, true)))
+        show(review(Review(PAYEE, 99_000, 0, 1_000, 200, 100_000, 0, true, 1)))
         rule.onNodeWithTag("wallet_send_review_left").assertTextEquals("1 coin was left out.")
     }
 

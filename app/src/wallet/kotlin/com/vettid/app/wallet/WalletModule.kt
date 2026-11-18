@@ -18,7 +18,6 @@ import com.vettid.core.wallet.ChainServerSettings
 import com.vettid.core.wallet.ServersChainSettings
 import com.vettid.core.wallet.ServersChainSource
 import com.vettid.core.wallet.VaultWalletOps
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import com.vettid.core.wallet.WalletWipe
@@ -123,17 +122,11 @@ object WalletModule {
     @Provides
     @Singleton
     fun walletAccess(m: WalletsManager, @AppScope scope: CoroutineScope): WalletAccess = object : WalletAccess {
-        override val shown: StateFlow<Boolean> = combine(m.isOpen, m.availability, ::shownOf).stateIn(scope, SharingStarted.Eagerly, false)
+        override val shown: StateFlow<Boolean> = m.isOpen
 
         override val wallets: StateFlow<List<WalletLabel>> =
             m.wallets.map { list -> list.map { WalletLabel(it.id, it.name) } }.stateIn(scope, SharingStarted.Eagerly, emptyList())
     }
-
-    /**
-     * The drawer's Wallet entry: while the vault is open, unless it answered that it has no wallets. A read that failed at the unlock
-     * leaves the entry there, and the list's Try again reads it again (nothing fails silently).
-     */
-    internal fun shownOf(open: Boolean, availability: WalletAvailability): Boolean = open && availability != WalletAvailability.UNSUPPORTED
 
     /** The open session's identity ([opens], the vault's openings) while the wallets may be held ([openOf]); null while not. */
     internal fun sessionOf(phase: AppPhase, check: OwnerCheckView?, opens: Int, releaseRequired: Boolean): Int? =

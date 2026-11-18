@@ -6,7 +6,6 @@ import com.vettid.core.chain.Bip39
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -115,13 +114,6 @@ data class ImportUiState(
     val capsDuplicate: Boolean = false,
     /** This phone could not record the imported wallet as backed up: it shows "Not backed up". */
     val notRecorded: Boolean = false,
-    /**
-     * The member chose a limit but the vault cannot enforce one (the imported wallet came back without `caps`): it was not kept or
-     * sent, and the notice says so. A limits step that was skipped (a listed wallet without `caps`) shows no notice.
-     */
-    val capsUnsupported: Boolean = false,
-    /** The limits step was asked: Back from the password returns to it. */
-    val limitsAsked: Boolean = false,
     /** The limits chosen could not be saved on this phone (kept for this session only), and the send failed. */
     val capsNotSaved: Boolean = false,
     /** The vault closed (locked, held, due) during the flow: the words are gone and the flow leaves. */
@@ -134,7 +126,7 @@ data class ImportUiState(
     val idle: Boolean get() = !busy && !closed
 
     /** Imported with nothing left to say or do here (no limit to retry, no notice): the flow goes on to the wallet. */
-    val finished: Boolean get() = importedId != null && !capsFailed && !notRecorded && !capsUnsupported
+    val finished: Boolean get() = importedId != null && !capsFailed && !notRecorded
 
     /** Nothing in progress, a password is typed and the limits are ones the vault would take. */
     val passwordReady: Boolean get() = idle && password.isNotEmpty() && limitsParse.ok
@@ -175,10 +167,10 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
         // §3.6.3, "Local state": nothing of a wallet is kept or shown once the vault closes.
         viewModelScope.launch {
             var seen = false
-            wallets.availability.collect { a ->
-                if (a == WalletAvailability.AVAILABLE) {
+            wallets.listed.collect { listed ->
+                if (listed) {
                     seen = true
-                } else if (seen && a == WalletAvailability.UNKNOWN) {
+                } else if (seen) {
                     wipe()
                     mutable.update { it.copy(closed = true, busy = false, password = "", typed = "", passphrase = "") }
                 }
@@ -227,12 +219,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
         val s = mutable.value
         if (s.step != ImportStep.FORM || !s.idle || !s.formReady) return
         if (PhraseInput.checksumOk(s.typed)) {
-            // A vault whose wallets give no `caps` cannot enforce a limit: no question, nothing chosen, nothing pending.
-            if (wallets.capsOffered) {
-                mutable.update { it.copy(step = ImportStep.LIMITS, limitsAsked = true, invalidPhrase = false) }
-            } else {
-                mutable.update { it.copy(step = ImportStep.PASSWORD, limitsAsked = false, limits = LimitsForm(), invalidPhrase = false) }
-            }
+            mutable.update { it.copy(step = ImportStep.LIMITS, invalidPhrase = false) }
         } else {
             mutable.update { it.copy(invalidPhrase = true) }
         }
@@ -249,7 +236,7 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             when (it.step) {
                 ImportStep.LIMITS -> it.copy(step = ImportStep.FORM)
                 ImportStep.PASSWORD -> it.copy(
-                    step = if (it.limitsAsked) ImportStep.LIMITS else ImportStep.FORM, password = "", error = null, problem = null,
+                    step = ImportStep.LIMITS, password = "", error = null, problem = null,
                 )
                 else -> it
             }
@@ -273,13 +260,12 @@ class ImportViewModel @Inject constructor(private val wallets: WalletsManager) :
             try {
                 val r = wallets.import(s.name, network, pw, phrase, pass.takeIf { it.isNotEmpty() }, s.limitsParse.caps)
                 wipe()
-                val notice = r.capsFailure != null || r.notRecorded || r.capsUnsupported
+                val notice = r.capsFailure != null || r.notRecorded
                 mutable.update {
                     it.copy(
                         busy = false, typed = "", passphrase = "", status = PhraseStatus(), importedId = r.wallet.id,
                         capsFailed = r.capsFailure != null, capsDuplicate = r.capsFailure?.code == WalletsManager.DUPLICATE_WALLET,
                         notRecorded = r.notRecorded, capsNotSaved = r.capsNotSaved,
-                        capsUnsupported = r.capsUnsupported,
                         step = if (notice) ImportStep.DONE else it.step,
                     )
                 }

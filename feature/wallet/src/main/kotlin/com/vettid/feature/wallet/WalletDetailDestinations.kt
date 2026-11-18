@@ -43,6 +43,7 @@ private fun LimitsDestination(leave: () -> Unit) {
         state,
         SpendingLimitsActions(
             onBack = leave,
+            onRetryList = vm::retryList,
             onLower = vm::openLower,
             onRaise = vm::openRaise,
             onPerTx = vm::setPerTx,
@@ -74,6 +75,7 @@ private fun DetailDestination(host: WalletHost, leave: () -> Unit) {
         WalletDetailActions(
             onBack = leave,
             onRefresh = vm::refresh,
+            onRetryList = vm::retryList,
             onReceive = { host.navigate(ReceiveRoute(id)) },
             onSend = { host.navigate(SendRoute(id)) },
             onTransactions = { host.navigate(TransactionsRoute(id)) },
