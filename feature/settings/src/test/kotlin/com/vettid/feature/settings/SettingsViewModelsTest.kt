@@ -75,7 +75,7 @@ class SettingsViewModelsTest {
         // Not read: the vault is locked, held or due, or its first `presence.get` has not been answered.
         val presence = com.vettid.core.testing.FakePresence(initial = null)
         val vm = SettingsViewModel(
-            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates(), screenshots(),
+            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, screenshots(),
             presence = presence,
         )
         advanceUntilIdle()
