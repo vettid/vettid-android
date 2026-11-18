@@ -626,7 +626,15 @@ class VaultManager(
     val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
 
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
-    private val phaseFlow = PhaseHolder(AppPhase.Starting, onOpen = { releaseUpdate.vaultOpened() })
+    private val phaseFlow = PhaseHolder(
+        AppPhase.Starting,
+        // The feed's mark first: the mailbox's events the check holds from now on are judged against it (Rule 3), on the
+        // vault's clock, the clock of their `ts` (the phone's only before any message from the vault in this process).
+        onOpen = {
+            feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())
+            releaseUpdate.vaultOpened()
+        },
+    )
 
     /** A lock not made here, and the phases published after vault calls (#242): [PhaseGate]. */
     private val phaseGate by lazy {
@@ -968,11 +976,14 @@ class VaultManager(
 
     /**
      * Photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1, ANDROID-PLAN 0.1.39): thumbnails, photos and pending uploads
-     * in memory only, cleared whenever the vault is not open, held or due, and at a wipe.
+     * in memory only, cleared whenever the vault is not open, held or due, and at a wipe. Every vault the app talks to has
+     * them (Rule 3: no probe). Nothing of photos is sent, fetched or kept while the vault is not open on this phone, the
+     * owner check is due or held, or the release gate checks or pauses, as for presence.
      */
     val attachments = com.vettid.core.data.social.AttachmentManager(
         com.vettid.core.data.social.VaultAttachmentOps { openApi() },
         onSent = { social.addSent(it) },
+        vaultClosed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },
     )
 
     /**
@@ -985,6 +996,8 @@ class VaultManager(
         gated = { featuresGated() },
         // Rule 3: while the release is checked, the feed's events and arrivals wait; told when the check is over (releasePause).
         held = { releaseUpdate.checking.value },
+        // Nothing waits for that end while the owner check is due or held (owner decision 2026-11-18).
+        ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
     /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
@@ -1156,6 +1169,7 @@ class VaultManager(
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
             presence.start() // the member's presence policy
+            attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
             location.resume() // the location shares this phone is the source of
             feed.releaseHeld() // the feed's events and arrivals held while the release was checked: notified now
         },
@@ -1218,6 +1232,7 @@ class VaultManager(
                     // end of this opening's check already ran the reads it owed (they run once).
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // the member's presence policy
+                    attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                     location.resume() // the location shares this phone is the source of are taken up again
                     // The release gate's check (Rule 3): the manifest is read by the opening
                     // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
@@ -1281,6 +1296,7 @@ class VaultManager(
                     // them. Both start when it ends or lifts ([ReleasePauseSteps]).
                     if (!releaseUpdate.required.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
                     steps.step { presence.start() } // the presence policy, again
+                    steps.step { attachments.opened() } // photos refused while held; the cleanups kept meanwhile
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     // The lists the hold dropped: approvals and requests.
                     if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }
@@ -1295,6 +1311,7 @@ class VaultManager(
                 // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
                 if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     steps.step { presence.start() }
+                    steps.step { attachments.opened() } // photos refused while the check was due
                     steps.step { location.reopenReceived() } // events were not taken while the check was due
                 }
                 // Rule 3: the reads of a release gate's lift that came while the check was due or held run now.
@@ -1320,7 +1337,7 @@ class VaultManager(
      */
     fun featuresGated(): Boolean = featuresGated(ownerCheck.ownerCheck.value?.gated(Instant.now()) == true, releaseUpdate.paused.value)
 
-    /** (Rule 3) Nothing of presence or location is sent: [featuresGated], or the vault's release is still being checked. */
+    /** (Rule 3) Nothing of presence, location or photos is sent: [featuresGated], or the vault's release is still being checked. */
     private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)
 
     /**
@@ -1330,7 +1347,6 @@ class VaultManager(
      */
     private fun gatedReads() {
         social.refreshAllQuietly()
-        scope.launch { attachments.probe() } // §10.5.1 "Compatibility": once after each unlock
         items.refreshQuietly()
         feed.open()
     }
@@ -1765,7 +1781,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             steps.step { social.clear() }
-            steps.step { attachments.reset() }
+            steps.step { attachments.forget() }
             steps.step { items.clear() }
             steps.step { feed.clear() }
             steps.step { devices.clear() }
@@ -3293,7 +3309,7 @@ class VaultManager(
         // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -3366,7 +3382,7 @@ class VaultManager(
         lockedElsewhereFlow.value = false
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -5310,7 +5326,7 @@ class VaultManager(
         // anything is erased: nothing still on its way saves after the erase.
         steps.step { forgetDevices() }
         steps.step { social.clear() }
-        steps.step { attachments.reset() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }

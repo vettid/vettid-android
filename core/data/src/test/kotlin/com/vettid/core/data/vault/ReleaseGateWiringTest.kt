@@ -38,7 +38,9 @@ class ReleaseGateWiringTest {
 
     @Test
     fun everyOpeningStartsTheCheckBeforeItShows() {
-        code.has("private val phaseFlow = PhaseHolder(AppPhase.Starting, onOpen = { releaseUpdate.vaultOpened() })")
+        // The opening's mark on the vault's clock, the clock of the messages' `ts` it is compared with.
+        block("private val phaseFlow = PhaseHolder(").has("feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())")
+        block("private val phaseFlow = PhaseHolder(").has("releaseUpdate.vaultOpened()")
     }
 
     @Test
@@ -71,12 +73,63 @@ class ReleaseGateWiringTest {
         )
         block("val feed = FeedManager(").has("gated = { featuresGated() },")
         block("val feed = FeedManager(").has("held = { releaseUpdate.checking.value },")
+        block("val feed = FeedManager(").has("ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },")
         // What sends waits for the release check too.
         code.has("private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)")
         block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
         block("val location = LocationSharing(").has("due = { sendsGated() },")
         // The votes' sync runs and event-started checks too.
         block("val votes = VotesManager(").has("sendsGated = { sendsGated() },")
+        // Photos: nothing sent, fetched or kept while the vault is not open, the check is due or held, or the release is
+        // checked or paused (no availability probe: every vault the app talks to has attachments).
+        block("val attachments = com.vettid.core.data.social.AttachmentManager(")
+            .has("vaultClosed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
+    }
+
+    /**
+     * `AttachmentsRepository.closed()` turns true before the attachments' clear of a lock, the hold or due state and a wipe
+     * (the forget paths drop the session first; callers carry the clear mark into `begin` for those).
+     */
+    @Test
+    fun theVaultIsClosedBeforeTheLockHoldAndWipeClearPhotos() {
+        // A lock: the clears run on the phase already published (the phase's collector).
+        code.has("clearAttachments = { attachments.clear() },")
+        assertTrue(block("phaseFlow.asStateFlow().collectSurviving(\"phase\") {").any { it.startsWith("phaseSteps.onPhase(it) {") })
+        // The hold or due state: on an owner-check value that is already held (held means gated).
+        val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
+        held.has("val now = OwnProfileStep.held(v)")
+        val opens = held.indexOf("if (now && !wasHeld) {")
+        assertTrue(opens >= 0)
+        assertTrue(held.subList(opens, held.size).contains("steps.step { attachments.clear() }"))
+        // A wipe: the release gate's clear (a pause) is its first step, before the attachments'.
+        val wipe = block("private suspend fun eraseAfterMark()")
+        assertTrue(wipe.indexOf("steps.step { releaseUpdate.clear() }") in 0 until wipe.indexOf("steps.step { attachments.forget() }"))
+    }
+
+    @Test
+    fun noAttachmentProbeAndTheClearsStay() {
+        assertTrue("no probe", code.none { it.contains("attachments.probe") })
+        assertTrue("no reset", code.none { it.contains("attachments.reset") })
+        // The lock's clear (PhaseSteps) and the hold's keep the cleanups for the next opening; signing out, both deletions
+        // and the wipe forget them.
+        code.has("clearAttachments = { attachments.clear() },")
+        assertEquals(1, code.count { it == "steps.step { attachments.clear() }" })
+        assertEquals(4, code.count { it == "steps.step { attachments.forget() }" })
+        listOf("dropSessionLocked(", "closeForDeletion(", "closeForApiDeleted(", "eraseAfterMark()").forEach { f ->
+            block("private suspend fun $f").has("steps.step { attachments.forget() }")
+        }
+    }
+
+    /** Photos have no watch of their own: they are told the vault opened where presence starts again. */
+    @Test
+    fun photosAreToldEachOpening() {
+        val pause = block("private val releasePause = ReleasePauseSteps(")
+        pause.subList(pause.indexOf("sends = {"), pause.size).has("attachments.opened()")
+        block("phaseSteps.onPhase(it) {").has("attachments.opened()")
+        val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
+        assertEquals(2, held.count { it == "steps.step { attachments.opened() }" })
+        assertEquals(held.count { it == "steps.step { presence.start() }" }, held.count { it == "steps.step { attachments.opened() }" })
+        assertEquals(4, code.count { it.contains("attachments.opened()") })
     }
 
     @Test
@@ -124,7 +177,6 @@ class ReleaseGateWiringTest {
         listOf("votes.startSync()", "presence.start()", "location.resume()", "feed.releaseHeld()").forEach { sends.has(it) }
         val opened = block("private fun gatedReads()")
         listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "feed.open()").forEach { opened.has(it) }
-        assertTrue(opened.any { it.contains("attachments.probe()") })
         assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
         // Nothing in the opened steps starts the votes' work.
         assertTrue(block("phaseSteps.onPhase(it) {").none { it.contains("votes.startSync()") })

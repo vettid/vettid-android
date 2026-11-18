@@ -7,21 +7,6 @@ import kotlinx.serialization.json.put
 
 // Photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1, release A): the app's calls. A desktop is answered `forbidden`.
 
-/**
- * Whether the vault has attachments (§10.5.1 "Compatibility"): `message.attachment.get{}` is `bad_request` on a
- * vault of release A (held or not) and `unsupported_type` on an older one. Null when the answer said neither.
- */
-suspend fun VaultApi.attachmentsSupported(): Boolean? = try {
-    device.op("message.attachment.get")
-    null
-} catch (e: VaultOpException) {
-    when (e.code) {
-        "bad_request" -> true
-        "unsupported_type" -> false
-        else -> null
-    }
-}
-
 /** Uploads a sealed photo blob to the vault's own mailbox (§10.5.1 "Sending" step 1); returns its `blob_id`. */
 suspend fun VaultApi.uploadBlob(blob: ByteArray): String = device.uploadBlobToVault(blob)
 

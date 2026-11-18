@@ -64,7 +64,6 @@ class PhotoPrivacyTest {
         var stored: ByteArray? = null
         val ids = mutableListOf<String>()
         val keys = mutableListOf<ByteArray>()
-        override suspend fun supported() = true
         override fun newRequestId() = "01JB2Z6V9K3M4N5P6Q7R8S9T70"
         override suspend fun upload(blob: ByteArray): String = "BLOBUP${mailbox.size}".also { mailbox[it] = blob.copyOf(); ids += it }
         override suspend fun send(connectionId: String, text: String?, attachment: JsonObject, requestId: String): SentAttachment {
@@ -117,7 +116,7 @@ class PhotoPrivacyTest {
     fun afterSendingViewingSharingAndALockNothingOfThePhotoIsOnDisk() = runTest {
         val before = dirs().flatMap { d -> d.walkTopDown().filter { it.isFile }.toList() }.toSet()
         val vault = LoopbackVault()
-        val m = AttachmentManager(vault, onSent = {})
+        val m = AttachmentManager(vault, onSent = {}, vaultClosed = { false })
         val prepared = Photos.prepare(picture())
         val jpeg = prepared.jpeg.copyOf()
         val thumb = prepared.thumb.copyOf()
