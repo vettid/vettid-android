@@ -8,7 +8,7 @@ import kotlinx.coroutines.delay
  * it needs a loaded feed and a `pending.list` read begun after the check, merged and published. Both reads are tried again,
  * with [waits] between tries (the last wait repeats), until both are had or the session ends ([open] false: a lock, and so
  * an unlock, or a new hold). The spec counts the first successful read before the next lock, so no number of failures ends
- * it. An older vault without `pending.list` ([unsupported]) merges nothing, and nothing is replayed.
+ * it: every failure, `unsupported_type` included, is tried again.
  *
  * [replay] is false while the feed is not loaded (it keeps the window); [end] closes the window when nothing is replayed.
  */
@@ -17,7 +17,6 @@ internal class WaitingAsksRun(
     private val feedLoaded: () -> Boolean,
     private val readFeed: suspend () -> Unit,
     private val listed: () -> Boolean,
-    private val unsupported: () -> Boolean,
     private val readList: suspend () -> Unit,
     private val replay: () -> Boolean,
     private val end: () -> Unit,
@@ -41,10 +40,9 @@ internal class WaitingAsksRun(
     private suspend fun tryOnce(): Boolean? {
         if (!open()) return false
         if (!feedLoaded()) attempt(readFeed)
-        if (open() && !listed() && !unsupported()) attempt(readList)
+        if (open() && !listed()) attempt(readList)
         return when {
             !open() -> false // a read that ended with the session counts for nothing
-            !listed() && unsupported() -> false
             listed() && replay() -> true
             else -> null
         }

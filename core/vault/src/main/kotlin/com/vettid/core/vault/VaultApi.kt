@@ -484,13 +484,6 @@ class VaultApi(
         op("share.rule.delete") { put("rule_id", ruleId) }
     }
 
-    /** Includes or declines the items a rule asks about (`share.pending`). */
-    suspend fun shareDecide(ruleId: String, items: List<String>, approve: Boolean): JsonObject = op("share.decide") {
-        put("rule_id", ruleId)
-        putJsonArray("items") { items.forEach { add(JsonPrimitive(it)) } }
-        put("approve", approve)
-    }
-
     /** Includes [include] and declines [decline], items of one rule, in one change (§10.12, 0.21.0). */
     suspend fun shareDecide(ruleId: String, include: List<String>, decline: List<String>): JsonObject = op("share.decide") {
         put("rule_id", ruleId)

@@ -12,7 +12,9 @@ import com.vettid.core.vault.FeedItem
 import com.vettid.core.vault.PendingPage
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -313,6 +315,53 @@ class DeviceApprovalsTest {
         runCurrent()
         // The vault does not list pairings: its entry stays; the approval, absent from the list, is gone.
         assertEquals(listOf("device:device.pair.pending:p1"), m.keys())
+    }
+
+    /**
+     * `pending.list` answered `unsupported_type` is a failed list (the app requires the vault's current release): the feed
+     * items still make their entries, as for any failed read, until a list is merged.
+     */
+    @Test
+    fun anUnsupportedListLeavesTheFeedEntriesAsAFailedOneDoes() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("device.pair.pending", "p1", device = null), feed("approval.pending", "h1"), feed("device.session.pending", "s1")))
+        runCurrent()
+        val all = listOf("device:approval.pending:h1", "device:device.pair.pending:p1", "device:device.session.pending:s1")
+        assertEquals(all, m.keys())
+        listOf(VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"), VaultFailure(FailureKind.NETWORK)).forEach { failure ->
+            try {
+                m.refreshPendingFrom { throw failure }
+                fail()
+            } catch (e: VaultFailure) {
+                assertEquals(failure.kind, e.kind)
+            }
+            runCurrent()
+            assertEquals(all, m.keys())
+        }
+        m.refreshPendingFrom { PendingPage(emptyList(), null, now) }
+        runCurrent()
+        assertEquals(listOf("device:device.pair.pending:p1"), m.keys())
+    }
+
+    /** A list read begun before a lock or a hold merges nothing after it: the feed entries stay until a list of now. */
+    @Test
+    fun aListReadAcrossALockOrAHoldDoesNotEndTheFeedEntries() = runTest {
+        val m = manager()
+        m.setFeedItems(listOf(feed("approval.pending", "h1")))
+        runCurrent()
+        listOf<(SocialManager) -> Unit>({ it.forgetOpenVault(); it.reopen() }, { it.forgetPending() }).forEach { stop ->
+            val gate = CompletableDeferred<Unit>()
+            val read = launch { m.refreshPendingFrom { gate.await(); PendingPage(emptyList(), null, now) } }
+            runCurrent()
+            stop(m)
+            gate.complete(Unit)
+            read.join()
+            runCurrent()
+            assertEquals(listOf("device:approval.pending:h1"), m.keys())
+        }
+        m.refreshPendingFrom { PendingPage(emptyList(), null, now) }
+        runCurrent()
+        assertTrue(m.keys().isEmpty())
     }
 
     @Test
