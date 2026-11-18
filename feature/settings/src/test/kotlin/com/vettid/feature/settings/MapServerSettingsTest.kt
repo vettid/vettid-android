@@ -6,6 +6,9 @@ package com.vettid.feature.settings
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.map.MapServer
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -36,6 +39,16 @@ class MapServerSettingsTest {
     private val prefs = InMemoryPreferencesRepository()
 
     private fun vm() = MapServerViewModel(prefs)
+
+    @Test
+    fun theRowIsInPrivacyWithTheHostAndOpensTheForm() {
+        var opened = 0
+        rule.setContent { SettingsContent(SettingsUiState(), SettingsActions(mapServer = { opened++ })) }
+        rule.onNodeWithTag("map_server_row").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("tiles.openfreemap.org").assertExists()
+        rule.onNodeWithTag("map_server_row").performClick()
+        assertEquals(1, opened)
+    }
 
     @Test
     fun startsOnTheDefaultAndHoldsNothing() = runTest {

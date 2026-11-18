@@ -2,7 +2,6 @@ package com.vettid.core.testing
 
 import com.vettid.core.data.location.AskResult
 import com.vettid.core.data.location.IncomingShare
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.OutgoingShare
 import com.vettid.core.data.location.PositionOffset
@@ -17,6 +16,7 @@ import java.time.Instant
  * lists a share (ending [lifetimeSeconds] after [now]); a failure in [fail] is thrown instead. A test sets `lastSentAt` through
  * [sent] to say that the first position went out. No position is involved anywhere.
  */
+@Suppress("TooManyFunctions") // one per repository call, as the repository has
 class FakeLocation(private val now: () -> Instant = Instant::now, private val lifetimeSeconds: Long = 3_600) : LocationRepository {
     val started = mutableListOf<ShareRequest>()
     val stopped = mutableListOf<String>()
@@ -25,9 +25,6 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
 
     override val outgoing = MutableStateFlow<List<OutgoingShare>>(emptyList())
     override val serviceState = MutableStateFlow(ServiceState())
-
-    /** Whether the vault has location; a test sets UNKNOWN to see the sheet read it first ([refresh] then makes it AVAILABLE). */
-    override val availability = MutableStateFlow(LocationAvailability.AVAILABLE)
 
     /** Connections whose once share ended without a position; a test sets it. */
     override val missedOnce = MutableStateFlow<Set<String>>(emptySet())
@@ -122,10 +119,24 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
         outgoing.value = emptyList()
     }
 
+    /** What a list read finds (a test sets it): runs at each [refresh] that does not fail. */
+    var onRefresh: () -> Unit = {}
+
+    /** A failure the next [refresh] throws (the list read alone; [fail] is for the calls that change something). */
+    var refreshFail: VaultFailure? = null
+
     override suspend fun refresh() {
         refreshes++
-        fail?.let { fail = null; throw it }
-        if (availability.value == LocationAvailability.UNKNOWN) availability.value = LocationAvailability.AVAILABLE
+        refreshFail?.let { refreshFail = null; throw it }
+        onRefresh()
+    }
+
+    /** As `LocationSharing`: the list is read ([refresh]), then nothing starts while a share to the asker is active. */
+    override suspend fun startAnsweringRequest(request: ShareRequest): OutgoingShare? {
+        refresh()
+        val active = com.vettid.core.data.location.activeShareTo(outgoing.value, serviceState.value, request.connectionId, now())
+        if (active != null) return null
+        return start(request)
     }
 
     /** The first position of [shareId] went out. */

@@ -46,6 +46,9 @@ class LocationReceivingTest {
     private var clock = t0
     private var unlocked = true
     private var gated = false
+
+    /** Run once at the next look at the gate: a lock that lands just after a call's open check. */
+    private var atGateCheck: (() -> Unit)? = null
     private val relists = mutableListOf<Unit>()
     private var here: Fix? = null
     private var hereCalls = 0
@@ -91,7 +94,13 @@ class LocationReceivingTest {
         scope = scope.backgroundScope,
         ops = { ops },
         unlocked = { unlocked },
-        gated = { gated },
+        gated = {
+            atGateCheck?.let {
+                atGateCheck = null
+                it()
+            }
+            gated
+        },
         isService = { it in services },
         here = {
             hereCalls++
@@ -366,6 +375,33 @@ class LocationReceivingTest {
         gate.complete(Unit)
         read.await()
         assertTrue(r.incoming.value.isEmpty())
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheGet() = runBlocking {
+        val ops = Ops()
+        val r = rig(TestScope(), ops)
+        ops.answerGet = { _, _ -> obj("""{"share_id":"s1","mode":"continuous","precision":"approximate","expires_at":"${t0.plusSeconds(3600)}","last":${position()}}""") }
+        // The check passes, then the vault locks (and opens again) before the get is sent: its answer is from before the lock.
+        atGateCheck = { r.clear() }
+        r.open("c1")
+        assertEquals(1, ops.gets.size)
+        assertTrue(r.incoming.value.isEmpty())
+        // a get after the lock is taken
+        r.open("c1")
+        assertEquals(listOf("s1"), r.incoming.value.map { it.shareId })
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheAsksRecord() = runBlocking {
+        val ops = Ops()
+        val r = rig(TestScope(), ops)
+        atGateCheck = { r.clear() }
+        assertEquals(AskResult.Sent, r.ask("c1", null))
+        ops.requestRefusal = VaultOpException("location.request", "limit")
+        clock = clock.plus(Duration.ofMinutes(3))
+        // the ask was not recorded under the new epoch: the whole allowance, not 7 minutes
+        assertEquals(AskResult.Limited(10), r.ask("c1", null))
     }
 
     @Test
