@@ -288,7 +288,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override val transferKeptSince = MutableStateFlow<Instant?>(null)
     override val transferCheckWaiting = MutableStateFlow(false)
     override val finishMovePending = MutableStateFlow(false)
-    override val finishMoveFailure = MutableStateFlow<FailureKind?>(null)
+    override val finishMoveFailure = MutableStateFlow<com.vettid.core.data.vault.MoveFailure?>(null)
 
     override fun acknowledgeFinishMoveFailure() {
         finishMoveFailure.value = null

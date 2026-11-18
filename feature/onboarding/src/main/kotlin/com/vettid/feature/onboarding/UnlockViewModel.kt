@@ -49,8 +49,11 @@ sealed interface UnlockMessage {
 }
 
 /** The unlock's own guard refused for want of a usable user_guid: both the kind and the code, nothing else. */
-internal fun isNoUserGuid(r: UnlockAttempt.Failed): Boolean =
-    r.kind == FailureKind.NOT_SUPPORTED && r.code == UnlockAttempt.CODE_NO_USER_GUID
+internal fun isNoUserGuid(r: UnlockAttempt.Failed): Boolean = isNoUserGuid(r.kind, r.code)
+
+/** [isNoUserGuid] for a failure kept as its kind and code (a "Finish the move" that did not open the vault, the update). */
+internal fun isNoUserGuid(kind: FailureKind?, code: String?): Boolean =
+    kind == FailureKind.NOT_SUPPORTED && code == UnlockAttempt.CODE_NO_USER_GUID
 
 /** Failures that say nothing about this phone's keys (the network, the service): never "the move back failed". */
 private val TRANSIENT_FAILURES = setOf(
@@ -190,7 +193,7 @@ data class UnlockUiState(
      * (Release R, §11.14.10) Why the last "Finish the move" did not open the vault (`transfer_incomplete`: "Approve it
      * again on your old phone", a wrong PIN, a wait), said here after its lock sent the app to this screen.
      */
-    val moveFailure: FailureKind? = null,
+    val moveFailure: com.vettid.core.data.vault.MoveFailure? = null,
     /**
      * (VAULT-MESSAGING 0.44.0 §11.14.9 step 5) A PIN change got no answer and is not decided yet: the screen asks for the
      * previous PIN ("Enter your previous PIN"), which goes with the current record.

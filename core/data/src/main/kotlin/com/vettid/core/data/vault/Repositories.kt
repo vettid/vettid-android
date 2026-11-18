@@ -21,8 +21,11 @@ object AccountSite {
 /** No transfer kept ([VaultRepository.transferKeptSince]'s default). */
 val NO_KEPT_TRANSFER: StateFlow<Instant?> = MutableStateFlow(null)
 
-/** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
+/** No failure (a default for flows of a [FailureKind]). */
 val NO_FINISH_MOVE_FAILURE: StateFlow<FailureKind?> = MutableStateFlow(null)
+
+/** No failed "Finish the move" ([VaultRepository.finishMoveFailure]'s default). */
+val NO_MOVE_FAILURE: StateFlow<MoveFailure?> = MutableStateFlow(null)
 
 private const val KEEP_MS_PER_SECOND = 1_000L
 
@@ -373,7 +376,7 @@ interface VaultRepository {
      * (Release R) Why the last [finishMove] did not open the vault (`transfer_incomplete`, a wrong PIN, a wait, the
      * network), for the unlock screen that follows it; null after a success or [acknowledgeFinishMoveFailure].
      */
-    val finishMoveFailure: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+    val finishMoveFailure: StateFlow<MoveFailure?> get() = NO_MOVE_FAILURE
 
     fun acknowledgeFinishMoveFailure() {}
 

@@ -335,6 +335,8 @@ private fun steps(p: UpdateProgress, from: Int, to: Int): List<Pair<String, Step
 private fun failureText(p: UpdateProgress): String = when {
     p.failure == FailureKind.BAD_PIN -> stringResource(R.string.unlock_bad_pin)
     p.failure == FailureKind.BACKOFF -> stringResource(R.string.release_update_backoff)
+    // A phone with no usable user_guid can never open the vault: the unlock screen's recover-or-erase text.
+    isNoUserGuid(p.failure, p.failureCode) -> stringResource(R.string.unlock_stuck_body)
     p.failureCode == ReleaseUpdateManager.CODE_RELEASE_STARTING -> stringResource(R.string.release_update_start_failed)
     // ANDROID-PLAN 0.1.54: still routed to release N after the retries; the way back answered `wrong_release` or `410`.
     p.failure == FailureKind.ROUTE_PENDING -> stringResource(R.string.release_update_route_pending, p.to.number.toInt())

@@ -10,11 +10,17 @@ internal object FinishSetupGate {
         (phase as? AppPhase.Setup)?.stage == SetupStage.FINISHING && !lockPending && !finishingMove
 
     /** What the unlock screen says after a "Finish the move" that did not open the vault; null after a success. */
-    fun failureOf(r: UnlockAttempt): FailureKind? = when (r) {
+    fun failureOf(r: UnlockAttempt): MoveFailure? = when (r) {
         UnlockAttempt.Success -> null
-        is UnlockAttempt.BadPin -> FailureKind.BAD_PIN
-        is UnlockAttempt.Backoff -> FailureKind.BACKOFF
-        is UnlockAttempt.Failed -> r.kind
-        else -> FailureKind.OTHER
+        is UnlockAttempt.BadPin -> MoveFailure(FailureKind.BAD_PIN)
+        is UnlockAttempt.Backoff -> MoveFailure(FailureKind.BACKOFF)
+        is UnlockAttempt.Failed -> MoveFailure(r.kind, r.code)
+        else -> MoveFailure(FailureKind.OTHER)
     }
 }
+
+/**
+ * Why a "Finish the move" did not open the vault, for the unlock screen: the kind, and the code where the failure had one
+ * (`no_user_guid` from the unlock's own guard is told apart by both).
+ */
+data class MoveFailure(val kind: FailureKind, val code: String? = null)
