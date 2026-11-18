@@ -182,7 +182,7 @@ class ShellViewModel @Inject constructor(
     val badges: StateFlow<ShellBadges> = combine(
         approvals.approvals,
         messages.conversations,
-        combine(votes.votes, votes.reconnect, votes.availability, VoteRules::entry),
+        combine(votes.votes, votes.reconnect, VoteRules::entry),
         wallet.shown,
     ) { a, c, v, w ->
         ShellBadges(

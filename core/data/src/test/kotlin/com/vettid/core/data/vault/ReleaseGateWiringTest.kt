@@ -75,6 +75,8 @@ class ReleaseGateWiringTest {
         code.has("private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)")
         block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
         block("val location = LocationSharing(").has("due = { sendsGated() },")
+        // The votes' sync runs and event-started checks too.
+        block("val votes = VotesManager(").has("sendsGated = { sendsGated() },")
     }
 
     @Test

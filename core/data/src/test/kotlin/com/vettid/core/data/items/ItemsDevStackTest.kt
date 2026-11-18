@@ -231,7 +231,6 @@ class ItemsDevStackTest {
         val decisions = com.vettid.core.data.social.SharePending.decisions(
             pendingPage = { after -> vaultGuard { c.vault.sharePendingList(after = after, limit = 1) } },
             rulePage = { after -> vaultGuard { c.vault.shareRuleList(after = after) } },
-            names = emptyMap(),
             t = java.time.Instant.now(),
         )
         val d = decisions.single { it.ruleId == ask.ruleId }

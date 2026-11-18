@@ -298,6 +298,20 @@ class VoteRulesTest {
         assertEquals(0, VoteRules.badge(emptyList()))
     }
 
+    /**
+     * The drawer's Votes entry is a product rule, not a feature gate: no empty Votes screen. It shows only with a vote or a
+     * `reconnect` connection in the vault's list (empty before the list is read and after a lock), and its badge is the open
+     * votes not yet voted on.
+     */
+    @Test
+    fun theDrawerEntryShowsOnlyWithAVoteOrAConnectionToConnectAgain() {
+        val again = ReconnectEntry("c2", "svc", "Example Org")
+        assertEquals(VotesEntry(shown = false, badge = 0), VoteRules.entry(emptyList(), emptyList()))
+        assertEquals(VotesEntry(shown = true, badge = 0), VoteRules.entry(emptyList(), listOf(again)))
+        assertEquals(VotesEntry(shown = true, badge = 0), VoteRules.entry(listOf(vote(VoteState.CLOSED)), emptyList()))
+        assertEquals(VotesEntry(shown = true, badge = 2), VoteRules.entry(listOf(vote(), vote(), vote(VoteState.UPCOMING)), listOf(again)))
+    }
+
     @Test
     fun aVoteIsUnfinishedWhileOpenOrItsBallotIsNotFinal() {
         assertTrue(VoteRules.unfinished(vote()))

@@ -950,6 +950,10 @@ class ApprovalDetailViewModel @Inject constructor(
     }
 
     private fun decide(block: suspend () -> Unit) {
+        // One decision per screen: none while one is on its way, and none once it is done. A share question over 500
+        // items holds its next round under the same key at once, so a second tap before the screen closes would decide
+        // items the member never saw.
+        if (local.value.busy || local.value.done) return
         local.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {

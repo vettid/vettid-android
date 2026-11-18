@@ -43,7 +43,6 @@ import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.votes.NoVotes
 import com.vettid.core.data.votes.VoteRules
-import com.vettid.core.data.votes.VotesAvailability
 import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultCodes
@@ -750,8 +749,6 @@ data class ConnectionVotes(
     val count: Int = 0,
     val unfinished: Boolean = false,
     val reconnect: Boolean = false,
-    /** The vault has the vote feature ([VotesAvailability.AVAILABLE]): a service's "what it can ask" line mentions voting. */
-    val available: Boolean = false,
 )
 
 /**
@@ -948,13 +945,12 @@ class ConnectionDetailViewModel @Inject constructor(
     /** Presence is asked of a person who is connected, never of a service (a service is not a person). */
     private val ConnectionInfo.askable: Boolean get() = state == ConnectionState.ACTIVE && !service
 
-    private fun ownVotes() = combine(votes.votes, votes.reconnect, votes.availability) { v, r, a ->
+    private fun ownVotes() = combine(votes.votes, votes.reconnect) { v, r ->
         val mine = v.filter { it.connectionId == id }
         ConnectionVotes(
             count = mine.size,
             unfinished = mine.any(VoteRules::unfinished),
             reconnect = r.any { it.connectionId == id },
-            available = a == VotesAvailability.AVAILABLE,
         )
     }
 

@@ -92,7 +92,6 @@
     <string name="service_request_caveat">The invitation says so. VettID has not checked who runs it.</string>
     <string name="service_name_label">Name given by the service</string>
     <string name="service_detail_can_ask_title">What this service can ask</string>
-    <string name="service_detail_can_ask_body">It can ask you to confirm a sign-in or approve an action. It can\'t message or call you, and it can\'t ask for your data.</string>
     <string name="service_detail_can_ask_body_votes">It can ask you to confirm a sign-in, approve an action or vote. It can\'t message or call you, and it can\'t ask for your data.</string>
     <string name="service_no_calls" tools:ignore="UnusedResources">Services can\'t be called.</string>
     <!-- The same words as connections_detail_key, for Approvals. -->

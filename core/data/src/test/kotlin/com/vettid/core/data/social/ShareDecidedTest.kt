@@ -68,7 +68,6 @@ class ShareDecidedTest {
         val d = SharePending.decisions(
             pendingPage = { o("""{"pending":[${entries.joinToString(",")}]}""") },
             rulePage = { rules },
-            names = emptyMap(),
             t = now,
         )
         return SocialManager.ListRead(d, grantsOk = true, criticalOk = true, sharesOk = true)
@@ -197,7 +196,100 @@ class ShareDecidedTest {
     }
 
     private suspend fun SocialManager.decide(rule: String, include: List<String>, answer: String) =
-        decideShareWith(rule, include, emptyList(), both = { o(answer) }, one = { _, _ -> o(answer) })
+        decideShareWith(rule, include, emptyList(), send = { _, _ -> o(answer) })
+
+    /**
+     * The app requires the vault's current release, which takes `share.decide{include, decline}`: a `bad_request` (or a
+     * `limit`) is a refusal like any other. It is thrown to the screen, nothing else is sent (no `{items, approve}` calls),
+     * and the question stays as it was, its feed item unread.
+     */
+    @Test
+    fun aRefusalIsThrownWithNoSecondCallAndTheQuestionStays() = runTest {
+        listOf(VaultFailure(FailureKind.OTHER, "bad_request"), VaultFailure(FailureKind.LIMIT, "limit")).forEach { refusal ->
+            val m = manager()
+            m.refresh(entry("r1", "i1"), entry("r1", "i2"))
+            runCurrent()
+            feedReads.clear()
+            var sent = 0
+            try {
+                m.decideShareWith("r1", listOf("i1"), listOf("i2"), send = { _, _ -> sent++; throw refusal })
+                error("${refusal.code} must be thrown")
+            } catch (e: VaultFailure) {
+                assertEquals(refusal.kind, e.kind)
+                assertEquals(refusal.code, e.code)
+            }
+            runCurrent()
+            assertEquals("sent once, nothing after it", 1, sent)
+            assertEquals(setOf("i1", "i2"), m.items("r1")?.toSet())
+            assertTrue(feedReads.isEmpty())
+        }
+    }
+
+    /**
+     * §10.12: none pending is `bad_request` (decided on another device, or withdrawn with the event missed). The question
+     * is kept and the error thrown, and the lists are read again in the background so a stale question clears; another
+     * refusal (a `limit`) reads nothing.
+     */
+    @Test
+    fun aBadRequestReadsTheListsAgainAndOnlyItDoes() = runTest {
+        val m = manager()
+        var rereads = 0
+        m.staleShareReread = { rereads++ }
+        m.refresh(entry("r1", "i1"))
+        runCurrent()
+        runCatching { m.decideShareWith("r1", emptyList(), listOf("i1"), send = { _, _ -> throw VaultFailure(FailureKind.LIMIT, "limit") }) }
+        runCurrent()
+        assertEquals("a limit reads nothing", 0, rereads)
+        try {
+            m.decideShareWith("r1", emptyList(), listOf("i1"), send = { _, _ -> throw VaultFailure(FailureKind.OTHER, "bad_request") })
+            error("bad_request must be thrown")
+        } catch (e: VaultFailure) {
+            assertEquals("bad_request", e.code)
+        }
+        assertEquals(listOf("i1"), m.items("r1"))
+        runCurrent()
+        assertEquals("the lists are read again", 1, rereads)
+        // The question stays until a list says otherwise; one that no longer lists it clears it.
+        assertEquals(listOf("i1"), m.items("r1"))
+        val empty = read()
+        m.refreshApprovalsFrom(now) { empty }
+        runCurrent()
+        assertNull(m.share("r1"))
+    }
+
+    /** The re-read itself is `refreshApprovals`: it asks for the vault (here on the IO dispatcher, so waited for in real time). */
+    @Test
+    fun theRereadAsksForTheVault() = runTest {
+        val asked = CompletableDeferred<Unit>()
+        val m = SocialManager(
+            backgroundScope,
+            api = { asked.complete(Unit); throw VaultFailure(FailureKind.OTHER) },
+            credential = credential,
+            obsoleteStore = InMemoryDeviceStateStore(),
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+        )
+        m.refresh(entry("r1", "i1"))
+        runCurrent()
+        runCatching { m.decideShareWith("r1", emptyList(), listOf("i1"), send = { _, _ -> throw VaultFailure(FailureKind.OTHER, "bad_request") }) }
+        runCurrent()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { asked.await() } }
+        assertEquals(listOf("i1"), m.items("r1"))
+    }
+
+    /**
+     * An answer that names neither list (`{}`): what was sent is taken as decided, included and declined alike, so both
+     * leave the rule and the subject's other rule too (a decision reaches every rule of the subject).
+     */
+    @Test
+    fun anAnswerWithoutListsTakesWhatWasSent() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r1", "i2"), entry("r1", "i3"), entry("r2", "i1"), entry("r2", "i2"), entry("r2", "i4"))
+        runCurrent()
+        m.decideShareWith("r1", listOf("i1"), listOf("i2"), send = { _, _ -> o("{}") })
+        runCurrent()
+        assertEquals(listOf("i3"), m.items("r1"))
+        assertEquals(listOf("i4"), m.items("r2"))
+    }
 
     @Test
     fun aDecisionMadeHereLeavesTheSubjectsOtherRule() = runTest {
@@ -218,6 +310,18 @@ class ShareDecidedTest {
         m.decide("r1", listOf("i1"), """{"included":["i1","i3"],"declined":[]}""")
         runCurrent()
         assertNull(m.share("r2"))
+    }
+
+    /** A decline's answer too: the items it names as declined leave, also another rule's (a decline reaches the subject). */
+    @Test
+    fun theAnswersDeclinedItemsLeaveToo() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r2", "i3"), entry("r2", "i4"))
+        runCurrent()
+        m.decideShareWith("r1", emptyList(), listOf("i1"), send = { _, _ -> o("""{"included":[],"declined":["i1","i3"]}""") })
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf("i4"), m.items("r2"))
     }
 
     @Test
@@ -276,7 +380,7 @@ class ShareDecidedTest {
 
     private suspend fun SocialManager.decideNotFound(rule: String, include: List<String>) {
         try {
-            decideShareWith(rule, include, emptyList(), both = { throw VaultFailure(FailureKind.NOT_FOUND) }, one = { _, _ -> o("{}") })
+            decideShareWith(rule, include, emptyList(), send = { _, _ -> throw VaultFailure(FailureKind.NOT_FOUND) })
             error("expected not_found")
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.NOT_FOUND, e.kind)
@@ -511,5 +615,83 @@ class ShareDecidedTest {
         m.decided("r1", """"A"""")
         runCurrent()
         assertEquals(setOf<String?>("r1", "r2"), feedReads.toSet())
+    }
+
+    /**
+     * Owner decision a (2026-11-18): a question shows at most one `share.decide`'s items (§10.12: 500), and the rest are the
+     * next round once those are decided.
+     */
+    @Test
+    fun aQuestionOfMoreThanOneDecisionShowsTheFirst500AndTheRestComeNext() = runTest {
+        val m = manager()
+        val ids = (1..600).map { "i%03d".format(it) }
+        m.refresh(*ids.map { entry("r1", it) }.toTypedArray())
+        runCurrent()
+        assertEquals(ids.take(500), m.items("r1"))
+
+        val shown = m.items("r1")!!
+        var sent: Pair<List<String>, List<String>>? = null
+        m.decideShareWith("r1", shown.take(300), shown.drop(300), send = { inc, dec ->
+            sent = inc to dec
+            o("""{"included":[${inc.joinToString(",") { "\"$it\"" }}],"declined":[${dec.joinToString(",") { "\"$it\"" }}]}""")
+        })
+        runCurrent()
+        assertEquals(ids.take(300) to ids.subList(300, 500), sent)
+        assertEquals(ids.drop(500), m.items("r1"))
+        // The question is still open, so its feed item stays unread.
+        assertTrue(feedReads.isEmpty())
+    }
+
+    /** The 500 shown are the lowest `item_id`s, in the order they are shown, whatever order a batch added them in. */
+    @Test
+    fun theCutKeepsTheLowestItemIdsWhateverTheArrivalOrder() = runTest {
+        val m = manager()
+        val ids = (1..500).map { "i%03d".format(it) }
+        m.refresh(*ids.drop(1).map { entry("r1", it) }.toTypedArray(), entry("r1", "i900"))
+        runCurrent()
+        // A batch adds the lowest id after the rest: it is shown, and the highest goes to the next round.
+        m.batch("r1", "i001")
+        runCurrent()
+        assertEquals(ids.toSet(), m.items("r1")!!.toSet())
+        assertEquals(500, m.items("r1")!!.size)
+        assertEquals("i001", m.items("r1")!!.last())
+    }
+
+    /** The cut comes after the one-question-per-item rule: a rule's own items are counted, not the ones another rule asks. */
+    @Test
+    fun theCutCountsOnlyTheItemsARuleShows() = runTest {
+        val m = manager()
+        val shared = (1..100).map { "i%03d".format(it) }
+        val own = (1..450).map { "j%03d".format(it) }
+        m.refresh(*shared.map { entry("r1", it) }.toTypedArray(), *(shared + own).map { entry("r2", it) }.toTypedArray())
+        runCurrent()
+        assertEquals(shared, m.items("r1"))
+        // r2 waits on 550 items, but 100 are asked under r1: its 450 own all show.
+        assertEquals(own, m.items("r2"))
+    }
+
+    /** What is sent is what was checked: each id once, 1 to 500 of them, none in both lists; else nothing is sent. */
+    @Test
+    fun aDecisionIsSentDedupedAndRefusedOutsideOneToFiveHundred() = runTest {
+        val m = manager()
+        val ids = (1..501).map { "i$it" }
+        var sends = 0
+        var rereads = 0
+        m.staleShareReread = { rereads++ }
+        suspend fun refused(include: List<String>, decline: List<String>) {
+            val e = runCatching { m.decideShareWith("r1", include, decline, send = { _, _ -> sends++; o("{}") }) }.exceptionOrNull()
+            assertEquals("bad_request", (e as VaultFailure).code)
+        }
+        refused(emptyList(), emptyList())
+        refused(ids.take(250), ids.drop(250))
+        refused(listOf("i1", "i2"), listOf("i2"))
+        runCurrent()
+        assertEquals(0, sends)
+        // A refusal made here is not the vault's `bad_request`: the lists are not read again for it.
+        assertEquals(0, rereads)
+        // 500 distinct ids and a repeat are sent as the 500, once each.
+        var sent: Pair<List<String>, List<String>>? = null
+        m.decideShareWith("r1", ids.take(400) + ids.first(), ids.subList(400, 500) + ids[450], send = { inc, dec -> sent = inc to dec; o("{}") })
+        assertEquals(ids.take(400) to ids.subList(400, 500), sent)
     }
 }

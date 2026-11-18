@@ -144,13 +144,12 @@ object VoteRules {
     fun inOpenSection(s: VoteSummary): Boolean = s.state != VoteState.CLOSED
 
     /**
-     * The drawer's Votes entry (ANDROID-PLAN 0.1.102): shown only when the vault answers `vote.list` and holds at least one
-     * vote or lists a `reconnect` connection: a member with no service that votes sees nothing (no empty screen).
+     * The drawer's Votes entry (ANDROID-PLAN 0.1.102): shown only when the vault's `vote.list` holds at least one vote or lists
+     * a `reconnect` connection: a member with no service that votes sees nothing (no empty screen). Both lists are empty until
+     * the vault answers and after a lock or a hold, so the entry is hidden then too.
      */
-    fun entry(votes: List<VoteSummary>, reconnect: List<ReconnectEntry>, availability: VotesAvailability): VotesEntry {
-        val on = availability == VotesAvailability.AVAILABLE
-        return VotesEntry(shown = on && (votes.isNotEmpty() || reconnect.isNotEmpty()), badge = if (on) badge(votes) else 0)
-    }
+    fun entry(votes: List<VoteSummary>, reconnect: List<ReconnectEntry>): VotesEntry =
+        VotesEntry(shown = votes.isNotEmpty() || reconnect.isNotEmpty(), badge = badge(votes))
 
     /** The drawer badge counts votes that are `open` and not yet voted on (not upcoming, checking or closed). */
     fun badge(votes: List<VoteSummary>): Int = votes.count { it.state == VoteState.OPEN && it.ballot == null }
