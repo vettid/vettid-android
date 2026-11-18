@@ -100,16 +100,33 @@ class ReleaseGateWiringTest {
         assertTrue(held.subList(opens, held.size).contains("steps.step { attachments.clear() }"))
         // A wipe: the release gate's clear (a pause) is its first step, before the attachments'.
         val wipe = block("private suspend fun eraseAfterMark()")
-        assertTrue(wipe.indexOf("steps.step { releaseUpdate.clear() }") in 0 until wipe.indexOf("steps.step { attachments.clear() }"))
+        assertTrue(wipe.indexOf("steps.step { releaseUpdate.clear() }") in 0 until wipe.indexOf("steps.step { attachments.forget() }"))
     }
 
     @Test
     fun noAttachmentProbeAndTheClearsStay() {
         assertTrue("no probe", code.none { it.contains("attachments.probe") })
         assertTrue("no reset", code.none { it.contains("attachments.reset") })
-        // The lock's clear (PhaseSteps), the hold's, both deletions' and the wipe's.
+        // The lock's clear (PhaseSteps) and the hold's keep the cleanups for the next opening; signing out, both deletions
+        // and the wipe forget them.
         code.has("clearAttachments = { attachments.clear() },")
-        assertEquals(5, code.count { it == "steps.step { attachments.clear() }" })
+        assertEquals(1, code.count { it == "steps.step { attachments.clear() }" })
+        assertEquals(4, code.count { it == "steps.step { attachments.forget() }" })
+        listOf("dropSessionLocked(", "closeForDeletion(", "closeForApiDeleted(", "eraseAfterMark()").forEach { f ->
+            block("private suspend fun $f").has("steps.step { attachments.forget() }")
+        }
+    }
+
+    /** Photos have no watch of their own: they are told the vault opened where presence starts again. */
+    @Test
+    fun photosAreToldEachOpening() {
+        val pause = block("private val releasePause = ReleasePauseSteps(")
+        pause.subList(pause.indexOf("sends = {"), pause.size).has("attachments.opened()")
+        block("phaseSteps.onPhase(it) {").has("attachments.opened()")
+        val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
+        assertEquals(2, held.count { it == "steps.step { attachments.opened() }" })
+        assertEquals(held.count { it == "steps.step { presence.start() }" }, held.count { it == "steps.step { attachments.opened() }" })
+        assertEquals(4, code.count { it.contains("attachments.opened()") })
     }
 
     @Test

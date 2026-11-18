@@ -1159,6 +1159,7 @@ class VaultManager(
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
             presence.start() // the member's presence policy
+            attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
             location.resume() // the location shares this phone is the source of
             feed.releaseHeld() // the feed's events and arrivals held while the release was checked: notified now
         },
@@ -1221,6 +1222,7 @@ class VaultManager(
                     // end of this opening's check already ran the reads it owed (they run once).
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // the member's presence policy
+                    attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                     location.resume() // the location shares this phone is the source of are taken up again
                     // The release gate's check (Rule 3): the manifest is read by the opening
                     // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
@@ -1284,6 +1286,7 @@ class VaultManager(
                     // them. Both start when it ends or lifts ([ReleasePauseSteps]).
                     if (!releaseUpdate.required.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
                     steps.step { presence.start() } // the presence policy, again
+                    steps.step { attachments.opened() } // photos refused while held; the cleanups kept meanwhile
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     // The lists the hold dropped: approvals and requests.
                     if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }
@@ -1298,6 +1301,7 @@ class VaultManager(
                 // The check passed while the state stayed OK (no hold): presence was only not sent meanwhile; ask again.
                 if (gatedEnded && !wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     steps.step { presence.start() }
+                    steps.step { attachments.opened() } // photos refused while the check was due
                     steps.step { location.reopenReceived() } // events were not taken while the check was due
                 }
                 // Rule 3: the reads of a release gate's lift that came while the check was due or held run now.
@@ -1767,7 +1771,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             steps.step { social.clear() }
-            steps.step { attachments.clear() }
+            steps.step { attachments.forget() }
             steps.step { items.clear() }
             steps.step { feed.clear() }
             steps.step { devices.clear() }
@@ -3295,7 +3299,7 @@ class VaultManager(
         // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.clear() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -3368,7 +3372,7 @@ class VaultManager(
         lockedElsewhereFlow.value = false
         val steps = ClearSteps()
         steps.step { social.clear() }
-        steps.step { attachments.clear() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }
@@ -5312,7 +5316,7 @@ class VaultManager(
         // anything is erased: nothing still on its way saves after the erase.
         steps.step { forgetDevices() }
         steps.step { social.clear() }
-        steps.step { attachments.clear() }
+        steps.step { attachments.forget() }
         steps.step { ownerCheck.clear() }
         steps.step { forgetOwnProfile() }
         steps.step { history.clear() }

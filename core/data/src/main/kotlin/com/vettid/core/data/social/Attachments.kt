@@ -235,9 +235,18 @@ class AttachmentManager(
     private val reopenedFlow = MutableStateFlow(0L)
     override val reopened: StateFlow<Long> = reopenedFlow.asStateFlow()
 
-    /** Watches [closed] after a refused fetch, until the vault opens again ([reopened]); one at a time. */
-    private var watcher: kotlinx.coroutines.Job? = null
-    private val watchLock = Any()
+    /** A fetch was refused because the vault was [closed] since the last [opened]: a placeholder is on screen. */
+    private val refusedWhileClosed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Blob ids (never a key or a byte) whose cleanup could not be sent while [closed]: this device's uploads to the vault's
+     * mailbox that will not be sent ([discardLater]), and blobs the vault put in this device's mailbox that were fetched or
+     * will not be ([deleteLater]). Both count against shared blob storage (RELAY-PROTOCOL §6.8: this device's share of the
+     * vault's mailbox; the vault's share of this one) until the vault's orphan sweep or the blob TTL, so they are cleaned
+     * up at the next [opened]. Memory only; kept across a lock's or the hold's [clear], dropped by [forget].
+     */
+    private val discardLater = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+    private val deleteLater = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
     /** `attachment_fetches`: at most 2 `content` fetches of this device at once (§10.5.1). */
     private val fetches = Semaphore(MAX_FETCHES)
@@ -249,30 +258,60 @@ class AttachmentManager(
         if (closed()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, CODE_CLOSED)
     }
 
-    /** [ensureOpen] for a fetch: a refusal is a placeholder on screen, so the vault opening again is told ([reopened]). */
+    /** [ensureOpen] for a fetch: a refusal is a placeholder on screen, so the next [opened] tells it ([reopened]). */
     private fun ensureOpenToFetch() {
         if (!closed()) return
-        watchClosed()
+        refusedWhileClosed.set(true)
         ensureOpen()
     }
 
-    private fun watchClosed() {
-        synchronized(watchLock) {
-            if (watcher?.isActive == true) return
-            watcher = scope.launch {
-                while (closed()) kotlinx.coroutines.delay(WATCH_MS)
-                reopenedFlow.value++
+    /**
+     * The vault is open again (called where presence starts again: after an unlock, when the release check ends or its
+     * pause lifts, when the owner check passes). Nothing polls meanwhile. When not [closed]: a fetch refused while closed
+     * is told ([reopened]), and the cleanups kept meanwhile are sent, each only while still open (one that meets a closed
+     * vault is kept for the next opening). Best effort: a failure is not retried (the vault's orphan sweep or the TTL).
+     */
+    fun opened() {
+        if (closed()) return
+        if (refusedWhileClosed.getAndSet(false)) reopenedFlow.value++
+        val discards = takeAll(discardLater)
+        val deletes = takeAll(deleteLater)
+        if (discards.isEmpty() && deletes.isEmpty()) return
+        scope.launch {
+            discards.forEachIndexed { i, id ->
+                if (closed()) {
+                    discardLater += discards.drop(i)
+                    deleteLater += deletes
+                    return@launch
+                }
+                runCatching { vaultGuard { ops.discard(id) } }
+            }
+            deletes.forEachIndexed { i, id ->
+                if (closed()) {
+                    deleteLater += deletes.drop(i)
+                    return@launch
+                }
+                runCatching { vaultGuard { ops.deleteBlob(id) } }
             }
         }
     }
 
+    private fun takeAll(set: MutableSet<String>): List<String> = synchronized(set) { set.toList().also { set.clear() } }
+
+    /** An upload of this device that will not be sent: discarded now, or at the next [opened] while closed. */
+    private fun discardOrKeep(blob: String) {
+        if (closed()) discardLater += blob else scope.launch { runCatching { vaultGuard { ops.discard(blob) } } }
+    }
+
     /**
      * [checkNotCleared], then [closed]: a photo refused because the vault is closed ends like any refused photo (wiped,
-     * nothing sent; an upload already made expires after the blob TTL, since no discard may be sent now).
+     * nothing sent; an upload already made is discarded at the next [opened], since no discard may be sent now).
      */
     private fun checkSendable(p: PendingPhoto) {
         checkNotCleared(p)
         if (!closed()) return
+        val blob = p.blobId
+        if (blob != null && !p.sent) discardLater += blob
         finish(p)
         ensureOpen()
     }
@@ -314,7 +353,7 @@ class AttachmentManager(
         val blob = p.blobId
         finish(p)
         // Best effort: an upload a clear overtook is discarded (it expires after the blob TTL otherwise).
-        if (blob != null && !p.sent) scope.launch { if (!closed()) runCatching { vaultGuard { ops.discard(blob) } } }
+        if (blob != null && !p.sent) discardOrKeep(blob)
         throw VaultFailure(FailureKind.OTHER, CODE_UNAVAILABLE)
     }
 
@@ -420,8 +459,10 @@ class AttachmentManager(
     override suspend fun cancel(p: PendingPhoto) {
         val blob = p.blobId
         finish(p)
-        // Not while closed: nothing is sent then, and the upload expires after the blob TTL.
-        if (blob != null && !p.sent && !closed()) {
+        // Not while closed: nothing is sent then; it is discarded at the next opening ([opened]).
+        if (blob != null && !p.sent && closed()) {
+            discardLater += blob
+        } else if (blob != null && !p.sent) {
             try {
                 vaultGuard { ops.discard(blob) }
             } catch (_: VaultFailure) {
@@ -500,8 +541,10 @@ class AttachmentManager(
             vaultGuard { ops.fetchBlob(ref.id) }
         } finally {
             // Every fetched blob is deleted, good or bad (§5.5): the mailbox's blob storage is shared. Not while closed:
-            // nothing is sent then, and it expires after the blob TTL.
-            if (!closed()) {
+            // nothing is sent then; it is deleted at the next opening ([opened]).
+            if (closed()) {
+                deleteLater += ref.id
+            } else {
                 try {
                     vaultGuard { ops.deleteBlob(ref.id) }
                 } catch (_: VaultFailure) {
@@ -567,6 +610,19 @@ class AttachmentManager(
     /** 1 to `thumb_max_bytes`, and JPEG, PNG or WebP by its bytes. */
     private fun acceptableThumb(t: ByteArray) = t.isNotEmpty() && t.size <= PhotoLimits.THUMB_MAX_BYTES && ImageType.sniff(t) != null
 
+    /**
+     * [clear], and the cleanups kept for the next opening are forgotten: signing out, a missing vault, a deletion or a wipe
+     * (the mailboxes they were for are not this phone's any more).
+     */
+    fun forget() {
+        try {
+            clear()
+        } finally {
+            discardLater.clear()
+            deleteLater.clear()
+        }
+    }
+
     override fun clear() {
         // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
         val steps = ClearSteps()
@@ -610,8 +666,6 @@ class AttachmentManager(
         internal const val HOOK_WIPE = "wipe"
         private const val MAX_FETCHES = 2
 
-        /** How often [closed] is looked at again after a refused fetch (as presence's watch). */
-        internal const val WATCH_MS = 5_000L
         private const val KEY_BYTES = 32
 
         /** Whether a failed `message.send` is retried as the same request: no answer, `busy`, or a relay error. */
