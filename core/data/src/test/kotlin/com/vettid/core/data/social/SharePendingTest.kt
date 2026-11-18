@@ -40,7 +40,6 @@ class SharePendingTest {
                 pages.removeFirst()
             },
             rulePage = { rules },
-            names = emptyMap(),
             t = t,
         )
         assertEquals(listOf(null, "opaque-1"), asked)
@@ -59,31 +58,35 @@ class SharePendingTest {
         val d = SharePending.decisions(
             pendingPage = { o("""{"pending":[{"rule_id":"01R1","item_id":"01I1","name":"A","category":"medical","sensitivity":"data"}]}""") },
             rulePage = { throw VaultFailure(FailureKind.NETWORK) },
-            names = emptyMap(),
             t = t,
         )
         assertTrue(d.single().tags.isEmpty())
         assertEquals(t, d.single().receivedAt)
     }
 
+    /**
+     * The app requires the vault's current release, which lists the decisions: `unsupported_type` and `bad_request` are
+     * failures like any other, thrown to the caller, and the rules' own `pending` ids are never read in their place.
+     */
     @Test
-    fun anOlderVaultsRulesAreReadInstead() = runTest {
+    fun anUnknownTypeIsAFailureAndTheRulesAreNotReadInstead() = runTest {
         listOf(VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"), VaultFailure(FailureKind.OTHER, "bad_request")).forEach { refusal ->
-            val d = SharePending.decisions(
-                pendingPage = { throw refusal },
-                rulePage = { rules },
-                names = mapOf("01I9" to ShareItem("01I9", "Blood type", "medical", "data")),
-                t = t,
-            )
-            assertEquals("01R1", d.single().ruleId)
-            assertEquals("Blood type", d.single().items.single().name)
+            var rulesRead = 0
+            try {
+                SharePending.decisions(pendingPage = { throw refusal }, rulePage = { rulesRead++; rules }, t = t)
+                fail("${refusal.code} must be thrown")
+            } catch (e: VaultFailure) {
+                assertEquals(refusal.kind, e.kind)
+                assertEquals(refusal.code, e.code)
+            }
+            assertEquals(0, rulesRead)
         }
     }
 
     @Test
     fun anotherFailureIsNotHidden() = runTest {
         try {
-            SharePending.decisions({ throw VaultFailure(FailureKind.NETWORK) }, { rules }, emptyMap(), t)
+            SharePending.decisions({ throw VaultFailure(FailureKind.NETWORK) }, { rules }, t)
             fail()
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.NETWORK, e.kind)
@@ -129,7 +132,6 @@ class SharePendingTest {
                 o("""{"pending":[{"rule_id":"01R2","subject":{"connection_id":"c1"},"item_id":"01I1","name":"Allergies","category":"medical","sensitivity":"data","ask_rule_id":"01R1","shared":false},{"rule_id":"01R2","subject":{"connection_id":"c1"},"item_id":"01I2","name":"Card","category":"insurance","sensitivity":"data","shared":true}]}""")
             },
             rulePage = { two },
-            names = emptyMap(),
             t = t,
         )
         val r2 = d.single()

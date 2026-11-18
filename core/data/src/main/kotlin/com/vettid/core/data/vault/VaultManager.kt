@@ -959,11 +959,6 @@ class VaultManager(
         onLeftoverFailed = {
             android.util.Log.w("VaultManager", "the old pending-asks file could not be deleted: ${it.javaClass.simpleName}")
         },
-        itemNames = {
-            items.items.value.associate { i ->
-                i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
-            }
-        },
         feedRead = { kinds, ref, connectionId -> feed.markReadWhere(kinds, ref, connectionId) },
         feedWithdrawn = { feed.askWithdrawn(it) },
         itemCache = { items.items.value },
@@ -3430,7 +3425,6 @@ class VaultManager(
             feedLoaded = { feed.loaded },
             readFeed = { feed.refresh() },
             listed = { social.pendingListedSince(listMark) },
-            unsupported = { social.pendingUnsupported },
             readList = { social.refreshApprovals() },
             replay = { feed.replayWaitingAsks(token, social.listedNow(), java.time.Instant.now()) },
             end = { feed.endReplayWindow(token) },

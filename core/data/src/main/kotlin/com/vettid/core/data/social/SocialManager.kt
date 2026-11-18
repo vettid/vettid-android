@@ -79,8 +79,6 @@ class SocialManager internal constructor(
     private val obsoletePendingStore: DeviceStateStore? = null,
     private val onLeftoverFailed: (Throwable) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
-    /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
-    private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
     /**
      * Marks feed items read (ANDROID-PLAN 0.1.23): an ask decided here ([com.vettid.core.data.feed.FeedAsks], by kind
      * and `ref`), a conversation opened (its `message.received` items, by connection).
@@ -217,8 +215,6 @@ class SocialManager internal constructor(
      */
     internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
-    /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
-    internal val pendingUnsupported: Boolean get() = pending.isUnsupported
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */
@@ -1562,13 +1558,12 @@ class SocialManager internal constructor(
     /**
      * Reads every page of `pending.list` (§10.4.2) and replaces the stored asks of its kinds with it, by ask id (an ask
      * not in it is gone: decided elsewhere, expired or withdrawn); events newer than the first page's `ts` stay. A
-     * failed read changes nothing and is thrown (and noted in [pendingReadFailure]); `unsupported_type` (an older
-     * release) is not a failure: the live events stay as they are until the next unlock. Reads may overlap; an older
+     * failed read changes nothing and is thrown (and noted in [pendingReadFailure]), `unsupported_type` included (the app
+     * requires the vault's current release, which lists them). Reads may overlap; an older
      * list never replaces a newer one. A list is merged only whole: when the cursors do not reach the end (a stale
      * cursor starts again from the beginning, §10.4.2) the read starts over once with a fresh first page and `ts`.
      */
     internal suspend fun refreshPendingFrom(page: suspend (after: String?) -> PendingPage) {
-        if (pending.isUnsupported) return
         val ticket = pending.begin()
         try {
             val list = readWhole(page) ?: readWhole(page)
@@ -1576,13 +1571,8 @@ class SocialManager internal constructor(
             if (takeInPending(ticket, list.ts, list.asks) && pending.current(ticket)) pendingFailureFlow.value = null
         } catch (e: VaultFailure) {
             // A read that is no longer current (a lock, or a later-started read merged) does not touch the notice.
-            if (e.code == "unsupported_type") {
-                pending.markUnsupported(ticket)
-                if (pending.current(ticket)) pendingFailureFlow.value = null
-            } else {
-                if (pending.current(ticket)) pendingFailureFlow.value = e
-                throw e
-            }
+            if (pending.current(ticket)) pendingFailureFlow.value = e
+            throw e
         }
     }
 
@@ -1843,7 +1833,6 @@ class SocialManager internal constructor(
     private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> = SharePending.decisions(
         pendingPage = { after -> vaultGuard(resend = true) { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
         rulePage = { after -> vaultGuard(resend = true) { a.shareRuleList(after = after) } },
-        names = itemNames(),
         t = t,
     )
 

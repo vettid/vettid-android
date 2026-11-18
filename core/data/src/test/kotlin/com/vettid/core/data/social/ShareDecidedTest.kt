@@ -68,7 +68,6 @@ class ShareDecidedTest {
         val d = SharePending.decisions(
             pendingPage = { o("""{"pending":[${entries.joinToString(",")}]}""") },
             rulePage = { rules },
-            names = emptyMap(),
             t = now,
         )
         return SocialManager.ListRead(d, grantsOk = true, criticalOk = true, sharesOk = true)

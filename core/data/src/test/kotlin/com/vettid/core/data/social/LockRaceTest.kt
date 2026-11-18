@@ -64,7 +64,6 @@ class LockRaceTest {
         val d = SharePending.decisions(
             pendingPage = { o("""{"pending":[${entries.joinToString(",")}]}""") },
             rulePage = { o("""{"rules":[{"rule_id":"r1","subject":{"connection_id":"c1"},"tags":["medical"]}]}""") },
-            names = emptyMap(),
             t = now,
         )
         return SocialManager.ListRead(d, grantsOk = true, criticalOk = true, sharesOk = true)

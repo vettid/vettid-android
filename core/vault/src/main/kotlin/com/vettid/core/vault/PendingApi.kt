@@ -14,7 +14,7 @@ class PendingPage(val asks: List<JsonObject>, val next: String?, val ts: Instant
 
 /**
  * `pending.list{after?, limit?}` (`limit` 1-100): `{asks: [{kind, body}], next?}` with the response's `ts`, which the app
- * judges events against. An older release answers `unsupported_type`; a held vault `owner_check_required`.
+ * judges events against. A held vault answers `owner_check_required`.
  */
 suspend fun VaultApi.pendingList(after: String? = null, limit: Int? = null): PendingPage {
     val r = device.request(
