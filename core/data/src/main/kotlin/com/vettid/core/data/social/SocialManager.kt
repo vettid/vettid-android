@@ -2118,7 +2118,7 @@ class SocialManager internal constructor(
         ruleId,
         include,
         decline,
-        send = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
+        send = { inc, dec -> vaultGuard { api().shareDecide(ruleId, inc, dec) } },
     )
 
     /** The re-read after a `share.decide` answered `bad_request` (a test replaces it); a failure is left for the screens. */
@@ -2129,16 +2129,22 @@ class SocialManager internal constructor(
         ruleId: String,
         include: List<String>,
         decline: List<String>,
-        send: suspend () -> JsonObject,
+        /** Sends the decision: [include] and [decline] as checked here, each id once. */
+        send: suspend (include: List<String>, decline: List<String>) -> JsonObject,
     ) {
-        // None, or more than one share.decide takes (§10.12: 1–500; the questions shown never ask for more,
-        // ShareQuestions.capped): the vault would refuse it, so nothing is sent.
-        if ((include + decline).toSet().size !in 1..ShareQuestions.DECIDE_MAX) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        val inc = include.distinct()
+        val dec = decline.distinct()
+        // What is sent is checked (§10.12): 1–500 ids in all (the questions shown never ask for more,
+        // ShareQuestions.capped) and none in both lists. The vault would refuse anything else, so nothing is sent.
+        val both = inc.toSet().intersect(dec.toSet())
+        if ((inc.size + dec.size) !in 1..ShareQuestions.DECIDE_MAX || both.isNotEmpty()) {
+            throw VaultFailure(FailureKind.OTHER, "bad_request")
+        }
         // The subject, before the decision takes the rule's question out of the list and the events.
         val subject = subjectOfRule(ruleId)
         var answer: JsonObject? = null
         try {
-            decideRun("share:$ruleId", whole = false) { answer = send() }
+            decideRun("share:$ruleId", whole = false) { answer = send(inc, dec) }
         } catch (e: VaultFailure) {
             // §10.12: none of the items pending is `bad_request` (another device decided, or they were withdrawn and the
             // event was missed). The question stays until the list says otherwise; the lists are read again in the
@@ -2150,14 +2156,14 @@ class SocialManager internal constructor(
         // without either list falls back to what was sent.
         val told = answer?.takeIf { "included" in it || "declined" in it }
         val done = if (told == null) {
-            (include + decline).toSet()
+            (inc + dec).toSet()
         } else {
             listOf("included", "declined").flatMap { k -> ids(told, k) }.toSet()
         }
         val read = applyShareDecided(ruleId, done, subject)
         // Sent but not named by the answer: the vault did not hold them pending. They leave this rule's question here
         // only; that is not a decision, so nothing is noted for a read on its way.
-        val ignored = (include + decline).toSet() - done
+        val ignored = (inc + dec).toSet() - done
         if (ignored.isNotEmpty()) removeShareItems(ignored, { it.ruleId == ruleId })
         // The feed item is read only when nothing of the question is left (a batch may have added an item meanwhile).
         val key = "share:$ruleId"

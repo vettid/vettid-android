@@ -15,10 +15,16 @@ object ShareQuestions {
      * Each question cut to its first [DECIDE_MAX] items (owner decision a, 2026-11-18): a rule can hold up to 4,096
      * items pending, but a decision is one `share.decide`, so the member decides at most [DECIDE_MAX] at a time, and the
      * rest are the next round once those leave the list. Applied after [dedupe], so an item asked in several rules is
-     * counted in the one that shows it.
+     * counted in the one that shows it. The items kept are the [DECIDE_MAX] lowest `item_id`s (the vault's list order),
+     * whatever order a `share.pending` batch added them in, and they keep the order they are shown in.
      */
     fun capped(approvals: List<Approval>): List<Approval> = approvals.map { a ->
-        if (a is Approval.ShareDecision && a.items.size > DECIDE_MAX) a.copy(items = a.items.take(DECIDE_MAX)) else a
+        if (a is Approval.ShareDecision && a.items.size > DECIDE_MAX) {
+            val kept = a.items.map { it.itemId }.sorted().take(DECIDE_MAX).toSet()
+            a.copy(items = a.items.filter { it.itemId in kept })
+        } else {
+            a
+        }
     }
 
     fun dedupe(approvals: List<Approval>): List<Approval> {
