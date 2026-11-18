@@ -323,10 +323,9 @@ private fun checkSdp(sdp: String) {
  * retired (VAULT-MESSAGING "Mixed releases"). A fresh `call_id` and ephemeral KEM key, the
  * share signed with the device's identity key. Deposited once and awaited for [timeout]. Errors
  * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
- * `owner_check_required`, `exists`, `bad_request`, `internal`, and `unsupported_type` from a vault release without
- * calls. When it fails in any other way after the request may have left (no answer in time, a lost response, an
- * answer that does not verify), a durable `call.end{hangup}` for the same `call_id` follows, so that a call the
- * vault did place does not ring on for nobody.
+ * `owner_check_required`, `exists`, `bad_request`, `internal`. When it fails in any other way after the request may
+ * have left (no answer in time, a lost response, an answer that does not verify), a durable `call.end{hangup}` for the
+ * same `call_id` follows, so that a call the vault did place does not ring on for nobody.
  */
 @OptIn(MadeByCallApi::class)
 suspend fun VaultApi.callStart(
@@ -630,9 +629,7 @@ suspend fun VaultApi.callEnd(callId: String, reason: String) {
 }
 
 /**
- * `call.list`: the vault's call history, newest first ([limit] 1–200). A vault release without calls answers
- * `unsupported_type`: that answer is how the app learns that the vault has no calls (§11.10.8: no message lists a
- * release's features).
+ * `call.list`: the vault's call history, newest first ([limit] 1–200).
  */
 suspend fun VaultApi.callList(limit: Int = 50): CallList {
     val o = device.op("call.list", buildJsonObject { put("limit", limit) })
@@ -648,7 +645,7 @@ data class CallPermission(val connectionId: String, val allowed: Boolean, val li
 
 /**
  * `call.permission.set{connection_id, allowed}` (C2): calls with [connectionId] allowed, or off both ways. Throws
- * [VaultOpException] (`not_found` for a connection the vault does not have, `unsupported_type` before C2, …).
+ * [VaultOpException] (`not_found` for a connection the vault does not have, …).
  */
 suspend fun VaultApi.callPermissionSet(connectionId: String, allowed: Boolean) {
     require(connectionId.isNotEmpty()) { "connection_id" }

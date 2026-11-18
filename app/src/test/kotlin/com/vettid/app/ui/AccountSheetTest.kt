@@ -105,6 +105,20 @@ class AccountSheetTest {
         rule.onNodeWithText("Sam", substring = true).assertDoesNotExist()
     }
 
+    /** The snapshot always carries `email` (VAULT-MESSAGING 0.20.0): without a readable one, no address, never the hint. */
+    @Test
+    fun anOpenVaultWithoutAnAddressShowsNoHint() {
+        val noEmail = AccountInfo("s***@example.org", state = "member")
+        rule.setContent {
+            AccountSheet(noEmail, "https://account.vettid.org", onDismiss = {}, onLockVault = {}, now = now)
+        }
+        // The sheet is drawn (its header and options), and nothing of the masked hint is in it.
+        rule.onNodeWithTag("account_lock_vault").assertExists()
+        rule.onNodeWithText("VettID member", substring = true, useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("account_email").assertDoesNotExist()
+        rule.onNodeWithText("s***@example.org", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
     @Test
     fun theOpenVaultsAddressIsShown() {
         show()

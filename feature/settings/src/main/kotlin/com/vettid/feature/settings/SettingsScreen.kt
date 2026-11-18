@@ -442,7 +442,7 @@ data class SettingsActions(
 
 /**
  * The account card (ANDROID-PLAN 0.1.11): the first and last name, the full address (VAULT-MESSAGING 0.20.0
- * `email`, the masked hint from an older vault) and the membership state; it opens the avatar sheet.
+ * `email`) and the membership state; it opens the avatar sheet.
  */
 @Composable
 private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
@@ -457,11 +457,11 @@ private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
             },
         )
     }
-    val detail = listOfNotNull(a?.fullName?.let { a.displayEmail }, membership)
+    val detail = listOfNotNull(a?.fullName?.let { a.email }, membership)
         .joinToString("\n")
         .ifEmpty { stringResource(R.string.settings_account_detail) }
     SettingsAccountRow(
-        name = a?.fullName ?: a?.displayEmail ?: "",
+        name = a?.fullName ?: a?.email ?: "",
         detail = detail,
         onClick = onClick,
         modifier = Modifier.testTag("account_card"),

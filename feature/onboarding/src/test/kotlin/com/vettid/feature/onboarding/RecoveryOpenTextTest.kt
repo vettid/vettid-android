@@ -36,7 +36,6 @@ class RecoveryOpenTextTest {
         assertEquals(R.string.onboarding_open_busy, openAnswerText(RecoveryOpenOutcome("busy"), false).res)
         assertEquals(R.string.onboarding_open_retry, openAnswerText(RecoveryOpenOutcome("retry"), false).res)
         assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch"), false).res)
-        assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 3, null), false).res)
         assertEquals(R.string.onboarding_open_exhausted, openAnswerText(RecoveryOpenOutcome("exhausted", 10, null), false).res)
         assertEquals(R.string.onboarding_open_closed, openAnswerText(RecoveryOpenOutcome("closed"), false).res)
         assertEquals(R.string.onboarding_open_not_armed, openAnswerText(RecoveryOpenOutcome("not_armed"), false).res)
@@ -77,6 +76,11 @@ class RecoveryOpenTextTest {
         // stored_mismatch and vault_missing: before or after the spend, by attempt_used, not by attempts.
         assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 3, null, attemptUsed = false), false).res)
         assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("vault_missing", 4, null, attemptUsed = true), false).res)
+        assertEquals(R.string.onboarding_open_stored_mismatch_right, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 4, null, attemptUsed = true), false).res)
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("vault_missing", 3, null, attemptUsed = false), false).res)
+        // `attempts` alone (no attempt_used) says nothing about this request: never shown as a used attempt.
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("stored_mismatch", 3, null), false).res)
+        assertEquals(R.string.onboarding_open_stored_mismatch, openAnswerText(RecoveryOpenOutcome("vault_missing", 3, null), false).res)
         // The resume of a lost ok that found no recovery here.
         assertEquals(R.string.onboarding_open_lost_not_here, openAnswerText(RecoveryOpenOutcome("no_bundle", opened = true), false).res)
     }

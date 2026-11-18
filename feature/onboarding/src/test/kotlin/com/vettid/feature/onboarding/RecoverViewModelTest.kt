@@ -393,7 +393,7 @@ class RecoverViewModelTest {
 
     @Test
     fun credentialBackupAbsentAsksForThePasswordAsBefore() = runTest {
-        // A vault that did not say: the password's answer decides (an older vault's credential_lost: no recovery).
+        // A vault that did not say: the password's answer decides (`no_backup`: no recovery).
         vault.recoverOutcome = RecoverOutcome.NO_BACKUP
         val vm = unlockedWith(null)
         assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)

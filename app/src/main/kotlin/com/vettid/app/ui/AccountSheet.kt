@@ -87,10 +87,9 @@ fun AccountSheet(
     val shown = account.shownInShell()
     AvatarSheet(
         photo = photo,
-        // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0,
-        // the masked `email_hint` from an older vault).
-        name = shown?.fullName ?: shown?.displayEmail ?: stringResource(R.string.account_placeholder_name),
-        detail = shown?.fullName?.let { shown.displayEmail } ?: membershipLine(shown),
+        // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0).
+        name = shown?.fullName ?: shown?.email ?: stringResource(R.string.account_placeholder_name),
+        detail = shown?.fullName?.let { shown.email } ?: membershipLine(shown),
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
@@ -226,13 +225,13 @@ fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: (() -> 
 }
 
 /**
- * The account's address (VAULT-MESSAGING 0.20.0 §11.13: the snapshot's full `email`, shown to the member only; the
- * masked `email_hint` from an older vault), labelled "Only you see this address" (ANDROID-PLAN 0.1.11).
+ * The account's address (VAULT-MESSAGING 0.20.0 §11.13: the snapshot's full `email`, shown to the member only), labelled
+ * "Only you see this address" (ANDROID-PLAN 0.1.11).
  */
 @Composable
 fun AccountEmailGroup(account: AccountInfo?) {
     // Only while the vault is open: never the masked hint of the account record (ANDROID-PLAN §4 "The member's own profile").
-    val email = account.shownInShell()?.displayEmail ?: return
+    val email = account.shownInShell()?.email ?: return
     SettingsGroup(Modifier.testTag("account_email")) {
         SettingsInfoRow(stringResource(R.string.account_email), email, icon = Icons.Outlined.Email)
         Text(

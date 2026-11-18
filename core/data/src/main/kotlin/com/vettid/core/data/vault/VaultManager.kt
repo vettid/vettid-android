@@ -2241,16 +2241,14 @@ class VaultManager(
     /** Re-reads the account snapshot (`account.get`, §11.13); kept only when newer (`as_of`). Quiet on failure. */
     override suspend fun refreshAccount() {
         try {
-            // The record this answer is for: after a wipe or a reset meanwhile, nothing of it is kept.
-            val rec = record.recordGeneration
-            // And the own account's: an answer on its way when the vault closes is not kept ([OwnAccount]).
+            // The own account's mark: an answer on its way when the vault closes is not kept ([OwnAccount]). Nothing of it
+            // goes to the account record (the snapshot carries no masked address; it stays in memory only).
             val mark = ownAccount.mark()
             val v = guard { session().openApi.accountGet() }
             // What is new is decided under the own account's lock (`as_of`): an older answer never replaces a newer one.
             val kept = ownAccount.keep(mark, v, ::ownProfileOpen) ?: return
             val u = kept.update
             val stored = kept.before
-            io { record.refreshed(rec, u) }
             publishAccount()
             // An applied name change brings new names to the shared profile's core too.
             if (u.snapshot?.firstName != stored?.firstName || u.snapshot?.lastName != stored?.lastName) {
@@ -4751,12 +4749,8 @@ class VaultManager(
             s.openApi.credentialRecover(password)
             RecoverOutcome.RECOVERED
         } catch (e: VaultOpException) {
-            when (e.code) {
-                // 0.16.0: a vault without a backup copy cannot be recovered; `credential_lost` is an older vault's word.
-                "credential_lost", CODE_NO_BACKUP -> RecoverOutcome.NO_BACKUP
-                "credential_required" -> RecoverOutcome.CREDENTIAL_REQUIRED
-                else -> throw e
-            }
+            // 0.16.0: a vault without a backup copy cannot be recovered. Any other code is the vault's error.
+            RecoverOutcome.ofRefusal(e.code) ?: throw e
         }
         if (outcome == RecoverOutcome.RECOVERED) publishFinishing(gen)
         outcome
@@ -5774,10 +5768,10 @@ private fun newer(a: String?, b: String?): Boolean {
 }
 
 /** The snapshot for display (§11.13). */
-internal fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): AccountInfo {
+internal fun com.vettid.core.vault.AccountSnapshot.toInfo(emailHint: String): AccountInfo {
     fun t(s: String?): Instant? = s?.let { runCatching { Instant.parse(it) }.getOrNull() }
     return AccountInfo(
-        emailHint = emailHint ?: fallbackHint,
+        emailHint = emailHint,
         state = state ?: "",
         accountStatus = accountStatus,
         deletesAt = t(deletesAt),

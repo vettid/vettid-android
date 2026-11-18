@@ -412,8 +412,9 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
         } else {
             OpenAnswerText(R.string.onboarding_open_retry)
         }
-        // Before the spend nothing was used; after it, the right attempt was (attempt_used; an older vault: attempts).
-        "stored_mismatch", "vault_missing" -> if (o.attemptUsed ?: (o.used != null)) {
+        // Before the spend nothing was used; after it, the right attempt was: only `attempt_used: true` says so (§11.14.6,
+        // never inferred from `attempts`).
+        "stored_mismatch", "vault_missing" -> if (o.attemptUsed == true) {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch_right)
         } else {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch)
