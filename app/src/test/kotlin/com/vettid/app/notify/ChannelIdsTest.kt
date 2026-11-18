@@ -36,7 +36,7 @@ class ChannelIdsTest {
     fun theSourcesAreFound() {
         val paths = sources.map { it.first }
         assertTrue(paths.any { it.endsWith("core/notify/Channels.kt") })
-        assertTrue(paths.any { it.endsWith("app/notify/ReleaseUpdateNotifier.kt") })
+        assertTrue(paths.any { it.endsWith("app/notify/PendingLockNotifier.kt") })
         assertTrue(paths.any { it.endsWith("core/calls/CallService.kt") })
     }
 
@@ -48,7 +48,7 @@ class ChannelIdsTest {
         assertTrue("the posting code names its channels", named.size > 10)
         named.filter { it.second != "SOUNDS" }.forEach { (path, name) ->
             val id = idOf(name)
-            assertTrue("$path: Channels.$name is not a channel (id $id)", id != null && id in Channels.allIds)
+            assertTrue("$path: Channels.$name is not a channel (id $id)", id != null && id in Channels.ids)
         }
     }
 
@@ -57,22 +57,16 @@ class ChannelIdsTest {
         val builder = """\b(?:NotificationCompat\.Builder|Notification\.Builder)\(\s*[\w.]+\s*,\s*([^,()]+?)\s*[,)]"""
         val calls = Regex("""$builder|\bNotificationChannel\(\s*([^,()]+?)\s*,""")
         // The expressions that carry a channel id: a Channels constant, a LocalNotification's (made by FeedNotifier and
-        // NotificationMapping from Channels constants), Channels.ensure's own loop, and a file's own `CHANNEL_ID`
-        // constant when that is a Channels constant (the release notice's).
+        // NotificationMapping from Channels constants) and Channels.ensure's own loop.
         val allowed = setOf("n.channel", "id")
-        val ownConstant = Regex("""\bconst val CHANNEL_ID\s*=\s*Channels\.([A-Z][A-Z0-9_]*)\b""")
-        fun known(arg: String) = arg.startsWith("Channels.") && idOf(arg.removePrefix("Channels.")) in Channels.allIds
+        fun known(arg: String) = arg.startsWith("Channels.") && idOf(arg.removePrefix("Channels.")) in Channels.ids
         val found = sources.flatMap { (path, text) ->
             calls.findAll(text).map { m -> path to (m.groupValues[1].ifEmpty { m.groupValues[2] }) }.toList()
         }
         assertTrue("the notification builders are found", found.size >= 6)
         found.forEach { (path, arg) ->
-            val text = sources.first { it.first == path }.second
-            val own = ownConstant.find(text)?.groupValues?.get(1)
-            val ok = arg in allowed || known(arg) || (arg == "CHANNEL_ID" && own != null && known("Channels.$own"))
-            assertTrue("$path: notification channel `$arg`", ok)
+            assertTrue("$path: notification channel `$arg`", arg in allowed || known(arg))
         }
-        assertEquals(Channels.VAULT_UPDATES, ReleaseUpdateNotifier.CHANNEL_ID)
     }
 
     /** Owner decision 2026-10-23: Missed calls is a channel of its own, posted to by the feed's `call.missed`. */
@@ -80,7 +74,6 @@ class ChannelIdsTest {
     fun missedCallsIsAChannel() {
         assertEquals("missed_calls_v2", Channels.MISSED_CALLS)
         assertTrue(Channels.MISSED_CALLS in Channels.ids)
-        assertTrue(Channels.MISSED_CALLS in Channels.allIds)
         val mapping = sources.single { it.first.endsWith("core/notify/NotificationMapping.kt") }.second
         assertTrue(mapping.contains("-> Channels.MISSED_CALLS"))
     }

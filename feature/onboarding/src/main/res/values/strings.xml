@@ -300,7 +300,7 @@
     <string name="transfer_in_scan_new">Scan a new code</string>
     <string name="move_back">Back</string>
     <string name="move_cd_qr_scanner">Camera view for scanning the code</string>
-    <!-- The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19). -->
+    <!-- The release gate's update (ANDROID-PLAN 0.1.19). -->
     <!-- What's new (ANDROID-PLAN 0.1.31): the release log entry, information only. -->
     <string name="release_notes_title">What\'s new in release %1$d</string>
     <string name="release_notes_loading">Loading the release notes…</string>

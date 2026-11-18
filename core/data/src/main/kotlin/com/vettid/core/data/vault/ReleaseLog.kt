@@ -51,7 +51,7 @@ sealed interface ReleaseNotes {
     data object Unavailable : ReleaseNotes
 }
 
-/** What's new for the update screen, the unlock offer and the "Vault updates" notification. */
+/** What's new for the update screen and the unlock offer. */
 interface ReleaseNotesRepository {
     /**
      * What's new in [target] (a release of the trusted manifest), with the summaries of [between] (the manifest's

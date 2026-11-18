@@ -116,21 +116,4 @@ class TimeScaleWaitsTest {
         assertTrue("the bound changed: written at once", real.contacted(real.recordGeneration, now + 1))
         assertNull(disk?.unreachableAfterMs)
     }
-
-    /** S16: the release banner's dismissal, 24 h at most, 1 h at 24, kept with the dismissal. */
-    @Test
-    fun theUpdateBannersDismissal() {
-        val at = Instant.parse("2026-10-19T10:00:00Z")
-        val o = ReleaseUpdateOffer(rel(4), rel(5))
-        assertEquals(Duration.ofHours(1), ReleaseNotices.dismissFor(24))
-        assertEquals(ReleaseNotices.DISMISS_FOR, ReleaseNotices.dismissFor(1))
-        val scaled = ReleaseDismissal(5, UpdateNoticeKind.AVAILABLE, at, ReleaseNotices.dismissFor(24))
-        assertFalse(ReleaseNotices.bannerVisible(o, scaled, at.plusSeconds(3_599)))
-        assertTrue(ReleaseNotices.bannerVisible(o, scaled, at.plusSeconds(3_600)))
-        // A dismissal from before the scale keeps its 24 hours.
-        val before = ReleaseDismissal(5, UpdateNoticeKind.AVAILABLE, at)
-        assertFalse(ReleaseNotices.bannerVisible(o, before, at.plusSeconds(3_600)))
-    }
-
-    private fun rel(n: Long) = ReleaseView(n, "%02d".format(n).repeat(48), ReleaseUpdateOffer.STATUS_ACTIVE, null, "https://vettid.org/r/$n")
 }

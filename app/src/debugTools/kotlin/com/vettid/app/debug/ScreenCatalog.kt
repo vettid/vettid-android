@@ -30,9 +30,7 @@ import com.vettid.feature.history.HistoryEntryUiState
 import com.vettid.feature.history.HistoryScreen
 import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
-import com.vettid.app.ui.ReleaseBannerState
 import com.vettid.app.ui.RelayRefusedNotice
-import com.vettid.app.ui.ReleaseUpdateBanner
 import com.vettid.core.data.vault.EarlierRelease
 import com.vettid.core.data.vault.ReleaseLogEntry
 import com.vettid.core.data.vault.ReleaseNotes
@@ -359,7 +357,7 @@ object ScreenCatalog {
         override fun finish() = Unit
     }
 
-    /** The proactive release update (ANDROID-PLAN 0.1.19): release 5 offered to a vault on release 4. */
+    /** The release gate's update (ANDROID-PLAN 0.1.19): release 5 offered to a vault on release 4. */
     private val updateOffer = ReleaseUpdateOffer(release(4), release(5))
     private val updateEnding = ReleaseUpdateOffer(
         release(4, "retired").copy(endsAt = Instant.parse("2026-11-30T00:00:00Z")),
@@ -1758,45 +1756,28 @@ object ScreenCatalog {
                 SharedProfileActions(),
             )
         },
-        // The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19).
-        "shell.release_banner" to {
-            Column {
-                ReleaseUpdateBanner(ReleaseBannerState(updateOffer, visible = true), first = true, onUpdate = {}, onDismiss = {})
-            }
-        },
-        "shell.release_banner_ending" to {
-            Column {
-                ReleaseUpdateBanner(ReleaseBannerState(updateEnding, visible = true), first = true, onUpdate = {}, onDismiss = {})
-            }
-        },
-        "shell.release_banner_ended" to {
-            Column {
-                ReleaseUpdateBanner(
-                    ReleaseBannerState(ReleaseUpdateOffer(release(3, "removed"), release(5)), visible = true),
-                    first = true, onUpdate = {}, onDismiss = {},
-                )
-            }
-        },
+        // The release update (ANDROID-PLAN 0.1.19), shown by the release gate (Rule 3).
         "release_update" to {
-            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468", notes = whatsNew), NoUpdate) {}
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468", notes = whatsNew), NoUpdate, onBack = null)
         },
-        "release_update.notes_loading" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer), NoUpdate) {} },
+        "release_update.notes_loading" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer), NoUpdate, onBack = null) },
         "release_update.notes_unavailable" to {
-            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, notes = ReleaseNotes.Unavailable), NoUpdate) {}
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, notes = ReleaseNotes.Unavailable), NoUpdate, onBack = null)
         },
         "release_update.security" to {
             ReleaseUpdateContent(
                 ReleaseUpdateUiState(loading = false, offer = ReleaseUpdateOffer(release(4), release(7)), notes = whatsNewSecurity),
                 NoUpdate,
-            ) {}
+                onBack = null,
+            )
         },
         "release_update.ending" to {
-            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateEnding, notes = whatsNew), NoUpdate) {}
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateEnding, notes = whatsNew), NoUpdate, onBack = null)
         },
         "release_update.check_first" to {
-            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, checkDue = true), NoUpdate) {}
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, checkDue = true), NoUpdate, onBack = null)
         },
-        "release_update.none" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false), NoUpdate) {} },
+        "release_update.none" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false), NoUpdate, onBack = null) },
         "release_update.progress" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.APPROVING), NoUpdate) },
         "release_update.starting" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.REOPENING) { it.copy(starting = true) }, NoUpdate) },
         "release_update.done" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.DONE) { it.copy(vaultOpen = true) }, NoUpdate) },
@@ -1824,9 +1805,6 @@ object ScreenCatalog {
         },
         "release_update.abandoning" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONING), NoUpdate) },
         "release_update.abandoned" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONED) { it.copy(vaultOpen = true) }, NoUpdate) },
-        "settings.release_update_row" to {
-            SettingsContent(SettingsUiState(account = sampleAccount, update = updateOffer), SettingsActions())
-        },
         "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
     )
 }

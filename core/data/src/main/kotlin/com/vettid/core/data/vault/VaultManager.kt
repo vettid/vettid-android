@@ -1220,7 +1220,7 @@ class VaultManager(
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
                     presence.start() // whether the vault has presence, and the member's policy
                     location.resume() // the location shares this phone is the source of are taken up again
-                    // The release gate's check (Rule 3) and the proactive release notice: the manifest is read by the opening
+                    // The release gate's check (Rule 3): the manifest is read by the opening
                     // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
                 }
             }
@@ -2907,7 +2907,7 @@ class VaultManager(
         return phone
     }
 
-    // --- the proactive release update (owner decision 2026-10-09) ---
+    // --- the release gate's update (Rule 3) ---
 
     private inner class UpdateOps : ReleaseUpdateOps {
         /** Fails closed (Rule 3, the release gate): [ReleaseGateOffer]. */

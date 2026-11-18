@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepository {
     val calls = mutableListOf<String>()
     override val offer = MutableStateFlow(offer)
-    override val offerKnown = MutableStateFlow(offer != null)
     override val progress = MutableStateFlow<UpdateProgress?>(null)
     var checkDue = false
 
@@ -44,7 +43,6 @@ class FakeReleaseUpdates(offer: ReleaseUpdateOffer? = null) : ReleaseUpdateRepos
 
     override suspend fun refreshOffer() {
         refreshed++
-        offerKnown.value = true
     }
 
     override fun ownerCheckDue(): Boolean = checkDue

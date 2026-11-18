@@ -35,7 +35,7 @@ class PosterLeftoversTest {
         nm.notify(FeedNotifier.TAG_CHECK, AndroidPoster.NOTIFICATION_ID, note(Channels.OWNER_CHECK, "Daily check due"))
         nm.notify(VaultConnectionService.NOTIFICATION_ID, note(Channels.CONNECTION, "VettID is connecting", ongoing = true))
         nm.notify("svc", AndroidPoster.NOTIFICATION_ID, note(Channels.CONNECTION, "ongoing with our id", ongoing = true))
-        nm.notify(1001, note(Channels.VAULT_UPDATES, "Vault update available"))
+        nm.notify(1001, note(Channels.LOCATION, "Sharing your location"))
 
         AndroidPoster(app).cancelLeftovers(setOf(FeedNotifier.TAG_LOCKED, FeedNotifier.TAG_CHECK, FeedNotifier.TAG_ALARM))
 

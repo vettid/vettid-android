@@ -129,8 +129,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.vettid.feature.onboarding.OwnerCheckMode
 import com.vettid.feature.onboarding.OwnerCheckRoute
-import com.vettid.feature.onboarding.ReleaseUpdateRoute
-import com.vettid.feature.onboarding.releaseUpdateDestination
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -212,15 +210,6 @@ fun AppShell(
             ContextCompat.checkSelfPermission(notifyContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         if (granted) shell.permissionAsked() else askNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
-    // The proactive release notice (owner decision 2026-10-09): the banner, the notification's tap, and the one
-    // request for the notification permission (API 33+), made when the first notice shows and never again.
-    val releaseVm: ReleaseBannerViewModel = hiltViewModel()
-    val release by releaseVm.banner.collectAsStateWithLifecycle()
-    val openUpdate by releaseVm.openRequested.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        releaseVm.permissionAnswered(granted)
-    }
     // Rule 3 (the release gate): while the vault's update is required, or its release is read, the gate replaces the shell
     // below, inside the owner check's layer. Read straight from the repository: the first frame after an opening is the gate's.
     val gateVmRelease: ReleaseGateViewModel = hiltViewModel()
@@ -229,13 +218,6 @@ fun AppShell(
     val releaseFailure by gateVmRelease.failure.collectAsStateWithLifecycle()
     val openScreen = OpenAppScreen.of(releaseRequired, releaseBehind)
     val gated = openScreen != OpenAppScreen.SHELL
-    LaunchedEffect(release.visible, release.notificationsAsked) {
-        if (release.visible && !release.notificationsAsked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted =
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            if (granted) releaseVm.markAsked() else askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
 
     // The Notifications bell (ANDROID-PLAN 0.1.23) on every drawer screen; none while the vault is held or due (§3.6.3).
     val bell = if (gate.gated) {
@@ -363,22 +345,16 @@ fun AppShell(
                     onHoldOn = gateVm::turnHoldOn,
                     onDismissNotices = gateVm::dismissNotices,
                 )
-                ReleaseUpdateBanner(
-                    release,
-                    first = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown(),
-                    onUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
-                    onDismiss = releaseVm::dismiss,
-                )
                 if (notifyPrompt.note) {
                     InfoBanner(
                         stringResource(R.string.notify_note),
                         Modifier.testTag("notify_note"),
                         stringResource(R.string.owner_check_notice_ok),
                         shell::noteShown,
-                        statusBarPadding = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown() && !release.visible,
+                        statusBarPadding = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown(),
                     )
                 }
-                val bannerShown = alarmShown || deletionShown || relayShown || gate.bannerShown() || release.visible || notifyPrompt.note
+                val bannerShown = alarmShown || deletionShown || relayShown || gate.bannerShown() || notifyPrompt.note
                 Box(
                     Modifier
                         .weight(1f)
@@ -501,12 +477,10 @@ fun AppShell(
                                         asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY
                                     },
                                     onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
-                                    onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
                                     onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
                                     bell = bell,
                                 ),
                             )
-                            releaseUpdateDestination(onBack = { navController.popBackStack() })
                             helpDestination(onBack = { navController.popBackStack() }, bell = bell)
                             notificationsDestination(
                                 NotificationsHost(
@@ -556,14 +530,6 @@ fun AppShell(
     // what waits for it waits until the gate lifts.
     LaunchedEffect(launchRoute, gated) {
         if (launchRoute != null && !gated) navController.navigateTopLevel(launchRoute)
-    }
-
-    // A tap on the "Vault updates" notification: the update screen (the owner check, if due, still comes first). The gate
-    // already shows it.
-    LaunchedEffect(openUpdate, gated) {
-        if (!openUpdate) return@LaunchedEffect
-        releaseVm.openTaken()
-        if (!gated) navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true }
     }
 
     // A notification's tap (ANDROID-PLAN 0.1.23): the item, read, then its target (or the list when it has none);

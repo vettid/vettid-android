@@ -10,10 +10,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Duration
 import java.time.Instant
 
-/** What the proactive release notice says (owner decision 2026-10-09, ANDROID-PLAN 0.1.19). */
+/** What kind of update the offer is (ANDROID-PLAN 0.1.19): the update screen words it by this. */
 enum class UpdateNoticeKind {
     /** A newer `active` release is listed: "A new vault release is available". */
     AVAILABLE,
@@ -31,8 +30,7 @@ enum class UpdateNoticeKind {
  * [current], the release the vault is sealed to (the one this phone last unlocked into).
  *
  * The manifest has no security flag (VAULT-RELEASES keeps `security: none | recommended | urgent` in the release
- * log, which the app shows in What's new but never decides from), so a security release is not told apart: every
- * notice is dismissed for [ReleaseNotices.DISMISS_FOR] at most.
+ * log, which the app shows in What's new but never decides from), so a security release is not told apart.
  */
 data class ReleaseUpdateOffer(
     val current: ReleaseView,
@@ -63,54 +61,6 @@ data class ReleaseUpdateOffer(
             newest.status != STATUS_ACTIVE || newest.number <= sealed.number -> null
             else -> ReleaseUpdateOffer(sealed, newest, between.filter { it.number > sealed.number && it.number < newest.number })
         }
-    }
-}
-
-/**
- * The member dismissed the notice of [release] ([kind]) at [at], for [duration] ([ReleaseNotices.DISMISS_FOR], divided by
- * the vault's time scale when it was dismissed: STAGING-TIME-SCALE, S16).
- */
-data class ReleaseDismissal(
-    val release: Long,
-    val kind: UpdateNoticeKind,
-    val at: Instant,
-    val duration: Duration = ReleaseNotices.DISMISS_FOR,
-)
-
-/** When the shell shows the release banner and when the app posts its local notification. */
-object ReleaseNotices {
-    /** A dismissed banner comes back after 24 h, whatever the kind (owner decision 2026-10-09). */
-    val DISMISS_FOR: Duration = Duration.ofHours(24)
-
-    /** (STAGING-TIME-SCALE, S16) How long a dismissal made now lasts on a vault of [timeScale]. */
-    fun dismissFor(timeScale: Long): Duration = Duration.ofSeconds(TimeScales.divide(DISMISS_FOR.seconds, timeScale))
-
-    /**
-     * Whether the banner shows for [offer] at [now]: always without a dismissal of this release and kind (a notice
-     * that turns from "available" into an end-date warning shows again), and again [DISMISS_FOR] after one (the
-     * dismissal's own [ReleaseDismissal.duration]). A
-     * dismissal "in the future" (the clock was set back) does not hide it either.
-     */
-    fun bannerVisible(offer: ReleaseUpdateOffer?, dismissal: ReleaseDismissal?, now: Instant): Boolean = when {
-        offer == null -> false
-        dismissal == null || dismissal.release != offer.target.number || dismissal.kind != offer.kind -> true
-        else -> now.isBefore(dismissal.at) || !now.isBefore(dismissal.at.plus(dismissal.duration))
-    }
-
-    /** One local notification per release: only for a target newer than the last one notified. */
-    fun shouldNotify(offer: ReleaseUpdateOffer?, lastNotified: Long): Boolean = offer != null && offer.target.number > lastNotified
-
-    /**
-     * The posted notification of release [lastNotified] no longer stands and is cancelled (owner report 2026-10-10,
-     * S9 canary): the update to it is done, or the offer as last read (after an unlock, at app start, on return to
-     * the foreground; [offerKnown]: read at least once in this process) no longer offers it — none at all (the vault
-     * runs it or a newer one, or the manifest dropped it), another release, or the vault's release has reached it.
-     * [lastNotified] is kept, so the cancelled release is never posted again ([shouldNotify]).
-     */
-    fun notificationStale(offer: ReleaseUpdateOffer?, offerKnown: Boolean, lastNotified: Long, progress: UpdateProgress?): Boolean {
-        val done = progress?.step == UpdateStep.DONE && progress.to.number >= lastNotified
-        val gone = offerKnown && (offer == null || offer.target.number != lastNotified || offer.current.number >= lastNotified)
-        return lastNotified > 0 && (done || gone)
     }
 }
 
@@ -259,12 +209,9 @@ data class UpdateProgress(
 /** Never required: the release gate's default for a repository without it. */
 private val NOT_REQUIRED: StateFlow<Boolean> = MutableStateFlow(false)
 
-/** The proactive release update: the offer the shell shows, and the one-step update. */
+/** The release gate's update: the offer it decides from, and the one-step update. */
 interface ReleaseUpdateRepository {
     val offer: StateFlow<ReleaseUpdateOffer?>
-
-    /** [offer] has been read from the manifest at least once in this process (before that, null means "not known"). */
-    val offerKnown: StateFlow<Boolean>
 
     /** Non-null while an update is under way or its outcome is shown; the root of the UI shows it over every phase. */
     val progress: StateFlow<UpdateProgress?>
@@ -361,7 +308,7 @@ interface ReleaseUpdateRepository {
  * unconfirmed (§11.10.4). The PIN is held only while a step runs and dropped when it ends.
  *
  * Nothing here sends an approval except [start] (and [retry] of a start that failed before anything moved): the
- * offer, its refresh and the notices never touch the vault.
+ * offer and its refresh never touch the vault.
  */
 @Suppress("TooManyFunctions") // the update's steps, and the release gate's state (Rule 3)
 class ReleaseUpdateManager(
@@ -373,8 +320,6 @@ class ReleaseUpdateManager(
     private val offerFlow = MutableStateFlow<ReleaseUpdateOffer?>(null)
     private val progressFlow = MutableStateFlow<UpdateProgress?>(null)
     override val offer: StateFlow<ReleaseUpdateOffer?> = offerFlow.asStateFlow()
-    private val knownFlow = MutableStateFlow(false)
-    override val offerKnown: StateFlow<Boolean> = knownFlow.asStateFlow()
     override val progress: StateFlow<UpdateProgress?> = progressFlow.asStateFlow()
     private var job: Job? = null
 
@@ -589,7 +534,6 @@ class ReleaseUpdateManager(
         val change = synchronized(gate) {
             if (!takes(begun, n)) return
             offerFlow.value = o
-            knownFlow.value = true
             checkingFlow.value = false
             failureFlow.value = null
             verified = true
@@ -945,23 +889,6 @@ class ReleaseUpdateManager(
         private const val MS_PER_S = 1000L
         private const val NS_PER_MS = 1_000_000L
         private const val MAX_MOVED_AGAIN = 2
-    }
-}
-
-/**
- * A tap on the "Vault updates" notification: the shell opens the update screen once the vault is open (after the
- * unlock, and after the owner check if it is due).
- */
-class ReleaseUpdateInbox {
-    private val flow = MutableStateFlow(false)
-    val pending: StateFlow<Boolean> = flow.asStateFlow()
-
-    fun offer() {
-        flow.value = true
-    }
-
-    fun consume() {
-        flow.value = false
     }
 }
 

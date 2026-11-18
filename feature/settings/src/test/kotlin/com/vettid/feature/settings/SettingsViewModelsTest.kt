@@ -53,14 +53,14 @@ class SettingsViewModelsTest {
 
     /** A6 audit S1 (owner decision 2026-10-11): off by default, on from the switch, and a local choice only. */
     private fun viewModel(allowance: com.vettid.core.data.lock.ScreenshotAllowance, lock: AppLock = AppLock(prefs, noKeys, noFile)) =
-        SettingsViewModel(vault, vault, prefs, lock, vault, com.vettid.core.testing.FakeReleaseUpdates(), allowance)
+        SettingsViewModel(vault, vault, prefs, lock, vault, allowance)
 
     @Test
     fun theMapServerRowIsOfferedOnlyWhereTheVaultHasLocation() = runTest {
         val location = com.vettid.core.testing.FakeLocation()
         location.availability.value = com.vettid.core.data.location.LocationAvailability.UNSUPPORTED
         val vm = SettingsViewModel(
-            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates(), screenshots(),
+            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, screenshots(),
             location = location,
         )
         advanceUntilIdle()

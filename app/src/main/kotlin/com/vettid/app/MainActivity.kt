@@ -31,9 +31,7 @@ import com.vettid.app.ui.VettIdApp
 import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.vault.CanaryManifestInbox
-import com.vettid.core.data.vault.ReleaseUpdateInbox
 import com.vettid.core.data.vault.SCALED_FAILURE_TEXTS
-import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.AppLockState
@@ -82,9 +80,6 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var canaryManifests: CanaryManifestInbox
-
-    @Inject
-    lateinit var releaseUpdates: ReleaseUpdateInbox
 
     @Inject
     lateinit var notificationTaps: com.vettid.core.notify.NotificationOpenInbox
@@ -174,12 +169,10 @@ class MainActivity : ComponentActivity() {
      * `vettid://connect#…`, §6.4) goes to the connect flow, which asks the member
      * before anything is sent; the account portal's setup link (`/vault/enroll/#s=…`, VAULT-MESSAGING §11.12.1) to
      * onboarding, which redeems it only while this phone has no vault. A shared file is a canary manifest
-     * ([receiveCanaryManifest]). The "Vault updates" notification opens the update screen.
+     * ([receiveCanaryManifest]).
      */
     private fun receiveLink(intent: Intent?) {
         when (intent?.action) {
-            // A tap on the "Vault updates" notification: the update screen, once the vault is open.
-            ReleaseUpdateNotifier.ACTION_OPEN_UPDATE -> releaseUpdates.offer()
             // A feed item's notification (ANDROID-PLAN 0.1.23): the shell marks it read and opens its target.
             com.vettid.core.notify.NotifyIntents.ACTION_OPEN_ITEM ->
                 intent.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_ITEM_ID)?.let {

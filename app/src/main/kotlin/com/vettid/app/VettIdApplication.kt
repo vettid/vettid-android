@@ -6,7 +6,6 @@ import android.os.Bundle
 import com.vettid.app.di.AppScope
 import com.vettid.app.distribution.DistributionApplication
 import com.vettid.app.distribution.PushStartup
-import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.calls.CallAccess
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.ScreenshotAllowance
@@ -53,9 +52,6 @@ class VettIdApplication : DistributionApplication() {
 
     @Inject
     lateinit var connections: PoolEviction
-
-    @Inject
-    lateinit var releaseNotifier: ReleaseUpdateNotifier
 
     @Inject
     lateinit var feedNotifier: FeedNotifier
@@ -140,8 +136,6 @@ class VettIdApplication : DistributionApplication() {
                 },
             ),
         )
-        // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
-        releaseNotifier.start()
         // The notification modes (ANDROID-PLAN 0.1.23 D7): the channels, feed items as notifications, and the
         // on-phone service while the mode is the service and the phone has a vault.
         runCatching { Channels.ensure(this) }

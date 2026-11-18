@@ -45,7 +45,6 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Straighten
 import androidx.compose.material.icons.outlined.Storage
-import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -71,7 +70,6 @@ import androidx.navigation.compose.composable
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.DistanceUnits
 import com.vettid.core.data.prefs.ThemePreference
-import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.data.vault.vaultCode
@@ -151,8 +149,6 @@ data class SettingsHost(
     val onOpenItem: (String) -> Unit = {},
     /** Opens the credential password change (from a notice about recovery attempts). */
     val onChangePassword: () -> Unit = onOpenCredential,
-    /** Opens the update screen (ANDROID-PLAN 0.1.19): Settings → Vault → "Update available". */
-    val onReleaseUpdate: () -> Unit = {},
     /** Opens Settings → Security → Credential → "Replace your vault's keys" (the prompt after a PIN change). */
     val onReplaceKeys: () -> Unit = {},
     /** The Notifications bell (ANDROID-PLAN 0.1.23): Settings is a drawer screen; null hides it. */
@@ -208,7 +204,6 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
                 sharedProfile = { host.navigate(SharedProfileRoute) },
-                releaseUpdate = host.onReleaseUpdate,
                 notifications = { host.navigate(NotificationSettingsRoute) },
                 presence = { host.navigate(PresenceSettingsRoute) },
                 mapServer = { host.navigate(MapServerRoute) },
@@ -438,7 +433,6 @@ data class SettingsActions(
     val deleteVault: () -> Unit = {},
     val dismissError: () -> Unit = {},
     val sharedProfile: () -> Unit = {},
-    val releaseUpdate: () -> Unit = {},
     val notifications: () -> Unit = {},
     /** Settings → Privacy → Presence (ANDROID-PLAN §4 "Presence"): only where the vault has it. */
     val presence: () -> Unit = {},
@@ -522,22 +516,6 @@ fun SettingsContent(
 
             SettingsSectionHeader(stringResource(R.string.settings_section_vault))
             SettingsGroup {
-                // The proactive release update (owner decision 2026-10-09): while the vault has one to approve.
-                state.update?.let { o ->
-                    SettingsRow(
-                        stringResource(R.string.settings_vault_update),
-                        actions.releaseUpdate,
-                        icon = Icons.Outlined.SystemUpdate,
-                        supporting = stringResource(R.string.settings_vault_update_body, o.target.number.toInt(), o.current.number.toInt()),
-                        iconTint = if (o.kind == UpdateNoticeKind.AVAILABLE) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
-                        modifier = Modifier.testTag("release_update_row"),
-                    )
-                    SettingsDivider()
-                }
                 SettingsRow(stringResource(R.string.settings_vault_status), actions.vaultStatus, icon =
                     Icons.Outlined.Storage, modifier = Modifier.testTag("vault_status"))
                 SettingsDivider()

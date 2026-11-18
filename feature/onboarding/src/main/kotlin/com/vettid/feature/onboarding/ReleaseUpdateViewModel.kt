@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import javax.inject.Inject
 
-/** Immutable UI state of the update screen ("Update now"). */
+/** Immutable UI state of the update screen (the release gate's update). */
 data class ReleaseUpdateUiState(
     val loading: Boolean = true,
     val offer: ReleaseUpdateOffer? = null,
