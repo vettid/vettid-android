@@ -60,6 +60,17 @@ class ShellPresenceTest {
     }
 
     @Test
+    fun theSheetRowShowsOnceThePolicyIsReadAndGoesAtALockOrTheHold() = runTest {
+        presence.policy.value = null // not read: the vault locked, held or due, or the first `presence.get` not answered
+        val vm = vm()
+        assertNull(vm.presenceState.value)
+        presence.policy.value = com.vettid.core.data.presence.PresencePolicy(1, PresenceState.AWAY)
+        assertEquals(PresenceState.AWAY, vm.presenceState.value)
+        presence.policy.value = null
+        assertNull(vm.presenceState.value)
+    }
+
+    @Test
     fun openingTheSheetForgetsAnEarlierRefusal() = runTest {
         val vm = vm()
         presence.fail = VaultFailure(FailureKind.NETWORK)

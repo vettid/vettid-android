@@ -6,7 +6,6 @@ import com.vettid.core.data.feed.FeedBadge
 import com.vettid.core.data.feed.FeedRepository
 import com.vettid.core.data.prefs.NotificationMode
 import com.vettid.core.data.prefs.PreferencesRepository
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceState
 import com.vettid.core.data.vault.VaultFailure
@@ -139,10 +138,12 @@ class ShellViewModel @Inject constructor(
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
     }
 
-    /** The member's own status for the avatar sheet's row (ANDROID-PLAN §4 "Presence"); null where the vault has no presence. */
-    val presenceState: StateFlow<PresenceState?> = combine(presence.availability, presence.policy) { a, p ->
-        p?.state?.takeIf { a == PresenceAvailability.AVAILABLE }
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    /**
+     * The member's own status for the avatar sheet's row (ANDROID-PLAN §4 "Presence"); null until the policy is read (and
+     * after a lock or the hold).
+     */
+    val presenceState: StateFlow<PresenceState?> =
+        presence.policy.map { p -> p?.state }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** The sheet's picker: the same `presence.set` as Settings → Privacy → Presence. A refused change leaves the row as it was. */
     fun setPresenceState(state: PresenceState) {

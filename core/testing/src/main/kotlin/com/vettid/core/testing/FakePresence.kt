@@ -1,6 +1,5 @@
 package com.vettid.core.testing
 
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresencePolicy
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
@@ -10,14 +9,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * TEST ONLY. An in-memory Presence repository (ANDROID-PLAN §4 "Presence") for ViewModel tests: [policy] is the member's
- * policy, [readings] what the connections answer; [update] applies the change at once (a failure in [fail] is thrown
- * instead); [queries] lists the connections asked.
+ * policy (null: not read, as while the vault is locked, held or due), [readings] what the connections answer; [update]
+ * applies the change at once (a failure in [fail] is thrown instead); [queries] lists the connections asked.
  */
-class FakePresence(available: Boolean = true, initial: PresencePolicy? = PresencePolicy(version = 1)) : PresenceRepository {
+class FakePresence(initial: PresencePolicy? = PresencePolicy(version = 1)) : PresenceRepository {
     val queries = mutableListOf<String>()
     var fail: VaultFailure? = null
 
-    override val availability = MutableStateFlow(if (available) PresenceAvailability.AVAILABLE else PresenceAvailability.UNSUPPORTED)
     override val policy = MutableStateFlow(initial)
     override val readings = MutableStateFlow<Map<String, PresenceReading>>(emptyMap())
 
