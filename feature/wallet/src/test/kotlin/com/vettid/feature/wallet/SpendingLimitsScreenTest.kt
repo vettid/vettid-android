@@ -37,9 +37,9 @@ class SpendingLimitsScreenTest {
         form: CapsEditForm = CapsEditForm(),
         error: FailureKind? = null,
         code: String? = null,
-        supported: Boolean = true,
+        loaded: Boolean = true,
     ) = SpendingLimitsUiState(
-        loaded = true, name = "Savings", supported = supported, perTx = perTx, perPeriod = perPeriod, spent = spent, step = step,
+        loaded = loaded, name = "Savings", perTx = perTx, perPeriod = perPeriod, spent = spent, step = step,
         raiseForm = raise, form = form, error = error, errorCode = code,
     )
 
@@ -70,11 +70,25 @@ class SpendingLimitsScreenTest {
         rule.onNodeWithText("Lower a limit").assertIsDisplayed()
     }
 
+    /** A read of the wallets that failed before this wallet was shown: the list's failure, with Try again, not a spinner. */
     @Test
-    fun aVaultWithoutLimitsOffersNoButtons() {
-        show(state(supported = false))
-        rule.onNodeWithTag("wallet_limits_unsupported").assertIsDisplayed()
-        rule.onNodeWithText("Lower a limit").assertDoesNotExist()
+    fun aFailedFirstReadIsSaidWithTryAgain() {
+        var retried = 0
+        show(state(loaded = false).copy(listFailed = FailureKind.NETWORK), SpendingLimitsActions(onRetryList = { retried++ }))
+        rule.onNodeWithText("Your wallets couldn't be read.").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_retry").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun beforeTheWalletIsReadNothingCanBeChanged() {
+        var lower = 0
+        var raise = 0
+        show(state(loaded = false), SpendingLimitsActions(onLower = { lower++ }, onRaise = { raise++ }))
+        rule.onNodeWithTag("limits_now_tx").assertDoesNotExist()
+        rule.onNodeWithText("Lower a limit").assertIsNotEnabled()
+        rule.onNodeWithText("Raise or remove a limit").performClick()
+        assertEquals(0, lower + raise)
     }
 
     @Test

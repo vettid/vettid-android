@@ -123,7 +123,7 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
          * own selection or what was typed. Null when the summary has no single payee: nothing is shown then (the compare makes it
          * unreachable, and there is no fallback to what was entered).
          */
-        fun reviewFrom(vault: InspectSummary, cap: SpendCap?, toFeeSats: Long, sendAll: Boolean, leftBehind: Int): Review? {
+        fun reviewFrom(vault: InspectSummary, cap: SpendCap, toFeeSats: Long, sendAll: Boolean, leftBehind: Int): Review? {
             val payee = vault.outputs.singleOrNull { !it.change } ?: return null
             return Review(
                 address = payee.address,
@@ -135,8 +135,7 @@ class ManagerSendEngine(private val wallets: WalletsManager) : SendEngine {
                 toFeeSats = toFeeSats,
                 sendAll = sendAll,
                 leftBehind = leftBehind,
-                hasCap = cap != null,
-                capRefusal = cap?.let(::refusalOf),
+                capRefusal = refusalOf(cap),
             )
         }
 

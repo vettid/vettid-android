@@ -19,7 +19,6 @@ import com.vettid.core.wallet.RecentSends
 import com.vettid.core.wallet.SendHold
 import com.vettid.core.wallet.SendRequest
 import com.vettid.core.wallet.SendResult
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -176,11 +175,11 @@ class SendViewModel internal constructor(
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.flagsChanged, wallets.capsPending) { list, availability, _, _ ->
-                list.firstOrNull { it.id == walletId } to availability
-            }.collect { (w, availability) ->
+            combine(wallets.wallets, wallets.listed, wallets.flagsChanged, wallets.capsPending) { list, listed, _, _ ->
+                list.firstOrNull { it.id == walletId } to listed
+            }.collect { (w, listed) ->
                 if (w == null) {
-                    if (seen || availability != WalletAvailability.UNKNOWN) clear()
+                    if (seen || listed) clear()
                 } else {
                     seen = true
                     val network = wallets.networkOf(w)
@@ -477,7 +476,7 @@ class SendViewModel internal constructor(
         val w = wallets.wallets.value.firstOrNull { it.id == walletId }
         val period = w?.perPeriodSats
         val spent = w?.spentSats
-        val limit = if (r.hasCap && period != null && spent != null) {
+        val limit = if (period != null && spent != null) {
             LimitLine(r.totalOutSats, (period - spent - r.totalOutSats).coerceAtLeast(0))
         } else {
             null
@@ -493,7 +492,7 @@ class SendViewModel internal constructor(
         mutable.update {
             it.copy(busy = false, step = SendStep.REVIEW, review = Review(
                 r.address, r.payeeSats, r.changeSats, r.feeSats, r.vsize, r.totalOutSats, r.toFeeSats, r.sendAll, r.leftBehind,
-                r.hasCap, cap, limit,
+                cap, limit,
             ), password = "", error = null, askAgain = false, bigFeeAsk = if (ten) BigFee.TEN_PERCENT else null, bigFeeSats = r.feeSats,
                 bigFeePayee = r.payeeSats,
             )

@@ -9,7 +9,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.BackupRoute
 import com.vettid.core.wallet.RevealedPhrase
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,12 +51,12 @@ class WalletsViewModel @Inject constructor(private val wallets: WalletsManager) 
     // The flags are this phone's (backed up, the legacy test chain): a change of them (a check just passed) reads the rows again.
     val state: StateFlow<WalletsUiState> = combine(
         wallets.wallets,
-        wallets.availability,
+        wallets.listed,
         failure,
         wallets.flagsChanged,
-    ) { list, availability, failed, _ -> Triple(list, availability, failed) }.mapLatest { (list, availability, failed) ->
+    ) { list, listed, failed, _ -> Triple(list, listed, failed) }.mapLatest { (list, listed, failed) ->
         WalletsUiState(
-            loading = availability == WalletAvailability.UNKNOWN && failed == null,
+            loading = !listed && failed == null,
             rows = list.map { w -> WalletRow(w.id, w.name, wallets.networkOf(w), w.networkName, wallets.backedUp(w.id)) },
             failed = failed,
             testBuild = !wallets.offers(Network.MAINNET),
@@ -176,13 +175,6 @@ data class BackupUiState(
     val backedUp: Boolean = false,
     /** The phrase was checked, but this phone could not record it: Try again ([BackupViewModel.saveAgain]). */
     val saveFailed: Boolean = false,
-    /**
-     * The member chose a limit but the vault cannot enforce one (the new wallet came back without `caps`): it was not kept or sent,
-     * and the notice says so. A limits step that was skipped (a listed wallet without `caps`) shows no notice.
-     */
-    val capsUnsupported: Boolean = false,
-    /** The limits step was asked (the vault enforces limits as far as is known): Back from the password returns to it. */
-    val limitsAsked: Boolean = false,
     /** The limits chosen could not be saved on this phone: they are kept for this session only, so the backup should be finished now. */
     val capsNotSaved: Boolean = false,
     /** Backed up, but the chosen spending limit is not set yet (no Receive until it is): Try again ([BackupViewModel.retryCaps]). */
@@ -290,13 +282,13 @@ class BackupViewModel internal constructor(
     val state: StateFlow<BackupUiState> = mutable.asStateFlow()
 
     init {
-        // §3.6.3, "Local state": nothing of a wallet is kept or shown once the vault closes (a clear makes the wallets UNKNOWN again).
+        // §3.6.3, "Local state": nothing of a wallet is kept or shown once the vault closes (a clear makes the wallets unlisted again).
         viewModelScope.launch {
             var seen = false
-            wallets.availability.collect { a ->
-                if (a == WalletAvailability.AVAILABLE) {
+            wallets.listed.collect { listed ->
+                if (listed) {
                     seen = true
-                } else if (seen && a == WalletAvailability.UNKNOWN) {
+                } else if (seen) {
                     forgetWords()
                     mutable.update { it.copy(closed = true, password = "", busy = false) }
                 }
@@ -317,12 +309,7 @@ class BackupViewModel internal constructor(
     fun toLimits() {
         val s = mutable.value
         if (s.step != BackupStep.FORM || !s.idle || !s.formReady) return
-        // A vault whose wallets give no `caps` cannot enforce a limit: no question, nothing chosen, nothing pending.
-        if (wallets.capsOffered) {
-            mutable.update { it.copy(step = BackupStep.LIMITS, limitsAsked = true) }
-        } else {
-            mutable.update { it.copy(step = BackupStep.CREATE, limitsAsked = false, limits = LimitsForm()) }
-        }
+        mutable.update { it.copy(step = BackupStep.LIMITS) }
     }
 
     /** "Continue" from the limits: the password (only with limits the vault would take). */
@@ -337,7 +324,7 @@ class BackupViewModel internal constructor(
             when (it.step) {
                 BackupStep.LIMITS -> it.copy(step = BackupStep.FORM)
                 BackupStep.CREATE -> it.copy(
-                    step = if (it.limitsAsked) BackupStep.LIMITS else BackupStep.FORM,
+                    step = BackupStep.LIMITS,
                     password = "", error = null, errorCode = null, problem = null,
                 )
                 else -> it
@@ -367,7 +354,7 @@ class BackupViewModel internal constructor(
                 // Created without limits; the ones chosen are kept as pending and sent once the phrase is checked.
                 val c = wallets.create(s.name, network, pw, parse.caps)
                 walletId = c.wallet.id
-                mutable.update { it.copy(capsNotSaved = c.capsNotSaved, capsUnsupported = c.capsUnsupported) }
+                mutable.update { it.copy(capsNotSaved = c.capsNotSaved) }
                 val p = c.phrase
                 if (p == null) {
                     mutable.update { it.copy(busy = false, step = BackupStep.DONE, revealFailed = true) }

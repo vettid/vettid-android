@@ -43,7 +43,7 @@ internal object WalletFixtures {
           {"type":"p2wpkh","path":"m/84'/1'/0'","xpub":"$TPUB84","descriptors":{"receive":"wpkh([$FP/84'/1'/0']$TPUB84/0/*)","change":"wpkh([$FP/84'/1'/0']$TPUB84/1/*)"},"next_receive":0,"next_change":0}],
          "tags":[],${caps?.let { "\"caps\":$it," } ?: ""}"created_at":"2026-10-31T12:00:00Z"}"""
 
-    /** A vault with spending limits (release 26) always gives `caps`; none are set. */
+    /** `<wallet>.caps` is always there (§10.18 "Spend caps", "Defaults"); none are set. */
     const val DEFAULT_CAPS = """{"period_seconds":86400,"spent_sats":0}"""
 
     fun wallet(id: String = "01WALLET0000000000000000AA", network: String = "testnet4", nextReceive: Int = 1, caps: String? = DEFAULT_CAPS): VaultWallet =
@@ -73,8 +73,14 @@ internal class FakeWalletOps : WalletOps {
     var listGate: CompletableDeferred<Unit>? = null
     var created = 0
 
-    /** A vault before release 26: its wallets have no `caps`. */
+    /**
+     * The vault's answers carry wallets without `caps` (not §10.18): `wallet.list`, `wallet.get` and `wallet.create` are read through
+     * [WalletWire] as the app reads them, so they do not read.
+     */
     var noCaps = false
+
+    /** `wallet.psbt.inspect` answers without its `cap` (not §10.18), read through [WalletWire]. */
+    var inspectWithoutCap = false
     var conflict = false
     var nextLie: String? = null
 
@@ -127,6 +133,7 @@ internal class FakeWalletOps : WalletOps {
         listGate?.await()
         if (unsupported) refuse("wallet.list", "unsupported_type")
         if (listFails) refuse("wallet.list", "internal")
+        if (noCaps) return atStart.map { withoutCaps(it) }
         return atStart
     }
 
@@ -134,8 +141,12 @@ internal class FakeWalletOps : WalletOps {
 
     override suspend fun get(walletId: String): VaultWallet {
         gets++
-        return wallets[walletId] ?: refuse("wallet.get", "not_found")
+        val w = wallets[walletId] ?: refuse("wallet.get", "not_found")
+        return if (noCaps) withoutCaps(w) else w
     }
+
+    /** [w] as a vault would answer it without `caps`, read as the app reads it: a [WalletWireException]. */
+    private fun withoutCaps(w: VaultWallet): VaultWallet = WalletFixtures.wallet(id = w.id, network = w.networkName, caps = null)
 
     override suspend fun create(name: String, network: String, password: CharArray, item: WalletImport?): VaultWallet {
         handedSecrets += password
@@ -249,8 +260,8 @@ internal class FakeWalletOps : WalletOps {
     /** The vault's summary is altered before it is answered (a vault that saw another payment). */
     var tamper: ((InspectSummary) -> InspectSummary)? = null
 
-    /** The `cap` of the inspect answer (null: a vault without spending limits). */
-    var cap: SpendCap? = SpendCap(true, null, null, null)
+    /** The `cap` of the inspect answer. */
+    var cap: SpendCap = SpendCap(true, null, null, null)
     val inspected = mutableListOf<String>()
 
     /** A failure of `wallet.sign` that is not the vault's answer (before the send, or after it without an answer). */
@@ -283,6 +294,11 @@ internal class FakeWalletOps : WalletOps {
         val summary = when (val r = PsbtInspector.inspect(vaultWallet, bytes)) {
             is InspectResult.Ok -> r.summary
             is InspectResult.Refused -> refuse("wallet.psbt.inspect", "invalid_psbt", r.reason)
+        }
+        if (inspectWithoutCap) {
+            // The summary as the vault writes it, and no `cap`: read as the app reads it.
+            val o = VaultJson.parseObject((tamper?.invoke(summary) ?: summary).toJson().encodeToByteArray())
+            return WalletWire.inspection(o)
         }
         return PsbtInspection(tamper?.invoke(summary) ?: summary, cap)
     }

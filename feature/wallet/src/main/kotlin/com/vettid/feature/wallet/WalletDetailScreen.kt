@@ -78,6 +78,8 @@ data class WalletDetailActions(
     val onAskReset: () -> Unit = {},
     val onCancelReset: () -> Unit = {},
     val onReset: () -> Unit = {},
+    /** Try again on a read of the wallets that failed before this wallet was shown. */
+    val onRetryList: () -> Unit = {},
 )
 
 /**
@@ -95,7 +97,10 @@ fun WalletDetailScreen(state: WalletDetailUiState, actions: WalletDetailActions,
         Column(Modifier.fillMaxSize()) {
             VettIdBackTopBar(onBackClick = actions.onBack, actions = { WalletMenu(state, actions) })
             CenteredTitle(state.name, Modifier.testTag("wallet_detail_title"))
-            if (!state.loaded) {
+            val listFailed = state.listFailed
+            if (!state.loaded && listFailed != null) {
+                WalletsFailed(listFailed, actions.onRetryList)
+            } else if (!state.loaded) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             } else {
                 PullToRefreshBox(isRefreshing = state.lookingUp, onRefresh = actions.onRefresh, modifier = Modifier.fillMaxSize()) {
@@ -375,7 +380,7 @@ private fun Problem(text: String, tag: String, ways: List<Pair<String, () -> Uni
     }
 }
 
-/** ⋯: Receiving address type, Spending limits (when the vault enforces them), Chain server, Details, Delete wallet. */
+/** ⋯: Receiving address type, Spending limits, Chain server, Details, Delete wallet. */
 @Composable
 private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions) {
     var open by remember { mutableStateOf(false) }
@@ -389,11 +394,9 @@ private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions)
                 open = false
                 typeDialog = true
             }
-            if (state.capsSupported) {
-                MenuItem(R.string.wallet_menu_limits, "wallet_menu_limits", enabled = state.loaded) {
-                    open = false
-                    actions.onLimits()
-                }
+            MenuItem(R.string.wallet_menu_limits, "wallet_menu_limits", enabled = state.loaded) {
+                open = false
+                actions.onLimits()
             }
             MenuItem(R.string.wallet_menu_chain_server, "wallet_menu_chain_server", enabled = state.network != null) {
                 open = false

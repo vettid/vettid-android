@@ -21,6 +21,7 @@ import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import com.vettid.core.wallet.WalletOps
 import com.vettid.core.wallet.WalletTx
+import com.vettid.core.wallet.WalletWireException
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.CoroutineScope
 
@@ -76,7 +77,7 @@ internal class FakeWallets : WalletOps {
     /** A vault error code for `wallet.caps.set`, else none. */
     var capsSetFails: String? = null
 
-    /** A vault before release 26: the wallet `create` answers has no `caps`. */
+    /** `wallet.create` answers a wallet without `caps` (not §10.18): it does not read, as [com.vettid.core.wallet.WalletWire] says. */
     var noCaps = false
 
     /** The password this vault takes (a test may choose a distinctive one to look for). */
@@ -98,9 +99,10 @@ internal class FakeWallets : WalletOps {
         }
         createFails?.let { throw VaultOpException("wallet.create", it) }
         if (String(password) != this.password) throw VaultOpException("wallet.create", "bad_password")
-        return wallet("01NEW000000000000000000000", name, network).let { w ->
-            if (noCaps) w.copy(capsSupported = false).also { wallets[w.id] = it } else w
-        }
+        val w = wallet("01NEW000000000000000000000", name, network)
+        // The vault made the wallet; its answer does not read.
+        if (noCaps) throw WalletWireException("caps")
+        return w
     }
 
     override suspend fun capsSet(walletId: String, version: Long, perTx: Long?, perPeriod: Long?): Long {

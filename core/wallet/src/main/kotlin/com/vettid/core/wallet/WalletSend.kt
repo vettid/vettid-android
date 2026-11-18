@@ -44,8 +44,8 @@ data class SpendCap(
     override fun toString(): String = "SpendCap"
 }
 
-/** The vault's answer to `wallet.psbt.inspect`: its summary, and its `cap` (null from a vault without spending limits). */
-class PsbtInspection(val summary: InspectSummary, val cap: SpendCap?) {
+/** The vault's answer to `wallet.psbt.inspect`: its summary, and its `cap` (always there; `ok: true` for a wallet without limits). */
+class PsbtInspection(val summary: InspectSummary, val cap: SpendCap) {
     override fun toString(): String = "PsbtInspection"
 }
 
@@ -138,8 +138,8 @@ class PreparedSend internal constructor(
     val address: String,
     /** The vault's summary: the payees, the change, the fee and the total leaving the wallet. */
     val vault: InspectSummary,
-    /** The vault's spending-limit check; null for a vault without spending limits (the screen then says nothing about limits). */
-    val cap: SpendCap?,
+    /** The vault's spending-limit check. */
+    val cap: SpendCap,
     val payeeSats: Long,
     val changeSats: Long,
     val feeSats: Long,
