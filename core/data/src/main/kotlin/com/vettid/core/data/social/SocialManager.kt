@@ -79,8 +79,6 @@ class SocialManager internal constructor(
     private val obsoletePendingStore: DeviceStateStore? = null,
     private val onLeftoverFailed: (Throwable) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
-    /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
-    private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
     /**
      * Marks feed items read (ANDROID-PLAN 0.1.23): an ask decided here ([com.vettid.core.data.feed.FeedAsks], by kind
      * and `ref`), a conversation opened (its `message.received` items, by connection).
@@ -166,7 +164,7 @@ class SocialManager internal constructor(
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
 
-    /** `pending.list` (§10.4.2): the cut, the ticket of each read, what an older release answered. */
+    /** `pending.list` (§10.4.2): the cut and the ticket of each read. */
     private val pending = PendingAsks()
     private val pendingFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
@@ -217,8 +215,6 @@ class SocialManager internal constructor(
      */
     internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
-    /** The vault answered `pending.list` with `unsupported_type` (an older release): no merge will come. */
-    internal val pendingUnsupported: Boolean get() = pending.isUnsupported
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */
@@ -699,7 +695,7 @@ class SocialManager internal constructor(
         try {
             refreshRequests()
         } catch (_: VaultFailure) {
-            // a release before 0.10.2 has no request list; the screens retry
+            // a failed read is left to the screens, which retry
         }
     }
 
@@ -1562,13 +1558,12 @@ class SocialManager internal constructor(
     /**
      * Reads every page of `pending.list` (§10.4.2) and replaces the stored asks of its kinds with it, by ask id (an ask
      * not in it is gone: decided elsewhere, expired or withdrawn); events newer than the first page's `ts` stay. A
-     * failed read changes nothing and is thrown (and noted in [pendingReadFailure]); `unsupported_type` (an older
-     * release) is not a failure: the live events stay as they are until the next unlock. Reads may overlap; an older
+     * failed read changes nothing and is thrown (and noted in [pendingReadFailure]), `unsupported_type` included (the app
+     * requires the vault's current release, which lists them). Reads may overlap; an older
      * list never replaces a newer one. A list is merged only whole: when the cursors do not reach the end (a stale
      * cursor starts again from the beginning, §10.4.2) the read starts over once with a fresh first page and `ts`.
      */
     internal suspend fun refreshPendingFrom(page: suspend (after: String?) -> PendingPage) {
-        if (pending.isUnsupported) return
         val ticket = pending.begin()
         try {
             val list = readWhole(page) ?: readWhole(page)
@@ -1576,13 +1571,8 @@ class SocialManager internal constructor(
             if (takeInPending(ticket, list.ts, list.asks) && pending.current(ticket)) pendingFailureFlow.value = null
         } catch (e: VaultFailure) {
             // A read that is no longer current (a lock, or a later-started read merged) does not touch the notice.
-            if (e.code == "unsupported_type") {
-                pending.markUnsupported(ticket)
-                if (pending.current(ticket)) pendingFailureFlow.value = null
-            } else {
-                if (pending.current(ticket)) pendingFailureFlow.value = e
-                throw e
-            }
+            if (pending.current(ticket)) pendingFailureFlow.value = e
+            throw e
         }
     }
 
@@ -1654,7 +1644,7 @@ class SocialManager internal constructor(
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.grant(o, t) } }
             grantsOk = true
         } catch (_: VaultFailure) {
-            // an older release without grants: nothing listed
+            // a failed list covers nothing: what was known of it stays (grantsOk false)
         }
         try {
             vaultGuard(resend = true) { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
@@ -1843,7 +1833,6 @@ class SocialManager internal constructor(
     private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> = SharePending.decisions(
         pendingPage = { after -> vaultGuard(resend = true) { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
         rulePage = { after -> vaultGuard(resend = true) { a.shareRuleList(after = after) } },
-        names = itemNames(),
         t = t,
     )
 
@@ -1874,12 +1863,12 @@ class SocialManager internal constructor(
         val all = (events + listed.filter { l -> events.none { it.key == l.key } })
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
-        // One question per item and subject (0.23.0 §10.12).
+        // One question per item and subject (0.23.0 §10.12), of at most one share.decide's items.
         val firsts = cs.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
         fun named(a: Approval): Approval = withName(a, names, services).let { n ->
             if (n is Approval.LocationRequest) n.copy(firstName = firsts[n.connectionId]) else n
         }
-        return ShareQuestions.dedupe(all.map(::named)).sortedByDescending { it.receivedAt }
+        return ShareQuestions.capped(ShareQuestions.dedupe(all.map(::named))).sortedByDescending { it.receivedAt }
     }
 
     private fun withName(a: Approval, names: Map<String, String>, services: Set<String>): Approval = when (a) {
@@ -2114,56 +2103,61 @@ class SocialManager internal constructor(
 
     override suspend fun denyCriticalUse(requestId: String) = decide("critical:$requestId") { it.criticalUseDeny(requestId) }
 
-    override suspend fun decideShare(ruleId: String, approve: Boolean) {
-        val req = find("share:$ruleId") as? Approval.ShareDecision ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        val ids = req.items.map { i -> i.itemId }
-        decideShare(ruleId, include = if (approve) ids else emptyList(), decline = if (approve) emptyList() else ids)
-    }
-
     /**
      * Includes [include] and declines [decline] in one change (§10.12 `share.decide{include, decline}`, 0.21.0: one
-     * flush, nothing changed on an error); declined items are not asked again. A vault before 0.21.0 refuses that
-     * form (`bad_request`, nothing changed): the two lists then go as two `{items, approve}` calls.
+     * flush, nothing changed on an error); declined items are not asked again. Any refusal, `bad_request` included, is
+     * thrown and nothing else is sent (the app requires the vault's current release, which takes this form).
      */
     override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) = decideShareWith(
         ruleId,
         include,
         decline,
-        both = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
-        one = { items, approve -> vaultGuard { api().shareDecide(ruleId, items, approve) } },
+        send = { inc, dec -> vaultGuard { api().shareDecide(ruleId, inc, dec) } },
     )
+
+    /** The re-read after a `share.decide` answered `bad_request` (a test replaces it); a failure is left for the screens. */
+    @Volatile
+    internal var staleShareReread: suspend () -> Unit = { runCatching { refreshApprovals() } }
 
     internal suspend fun decideShareWith(
         ruleId: String,
         include: List<String>,
         decline: List<String>,
-        both: suspend () -> JsonObject,
-        one: suspend (items: List<String>, approve: Boolean) -> JsonObject,
+        /** Sends the decision: [include] and [decline] as checked here, each id once. */
+        send: suspend (include: List<String>, decline: List<String>) -> JsonObject,
     ) {
-        if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        val inc = include.distinct()
+        val dec = decline.distinct()
+        // What is sent is checked (§10.12): 1–500 ids in all (the questions shown never ask for more,
+        // ShareQuestions.capped) and none in both lists. The vault would refuse anything else, so nothing is sent.
+        val both = inc.toSet().intersect(dec.toSet())
+        if ((inc.size + dec.size) !in 1..ShareQuestions.DECIDE_MAX || both.isNotEmpty()) {
+            throw VaultFailure(FailureKind.OTHER, "bad_request")
+        }
         // The subject, before the decision takes the rule's question out of the list and the events.
         val subject = subjectOfRule(ruleId)
-        val answers = mutableListOf<JsonObject>()
-        decideRun("share:$ruleId", whole = false) {
-            SharePending.decide(
-                include,
-                decline,
-                both = { answers.add(both()) },
-                one = { items, approve -> answers.add(one(items, approve)) },
-            )
+        var answer: JsonObject? = null
+        try {
+            decideRun("share:$ruleId", whole = false) { answer = send(inc, dec) }
+        } catch (e: VaultFailure) {
+            // §10.12: none of the items pending is `bad_request` (another device decided, or they were withdrawn and the
+            // event was missed). The question stays until the list says otherwise; the lists are read again in the
+            // background so a stale one clears.
+            if (e.kind == FailureKind.OTHER && e.code == "bad_request") scope.launch { staleShareReread() }
+            throw e
         }
         // The vault's answer says what the decision changed (it also reaches the subject's other rules); only an answer
         // without either list falls back to what was sent.
-        val told = answers.filter { "included" in it || "declined" in it }
-        val done = if (told.isEmpty()) {
-            (include + decline).toSet()
+        val told = answer?.takeIf { "included" in it || "declined" in it }
+        val done = if (told == null) {
+            (inc + dec).toSet()
         } else {
-            told.flatMap { listOf("included", "declined").flatMap { k -> ids(it, k) } }.toSet()
+            listOf("included", "declined").flatMap { k -> ids(told, k) }.toSet()
         }
         val read = applyShareDecided(ruleId, done, subject)
         // Sent but not named by the answer: the vault did not hold them pending. They leave this rule's question here
         // only; that is not a decision, so nothing is noted for a read on its way.
-        val ignored = (include + decline).toSet() - done
+        val ignored = (inc + dec).toSet() - done
         if (ignored.isNotEmpty()) removeShareItems(ignored, { it.ruleId == ruleId })
         // The feed item is read only when nothing of the question is left (a batch may have added an item meanwhile).
         val key = "share:$ruleId"

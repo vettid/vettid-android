@@ -374,6 +374,46 @@ class ApprovalsViewModelsTest {
         assertEquals(emptyList<String>() to listOf("i1", "i2"), social.lastShare)
     }
 
+    /**
+     * A question over 500 items holds its next round under the same key at once: after a decision the screen sends
+     * nothing more, so a second tap before it closes decides none of the items it now shows.
+     */
+    @Test
+    fun aSecondTapAfterAShareDecisionSendsNothing() = runTest {
+        fun item(id: String) = com.vettid.core.data.social.ShareItem(id, id, "medical", "data")
+        val round1 = Approval.ShareDecision("r1", "c1", null, listOf(item("i1"), item("i2")), "tagged", now)
+        social.approvals.value = listOf(round1)
+        val vm = detail(round1)
+        advanceUntilIdle()
+        vm.approve(listOf("i1", "i2"))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        // The next round is listed under the same key before the screen has closed.
+        val round2 = round1.copy(items = listOf(item("i3"), item("i4")))
+        social.approvals.value = listOf(round2)
+        advanceUntilIdle()
+        vm.approve(listOf("i3", "i4"))
+        vm.deny(listOf("i3", "i4"))
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "decideShare" })
+        assertEquals(listOf("i1", "i2") to emptyList<String>(), social.lastShare)
+    }
+
+    /** A Deny tapped while a decision is on its way sends nothing. */
+    @Test
+    fun aDenyWhileADecisionIsOnItsWaySendsNothing() = runTest {
+        fun item(id: String) = com.vettid.core.data.social.ShareItem(id, id, "medical", "data")
+        val share = Approval.ShareDecision("r1", "c1", null, listOf(item("i1")), "tagged", now)
+        social.approvals.value = listOf(share)
+        val vm = detail(share)
+        advanceUntilIdle()
+        vm.approve(listOf("i1"))
+        vm.deny(listOf("i1"))
+        advanceUntilIdle()
+        assertEquals(1, social.calls.count { it == "decideShare" })
+        assertEquals(listOf("i1") to emptyList<String>(), social.lastShare)
+    }
+
     /** §10.12: entries ticked one by one, a category answered with the member's item, uses and lifetime chosen. */
     @Test
     fun aGrantIsDecidedEntryByEntry() = runTest {

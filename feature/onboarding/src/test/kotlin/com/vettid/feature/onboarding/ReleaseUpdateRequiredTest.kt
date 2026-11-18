@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performClick
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseView
+import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.UpdateStep
 import com.vettid.core.testing.FakeReleaseUpdates
@@ -111,5 +112,39 @@ class ReleaseUpdateRequiredTest {
         } finally {
             Dispatchers.resetMain()
         }
+    }
+
+    /** A phone with no usable user_guid: the unlock screen's recover-or-erase text, not "does not support this yet". */
+    @Test
+    fun aPhoneWithoutAUserGuidIsToldItCannotOpenTheVault() {
+        val p = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NOT_SUPPORTED, failureCode = UnlockAttempt.CODE_NO_USER_GUID,
+            vaultOpen = false,
+        )
+        rule.setContent { ReleaseUpdateFlowContent(ReleaseUpdateFlowUiState(progress = p, required = true), flowActions) }
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertExists()
+        rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
+    }
+
+    /** Another NOT_SUPPORTED (no previous release to go back to) is not a phone without a user_guid. */
+    @Test
+    fun anotherNotSupportedIsNotAPhoneWithoutAUserGuid() {
+        val p = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NOT_SUPPORTED, failureCode = "no_previous_release",
+            vaultOpen = false,
+        )
+        rule.setContent { ReleaseUpdateFlowContent(ReleaseUpdateFlowUiState(progress = p, required = true), flowActions) }
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertDoesNotExist()
+    }
+
+    /** The code with another kind is not the unlock guard's refusal: no recover-or-erase text. */
+    @Test
+    fun theCodeAloneIsNotAPhoneWithoutAUserGuid() {
+        val p = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.OTHER, failureCode = UnlockAttempt.CODE_NO_USER_GUID,
+            vaultOpen = false,
+        )
+        rule.setContent { ReleaseUpdateFlowContent(ReleaseUpdateFlowUiState(progress = p, required = true), flowActions) }
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertDoesNotExist()
     }
 }

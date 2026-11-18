@@ -24,7 +24,8 @@ class WaitingAsksRunTest {
         var listed = false
         var listReads = 0
         var listDown = false
-        var unsupported = false
+        /** What a failed list read throws. */
+        var listFailure: () -> Throwable = { IllegalStateException("pending.list failed") }
         var replays = 0
         var ended = 0
 
@@ -40,11 +41,10 @@ class WaitingAsksRunTest {
                 feedLoaded = true
             },
             listed = { listed },
-            unsupported = { unsupported },
             readList = {
                 listReads++
                 duringListRead()
-                if (listDown) error("pending.list failed")
+                if (listDown) throw listFailure()
                 listed = true
             },
             replay = {
@@ -126,7 +126,6 @@ class WaitingAsksRunTest {
                 f.open = false
             },
             listed = { f.listed },
-            unsupported = { f.unsupported },
             readList = { f.listReads++ },
             replay = { true },
             end = { f.ended++ },
@@ -153,12 +152,28 @@ class WaitingAsksRunTest {
         assertEquals(1, f.ended)
     }
 
-    /** An older vault without `pending.list` merges nothing: nothing is replayed. */
+    /**
+     * `unsupported_type` is a failure like any other (the app requires the vault's current release): the list is read again
+     * at each try and the replay runs once it is had.
+     */
     @Test
-    fun anOlderVaultReplaysNothing() = runTest {
-        val f = Fake().apply { unsupported = true }
-        assertFalse(f.run().run())
-        assertEquals(0, f.replays)
-        assertEquals(1, f.ended)
+    fun anUnsupportedListIsTriedAgain() = runTest {
+        val f = Fake().apply {
+            listDown = true
+            listFailure = { VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type") }
+        }
+        val run = async { f.run().run() }
+        advanceTimeBy(2_000L + 5_000L + 1)
+        runCurrent()
+        assertFalse("not given up", run.isCompleted)
+        assertEquals(2, f.listReads)
+        assertEquals(0, f.ended)
+        f.listDown = false
+        advanceTimeBy(15_001L)
+        runCurrent()
+        assertTrue(run.await())
+        assertEquals(3, f.listReads)
+        assertEquals(1, f.replays)
+        assertEquals(0, f.ended)
     }
 }

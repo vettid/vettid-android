@@ -194,4 +194,25 @@ class UnlockStuckTest {
         rule.onNodeWithTag("recover_vault").assertDoesNotExist()
         rule.onNodeWithTag("move_back_failed").assertDoesNotExist()
     }
+
+    /**
+     * A "Finish the move" refused for want of a usable user_guid: the unlock screen's move card says the recover-or-erase
+     * notice's words, not "does not support this yet", and offers no erase itself (that comes after the next PIN).
+     */
+    @Test
+    fun aMoveRefusedForWantOfAUserGuidIsToldWithTheStuckWords() {
+        var state by androidx.compose.runtime.mutableStateOf(
+            ok.copy(moveFailure = com.vettid.core.data.vault.MoveFailure(FailureKind.NOT_SUPPORTED, "no_user_guid")),
+        )
+        rule.setContent { UnlockContent(state, actions) }
+        rule.onNodeWithTag("unlock_move_failure").assertExists()
+        rule.onNodeWithText("This phone cannot open your vault").assertExists()
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertExists()
+        rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        // Any other refusal of the kind keeps its own text.
+        state = ok.copy(moveFailure = com.vettid.core.data.vault.MoveFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"))
+        rule.waitForIdle()
+        rule.onNodeWithText("This phone cannot open your vault").assertDoesNotExist()
+    }
 }

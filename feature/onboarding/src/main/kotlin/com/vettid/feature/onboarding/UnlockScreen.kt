@@ -262,11 +262,14 @@ fun UnlockContent(
                 )
             }
             state.moveFailure?.let { f ->
-                // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it.
+                // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it. No usable
+                // user_guid on this phone: the recover-or-erase notice's words, with no erase here (that comes after the
+                // next PIN, with its confirmation), never "does not support this yet".
+                val noGuid = isNoUserGuid(f.kind, f.code)
                 NoticeCard(
-                    NoticeKind.WARNING,
-                    stringResource(R.string.onboarding_finish_move_title),
-                    failureText(f.messageRes()),
+                    if (noGuid) NoticeKind.URGENT else NoticeKind.WARNING,
+                    stringResource(if (noGuid) R.string.unlock_stuck_title else R.string.onboarding_finish_move_title),
+                    if (noGuid) stringResource(R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
                     modifier = Modifier.testTag("unlock_move_failure"),
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },

@@ -31,7 +31,6 @@ internal class PendingAsks {
     private var issued = 0L
     private var merged = 0L
     private var floor = 0L
-    private var unsupported = false
 
     /** Creation events accepted: key to `ts`; those not later than the cut leave at each merge. */
     private val created = HashMap<String, Instant>()
@@ -48,9 +47,6 @@ internal class PendingAsks {
     /** The `ts` of the first page of the last list merged; null before one. */
     val lastCut: Instant? get() = synchronized(lock) { cut }
 
-    /** An older release answered `unsupported_type`: no read until the next unlock. */
-    val isUnsupported: Boolean get() = synchronized(lock) { unsupported }
-
     /** A read starts. */
     fun begin(): Long = synchronized(lock) { ++issued }
 
@@ -63,16 +59,10 @@ internal class PendingAsks {
     /** Whether the read of [ticket] is still current: no lock since it began and no later-started read has merged. */
     fun current(ticket: Long): Boolean = synchronized(lock) { ticket > floor && ticket >= merged }
 
-    /** The older release's answer: keep the live events as they are until the next [reset]. */
-    fun markUnsupported(ticket: Long) = synchronized(lock) {
-        if (ticket > floor) unsupported = true
-    }
-
-    /** A lock: nothing read before it counts, and an unlock reads again, whatever an older release answered. */
+    /** A lock: nothing read before it counts, and an unlock reads again. */
     fun reset() = synchronized(lock) {
         floor = issued
         cut = null
-        unsupported = false
         created.clear()
         closedKeys.clear()
         closedDevices.clear()

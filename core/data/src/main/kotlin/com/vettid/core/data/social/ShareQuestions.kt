@@ -5,10 +5,29 @@ package com.vettid.core.data.social
  * rules of the same connection (or agent) is asked once. Since 0.23.0 the vault applies a `share.decide` of the item
  * in one rule to every rule of that subject where it waits (and a decline also where it is included), so the app shows
  * it in the first of those rules (by `rule_id`, the order `share.pending.list` keeps) and notes the others in
- * [ShareItem.alsoIn]. A rule left with no item of its own is not shown. With a vault before 0.23.0 the item comes back
- * in the next rule after the first answer, as that vault still asks per rule.
+ * [ShareItem.alsoIn]. A rule left with no item of its own is not shown.
  */
 object ShareQuestions {
+    /** The most item ids one `share.decide` takes (§10.12: `include` and `decline` together 1–500). */
+    const val DECIDE_MAX = 500
+
+    /**
+     * Each question cut to its first [DECIDE_MAX] items (owner decision a, 2026-11-18): a rule can hold up to 4,096
+     * items pending, but a decision is one `share.decide`, so the member decides at most [DECIDE_MAX] at a time, and the
+     * rest are the next round once those leave the list. Applied after [dedupe], so an item asked in several rules is
+     * counted in the one that shows it. The items kept are the [DECIDE_MAX] lowest `item_id`s in string order (the
+     * vault's order for its ASCII ids), whatever order a `share.pending` batch added them in, and they keep the order
+     * they are shown in.
+     */
+    fun capped(approvals: List<Approval>): List<Approval> = approvals.map { a ->
+        if (a is Approval.ShareDecision && a.items.size > DECIDE_MAX) {
+            val kept = a.items.map { it.itemId }.sorted().take(DECIDE_MAX).toSet()
+            a.copy(items = a.items.filter { it.itemId in kept })
+        } else {
+            a
+        }
+    }
+
     fun dedupe(approvals: List<Approval>): List<Approval> {
         val shares = approvals.filterIsInstance<Approval.ShareDecision>()
         if (shares.size < 2) return approvals

@@ -202,24 +202,87 @@ class PendingListTest {
         assertEquals(listOf("auth:r1", "location:l1"), m.keys())
     }
 
+    private val unsupported = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+
+    /**
+     * The app requires the vault's current release, which answers `pending.list`: `unsupported_type` is a failure like any
+     * other. It is thrown and noted, changes nothing, and the next read asks again (no latch until the next unlock).
+     */
     @Test
-    fun anOlderReleaseKeepsTheLiveEventsUntilTheNextUnlock() = runTest {
+    fun unsupportedTypeIsAFailureAndTheNextReadAsksAgain() = runTest {
         val m = manager()
         m.onEvent(event("connection.authenticate.pending", auth("r1"), at(1)))
         var calls = 0
-        val unsupported: suspend (String?) -> PendingPage = { calls++; throw VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type") }
-        m.refreshPendingFrom(unsupported) // not a failure
-        m.refreshPendingFrom(unsupported) // not asked again
-        assertEquals(1, calls)
+        repeat(2) {
+            try {
+                m.refreshPendingFrom { calls++; throw unsupported }
+                org.junit.Assert.fail("unsupported_type must be thrown")
+            } catch (e: VaultFailure) {
+                assertEquals("unsupported_type", e.code)
+            }
+            assertEquals(FailureKind.NOT_SUPPORTED, m.pendingReadFailure.value?.kind)
+        }
+        assertEquals("asked again", 2, calls)
         runCurrent()
         assertEquals(listOf("auth:r1"), m.keys())
-        // Live events still apply as before (no cut).
-        m.onEvent(sync("connection.authenticate.decided", """"request_id":"r1","approved":true""", at(2)))
+        // No cut was set: an event at 2 still applies.
+        m.onEvent(event("connection.authenticate.pending", auth("r2"), at(2)))
         runCurrent()
+        assertEquals(listOf("auth:r1", "auth:r2"), m.keys())
+        // The next read that answers merges and clears the notice.
+        m.refreshPendingFrom { calls++; page(at(10), ask("authenticate", auth("r3"))) }
+        runCurrent()
+        assertEquals(3, calls)
+        assertEquals(listOf("auth:r3"), m.keys())
+        assertEquals(null, m.pendingReadFailure.value)
+    }
+
+    /** An `unsupported_type` answered after a lock is that read's alone: no notice, and nothing stops the next read. */
+    @Test
+    fun anUnsupportedAnswerAfterALockTouchesNothing() = runTest {
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        var thrown: VaultFailure? = null
+        launch {
+            try {
+                m.refreshPendingFrom { gate.await(); throw unsupported }
+            } catch (e: VaultFailure) {
+                thrown = e
+            }
+        }
+        runCurrent()
+        m.forgetOpenVault()
+        m.reopen()
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("told to its caller", "unsupported_type", thrown?.code)
+        assertEquals("not this session's notice", null, m.pendingReadFailure.value)
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
+        runCurrent()
+        assertEquals(listOf("auth:r1"), m.keys())
+    }
+
+    /** The same across a hold: a read begun before it neither sets the notice nor merges after it. */
+    @Test
+    fun aReadAcrossAHoldNeitherNotesNorMerges() = runTest {
+        val m = manager()
+        val failing = CompletableDeferred<Unit>()
+        val listing = CompletableDeferred<Unit>()
+        launch { runCatching { m.refreshPendingFrom { failing.await(); throw unsupported } } }
+        launch { m.refreshPendingFrom { listing.await(); page(at(10), ask("authenticate", auth("old"))) } }
+        runCurrent()
+        val mark = m.pendingReadMark()
+        m.forgetPending()
+        failing.complete(Unit)
+        listing.complete(Unit)
+        runCurrent()
+        assertEquals(null, m.pendingReadFailure.value)
         assertEquals(emptyList<String>(), m.keys())
-        m.forgetOpenVault() // the lock; the next unlock reads again
-        m.refreshPendingFrom(unsupported)
-        assertEquals(2, calls)
+        assertTrue("a read begun before the hold does not count", !m.pendingListedSince(mark))
+        // No cut: an event at 5 applies.
+        m.onEvent(event("connection.authenticate.pending", auth("live"), at(5)))
+        runCurrent()
+        assertEquals(listOf("auth:live"), m.keys())
     }
 
     @Test
@@ -413,25 +476,18 @@ class PendingListTest {
         assertEquals(listOf("auth:b", "auth:c"), m.keys())
     }
 
+    /** An `unsupported_type` of a read begun before one that merged leaves that merge's cleared notice alone. */
     @Test
-    fun unsupportedDuringAnotherReadKeepsTheLiveEventsAndClearsTheNotice() = runTest {
+    fun aStaleUnsupportedAnswerDoesNotOverwriteANewerMerge() = runTest {
         val m = manager()
-        m.onEvent(event("connection.authenticate.pending", auth("live"), at(1)))
-        try {
-            m.refreshPendingFrom { throw VaultFailure(FailureKind.NETWORK) }
-        } catch (_: VaultFailure) {
-            // noted
-        }
-        assertEquals(FailureKind.NETWORK, m.pendingReadFailure.value?.kind)
         val gate = CompletableDeferred<Unit>()
-        val unsupported = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
-        launch { m.refreshPendingFrom { gate.await(); throw unsupported } }
+        launch { runCatching { m.refreshPendingFrom { gate.await(); throw unsupported } } }
         runCurrent()
-        m.refreshPendingFrom { throw unsupported }
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
         gate.complete(Unit)
         runCurrent()
-        assertEquals(listOf("auth:live"), m.keys())
         assertEquals(null, m.pendingReadFailure.value)
+        assertEquals(listOf("auth:r1"), m.keys())
     }
 
     @Test

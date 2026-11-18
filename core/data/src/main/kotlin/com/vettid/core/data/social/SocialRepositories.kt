@@ -116,8 +116,9 @@ interface ApprovalsRepository {
 
     /**
      * Why the last read of the open asks (`pending.list`, §10.4.2) failed, or null: set on a failure (a held vault has the kind
-     * [com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED]), cleared by a good read, an older release's
-     * `unsupported_type` and a lock. The quiet reads after an unlock and a passed check set it too, so no failure is silent.
+     * [com.vettid.core.data.vault.FailureKind.OWNER_CHECK_REQUIRED]), cleared by a good read and a lock
+     * (`unsupported_type` is a failure like any other). The quiet reads after an unlock and a passed check set it too, so
+     * no failure is silent.
      */
     val pendingReadFailure: StateFlow<com.vettid.core.data.vault.VaultFailure?>
 
@@ -202,9 +203,6 @@ interface ApprovalsRepository {
     suspend fun approveCriticalUse(requestId: String, password: String): String?
 
     suspend fun denyCriticalUse(requestId: String)
-
-    /** Includes or declines every listed item of a share rule (§10.12). */
-    suspend fun decideShare(ruleId: String, approve: Boolean)
 
     /** Includes [include] and declines [decline], items of one share rule's decision (§10.12). */
     suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>)
