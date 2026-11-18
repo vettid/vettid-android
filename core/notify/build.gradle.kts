@@ -9,6 +9,7 @@ dependencies {
     api(projects.core.data)
     implementation(libs.androidx.core.ktx)
 
+    testImplementation(projects.core.testing)
     testImplementation(libs.kotlinx.coroutines.test)
     // Texts from string resources under Robolectric.
     testImplementation(libs.robolectric)

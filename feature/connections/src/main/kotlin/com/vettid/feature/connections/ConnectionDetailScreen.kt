@@ -287,7 +287,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         if (c.service) {
             // The `ik` fingerprint is part of what the service shared (ANDROID-PLAN 0.1.90); the rest of the card stays at the end.
             c.keyFingerprint?.let { FingerprintCard(it) }
-            CanAskCard(state.votes.available)
+            CanAskCard()
         }
         if (c.service && state.votes.count > 0) {
             DetailCard(Modifier.testTag("detail_votes")) {
@@ -324,13 +324,13 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
     }
 }
 
-/** "What this service can ask" and the vault's rule for this release (ANDROID-PLAN 0.1.90; the votes line where the vault has votes). */
+/** "What this service can ask" (ANDROID-PLAN 0.1.90): every vault the app talks to has votes, so voting is always named. */
 @Composable
-private fun CanAskCard(votes: Boolean) {
+private fun CanAskCard() {
     DetailCard(Modifier.testTag("service_can_ask")) {
         CardTitle(stringResource(UiR.string.service_detail_can_ask_title))
         Text(
-            stringResource(if (votes) UiR.string.service_detail_can_ask_body_votes else UiR.string.service_detail_can_ask_body),
+            stringResource(UiR.string.service_detail_can_ask_body_votes),
             modifier = Modifier.testTag("service_can_ask_body"),
         )
     }

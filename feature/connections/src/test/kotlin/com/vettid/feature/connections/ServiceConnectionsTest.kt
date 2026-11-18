@@ -152,9 +152,9 @@ class ServiceConnectionsTest {
 
     // --- the detail ---
 
-    private fun detail(c: ConnectionInfo, canCall: Boolean = true, votes: Boolean = false) = rule.setContent {
+    private fun detail(c: ConnectionInfo, canCall: Boolean = true) = rule.setContent {
         ConnectionDetailScreen(
-            ConnectionDetailUiState(c.id, c, null, loading = false, canCall = canCall, votes = ConnectionVotes(available = votes)),
+            ConnectionDetailUiState(c.id, c, null, loading = false, canCall = canCall),
             DetailActions(),
         )
     }
@@ -165,7 +165,7 @@ class ServiceConnectionsTest {
         rule.onNodeWithTag("detail_name").assertIsDisplayed()
         rule.onNodeWithTag("service_label").assertExists()
         rule.onNodeWithText("What this service can ask").assertExists()
-        rule.onNodeWithText("It can ask you to confirm a sign-in or approve an action. It can't message or call you, and it can't ask for your data.").assertExists()
+        rule.onNodeWithText("It can ask you to confirm a sign-in, approve an action or vote. It can't message or call you, and it can't ask for your data.").assertExists()
         assertTrue(rule.onAllNodesWithText("Name given by the service").fetchSemanticsNodes().isNotEmpty())
         rule.onNodeWithTag("detail_fingerprint").assertExists()
         rule.onNodeWithTag("auth_card").assertDoesNotExist()
@@ -177,10 +177,14 @@ class ServiceConnectionsTest {
         assertTrue(rule.onAllNodesWithContentDescription("Remove", substring = true).fetchSemanticsNodes().isNotEmpty())
     }
 
+    /** Every vault the app talks to has votes: the line names voting before the votes list is read and with no vote from it. */
     @Test
-    fun theCanAskLineMentionsVotesWhereTheVaultHasThem() {
-        detail(service(), votes = true)
-        rule.onNodeWithText("It can ask you to confirm a sign-in, approve an action or vote. It can't message or call you, and it can't ask for your data.").assertExists()
+    fun theCanAskLineAlwaysMentionsVotes() {
+        detail(service())
+        rule.onNodeWithTag("service_can_ask_body").assertTextEquals(
+            "It can ask you to confirm a sign-in, approve an action or vote. It can't message or call you, and it can't ask for your data.",
+        )
+        assertEquals(0, rule.onAllNodesWithText("confirm a sign-in or approve an action", substring = true).fetchSemanticsNodes().size)
     }
 
     @Test

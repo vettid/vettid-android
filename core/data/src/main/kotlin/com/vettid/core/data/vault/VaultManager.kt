@@ -1058,6 +1058,9 @@ class VaultManager(
         stamps = com.vettid.core.data.votes.KeystoreRecheckStampStore(
             KeystoreFileStore(File(app.noBackupFilesDir, VOTE_RECHECKS_FILE), "vote-rechecks"),
         ),
+        // (Rule 3) As presence and location: no sync and no event-started check while the release is checked or paused, or
+        // the owner check is due or held.
+        sendsGated = { sendsGated() },
     )
 
     /**

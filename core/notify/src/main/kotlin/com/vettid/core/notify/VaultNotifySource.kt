@@ -8,6 +8,7 @@ import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.VaultManager
+import com.vettid.core.data.votes.VotesRepository
 import com.vettid.core.vault.FeedItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,16 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+
+/**
+ * True only when [votes]' list was read and applied: false when it could not be read (locked, held, no answer) and when a
+ * lock or hold voided the read while it was out, so that the names are never taken as the vault's state after the item.
+ */
+internal suspend fun votesReadAfresh(votes: VotesRepository): Boolean = try {
+    votes.refresh()
+} catch (_: com.vettid.core.data.vault.VaultFailure) {
+    false
+}
 
 /** [NotifySource] over the app's [VaultManager]: the feed, the phase and the owner check, names from the caches. */
 class VaultNotifySource(
@@ -43,13 +54,8 @@ class VaultNotifySource(
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
     override val alarm: StateFlow<CredentialAlarm?> = vault.alarm
 
-    /** The votes list read afresh (review 1, M3); false when it could not be read (locked, held, no answer). */
-    override suspend fun refreshVotes(): Boolean = try {
-        vault.votes.refresh()
-        true
-    } catch (_: com.vettid.core.data.vault.VaultFailure) {
-        false
-    }
+    /** The votes list read afresh (review 1, M3): [votesReadAfresh]. */
+    override suspend fun refreshVotes(): Boolean = votesReadAfresh(vault.votes)
 
     override fun names(): FeedNames = FeedNames(
         connections = vault.social.connections.value.associateBy { it.id },

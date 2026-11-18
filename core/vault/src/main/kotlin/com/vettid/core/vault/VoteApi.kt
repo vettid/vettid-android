@@ -10,8 +10,8 @@ import kotlinx.serialization.json.put
 /*
  * The requests of "Votes" (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes"; VAULT-MESSAGING 0.81.3 §10.19.8), beside [VaultApi]
  * rather than in it. All are the owner app's alone (a desktop or an agent is `forbidden`). Every request about one
- * proposal names `connection_id` together with `proposal_id` (0.81.2): the vault keys its records by the pair. A vault
- * without the feature answers `unsupported_type`; a held vault `owner_check_required`.
+ * proposal names `connection_id` together with `proposal_id` (0.81.2): the vault keys its records by the pair. A held vault
+ * answers `owner_check_required`.
  */
 
 /** `vote.list{state?, after?, limit?, ack_dropped?}`: `{votes, next?, dropped, problems, reconnect, list_version?, list_sha256?}`. */
