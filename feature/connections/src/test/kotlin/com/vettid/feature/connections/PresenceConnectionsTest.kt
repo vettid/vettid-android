@@ -95,18 +95,19 @@ class PresenceConnectionsTest {
     }
 
     @Test
-    fun afterAHoldThatClearedTheReadingsThePageShowsNothingThenCheckingAndAsksAgainWhenPresenceIsBack() = runTest {
+    fun afterAHoldThatClearedTheReadingsThePageShowsNothingThenCheckingAndAsksAgainWhenThePolicyIsBack() = runTest {
         social.seed(listOf(ada()))
         val vm = detailVm()
         advanceUntilIdle()
         assertEquals(1, presence.queries.size)
-        // The hold: availability and readings go (the manager's clear).
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        // The hold: the policy and the readings go (the manager's clear).
+        presence.policy.value = null
         presence.readings.value = emptyMap()
         advanceUntilIdle()
         assertNull(vm.uiState.value.presence)
-        // After the check: presence again; the reading was lost, so the question is asked and the page says Checking.
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        assertEquals(1, presence.queries.size)
+        // After the check: the policy is read again; the reading was lost, so the question is asked and the page says Checking.
+        presence.policy.value = PresencePolicy(2)
         advanceUntilIdle()
         assertEquals(2, presence.queries.size)
         assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
@@ -135,11 +136,11 @@ class PresenceConnectionsTest {
         assertEquals(1, presence.queries.size)
         vm.setVisible(false)
         advanceUntilIdle()
-        // A reading that goes stale, a hold and presence coming back: nothing is asked while stopped.
+        // A reading that goes stale, a hold and the policy read again: nothing is asked while stopped.
         presence.readings.value = emptyMap()
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        presence.policy.value = null
         advanceUntilIdle()
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        presence.policy.value = PresencePolicy(2)
         advanceUntilIdle()
         assertEquals(1, presence.queries.size)
         vm.setVisible(true)
@@ -231,14 +232,21 @@ class PresenceConnectionsTest {
     }
 
     @Test
-    fun withoutPresenceInTheVaultNothingIsShownOrAsked() = runTest {
+    fun untilThePolicyIsReadNothingIsShownOrAskedAndOnceItIsPresenceIsThere() = runTest {
         social.seed(listOf(ada()))
-        val none = FakePresence(available = false)
-        val vm = detailVm(p = none)
+        // Not read: the vault is locked, held or due, or its first `presence.get` has not been answered.
+        val notRead = FakePresence(initial = null)
+        val vm = detailVm(p = notRead)
         advanceUntilIdle()
         assertNull(vm.uiState.value.presence)
-        assertTrue(none.queries.isEmpty())
-        // The default of a screen built without presence is the same.
+        assertTrue(notRead.queries.isEmpty())
+        // Read (the vault open and not gated): the line, the switch and the question, with nothing else to wait for.
+        notRead.policy.value = PresencePolicy(1)
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), notRead.queries)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence?.reading)
+        assertEquals(true, vm.uiState.value.presence?.shared)
+        // The default of a screen built without a repository shows and asks nothing.
         val bare = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing())
         advanceUntilIdle()
         assertNull(bare.uiState.value.presence)
@@ -270,7 +278,7 @@ class PresenceConnectionsTest {
 
     private fun detail(
         reading: PresenceReading,
-        shared: Boolean? = true,
+        shared: Boolean = true,
         onRefresh: () -> Unit = {},
         onShared: (Boolean) -> Unit = {},
         service: Boolean = false,
@@ -406,15 +414,15 @@ class PresenceConnectionsTest {
     }
 
     @Test
-    fun theCardIsShownOnceWhenTheVaultHasPresenceAndSharesWithAll() = runTest {
+    fun theCardIsShownOnceThePolicyIsReadAndSharesWithAll() = runTest {
         val vm = listVm()
         advanceUntilIdle()
         assertTrue(vm.uiState.value.presenceCard)
     }
 
     @Test
-    fun noCardWithoutPresenceOrOnceTheMemberChoseOrNoOneIsAlreadyChosen() = runTest {
-        val a = listVm(FakePresence(available = false))
+    fun noCardUntilThePolicyIsReadOrOnceTheMemberChoseOrNoOneIsAlreadyChosen() = runTest {
+        val a = listVm(FakePresence(initial = null))
         advanceUntilIdle()
         assertFalse(a.uiState.value.presenceCard)
         val b = listVm(prefs = InMemoryPreferencesRepository(com.vettid.core.data.prefs.AppPreferences(presenceCardAnswered = true)))

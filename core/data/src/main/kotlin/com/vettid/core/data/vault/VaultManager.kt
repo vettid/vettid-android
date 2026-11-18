@@ -1156,7 +1156,7 @@ class VaultManager(
         },
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
-            presence.start() // whether the vault has presence, and the member's policy
+            presence.start() // the member's presence policy
             location.resume() // the location shares this phone is the source of
             feed.releaseHeld() // the feed's events and arrivals held while the release was checked: notified now
         },
@@ -1218,7 +1218,7 @@ class VaultManager(
                     // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
                     // end of this opening's check already ran the reads it owed (they run once).
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
-                    presence.start() // whether the vault has presence, and the member's policy
+                    presence.start() // the member's presence policy
                     location.resume() // the location shares this phone is the source of are taken up again
                     // The release gate's check (Rule 3): the manifest is read by the opening
                     // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
@@ -1281,7 +1281,7 @@ class VaultManager(
                     // Rule 3: the votes' work sends, so it waits for the release check too; the lists wait while the gate pauses
                     // them. Both start when it ends or lifts ([ReleasePauseSteps]).
                     if (!releaseUpdate.required.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
-                    steps.step { presence.start() } // whether the vault has presence, and the policy, again
+                    steps.step { presence.start() } // the presence policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     // The lists the hold dropped: approvals and requests.
                     if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }

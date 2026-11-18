@@ -1382,7 +1382,7 @@ object ScreenCatalog {
         "settings.presence" to {
             PresenceSettingsContent(
                 PresenceSettingsUiState(
-                    available = true, loading = false, policy = PresencePolicy(3, PresenceState.BUSY, PresenceShare.ALL, listOf("c2")),
+                    loading = false, policy = PresencePolicy(3, PresenceState.BUSY, PresenceShare.ALL, listOf("c2")),
                     people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe"), PresencePerson("c3", "Riley Chen")),
                 ),
                 {}, {}, { _, _ -> }, {}, {},
@@ -1391,7 +1391,7 @@ object ScreenCatalog {
         "settings.presence_invisible" to {
             PresenceSettingsContent(
                 PresenceSettingsUiState(
-                    available = true, loading = false, policy = PresencePolicy(4, PresenceState.INVISIBLE, PresenceShare.NONE, listOf("c1")),
+                    loading = false, policy = PresencePolicy(4, PresenceState.INVISIBLE, PresenceShare.NONE, listOf("c1")),
                     people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe")),
                 ),
                 {}, {}, { _, _ -> }, {}, {},
@@ -1399,7 +1399,7 @@ object ScreenCatalog {
         },
         "settings.presence_error" to {
             PresenceSettingsContent(
-                PresenceSettingsUiState(available = true, loading = false, policy = PresencePolicy(3), error = FailureKind.CONFLICT),
+                PresenceSettingsUiState(loading = false, policy = PresencePolicy(3), error = FailureKind.CONFLICT),
                 {}, {}, { _, _ -> }, {}, {},
             )
         },

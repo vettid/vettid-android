@@ -52,7 +52,7 @@ import java.time.Instant
 
 /**
  * The avatar sheet's status row (ANDROID-PLAN §4 "Presence"): the member's own [state], and what picking another one does.
- * Passed only where the vault has presence.
+ * Passed only once the member's policy is read.
  */
 data class SheetPresence(
     val state: PresenceState,

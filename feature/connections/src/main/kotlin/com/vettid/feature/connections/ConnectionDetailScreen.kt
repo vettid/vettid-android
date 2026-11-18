@@ -269,7 +269,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         state.presence?.let { p ->
             val first = sharingName(c)?.let { AccountNames.isolate(it) }
             // Without the first name the switch and its note would have to say "this connection": not offered until it arrives.
-            if (first != null && p.shared != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
+            if (first != null) PresenceShareCard(p.shared, p.invisible, first, state.busy, actions.onSetPresenceShared)
         }
         state.calls?.let { CallsCard(it.allowed, it.limited, firstOf(c, name), !state.callsChanging, actions.onSetCallsAllowed) }
         // Sharing the member's location (ANDROID-PLAN §4 "Location"): with a person who is connected, never with a service.
