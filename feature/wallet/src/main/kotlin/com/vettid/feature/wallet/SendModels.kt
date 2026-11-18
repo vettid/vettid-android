@@ -86,10 +86,8 @@ class Review(
     val sendAll: Boolean,
     /** Coins a Send all did not spend. */
     val leftBehind: Int,
-    /** The vault's inspect answered a `cap` (it implements spending limits). */
-    val hasCap: Boolean,
     val capRefusal: CapText? = null,
-    /** From the wallet's limits, when the vault implements them and the wallet has a per-period limit. */
+    /** From the wallet's limits, when the wallet has a per-period limit. */
     val limit: LimitLine? = null,
 ) {
     /** The fee in sat/vB as the vault's `vsize` reads it. */

@@ -47,7 +47,7 @@ class WalletResetTest {
 
     private fun detail(unreadable: Boolean, ask: Boolean = false) = WalletDetailUiState(
         loaded = true, name = "Savings", network = Network.TESTNET4, capsPending = unreadable, settingsUnreadable = unreadable,
-        capsSupported = true, resetAsk = ask,
+        resetAsk = ask,
     )
 
     @Test
@@ -76,17 +76,20 @@ class WalletResetTest {
     }
 
     @Test
-    fun spendingLimitsIsInTheMenuOnlyForAVaultThatEnforcesThem() {
-        rule.setContent { WalletDetailScreen(detail(unreadable = false).copy(capsSupported = true), WalletDetailActions()) }
+    fun spendingLimitsIsAlwaysInTheMenu() {
+        var limits = 0
+        rule.setContent { WalletDetailScreen(detail(unreadable = false), WalletDetailActions(onLimits = { limits++ })) }
         rule.onNodeWithTag("wallet_menu").performClick()
-        rule.onNodeWithTag("wallet_menu_limits").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_menu_limits").assertIsDisplayed().performClick()
+        assertEquals(1, limits)
     }
 
+    /** Before the wallet is read the entry is there but does nothing. */
     @Test
-    fun noSpendingLimitsInTheMenuForAVaultWithoutCaps() {
-        rule.setContent { WalletDetailScreen(detail(unreadable = false).copy(capsSupported = false), WalletDetailActions()) }
+    fun spendingLimitsIsOffInTheMenuUntilTheWalletIsRead() {
+        rule.setContent { WalletDetailScreen(detail(unreadable = false).copy(loaded = false), WalletDetailActions()) }
         rule.onNodeWithTag("wallet_menu").performClick()
-        rule.onNodeWithTag("wallet_menu_limits").assertDoesNotExist()
+        rule.onNodeWithTag("wallet_menu_limits").assertIsNotEnabled()
     }
 
     @Test

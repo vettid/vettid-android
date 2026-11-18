@@ -12,7 +12,6 @@ import com.vettid.core.data.wallet.WalletOpenRoute
 import com.vettid.core.wallet.ChainServerSettings
 import com.vettid.core.wallet.LookupResult
 import com.vettid.core.wallet.VaultWallet
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletLookup
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -53,8 +52,6 @@ data class WalletDetailUiState(
     val capped: Boolean = false,
     /** The pending limit was refused because the vault holds another copy of this wallet (`duplicate_wallet`). */
     val capsDuplicate: Boolean = false,
-    /** The wallet's vault enforces spending limits: ⋯ → Spending limits is offered. */
-    val capsSupported: Boolean = false,
     /** "Reset wallet settings on this phone" is asked about (its confirm is up). */
     val resetAsk: Boolean = false,
     /** The reset could not be written on this phone. */
@@ -80,6 +77,8 @@ data class WalletDetailUiState(
     val deleteError: FailureKind? = null,
     /** The wallet is gone from this screen (deleted, locked, held, wiped): the screen leaves. */
     val closed: Boolean = false,
+    /** The read of the wallets failed before this wallet was shown: said, with Try again ([WalletDetailViewModel.retryList]). */
+    val listFailed: FailureKind? = null,
 ) {
     val idle: Boolean get() = !deleting && !typeBusy && !closed
 
@@ -112,7 +111,7 @@ class WalletDetailViewModel @Inject constructor(
 
     private class Seen(
         val wallet: VaultWallet?,
-        val availability: WalletAvailability,
+        val listed: Boolean,
         val last: WalletLookup?,
         val network: Network?,
         val backedUp: Boolean,
@@ -124,16 +123,17 @@ class WalletDetailViewModel @Inject constructor(
         viewModelScope.launch {
             wallets.capsDuplicate.collect { d -> mutable.update { it.copy(capsDuplicate = walletId in d) } }
         }
+        viewModelScope.launch { wallets.listFailure.collect { f -> mutable.update { it.copy(listFailed = f) } } }
         viewModelScope.launch {
             combine(
-                wallets.wallets, wallets.availability, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
-            ) { list, availability, lookups, _, pending ->
+                wallets.wallets, wallets.listed, wallets.lookups, wallets.flagsChanged, wallets.capsPending,
+            ) { list, listed, lookups, _, pending ->
                 val here = WalletsManager.isPending(pending, walletId) to (WalletsManager.UNKNOWN in pending)
-                Triple(list.firstOrNull { it.id == walletId }, availability, lookups[walletId]) to here
+                Triple(list.firstOrNull { it.id == walletId }, listed, lookups[walletId]) to here
             }.mapLatest { (seen, flagsState) ->
                 val (pending, unreadable) = flagsState
-                val (w, availability, last) = seen
-                Seen(w, availability, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending, unreadable)
+                val (w, listed, last) = seen
+                Seen(w, listed, last, w?.let { wallets.networkOf(it) }, wallets.backedUp(walletId), pending, unreadable)
             }.collect { show(it) }
         }
     }
@@ -142,14 +142,14 @@ class WalletDetailViewModel @Inject constructor(
         val w = s.wallet
         if (w == null) {
             // Gone after it was shown (deleted elsewhere, locked), or the vault answered and never had it.
-            if (seen || s.availability != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true, password = "") }
+            if (seen || s.listed) mutable.update { it.copy(closed = true, password = "") }
             return
         }
         seen = true
         mutable.update {
             it.copy(
                 loaded = true, name = w.name, network = s.network, addressType = w.addressType, backedUp = s.backedUp,
-                capsPending = s.capsPending, settingsUnreadable = s.settingsUnreadable, capped = w.capped, capsSupported = w.capsSupported,
+                capsPending = s.capsPending, settingsUnreadable = s.settingsUnreadable, capped = w.capped,
                 last = s.last ?: it.last,
             )
         }
@@ -175,6 +175,19 @@ class WalletDetailViewModel @Inject constructor(
             wallets.setPrivacyNoteShown(walletId)
             mutable.update { it.copy(noteNeeded = false) }
             lookUp()
+        }
+    }
+
+    /** "Try again" on a read of the wallets that failed before this wallet was shown: the wallets are read again. */
+    fun retryList() {
+        if (mutable.value.loaded || mutable.value.closed) return
+        mutable.update { it.copy(listFailed = null) }
+        viewModelScope.launch {
+            try {
+                wallets.refresh()
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(listFailed = e.kind) }
+            }
         }
     }
 

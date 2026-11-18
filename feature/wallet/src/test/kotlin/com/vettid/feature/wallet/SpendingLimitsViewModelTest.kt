@@ -33,12 +33,12 @@ class SpendingLimitsViewModelTest {
     private val flagsFile = MemoryFlags()
     private val id = "01WALLET0000000000000000AA"
 
-    private suspend fun TestScope.vm(capped: Boolean = true, supported: Boolean = true): SpendingLimitsViewModel {
+    private suspend fun TestScope.vm(capped: Boolean = true): SpendingLimitsViewModel {
         val w = ops.wallet(id)
-        ops.wallets[id] = when {
-            !supported -> w.copy(capsSupported = false)
-            capped -> w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000, spentSats = 750_000, periodSeconds = 86_400)
-            else -> w
+        ops.wallets[id] = if (capped) {
+            w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000, spentSats = 750_000, periodSeconds = 86_400)
+        } else {
+            w
         }
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
         m.open()
@@ -58,7 +58,6 @@ class SpendingLimitsViewModelTest {
         assertEquals(500_000L, s.perTx)
         assertEquals(2_000_000L, s.perPeriod)
         assertEquals(750_000L, s.spent)
-        assertTrue(s.supported)
         assertEquals("SpendingLimitsUiState", s.toString())
         val none = vm(capped = false).state.value
         assertNull(none.perTx)
@@ -292,18 +291,36 @@ class SpendingLimitsViewModelTest {
     }
 
     @Test
-    fun theUnitToggleCarriesWhatIsTypedAndAVaultWithoutLimitsOffersNoForm() = runTest {
+    fun theUnitToggleCarriesWhatIsTypedAndNoFormOpensBeforeTheWalletIsRead() = runTest {
         val vm = vm()
         vm.openLower()
         vm.setPerTx("100000")
         vm.toggleUnit()
         assertEquals("0.001", vm.state.value.form.perTx)
         assertEquals(100_000L, CapsEdit.plan(500_000, 2_000_000, vm.state.value.form, false).newPerTx)
-        val old = vm(supported = false)
-        old.openLower()
-        old.openRaise()
-        assertEquals(LimitsStep.OVERVIEW, old.state.value.step)
-        assertFalse(old.state.value.supported)
+        // The vault not open for the wallets yet: nothing is read, and no form is chosen against limits not read.
+        val early = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), manager(backgroundScope, ops, WalletFlags(flagsFile)))
+        early.openLower()
+        early.openRaise()
+        assertEquals(LimitsStep.OVERVIEW, early.state.value.step)
+        assertFalse(early.state.value.loaded)
+    }
+
+    /** A read that failed before the wallet was shown is said; Try again reads the wallets, and the limits are shown. */
+    @Test
+    fun aFailedFirstReadIsSaidAndTryAgainShowsTheLimits() = runTest {
+        ops.wallets[id] = ops.wallet(id).copy(capped = true, perTxSats = 500_000)
+        ops.listFails = true
+        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is com.vettid.core.data.vault.VaultFailure)
+        val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        eventually { vm.state.value.listFailed != null }
+        assertFalse(vm.state.value.loaded)
+        ops.listFails = false
+        vm.retryList()
+        eventually { vm.state.value.loaded }
+        assertNull(vm.state.value.listFailed)
+        assertEquals(500_000L, vm.state.value.perTx)
     }
 
     @Test

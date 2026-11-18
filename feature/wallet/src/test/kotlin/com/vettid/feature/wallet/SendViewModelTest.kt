@@ -13,6 +13,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.wallet.BroadcastCause
 import com.vettid.core.wallet.CapReason
+import com.vettid.core.wallet.SpendCap
 import com.vettid.core.wallet.FeeEstimates
 import com.vettid.core.wallet.PrepareResult
 import com.vettid.core.wallet.RecentSends
@@ -435,12 +436,12 @@ class SendViewModelTest {
         // Send all: the amount is not known before the build. 4,000 of 40,000 is exactly 10% (fine); 4,001 is over.
         val vm = ready()
         vm.setSendAll(true)
-        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_000, 150, 44_000, 0, true, 0, true) })
+        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_000, 150, 44_000, 0, true, 0) })
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertNull(vm.state.value.bigFeeAsk)
         vm.edit()
-        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_001, 150, 44_001, 0, true, 0, true) })
+        engine.prepared = SendPrepared.Ready(sampleReview().let { Review(it.address, 40_000, 0, 4_001, 150, 44_001, 0, true, 0) })
         vm.review()
         eventually { vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
         // No approving while the question stands.
@@ -595,7 +596,7 @@ class SendViewModelTest {
         assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
         assertEquals(4_400L, vm.state.value.bigFeeSats)
         // The vault's real fee is 7,000 (more than 1.5 times 4,400 = 6,600): asked again, with its figure.
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 7_000, 150, 47_000, 0, false, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 7_000, 150, 47_000, 0, false, 0))
         vm.confirmBigFee()
         eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
         assertEquals(7_000L, vm.state.value.bigFeeSats)
@@ -639,7 +640,7 @@ class SendViewModelTest {
         vm.setFeeChoice(FeeChoice.CUSTOM)
         // 30 sat/vB x 110 = 3,300: under 10% of 40,000, so nothing is asked on the form.
         vm.setCustomFee("30")
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, false, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, false, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
         vm.confirmBigFee()
@@ -647,7 +648,7 @@ class SendViewModelTest {
         vm.edit()
         // 35,000 sats from a link: 3,300 is still under 10% on the form; the vault's 4,500 is over 10% of 35,000.
         vm.setAddress("bitcoin:$PAYEE?amount=0.00035")
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, false, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, false, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
@@ -660,7 +661,7 @@ class SendViewModelTest {
         vm.setSendAll(true)
         vm.setFeeChoice(FeeChoice.CUSTOM)
         vm.setCustomFee("30")
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, payee, 0, fee, 150, payee + fee, 0, true, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, payee, 0, fee, 150, payee + fee, 0, true, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
         vm.confirmBigFee()
@@ -673,7 +674,7 @@ class SendViewModelTest {
     @Test
     fun sendAllAsksAgainWhenThePayeeShrinksWithTheSameFee() = runTest {
         val vm = sendAllAgreedAt(40_000, 4_500)
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertEquals(BigFee.TEN_PERCENT, vm.state.value.bigFeeAsk)
@@ -682,7 +683,7 @@ class SendViewModelTest {
     @Test
     fun sendAllDoesNotAskAgainForTheSamePayee() = runTest {
         val vm = sendAllAgreedAt(40_000, 4_500)
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertNull(vm.state.value.bigFeeAsk)
@@ -706,7 +707,7 @@ class SendViewModelTest {
     fun aPayeeThatGrowsWithTheSameFeeDoesNotAskAgain() = runTest {
         val vm = sendAllAgreedAt(40_000, 4_500)
         // 44,000: the fee is still over 10% of it, but the payee is not below the one agreed to.
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 44_000, 0, 4_500, 150, 48_500, 0, true, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 44_000, 0, 4_500, 150, 48_500, 0, true, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW }
         assertNull(vm.state.value.bigFeeAsk)
@@ -736,7 +737,7 @@ class SendViewModelTest {
     fun everyEditDropsTheAgreementAndTheReviewQuestionThatIsPending() = runTest {
         for ((name, edit) in resets) {
             val vm = sendAllAgreedAt(40_000, 4_500)
-            engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0, true))
+            engine.prepared = SendPrepared.Ready(Review(PAYEE, 35_000, 0, 4_500, 150, 39_500, 0, true, 0))
             vm.review()
             eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
             assertEquals(name, 35_000L, vm.state.value.bigFeePayee)
@@ -773,7 +774,7 @@ class SendViewModelTest {
         vm.setSendAll(true)
         vm.setFeeChoice(FeeChoice.CUSTOM)
         vm.setCustomFee("30")
-        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0, true))
+        engine.prepared = SendPrepared.Ready(Review(PAYEE, 40_000, 0, 4_500, 150, 44_500, 0, true, 0))
         vm.review()
         eventually { vm.state.value.step == SendStep.REVIEW && vm.state.value.bigFeeAsk == BigFee.TEN_PERCENT }
         assertEquals(40_000L, vm.state.value.bigFeePayee)
@@ -864,12 +865,6 @@ class SendViewModelTest {
         val vm = review()
         eventually { vm.state.value.review?.limit != null }
         assertEquals(LimitLine(41_200, 1_208_800), vm.state.value.review!!.limit)
-        // A vault that returns no cap says nothing, even with limits on the wallet.
-        engine.prepared = SendPrepared.Ready(sampleReview(hasCap = false))
-        vm.edit()
-        vm.review()
-        eventually { vm.state.value.review?.hasCap == false }
-        assertNull(vm.state.value.review!!.limit)
     }
 
     @Test
@@ -1240,7 +1235,8 @@ class SendViewModelTest {
             ),
             totalInSats = 100_000, sendingSats = 40_000, changeSats = 58_800, feeSats = 1_200, vsize = 150,
         )
-        val r = ManagerSendEngine.reviewFrom(vault, null, toFeeSats = 330, sendAll = false, leftBehind = 0)!!
+        val ok = SpendCap(true, null, null, null)
+        val r = ManagerSendEngine.reviewFrom(vault, ok, toFeeSats = 330, sendAll = false, leftBehind = 0)!!
         // The vault's address as it wrote it, its amounts, its fee and its vsize (the rate is 1,200 / 150): nothing else.
         assertEquals(PAYEE, r.address)
         assertEquals(40_000L, r.payeeSats)
@@ -1250,11 +1246,13 @@ class SendViewModelTest {
         assertEquals(8.0, r.feeRate, 0.0)
         assertEquals(41_200L, r.totalOutSats)
         assertEquals(330L, r.toFeeSats)
-        assertFalse(r.hasCap)
         assertNull(r.capRefusal)
+        // A `cap` with `ok: false` is the refusal the review shows in place of the password.
+        val refused = ManagerSendEngine.reviewFrom(vault, SpendCap(false, "per_tx", null, null, 30_000), 0, false, 0)!!
+        assertEquals(CapReason.PER_TX, refused.capRefusal?.reason)
         // No single payee in the summary: no review, and no fallback to what was entered.
-        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs.filter { it.change }), null, 0, false, 0))
-        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs + vault.outputs.first()), null, 0, false, 0))
+        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs.filter { it.change }), ok, 0, false, 0))
+        assertNull(ManagerSendEngine.reviewFrom(vault.copy(outputs = vault.outputs + vault.outputs.first()), ok, 0, false, 0))
     }
 
     @Test

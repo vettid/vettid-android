@@ -9,7 +9,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.wallet.ReceiveResult
 import com.vettid.core.wallet.WalletAddress
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -109,13 +108,13 @@ class ReceiveViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.flagsChanged) { list, availability, _ ->
-                list.firstOrNull { it.id == walletId } to availability
-            }.mapLatest { (w, availability) ->
-                Triple(w, availability, w?.let { wallets.networkOf(it) })
-            }.collect { (w, availability, network) ->
+            combine(wallets.wallets, wallets.listed, wallets.flagsChanged) { list, listed, _ ->
+                list.firstOrNull { it.id == walletId } to listed
+            }.mapLatest { (w, listed) ->
+                Triple(w, listed, w?.let { wallets.networkOf(it) })
+            }.collect { (w, listed, network) ->
                 if (w == null) {
-                    if (seen || availability != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true) }
+                    if (seen || listed) mutable.update { it.copy(closed = true) }
                 } else {
                     seen = true
                     mutable.update { it.copy(network = network, needsNetwork = network == null) }

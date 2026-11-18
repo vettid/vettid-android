@@ -9,7 +9,6 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.TransactionRoute
 import com.vettid.core.data.wallet.TransactionsRoute
 import com.vettid.core.wallet.TransactionsResult
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletTransaction
 import com.vettid.core.wallet.WalletTransactions
 import com.vettid.core.wallet.WalletsManager
@@ -54,7 +53,7 @@ class TransactionsViewModel @Inject constructor(
             wallets.wallets.collect { list ->
                 val w = list.firstOrNull { it.id == walletId }
                 if (w == null) {
-                    if (seen || wallets.availability.value != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true) }
+                    if (seen || wallets.listed.value) mutable.update { it.copy(closed = true) }
                 } else {
                     seen = true
                     mutable.update { it.copy(name = w.name, network = wallets.networkOf(w)) }
@@ -126,7 +125,7 @@ class TransactionViewModel @Inject constructor(
                 val id = walletId ?: return@collect
                 val w = list.firstOrNull { it.id == id }
                 if (w == null) {
-                    if (seen || wallets.availability.value != WalletAvailability.UNKNOWN) mutable.update { it.copy(closed = true) }
+                    if (seen || wallets.listed.value) mutable.update { it.copy(closed = true) }
                 } else {
                     seen = true
                     mutable.update { it.copy(name = w.name, network = wallets.networkOf(w)) }

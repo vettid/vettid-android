@@ -1,6 +1,7 @@
 package com.vettid.feature.wallet
 
 import androidx.lifecycle.SavedStateHandle
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -159,12 +160,19 @@ class ReceiveViewModelTest {
         assertNull(vm.state.value.address)
     }
 
+    /**
+     * Rule 3: `unsupported_type` is a failure like any other. A list that cannot be read closes nothing (the wallet may be there);
+     * once a list reads without the wallet, the screen leaves.
+     */
     @Test
-    fun aVaultWithoutWalletsClosesTheScreen() = runTest {
+    fun aFailedListKeepsTheScreenAndAListWithoutTheWalletClosesIt() = runTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops)
-        runCatching { m.open() }
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
+        assertFalse(vm.state.value.closed)
+        ops.unsupported = false
+        m.refresh()
         eventually { vm.state.value.closed }
     }
 

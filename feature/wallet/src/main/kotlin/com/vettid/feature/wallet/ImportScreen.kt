@@ -203,7 +203,6 @@ private fun ImportDone(state: ImportUiState, actions: ImportActions, modifier: M
         if (state.capsFailed) add(if (state.capsDuplicate) R.string.wallet_limits_duplicate else R.string.wallet_caps_not_set)
         if (state.capsNotSaved) add(R.string.wallet_caps_not_saved)
         if (state.notRecorded) add(R.string.wallet_import_not_recorded)
-        if (state.capsUnsupported) add(R.string.wallet_caps_unsupported)
     }
     FormScaffold(
         title = stringResource(R.string.wallet_imported),

@@ -48,8 +48,8 @@ class WalletCapsScreenTest {
         { Instant.parse("2026-10-31T20:00:00Z") },
     )
 
-    private fun wallet(id: String, cappedAlready: Boolean = false, caps: String? = WalletFixtures.DEFAULT_CAPS) =
-        WalletFixtures.wallet(id = id, caps = caps).let { w ->
+    private fun wallet(id: String, cappedAlready: Boolean = false) =
+        WalletFixtures.wallet(id = id).let { w ->
             if (cappedAlready) w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000) else w
         }.also { ops.wallets[id] = it }
 
@@ -64,7 +64,16 @@ class WalletCapsScreenTest {
         val none = WalletFixtures.wallet()
         assertEquals(0L, none.spentSats)
         assertNull(none.perPeriodSats)
-        assertNull(WalletFixtures.wallet(caps = null).spentSats)
+        // A wallet without `caps` does not read: it is never a wallet with no limit.
+        val e = runCatching { WalletFixtures.wallet(caps = null) }.exceptionOrNull()
+        assertTrue(e is WalletWireException)
+        assertEquals("wallet answer: caps", e?.message)
+        // Nor does `caps` that is not an object.
+        assertTrue(runCatching { WalletFixtures.wallet(caps = "null") }.exceptionOrNull() is WalletWireException)
+        assertTrue(runCatching { WalletFixtures.wallet(caps = "[]") }.exceptionOrNull() is WalletWireException)
+        // No limits: the period and what it holds, nothing else (an empty object misses those, so it does not read).
+        assertFalse(WalletFixtures.wallet(caps = WalletFixtures.DEFAULT_CAPS).capped)
+        assertTrue(runCatching { WalletFixtures.wallet(caps = "{}") }.exceptionOrNull() is WalletWireException)
     }
 
     /**
@@ -86,7 +95,7 @@ class WalletCapsScreenTest {
         ops.calls.clear()
         m.beginCredentialReset()()
         assertTrue(m.wallets.value.isEmpty())
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
         assertNull(WalletFlags(flagsFile).pendingCaps(w.id))
         assertFalse(m.isCapsPending(w.id))
         assertTrue("nothing is sent for a wallet that is gone", ops.calls.none { it.startsWith("caps.set") })
@@ -255,10 +264,8 @@ class WalletCapsScreenTest {
     fun afterTheResetAnUncappedWalletAsksForALimitBeforeReceiveAndACappedOneGoesOn() = runBlocking {
         val bare = "01WALLET000000000000000001"
         val capped = "01WALLET000000000000000002"
-        val old = "01WALLET000000000000000003"
         wallet(bare)
         wallet(capped, cappedAlready = true)
-        wallet(old, caps = null)
         flagsFile.bytes = unreadable.encodeToByteArray()
         val m = manager()
         m.open()
@@ -268,9 +275,7 @@ class WalletCapsScreenTest {
         assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(bare))
         assertTrue(m.asksLimits(bare))
         assertTrue(m.receiveAddress(capped) is ReceiveResult.Address)
-        assertTrue(m.receiveAddress(old) is ReceiveResult.Address)
         assertFalse(m.asksLimits(capped))
-        assertFalse(m.asksLimits(old))
         // The question is asked again, and no address was issued for the wallet that has to answer it.
         assertEquals(ReceiveResult.LimitsAsk, m.receiveAddress(bare))
         assertTrue(ops.calls.none { it.startsWith("caps.") })
