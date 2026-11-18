@@ -229,6 +229,7 @@ class VotesManagerTest {
         attempts: ResultsAttemptStore = MemoryResultsAttemptStore(),
         unmetered: () -> Boolean? = { null },
         stamps: RecheckStampStore = MemoryRecheckStampStore(),
+        sendsGated: () -> Boolean = { false },
         computeStep: (String) -> Unit = {},
     ) = VotesManager(
         this,
@@ -255,6 +256,7 @@ class VotesManagerTest {
         io = Dispatchers.Default,
         unmetered = unmetered,
         stamps = stamps,
+        sendsGated = sendsGated,
     )
 
     @Test
@@ -377,9 +379,12 @@ class VotesManagerTest {
             list = listing(dueVote(PID), dueVote(second))
             onGo = { if (it == "get:$CONN/$PID") m!!.stopSync() }
         }
-        m = manager(ops)
+        val site = Site()
+        m = manager(ops, site)
         m.syncOnce()
         assertTrue(ops.calls.contains("get:$CONN/$PID"))
+        // The check in flight stops at its next network call: its results are not fetched.
+        assertTrue(site.reads.none { it.startsWith("p/$PID/results") })
         assertFalse(ops.calls.contains("get:$CONN/$second"))
         // Without the pause both are checked.
         ops.onGo = {}
@@ -395,21 +400,247 @@ class VotesManagerTest {
         val site = Site().apply {
             answers["index.json"] = ok("[]")
             answers["p/$PID/proposal.json"] = ok("""{"proposal_id":"$PID"}""")
-            onRead = { if (it == "p/$PID/proposal.json") m!!.clear() }
+            // The last read of the proposal's documents (no extension): the sync built from them is next.
+            onRead = { if (it == "p/$PID/extension-1.json") m!!.clear() }
         }
         m = manager(ops, site)
         m.syncOnce()
+        assertTrue(site.reads.contains("p/$PID/extension-1.json"))
         assertFalse(ops.calls.contains("sync"))
         // The screen's own site check follows the same rule.
         site.onRead = {}
         m.refresh()
-        site.onRead = { if (it == "p/$PID/proposal.json") m!!.clear() }
+        site.onRead = { if (it == "p/$PID/extension-1.json") m!!.clear() }
         m.siteCheck(CONN, PID)
         assertFalse(ops.calls.contains("sync"))
         site.onRead = {}
         m.refresh()
         m.siteCheck(CONN, PID)
         assertTrue(ops.calls.contains("sync"))
+    }
+
+    // ---- Every site read and send is gated (a lock, a hold, the release gate's pause, sends held back) ----
+
+    /** Ends the run the way [how] says: a lock or hold (`clear()`), or the release gate's pause (`stopSync()` alone). */
+    private enum class Ending { LOCK, PAUSE }
+
+    private fun VotesManager.end(how: Ending) = if (how == Ending.LOCK) clear() else stopSync()
+
+    /** A lock or a pause between two documents of one proposal: nothing more is read from the site, nothing is sent. */
+    @Test
+    fun noSiteReadAfterALockOrPauseBetweenTwoDocumentsOfOneProposal() = runTest {
+        for (how in Ending.entries) {
+            val ops = Ops().apply { list = listing(summary()) }
+            var m: VotesManager? = null
+            val site = Site().apply {
+                answers["index.json"] = ok("[]")
+                answers["p/$PID/proposal.json"] = ok("""{"proposal_id":"$PID"}""")
+                answers["p/$PID/proposal.json.sig"] = SiteAnswer.Found(ByteArray(64))
+                onRead = { if (it == "p/$PID/proposal.json") m!!.end(how) }
+            }
+            m = manager(ops, site)
+            m.syncOnce()
+            assertEquals("$how", "p/$PID/proposal.json", site.reads.last())
+            assertFalse("$how", site.reads.contains("p/$PID/proposal.json.sig"))
+            assertFalse("$how", ops.calls.contains("sync"))
+        }
+    }
+
+    /** A lock or a pause while the service list is read: its signature and the older versions are not fetched. */
+    @Test
+    fun noSiteReadAfterALockOrPauseWhileTheServiceListIsRead() = runTest {
+        for (how in Ending.entries) {
+            val ops = Ops().apply { list = listing(summary()) }
+            var m: VotesManager? = null
+            val site = Site().apply {
+                answers["services.json"] = ok(servicesDoc)
+                onRead = { if (it == "services.json") m!!.end(how) }
+            }
+            m = manager(ops, site)
+            m.syncOnce()
+            assertEquals("$how", listOf("services.json"), site.reads)
+            assertEquals("$how", listOf("list"), ops.calls)
+        }
+    }
+
+    private val checkPaths = listOf("results.json", "results.json.sig", "results.json.sigstore.json", "rows.json").map { "p/$PID/$it" }
+
+    /**
+     * A due check in flight when a lock or the pause comes stops at its next network call, wherever it is: nothing of the
+     * results after that point is fetched, and nothing is submitted.
+     */
+    @Test
+    fun aDueCheckInFlightStopsAtItsNextNetworkCall() = runTest {
+        for (how in Ending.entries) {
+            for ((i, at) in checkPaths.withIndex()) {
+                val (ops, site) = dueScenario()
+                var m: VotesManager? = null
+                site.onRead = { if (it == at) m!!.end(how) }
+                m = manager(ops, site)
+                runCatching { m.syncOnce() }
+                val read = site.reads.filter { it in checkPaths }
+                assertEquals("$how at $at", checkPaths.take(i + 1), read)
+                assertTrue("$how at $at", ops.submitted.isEmpty())
+            }
+        }
+    }
+
+    /** The same scenario with nothing ending it submits (the cases above are not empty for another reason). */
+    @Test
+    fun theDueScenarioSubmitsWhenNothingEndsIt() = runTest {
+        val (ops, site) = dueScenario()
+        manager(ops, site).syncOnce()
+        assertEquals(checkPaths, site.reads.filter { it in checkPaths })
+        assertEquals(1, ops.submitted.size)
+    }
+
+    /** No sync while sends are held back (the release check or pause, the owner check due or held): not even the list. */
+    @Test
+    fun noSyncWhileSendsAreHeldBack() = runTest {
+        var gated = true
+        val (ops, site) = dueScenario()
+        val m = manager(ops, site, sendsGated = { gated })
+        m.syncOnce()
+        assertTrue(ops.calls.isEmpty())
+        assertTrue(site.reads.isEmpty())
+        gated = false
+        m.syncOnce()
+        assertEquals(1, ops.submitted.size)
+    }
+
+    /** Sends held back after the list read: the run stops at its next site read (the gate is part of its liveness). */
+    @Test
+    fun aRunStopsWhenSendsAreHeldBackMidway() = runTest {
+        var gated = false
+        val (ops, site) = dueScenario()
+        site.onRead = { if (it == "services.json") gated = true }
+        val m = manager(ops, site, sendsGated = { gated })
+        m.syncOnce()
+        assertEquals(listOf("services.json"), site.reads)
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    /** Lets work running off the test dispatcher (the stores' dispatcher) finish before a "nothing more happened" check. */
+    private suspend fun TestScope.settle() {
+        repeat(3) {
+            withContext(Dispatchers.Default) { delay(100) }
+            advanceUntilIdle()
+        }
+    }
+
+    private fun checkDueEvent() = event("vote.event", """{"event":"check_due","connection_id":"$CONN","proposal_id":"$PID"}""")
+
+    /** A `check_due` event while sends are held back starts no check; once they are not, it does. */
+    @Test
+    fun aCheckDueEventStartsNothingWhileSendsAreHeldBack() = runTest {
+        var gated = true
+        val (ops, site) = dueScenario()
+        val m = manager(ops, site, sendsGated = { gated })
+        m.refresh()
+        m.onEvent(checkDueEvent())
+        advanceUntilIdle()
+        settle()
+        assertFalse(ops.calls.any { it.startsWith("get:") })
+        assertTrue(site.reads.isEmpty())
+        gated = false
+        m.onEvent(checkDueEvent())
+        advanceUntilIdle()
+        eventually { ops.submitted.size == 1 }
+    }
+
+    /** A check a `check_due` event started stops at its next network call when a lock or the pause comes. */
+    @Test
+    fun aCheckDueEventsCheckStopsAtALockOrPause() = runTest {
+        for (how in Ending.entries) {
+            val (ops, site) = dueScenario()
+            var m: VotesManager? = null
+            site.onRead = { if (it == "p/$PID/results.json") m!!.end(how) }
+            m = manager(ops, site)
+            m.refresh()
+            m.onEvent(checkDueEvent())
+            advanceUntilIdle()
+            // The event's work runs partly off the test dispatcher: wait for the read that ends it, then let it settle.
+            eventually { synchronized(site) { site.reads.contains("p/$PID/results.json") } }
+            settle()
+            assertTrue("$how", ops.calls.contains("get:$CONN/$PID"))
+            assertEquals("$how", listOf("p/$PID/results.json"), site.reads.filter { it in checkPaths })
+            assertTrue("$how", ops.submitted.isEmpty())
+        }
+    }
+
+    /** The member's Check again after a lock: the results are not fetched and the check is void. */
+    @Test
+    fun checkAgainAfterALockFetchesNothing() = runTest {
+        val (ops, site) = dueScenario()
+        var m: VotesManager? = null
+        ops.onGo = { if (it == "get:$CONN/$PID") m!!.clear() }
+        m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.checkResults(CONN, PID))
+        assertTrue(site.reads.isEmpty())
+        assertTrue(ops.submitted.isEmpty())
+    }
+
+    /** The recheck on open after a lock: the results are not fetched and it is void. */
+    @Test
+    fun theRecheckAfterALockFetchesNothing() = runTest {
+        val (ops, site) = dueScenario()
+        var m: VotesManager? = null
+        ops.onGo = { if (it == "get:$CONN/$PID") m!!.clear() }
+        m = manager(ops, site)
+        m.refresh()
+        assertEquals(ResultsOutcome.Voided, m.recheck(CONN, PID))
+        assertTrue(site.reads.isEmpty())
+    }
+
+    /** The give-up diagnosis answered after a lock writes no hint. */
+    @Test
+    fun theGiveUpDiagnosisAnsweredAfterALockWritesNothing() = runTest {
+        val ops = Ops().apply { list = listing(summary(state = "closed", extra = ""","check":{"state":"gave_up"}""")) }
+        var m: VotesManager? = null
+        val site = Site().apply { onRead = { m!!.clear() } }
+        m = manager(ops, site)
+        m.refresh()
+        m.diagnoseGaveUp(CONN, PID)
+        assertTrue(m.hints.value.isEmpty())
+        // Without the lock it is written.
+        site.onRead = {}
+        m.refresh()
+        m.diagnoseGaveUp(CONN, PID)
+        assertEquals(GaveUpWhy.UNPUBLISHED, m.hints.value.getValue("$CONN/$PID").gaveUp)
+    }
+
+    /** The blob slot was full: the second upload try comes after a wait, and not after a lock or pause meanwhile. */
+    @Test
+    fun theUploadRetryIsNotMadeAfterALockOrPause() = runTest {
+        for (how in Ending.entries) {
+            val ids = (1..4).map { "01JBQZ0000000000000000001$it" }
+            var m: VotesManager? = null
+            val ops = Ops().apply {
+                list = listing(*ids.map { summary(id = it) }.toTypedArray())
+                refuse["upload"] = "limit"
+                onGo = { if (it == "upload") m!!.end(how) }
+            }
+            val site = Site().apply {
+                answers["index.json"] = ok("[]")
+                for (id in ids) answers["p/$id/proposal.json"] = ok("x".repeat(60_000))
+            }
+            m = manager(ops, site)
+            runCatching { m.syncOnce() }
+            assertEquals("$how", 1, ops.calls.count { it == "upload" })
+        }
+        // Without either, the slot is tried twice.
+        val ids = (1..4).map { "01JBQZ0000000000000000001$it" }
+        val ops = Ops().apply {
+            list = listing(*ids.map { summary(id = it) }.toTypedArray())
+            refuse["upload"] = "limit"
+        }
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            for (id in ids) answers["p/$id/proposal.json"] = ok("x".repeat(60_000))
+        }
+        runCatching { manager(ops, site).syncOnce() }
+        assertEquals(2, ops.calls.count { it == "upload" })
     }
 
     /** A request that travels as a blob: a lock before the upload sends nothing; one during the upload sends no `syncBlob`. */
@@ -421,7 +652,7 @@ class VotesManagerTest {
         val site = Site().apply {
             answers["index.json"] = ok("[]")
             for (id in ids) answers["p/$id/proposal.json"] = ok("x".repeat(60_000))
-            onRead = { if (it == "p/${ids.last()}/proposal.json.sigstore.json") m!!.clear() }
+            onRead = { if (it == "p/${ids.last()}/extension-1.json") m!!.clear() }
         }
         m = manager(ops, site)
         m.syncOnce()

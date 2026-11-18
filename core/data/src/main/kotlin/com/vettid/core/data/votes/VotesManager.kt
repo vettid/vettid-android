@@ -309,6 +309,11 @@ class VotesManager(
      * which counts as metered (#314 item 1).
      */
     private val unmetered: () -> Boolean? = { null },
+    /**
+     * (Rule 3) Whether the vault manager holds back what the features send: the release gate checks the vault's release or
+     * pauses the features, or the daily owner check is due or held. Then no sync runs and a `check_due` event starts nothing.
+     */
+    private val sendsGated: () -> Boolean = { false },
 ) : VotesRepository {
     private val lock = Any()
     private val votesFlow = MutableStateFlow<List<VoteSummary>>(emptyList())
@@ -393,8 +398,10 @@ class VotesManager(
     fun onEvent(m: VaultMessage) {
         if (m.type != "vote.event") return
         refreshQuietly()
-        if (VaultJson.str(m.body, "event") == "check_due") {
-            val live = liveFor(synchronized(lock) { generation })
+        // A due check the vault announces runs as a sync run does: not while sends are held back, and it stops at the next
+        // network call once a lock, a hold or a pause comes (the generation and the sync run taken now).
+        if (VaultJson.str(m.body, "event") == "check_due" && !sendsGated()) {
+            val live = synchronized(lock) { runLive(generation, syncRun) }
             scope.launch { runCatching { submitDue(live) } }
         }
     }
@@ -519,6 +526,12 @@ class VotesManager(
         return VoteWire.detail(body) ?: throw VaultFailure(FailureKind.OTHER, "unreadable")
     }
 
+    /** [get] for a results check: only while [live] holds ([RunOver] otherwise). */
+    private suspend fun getLive(live: () -> Boolean, connectionId: String, proposalId: String): VoteDetail {
+        if (!live()) throw RunOver()
+        return get(connectionId, proposalId)
+    }
+
     override fun windowOpen(): Boolean = windowUntil()?.isAfter(now()) == true
 
     override suspend fun cast(connectionId: String, proposalId: String, choiceId: String, password: String?): BallotState {
@@ -638,8 +651,34 @@ class VotesManager(
         }
     }
 
-    /** Whether work begun under [gen] may still write or send: no lock or hold ([clear]) came since. */
+    /** Whether work begun under [gen] may still read from the site, write or send: no lock or hold ([clear]) came since. */
     private fun liveFor(gen: Int): () -> Boolean = { synchronized(lock) { gen == generation } }
+
+    /**
+     * Whether a sync run (or a due check a `check_due` event started) begun under [gen] and [run] may still read from the
+     * site or send: no lock or hold ([clear]), the sync not stopped ([stopSync]: also the release gate's pause), and sends not
+     * held back ([sendsGated]).
+     */
+    private fun runLive(gen: Int, run: Long): () -> Boolean =
+        { synchronized(lock) { gen == generation && run == syncRun } && !sendsGated() }
+
+    /**
+     * The run that [live] guards is over: thrown at the next network call (a site read or a call to the vault), so that
+     * nothing more of it is read or sent. A cancellation of that work, never shown: a results check that it ends is void.
+     */
+    private class RunOver : CancellationException("the run is over: a lock, a hold or a pause")
+
+    /** A read from the public site, only while [live] holds ([RunOver] otherwise). */
+    private suspend fun siteGet(live: () -> Boolean, path: String, maxBytes: Long = VoteSite.DEFAULT_MAX): SiteAnswer {
+        if (!live()) throw RunOver()
+        return site.get(path, maxBytes)
+    }
+
+    /** [siteGet] with the bytes counted as they arrive. */
+    private suspend fun siteGetCounted(live: () -> Boolean, path: String, maxBytes: Long, received: (Long) -> Unit): SiteAnswer {
+        if (!live()) throw RunOver()
+        return site.getCounted(path, maxBytes, received)
+    }
 
     /**
      * One run: the service list, the proposals, and the results that are due, as **separate stages** (VAULT-MESSAGING 0.81.5
@@ -648,14 +687,15 @@ class VotesManager(
      * run is over. Not while another run is going.
      */
     suspend fun syncOnce() {
-        if (!site.configured) return
+        if (!site.configured || sendsGated()) return
         syncs.withLock {
             val run = synchronized(lock) { syncRun }
             // A list read voided by a lock or a hold: nothing more of this run (the next unlock starts the sync again).
             val gen = read(fromQueue = false) ?: return@withLock
-            // From here every stage, and every call to the vault in it, first looks again: a lock or hold (the generation) or
-            // the sync stopped (the release gate's pause) since the read ends the run with nothing more sent.
-            val live = { synchronized(lock) { gen == generation && run == syncRun } }
+            // From here every stage, and every site read and call to the vault in it, first looks again: a lock or hold (the
+            // generation), the sync stopped (the release gate's pause) or sends held back since the read ends the run with
+            // nothing more read or sent ([RunOver]).
+            val live = runLive(gen, run)
             var first: VaultFailure? = null
             suspend fun stage(block: suspend () -> Unit) {
                 if (!live()) return
@@ -665,9 +705,13 @@ class VotesManager(
                     if (first == null && e.code != CODE_TOO_LARGE) first = e
                 }
             }
-            stage { syncLists(live) }
-            stage { syncProposals(only = null, live) }
-            stage { submitDue(live) }
+            try {
+                stage { syncLists(live) }
+                stage { syncProposals(only = null, live) }
+                stage { submitDue(live) }
+            } catch (_: RunOver) {
+                return@withLock
+            }
             first?.let { throw it }
         }
     }
@@ -675,14 +719,18 @@ class VotesManager(
     override suspend fun siteCheck(connectionId: String, proposalId: String) {
         if (!site.configured) return
         val live = liveFor(synchronized(lock) { generation })
-        syncs.withLock { syncProposals(only = proposalId, live) }
+        try {
+            syncs.withLock { syncProposals(only = proposalId, live) }
+        } catch (_: RunOver) {
+            return // a lock or hold came: nothing more is read from the site or sent
+        }
         refreshQuietly()
     }
 
     @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
     private suspend fun syncLists(live: () -> Boolean) {
-        val doc = (site.get("services.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: return
-        val sig = (site.get("services.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: return
+        val doc = (siteGet(live, "services.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: return
+        val sig = (siteGet(live, "services.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: return
         val version = VoteSync.versionOf(doc) ?: 0
         val current = VoteSync.ServedList(doc, sig, version)
         val held = listVersion
@@ -693,8 +741,8 @@ class VotesManager(
             // what was fetched is sent and the rest goes on at the next run.
             val last = minOf(version, held + 1 + VoteSync.MAX_LISTS)
             for (v in (held + 1) until last) {
-                val d = (site.get("services/$v.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: break
-                val s = (site.get("services/$v.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: break
+                val d = (siteGet(live, "services/$v.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: break
+                val s = (siteGet(live, "services/$v.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: break
                 between += VoteSync.ServedList(d, s, v)
             }
         }
@@ -709,7 +757,7 @@ class VotesManager(
     @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     private suspend fun syncProposals(only: String?, live: () -> Boolean) {
         val held = votesFlow.value.map { it.proposalId }.distinct()
-        val index = (site.get("index.json", INDEX_MAX) as? SiteAnswer.Found)?.let { VoteSync.indexOf(it.bytes) }.orEmpty()
+        val index = (siteGet(live, "index.json", INDEX_MAX) as? SiteAnswer.Found)?.let { VoteSync.indexOf(it.bytes) }.orEmpty()
         val byId = index.mapNotNull { e -> VoteSync.proposalIdOf(e)?.let { it to e } }.toMap()
         val ids = if (only != null) {
             listOf(only)
@@ -717,7 +765,7 @@ class VotesManager(
             // The held proposals, then the newest the vault lacks (it learns what to ask the service for from them).
             held + byId.keys.filter { it !in held }.takeLast(VoteSync.MAX_NEW)
         }
-        val entries = ids.map { id -> VoteSync.entryJson(id, byId[id], readDocument(id, byId[id])) }
+        val entries = ids.map { id -> VoteSync.entryJson(id, byId[id], readDocument(id, byId[id], live)) }
         // Each call on its own: one the vault refuses does not keep the others from it. The first refusal is thrown after the last.
         var first: VaultFailure? = null
         for (call in VoteSync.entryCalls(entries)) {
@@ -732,18 +780,18 @@ class VotesManager(
 
     /** One proposal's documents from the site: `proposal.json` with its signature and bundle, and each extension in order. */
     @Suppress("ReturnCount", "CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
-    private suspend fun readDocument(id: String, index: JsonObject?): VoteSync.Document {
-        val p = when (val a = site.get("p/$id/proposal.json")) {
+    private suspend fun readDocument(id: String, index: JsonObject?, live: () -> Boolean): VoteSync.Document {
+        val p = when (val a = siteGet(live, "p/$id/proposal.json")) {
             SiteAnswer.Absent -> return VoteSync.Document.Absent
             SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             is SiteAnswer.Found -> a.bytes
         }
-        val sig = when (val a = site.get("p/$id/proposal.json.sig", SIG_MAX)) {
+        val sig = when (val a = siteGet(live, "p/$id/proposal.json.sig", SIG_MAX)) {
             SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             SiteAnswer.Absent -> null
             is SiteAnswer.Found -> a.bytes
         }
-        val bundle = when (val a = site.get("p/$id/proposal.json.sigstore.json", BUNDLE_MAX)) {
+        val bundle = when (val a = siteGet(live, "p/$id/proposal.json.sigstore.json", BUNDLE_MAX)) {
             SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
             SiteAnswer.Absent -> null
             is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes, VoteSync.BUNDLE_DEPTH)
@@ -751,17 +799,17 @@ class VotesManager(
         val extensions = ArrayList<VoteSync.Extension>()
         val count = VoteSync.extendedOf(index)?.coerceIn(0, VoteSync.MAX_EXTENSIONS) ?: VoteSync.MAX_EXTENSIONS
         for (n in 1..count) {
-            val x = when (val a = site.get("p/$id/extension-$n.json")) {
+            val x = when (val a = siteGet(live, "p/$id/extension-$n.json")) {
                 SiteAnswer.Absent -> break
                 SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 is SiteAnswer.Found -> a.bytes
             }
-            val xs = when (val a = site.get("p/$id/extension-$n.json.sig", SIG_MAX)) {
+            val xs = when (val a = siteGet(live, "p/$id/extension-$n.json.sig", SIG_MAX)) {
                 SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 SiteAnswer.Absent -> null
                 is SiteAnswer.Found -> a.bytes
             }
-            val xb = when (val a = site.get("p/$id/extension-$n.json.sigstore.json", BUNDLE_MAX)) {
+            val xb = when (val a = siteGet(live, "p/$id/extension-$n.json.sigstore.json", BUNDLE_MAX)) {
                 SiteAnswer.Unreachable, SiteAnswer.TooLarge -> return VoteSync.Document.Unreachable
                 SiteAnswer.Absent -> null
                 is SiteAnswer.Found -> VoteSync.jsonObject(a.bytes, VoteSync.EXTENSION_BUNDLE_DEPTH)
@@ -773,24 +821,27 @@ class VotesManager(
 
     /**
      * Sends one `vote.site.sync` body within the limits (§10.19.8): inline at or under 245,760 bytes, otherwise as a
-     * claim-check blob to the app's own vault, and never over 8,257,532 bytes. Null when it was not sent: also when [live]
-     * says the run is over (a lock, a hold or the sync stopped), looked at before each call to the vault.
+     * claim-check blob to the app's own vault, and never over 8,257,532 bytes. Null when it was not sent. [live] is looked
+     * at before each call to the vault: [RunOver] once the run is over (a lock, a hold, the sync stopped).
      */
     @Suppress("ReturnCount")
     private suspend fun send(body: JsonObject, live: () -> Boolean): JsonObject? {
         val bytes = VoteSync.encoded(body)
         if (bytes.size > VoteSync.BODY_MAX) return null
         when (VoteSync.inline(bytes)) {
-            VoteSync.Inline.FITS -> return if (live()) vaultGuard { ops().sync(body) } else null
+            VoteSync.Inline.FITS -> {
+                if (!live()) throw RunOver()
+                return vaultGuard { ops().sync(body) }
+            }
             VoteSync.Inline.TOO_LARGE -> Unit // a claim-check blob, below
             // Not an inner message at all (the strict body check failed): the vault would refuse it either way. Not sent.
             VoteSync.Inline.OTHER -> return null
         }
         val sealed = ClaimBlob.seal(bytes)
         try {
-            if (!live()) return null
-            val id = uploadWithRetry(sealed.blob) ?: return null
-            if (!live()) return null
+            // uploadWithRetry looks at [live] before each try, the first included.
+            val id = uploadWithRetry(sealed.blob, live) ?: return null
+            if (!live()) throw RunOver()
             return vaultGuard {
                 ops().syncBlob(id, Base64s.encodeStd(sealed.key), Base64s.encodeStd(sealed.sha256), sealed.size)
             }
@@ -800,8 +851,10 @@ class VotesManager(
     }
 
     /** The mailbox's single blob slot is shared with photo uploads: once more after a short wait when it is full. */
-    private suspend fun uploadWithRetry(blob: ByteArray): String? {
+    private suspend fun uploadWithRetry(blob: ByteArray, live: () -> Boolean): String? {
         repeat(UPLOAD_TRIES) { attempt ->
+            // The second try comes after a wait: a lock, a hold or a pause meanwhile ends it.
+            if (!live()) throw RunOver()
             try {
                 return vaultGuard { ops().uploadBlob(blob) }
             } catch (e: VaultFailure) {
@@ -823,14 +876,14 @@ class VotesManager(
         val at = now()
         for (v in votesFlow.value) {
             // A lock, a hold or the sync stopped since the run began: no further check is started.
-            if (!live()) return
+            if (!live()) throw RunOver()
             val c = v.check ?: continue
             val pending = c.state == CheckState.PENDING && !(c.dueAt != null && c.dueAt.isAfter(at))
             val due = v.state == VoteState.CLOSED && (pending || c.state == CheckState.GAVE_UP && dailyDue(v.key, at))
             // One vote's failure does not stop the others; a cancellation does (it is not caught).
             if (due) {
                 try {
-                    checkDue(v.connectionId, v.proposalId)
+                    checkDue(v.connectionId, v.proposalId, live)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
@@ -841,17 +894,21 @@ class VotesManager(
     }
 
     override suspend fun checkResults(connectionId: String, proposalId: String): ResultsOutcome =
-        checkResults(connectionId, proposalId, due = false)
+        checkResults(connectionId, proposalId, due = false, live = null)
 
     /**
      * A check [submitDue] found due: a `gave_up` one is looked at again under the vote's lock (review 1, L2), so that two
      * passes that both found it due (a `check_due` event and the sync) do not run it back to back.
      */
     @VisibleForTesting
-    internal suspend fun checkDue(connectionId: String, proposalId: String): ResultsOutcome =
-        checkResults(connectionId, proposalId, due = true)
+    internal suspend fun checkDue(connectionId: String, proposalId: String, live: (() -> Boolean)? = null): ResultsOutcome =
+        checkResults(connectionId, proposalId, due = true, live = live)
 
-    private suspend fun checkResults(connectionId: String, proposalId: String, due: Boolean): ResultsOutcome {
+    /**
+     * [live]: the run a due check belongs to (a sync run, a `check_due` event); null for the member's Check again, which
+     * follows the generation taken at its start. Either way every site read and call to the vault looks at it first.
+     */
+    private suspend fun checkResults(connectionId: String, proposalId: String, due: Boolean, live: (() -> Boolean)?): ResultsOutcome {
         val key = VoteKeys.of(connectionId, proposalId)
         return resultLocks.computeIfAbsent(key) { Mutex() }.withLock {
             val gaveUp = votesFlow.value.firstOrNull { it.key == key }?.check?.state == CheckState.GAVE_UP
@@ -863,7 +920,8 @@ class VotesManager(
             var out: ResultsOutcome? = null
             var cancelled = false
             try {
-                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, epoch, trace, due) }.also { out = it }
+                val alive = live ?: liveFor(gen)
+                asCheck(gen) { checkResultsLocked(key, connectionId, proposalId, gen, epoch, trace, due, alive) }.also { out = it }
             } catch (e: CancellationException) {
                 cancelled = true
                 throw e
@@ -952,18 +1010,20 @@ class VotesManager(
         trace: Trace,
         /** The automatic re-check ([checkDue]); false for the member's Check again, which the network cap does not hold. */
         due: Boolean,
+        /** Looked at before each site read and call to the vault ([RunOver] once a lock, a hold or a pause ended the run). */
+        live: () -> Boolean,
     ): ResultsOutcome = run {
         // A lock (or any clear) during the check voids it: its hints are not written and nothing is submitted (R1-2), and
         // [clear] cancels it (L2).
         if (!site.configured) return@run ResultsOutcome.SiteUnreachable
         // `other_rows` and `rows_unavailable` only to a vault that lists `vote_rows` (§10.19.6 step 3, "Version gating").
         val rowsOk = voteRows()
-        val detail = get(connectionId, proposalId)
+        val detail = getLive(live, connectionId, proposalId)
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
             ?: return@run fail(key, ResultsOutcome.Problem, gen = gen)
         var siteDown = false
         var tooLarge = false
-        suspend fun fetch(name: String, max: Long): ByteArray? = when (val a = site.get("p/$proposalId/$name", max)) {
+        suspend fun fetch(name: String, max: Long): ByteArray? = when (val a = siteGet(live, "p/$proposalId/$name", max)) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.Absent -> null
             // Over the vault's own limit: results the vault could never take, a problem with them and not a site that is down.
@@ -1037,7 +1097,7 @@ class VotesManager(
                     stampRecheckRows(key, rowsAt, epoch)
                 }
             }
-            when (val a = site.getCounted("p/$proposalId/rows.json", cap, stamp)) {
+            when (val a = siteGetCounted(live, "p/$proposalId/rows.json", cap, stamp)) {
                 is SiteAnswer.Found -> a.bytes
                 SiteAnswer.Absent -> null
                 SiteAnswer.TooLarge -> {
@@ -1133,6 +1193,7 @@ class VotesManager(
             VoteSync.Inline.OTHER -> return@run fail(key, ResultsOutcome.Problem, gen = gen)
         }
         if (synchronized(lock) { gen != generation }) return@run ResultsOutcome.Voided
+        if (!live()) throw RunOver()
         // Set before the submit: a refused or lost submission keeps it (ANDROID-PLAN 0.1.117).
         hint(key, gen) { it.copy(observerFailed = sent.observerFailed) }
         trace.sentRow = !sent.unavailable
@@ -1375,20 +1436,28 @@ class VotesManager(
             // A child job as a results check is (lead review L2): a lock cancels it and it is void.
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
-            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen, epoch) }
+            asCheck(gen) { recheckLocked(key, connectionId, proposalId, gen, epoch, liveFor(gen)) }
         }
     }
 
     /** The observer's check alone, on the published results as they are now; nothing is submitted or kept on disk. */
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one early return per reason it could not check
-    private suspend fun recheckLocked(key: String, connectionId: String, proposalId: String, gen: Int, epoch: Int): ResultsOutcome = run {
+    private suspend fun recheckLocked(
+        key: String,
+        connectionId: String,
+        proposalId: String,
+        gen: Int,
+        epoch: Int,
+        /** Looked at before each site read and call to the vault ([RunOver] once a lock or hold came). */
+        live: () -> Boolean,
+    ): ResultsOutcome = run {
         if (!site.configured) return@run notRechecked(key, gen)
-        val detail = get(connectionId, proposalId)
+        val detail = getLive(live, connectionId, proposalId)
         // Nothing checked (no tag to look for, results.json over the limit, a cap that does not read): not a failed observer
         // check but one that could not run, so `vote_results_not_rechecked` and no number, not "don't add up" (#314 item 2).
         val tag = detail.recordTag?.let { runCatching { Base64s.decodeStd(it, TAG_LEN) }.getOrNull() }
             ?: return@run notRechecked(key, gen)
-        val doc = when (val a = site.get("p/$proposalId/results.json", RESULTS_MAX)) {
+        val doc = when (val a = siteGet(live, "p/$proposalId/results.json", RESULTS_MAX)) {
             is SiteAnswer.Found -> a.bytes
             SiteAnswer.TooLarge, SiteAnswer.Absent, SiteAnswer.Unreachable -> return@run notRechecked(key, gen)
         }
@@ -1406,7 +1475,7 @@ class VotesManager(
         // (the epoch, review of #319 L1).
         // Stamped once per download, at its first bytes (not under the lock at every chunk).
         var stamped = false
-        val rows = when (val a = site.getCounted("p/$proposalId/rows.json", cap) { n ->
+        val rows = when (val a = siteGetCounted(live, "p/$proposalId/rows.json", cap) { n ->
             if (n > 0 && !stamped) {
                 stamped = true
                 stampRecheckRows(key, at, epoch)
@@ -1570,13 +1639,19 @@ class VotesManager(
     }
 
     override suspend fun diagnoseGaveUp(connectionId: String, proposalId: String) {
-        if (!site.configured) return
         val key = VoteKeys.of(connectionId, proposalId)
-        if (hintsFlow.value[key]?.gaveUp != null) return
-        when (site.get("p/$proposalId/results.json", RESULTS_MAX)) {
-            SiteAnswer.Absent -> hint(key) { it.copy(gaveUp = GaveUpWhy.UNPUBLISHED) }
-            SiteAnswer.Unreachable -> hint(key) { it.copy(gaveUp = GaveUpWhy.SITE) }
-            SiteAnswer.TooLarge -> hint(key) { it.copy(resultsProblem = true, resultsTooLarge = true) }
+        if (!site.configured || hintsFlow.value[key]?.gaveUp != null) return
+        // Under the generation taken now: nothing is read after a lock or hold, and an answer that comes after one writes nothing.
+        val gen = synchronized(lock) { generation }
+        val answer = try {
+            siteGet(liveFor(gen), "p/$proposalId/results.json", RESULTS_MAX)
+        } catch (_: RunOver) {
+            return
+        }
+        when (answer) {
+            SiteAnswer.Absent -> hint(key, gen) { it.copy(gaveUp = GaveUpWhy.UNPUBLISHED) }
+            SiteAnswer.Unreachable -> hint(key, gen) { it.copy(gaveUp = GaveUpWhy.SITE) }
+            SiteAnswer.TooLarge -> hint(key, gen) { it.copy(resultsProblem = true, resultsTooLarge = true) }
             is SiteAnswer.Found -> Unit // published: **Check again** hands them to the vault
         }
     }

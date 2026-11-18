@@ -441,10 +441,17 @@ The A2 exit test:
   app requires the vault's current release, and a vault behind sees only the update screen), so there is no availability flag:
   `unsupported_type` from `vote.list` is a failure like any other (the list FAILED, asked again by the next read). A list answered
   after a lock or hold is voided by `VotesManager`'s `generation`, taken before the vault is asked (with "loading" set under the
-  same lock), and `refresh()` says whether the read was applied (the notifier's `refreshVotes` is true only then). A sync whose
-  list read was voided fetches and sends nothing; after it, each stage, each due check and each call to the vault first looks
-  again at that generation and at `syncRun` (bumped by `stopSync`: a lock or hold, and the release gate's pause), so nothing more
-  is sent once either moved. The screen's site check follows the generation the same way. `VoteRules` (pure) maps what the vault decided to a chip and
+  same lock), and `refresh()` says whether the read was applied (the notifier's `refreshVotes` is true only then). **Every site read and send is gated**:
+  no sync runs and a `check_due` event starts no check while `sendsGated` (the release gate's check or pause, the owner check due
+  or held; wired from `VaultManager` as for presence and location). A sync whose list read was voided fetches and sends nothing;
+  after it, every read from votes.vettid.org (`siteGet` / `siteGetCounted`: the service lists, `index.json`, each document of
+  each proposal, the results and rows.json) and every call to the vault (the `vote.site.sync` calls, the blob upload and its
+  retry, `vote.get` and `vote.results.submit` of a due check) first looks again at that generation, at `syncRun` (bumped by
+  `stopSync`: a lock or hold, and the pause) and at `sendsGated` (`runLive`); a run that is over stops there (`RunOver`, a
+  cancellation; a results check it ends is void). A due check a `check_due` event starts follows the same rule from the event's
+  generation and run. The member's Check again, the recheck on open, the screen's site check and the give-up diagnosis follow
+  the generation taken at their start (a lock or hold), the diagnosis writing no hint after one. Only a request already in
+  flight when the lock or pause comes finishes (the site client's read is blocking). `VoteRules` (pure) maps what the vault decided to a chip and
   to notes (`VoteNote`); every text of the plan's table is in `feature/votes/.../strings.xml` and `VoteTextsTest` holds the approved
   ones word for word (a changed text is the owner's to approve; the strings under "Proposed" there are not yet approved). The
   vote screen is `FLAG_SECURE`; the proof is written only where the member's "Save to…" points, only on their action, never to a
