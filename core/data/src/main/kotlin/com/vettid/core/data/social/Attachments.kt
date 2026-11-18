@@ -19,7 +19,6 @@ import com.vettid.core.vault.SentAttachment
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.attachmentContent
 import com.vettid.core.vault.attachmentThumb
-import com.vettid.core.vault.attachmentsSupported
 import com.vettid.core.vault.deleteBlob
 import com.vettid.core.vault.fetchBlob
 import com.vettid.core.vault.messageAttachmentDiscard
@@ -90,15 +89,30 @@ class FetchedPhoto(val bytes: ByteArray, val type: ImageType)
 /**
  * Photo attachments (VAULT-MESSAGING 0.32.0 §10.5.1, ANDROID-PLAN 0.1.39) on this phone. Everything lives in memory:
  * thumbnails, photos and prepared uploads, wiped by [clear] at a lock, on entering the hold or the due state, at a
- * wipe and at an unlink. Nothing from a photo goes to a log.
+ * wipe and at an unlink. Nothing from a photo goes to a log. Every vault the app talks to has attachments (it requires
+ * the vault's current release), so nothing asks whether it has them.
  */
 @Suppress("TooManyFunctions") // one per step of §10.5.1 the app takes
 interface AttachmentsRepository {
-    /** Whether the vault has attachments (`message.attachment.get{}` after each unlock); no attach button otherwise. */
-    val available: StateFlow<Boolean>
+    /**
+     * The vault is not open on this phone, the daily owner check is due or held, or the release gate checks or pauses
+     * (Rule 3): no photo is taken in, and every call that would reach the vault or the mailbox is refused
+     * (`owner_check_required`) or, for a cleanup, left undone.
+     *
+     * It turns true before the [clear] of a lock (the clears run on the phase already published as locked), of the hold
+     * or due state (they run on an owner-check value that is already gated) and of a wipe (its first step, the release
+     * gate's clear, pauses). It does not before the forget paths' [clear] (signing out, a missing vault, an abandoned
+     * recovery, the end of a deletion), which drop the session first and publish the phase after. So a caller never
+     * relies on it alone: it reads [cleared] before asking it, and a send carries that mark into [begin], so that a clear
+     * between the two ends the photo under the clear's own lock.
+     */
+    fun closed(): Boolean
 
-    /** The availability probe: once after each unlock. */
-    suspend fun probe()
+    /**
+     * Counts each time the vault opened again after a fetch was refused because it was [closed] (the owner check passed,
+     * the release gate lifted, the next unlock): the bubbles that showed a placeholder ask again.
+     */
+    val reopened: StateFlow<Long>
 
     /**
      * Prepares a picked picture's bytes for sending, off the main thread (ANDROID-PLAN "Preparing it, in memory"):
@@ -110,14 +124,18 @@ interface AttachmentsRepository {
     /** Prepares a camera shot (upright, in memory); the caller recycles [shot]. */
     suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto
 
-    /** Starts sending [photo] to [connectionId] with [caption] (it goes with the first photo only). */
-    fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto
+    /**
+     * Starts sending [photo] to [connectionId] with [caption] (it goes with the first photo only). [clearMark] is [cleared]
+     * as the caller read it before it asked [closed]: a clear since then ends the photo before anything is sent.
+     */
+    fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long = cleared.value): PendingPhoto
 
     /**
      * Uploads [p] (unless it already is) and sends `message.send` with it under [PendingPhoto.requestId]. A lost
      * or late answer leaves [p] uploaded: calling this again is the member's Retry, the same request without a new
      * upload. The relay refusing the upload with `quota_exceeded` is [FailureKind.LIMIT] with code
-     * `quota_exceeded`, and nothing is retried until the member taps Send again.
+     * `quota_exceeded`, and nothing is retried until the member taps Send again. While [closed] it is refused
+     * (`owner_check_required`) before the upload and before `message.send`, and [p] ends as for any refusal.
      */
     suspend fun send(p: PendingPhoto): MessageInfo
 
@@ -148,7 +166,6 @@ interface AttachmentsRepository {
 
 /** The vault calls behind [AttachmentManager] (a fake in tests). */
 interface AttachmentOps {
-    suspend fun supported(): Boolean?
     fun newRequestId(): String
     suspend fun upload(blob: ByteArray): String
     suspend fun send(connectionId: String, text: String?, attachment: JsonObject, requestId: String): SentAttachment
@@ -161,7 +178,6 @@ interface AttachmentOps {
 
 /** [AttachmentOps] over the vault client. */
 class VaultAttachmentOps(private val api: suspend () -> VaultApi) : AttachmentOps {
-    override suspend fun supported() = api().attachmentsSupported()
     override fun newRequestId(): String = com.vettid.core.crypto.envelope.Ulid.new(Instant.now())
     override suspend fun upload(blob: ByteArray) = api().uploadBlob(blob)
     override suspend fun send(connectionId: String, text: String?, attachment: JsonObject, requestId: String) =
@@ -178,17 +194,20 @@ class AttachmentManager(
     private val ops: AttachmentOps,
     /** A sent photo's message joins its conversation ([SocialManager.addSent]). */
     private val onSent: (MessageInfo) -> Unit,
+    /**
+     * (Rule 3) The vault is not open on this phone, the owner check is due or held, or the release gate checks or pauses:
+     * nothing of photos is sent, fetched or kept ([closed]).
+     */
+    private val vaultClosed: () -> Boolean,
     /** Where an abandoned upload's discard runs. */
     private val scope: kotlinx.coroutines.CoroutineScope =
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
 ) : AttachmentsRepository {
-    private val availableFlow = MutableStateFlow(false)
     private val clearedFlow = MutableStateFlow(0L)
     override val cleared: StateFlow<Long> = clearedFlow.asStateFlow()
 
     /** Caches are keyed by conversation and message: a message id is unique only within its connection. */
     private fun cacheKey(connectionId: String, messageId: String) = "$connectionId\u0000$messageId"
-    override val available: StateFlow<Boolean> = availableFlow.asStateFlow()
 
     private val thumbs = MemoryCache<String, ByteArray>(PhotoLimits.THUMB_CACHE_BYTES, { it.size.toLong() }) { it.fill(0) }
     private val photos = MemoryCache<String, FetchedPhoto>(PhotoLimits.PHOTO_CACHE_BYTES, { it.bytes.size.toLong() }) { it.bytes.fill(0) }
@@ -208,25 +227,121 @@ class AttachmentManager(
     @Volatile
     internal var testHook: ((String) -> Unit)? = null
 
+    /** TEST hook: called with each photo prepared, before it is handed back (a cancellation landing then). */
+    @VisibleForTesting
+    @Volatile
+    internal var prepareHook: ((PreparedPhoto) -> Unit)? = null
+
+    private val reopenedFlow = MutableStateFlow(0L)
+    override val reopened: StateFlow<Long> = reopenedFlow.asStateFlow()
+
+    /** A fetch was refused because the vault was [closed] since the last [opened]: a placeholder is on screen. */
+    private val refusedWhileClosed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Blob ids (never a key or a byte) whose cleanup could not be sent while [closed]: this device's uploads to the vault's
+     * mailbox that will not be sent ([discardLater]), and blobs the vault put in this device's mailbox that were fetched or
+     * will not be ([deleteLater]). Both count against shared blob storage (RELAY-PROTOCOL §6.8: this device's share of the
+     * vault's mailbox; the vault's share of this one) until the vault's orphan sweep or the blob TTL, so they are cleaned
+     * up at the next [opened]. Memory only; kept across a lock's or the hold's [clear], dropped by [forget].
+     */
+    private val discardLater = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+    private val deleteLater = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
     /** `attachment_fetches`: at most 2 `content` fetches of this device at once (§10.5.1). */
     private val fetches = Semaphore(MAX_FETCHES)
 
-    override suspend fun probe() {
-        availableFlow.value = try {
-            vaultGuard { ops.supported() } == true
-        } catch (_: VaultFailure) {
-            false
+    override fun closed(): Boolean = vaultClosed()
+
+    /** Nothing reaches the vault or the mailbox while [closed]: `owner_check_required`, as for presence and location. */
+    private fun ensureOpen() {
+        if (closed()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, CODE_CLOSED)
+    }
+
+    /** [ensureOpen] for a fetch: a refusal is a placeholder on screen, so the next [opened] tells it ([reopened]). */
+    private fun ensureOpenToFetch() {
+        if (!closed()) return
+        refusedWhileClosed.set(true)
+        ensureOpen()
+    }
+
+    /**
+     * The vault is open again (called where presence starts again: after an unlock, when the release check ends or its
+     * pause lifts, when the owner check passes). Nothing polls meanwhile. When not [closed]: a fetch refused while closed
+     * is told ([reopened]), and the cleanups kept meanwhile are sent, each only while still open (one that meets a closed
+     * vault is kept for the next opening). Best effort: a failure is not retried (the vault's orphan sweep or the TTL).
+     */
+    fun opened() {
+        if (closed()) return
+        if (refusedWhileClosed.getAndSet(false)) reopenedFlow.value++
+        val discards = takeAll(discardLater)
+        val deletes = takeAll(deleteLater)
+        if (discards.isEmpty() && deletes.isEmpty()) return
+        scope.launch {
+            discards.forEachIndexed { i, id ->
+                if (closed()) {
+                    discardLater += discards.drop(i)
+                    deleteLater += deletes
+                    return@launch
+                }
+                runCatching { vaultGuard { ops.discard(id) } }
+            }
+            deletes.forEachIndexed { i, id ->
+                if (closed()) {
+                    deleteLater += deletes.drop(i)
+                    return@launch
+                }
+                runCatching { vaultGuard { ops.deleteBlob(id) } }
+            }
         }
     }
 
-    override suspend fun prepare(source: ByteArray): PreparedPhoto =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(source) }
+    private fun takeAll(set: MutableSet<String>): List<String> = synchronized(set) { set.toList().also { set.clear() } }
+
+    /** An upload of this device that will not be sent: discarded now, or at the next [opened] while closed. */
+    private fun discardOrKeep(blob: String) {
+        if (closed()) discardLater += blob else scope.launch { runCatching { vaultGuard { ops.discard(blob) } } }
+    }
+
+    /**
+     * [checkNotCleared], then [closed]: a photo refused because the vault is closed ends like any refused photo (wiped,
+     * nothing sent; an upload already made is discarded at the next [opened], since no discard may be sent now).
+     */
+    private fun checkSendable(p: PendingPhoto) {
+        checkNotCleared(p)
+        if (!closed()) return
+        val blob = p.blobId
+        if (blob != null && !p.sent) discardLater += blob
+        finish(p)
+        ensureOpen()
+    }
+
+    override suspend fun prepare(source: ByteArray): PreparedPhoto = preparedOrWiped { com.vettid.core.media.Photos.prepare(source) }
 
     override suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(shot) }
+        preparedOrWiped { com.vettid.core.media.Photos.prepare(shot) }
 
-    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto =
-        PendingPhoto(connectionId, caption, photo, ops.newRequestId(), clearedFlow.value).also { pending += it }
+    /**
+     * Prepares off the main thread. A caller cancelled meanwhile (Cancel, the screen gone) never gets the photo: it is
+     * wiped here, not dropped with its bytes.
+     */
+    private suspend fun preparedOrWiped(make: () -> PreparedPhoto): PreparedPhoto {
+        val made = java.util.concurrent.atomic.AtomicReference<PreparedPhoto?>()
+        try {
+            return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                make().also {
+                    made.set(it)
+                    prepareHook?.invoke(it)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            made.get()?.wipe()
+            throw e
+        }
+    }
+
+    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long): PendingPhoto =
+        PendingPhoto(connectionId, caption, photo, ops.newRequestId(), clearMark).also { pending += it }
 
     /**
      * (ANDROID-PLAN "Memory only, wiped at lock") A clear (a lock, the hold or due state, a wipe, an unlink) came since [p]
@@ -238,7 +353,7 @@ class AttachmentManager(
         val blob = p.blobId
         finish(p)
         // Best effort: an upload a clear overtook is discarded (it expires after the blob TTL otherwise).
-        if (blob != null && !p.sent) scope.launch { runCatching { vaultGuard { ops.discard(blob) } } }
+        if (blob != null && !p.sent) discardOrKeep(blob)
         throw VaultFailure(FailureKind.OTHER, CODE_UNAVAILABLE)
     }
 
@@ -252,7 +367,7 @@ class AttachmentManager(
         // wipes the pending photos under: a clear either stops the send here or comes after the request is complete, so
         // `message.send` never carries a zeroed key or thumbnail.
         val (att, size) = synchronized(clearLock) {
-            checkNotCleared(p)
+            checkSendable(p)
             testHook?.invoke(HOOK_BUILD)
             val blobId = p.blobId ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
             val sealed = p.sealed ?: throw VaultFailure(FailureKind.OTHER, "no_upload")
@@ -323,8 +438,8 @@ class AttachmentManager(
         val sealed = ClaimBlob.seal(p.photo.jpeg)
         p.sealed = sealed
         p.blobId = try {
-            // A clear while it was sealed: the sealed copy goes with the photo (finish), nothing is uploaded.
-            checkNotCleared(p)
+            // A clear (or the vault closing) while it was sealed: the sealed copy goes with the photo (finish), nothing is uploaded.
+            checkSendable(p)
             vaultGuard {
                 try {
                     ops.upload(sealed.blob)
@@ -344,7 +459,10 @@ class AttachmentManager(
     override suspend fun cancel(p: PendingPhoto) {
         val blob = p.blobId
         finish(p)
-        if (blob != null && !p.sent) {
+        // Not while closed: nothing is sent then; it is discarded at the next opening ([opened]).
+        if (blob != null && !p.sent && closed()) {
+            discardLater += blob
+        } else if (blob != null && !p.sent) {
             try {
                 vaultGuard { ops.discard(blob) }
             } catch (_: VaultFailure) {
@@ -373,7 +491,9 @@ class AttachmentManager(
 
     override suspend fun thumbnail(connectionId: String, messageId: String): ByteArray {
         thumbs.get(cacheKey(connectionId, messageId))?.let { return it.copyOf() }
+        // The mark before the open check: a clear right after the check voids the answer.
         val mark = clearedFlow.value
+        ensureOpenToFetch()
         val t = vaultGuard { ops.thumb(connectionId, messageId) }
         if (!acceptableThumb(t)) throw VaultFailure(FailureKind.OTHER, CODE_TYPE)
         keepUnlessCleared(mark, t) { thumbs.put(cacheKey(connectionId, messageId), t) }
@@ -382,6 +502,7 @@ class AttachmentManager(
 
     override suspend fun photo(connectionId: String, messageId: String): FetchedPhoto {
         photos.get(cacheKey(connectionId, messageId))?.let { return FetchedPhoto(it.bytes.copyOf(), it.type) }
+        // The mark before the open check ([fetch], after the wait for a turn): a clear right after the check voids the answer.
         val mark = clearedFlow.value
         val got = fetches.withPermit { fetch(connectionId, messageId) }
         keepUnlessCleared(mark, got.bytes) { photos.put(cacheKey(connectionId, messageId), got) }
@@ -412,15 +533,23 @@ class AttachmentManager(
 
     @Suppress("ThrowsCount")
     private suspend fun fetch(connectionId: String, messageId: String): FetchedPhoto {
+        // Here, after the wait for a turn: the vault may have closed meanwhile.
+        ensureOpenToFetch()
         val ref = vaultGuard { ops.content(connectionId, messageId) }.blob
         val raw = try {
+            ensureOpenToFetch()
             vaultGuard { ops.fetchBlob(ref.id) }
         } finally {
-            // Every fetched blob is deleted, good or bad (§5.5): the mailbox's blob storage is shared.
-            try {
-                vaultGuard { ops.deleteBlob(ref.id) }
-            } catch (_: VaultFailure) {
-                // it expires after the blob TTL
+            // Every fetched blob is deleted, good or bad (§5.5): the mailbox's blob storage is shared. Not while closed:
+            // nothing is sent then; it is deleted at the next opening ([opened]).
+            if (closed()) {
+                deleteLater += ref.id
+            } else {
+                try {
+                    vaultGuard { ops.deleteBlob(ref.id) }
+                } catch (_: VaultFailure) {
+                    // it expires after the blob TTL
+                }
             }
         }
         val content = try {
@@ -467,6 +596,8 @@ class AttachmentManager(
     fun onEvent(type: String, body: JsonObject) {
         if (type != "message.new") return
         val mark = clearedFlow.value
+        // Nothing of a photo is kept while closed (the hold's clear stands until the check passes).
+        if (closed()) return
         val m = runCatching { VaultJson.decode(Message.serializer(), body) }.getOrNull()
         val bytes = m?.attachment?.thumb?.let { t -> runCatching { Base64s.decodeStd(t) }.getOrNull() }
         if (m != null && bytes != null && acceptableThumb(bytes)) {
@@ -478,6 +609,19 @@ class AttachmentManager(
 
     /** 1 to `thumb_max_bytes`, and JPEG, PNG or WebP by its bytes. */
     private fun acceptableThumb(t: ByteArray) = t.isNotEmpty() && t.size <= PhotoLimits.THUMB_MAX_BYTES && ImageType.sniff(t) != null
+
+    /**
+     * [clear], and the cleanups kept for the next opening are forgotten: signing out, a missing vault, a deletion or a wipe
+     * (the mailboxes they were for are not this phone's any more).
+     */
+    fun forget() {
+        try {
+            clear()
+        } finally {
+            discardLater.clear()
+            deleteLater.clear()
+        }
+    }
 
     override fun clear() {
         // Every step runs even if one throws (fail secure); the first failure is rethrown after the last.
@@ -501,15 +645,6 @@ class AttachmentManager(
         steps.finish()
     }
 
-    /** Clears and forgets that the vault has attachments (signed out, or a new vault). */
-    fun reset() {
-        try {
-            clear()
-        } finally {
-            availableFlow.value = false
-        }
-    }
-
     companion object {
         /** The relay refused the upload: the vault's mailbox is full. */
         const val CODE_QUOTA = "quota_exceeded"
@@ -523,10 +658,14 @@ class AttachmentManager(
         /** A clear (a lock, the hold or due state, a wipe, an unlink) came during the fetch or the send. */
         const val CODE_UNAVAILABLE = "unavailable"
 
+        /** Refused while [closed] (the vault not open, the owner check due or held, the release gate): nothing was sent. */
+        const val CODE_CLOSED = "owner_check_required"
+
         internal const val HOOK_BUILD = "build"
         internal const val HOOK_EVENT = "event"
         internal const val HOOK_WIPE = "wipe"
         private const val MAX_FETCHES = 2
+
         private const val KEY_BYTES = 32
 
         /** Whether a failed `message.send` is retried as the same request: no answer, `busy`, or a relay error. */

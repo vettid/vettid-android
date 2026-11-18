@@ -39,7 +39,7 @@ class AttachmentManagerTest {
         val requests = mutableListOf<Pair<String, JsonObject>>()
         val sendFailures = ArrayDeque<Exception>()
         var uploadFailure: Exception? = null
-        var supported: Boolean? = true
+        var thumbFailure: Exception? = null
         var served: ByteArray = ByteArray(0)
         var servedRef: BlobRef? = null
         var seq = 0
@@ -48,12 +48,12 @@ class AttachmentManagerTest {
         var duringUpload: (() -> Unit)? = null
         var duringSend: (() -> Unit)? = null
         var duringThumb: (() -> Unit)? = null
+        var duringContent: (() -> Unit)? = null
         var duringFetch: (() -> Unit)? = null
 
         /** Every thumbnail served, to check that one fetched across a clear was zeroed. */
         val thumbsServed = mutableListOf<ByteArray>()
 
-        override suspend fun supported() = supported
         override fun newRequestId() = "REQ${++seq}"
         override suspend fun upload(blob: ByteArray): String {
             calls += "upload"
@@ -75,10 +75,12 @@ class AttachmentManagerTest {
         override suspend fun thumb(connectionId: String, messageId: String): ByteArray {
             calls += "thumb:$messageId"
             duringThumb?.invoke()
+            thumbFailure?.let { thumbFailure = null; throw it }
             return byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 1).also { thumbsServed += it }
         }
         override suspend fun content(connectionId: String, messageId: String): FetchedAttachment {
             calls += "content:$messageId"
+            duringContent?.invoke()
             return FetchedAttachment(servedRef!!, "2026-10-22T10:00:00Z")
         }
         override suspend fun fetchBlob(blobId: String): ByteArray {
@@ -99,19 +101,10 @@ class AttachmentManagerTest {
 
     private val ops = FakeOps()
     private val sent = mutableListOf<MessageInfo>()
-    private val m = AttachmentManager(ops, onSent = { sent += it })
-
-    @Test
-    fun theProbeReadsReleaseAFromTheAnswer() = runTest {
-        m.probe()
-        assertTrue(m.available.value)
-        ops.supported = false
-        m.probe()
-        assertFalse(m.available.value)
-        ops.supported = null
-        m.probe()
-        assertFalse(m.available.value)
-    }
+    /** The vault is closed: not open on this phone, the owner check due or held, or the release gate checking or pausing. */
+    @Volatile
+    private var closedNow = false
+    private val m = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = { closedNow })
 
     @Test
     fun aPhotoIsUploadedSealedAndSentWithItsReference() = runTest {
@@ -324,7 +317,7 @@ class AttachmentManagerTest {
     @Test
     fun aClearDuringTheUploadSendsNoMessage() = runTest {
         // The upload's best-effort discard runs in this test's scope, after the checks below.
-        val m = AttachmentManager(ops, onSent = { sent += it }, scope = this)
+        val m = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = { closedNow }, scope = this)
         val p = m.begin("c1", "", photo())
         ops.duringUpload = { m.clear() }
         assertEquals(AttachmentManager.CODE_UNAVAILABLE, unavailable { m.send(p) }.code)
@@ -433,5 +426,206 @@ class AttachmentManagerTest {
         m.testHook = null
         m.onEvent("message.new", body)
         assertArrayEquals(thumb, m.cachedThumbnail("c1", "M4"))
+    }
+
+    // --- (Rule 3) no availability probe: every vault the app talks to has attachments; closed means nothing is sent ---
+
+    /** The best-effort discards launched in the test's scope have run (they go through `Dispatchers.IO`). */
+    private suspend fun kotlinx.coroutines.test.TestScope.settleLaunched() {
+        testScheduler.advanceUntilIdle()
+        coroutineContext[kotlinx.coroutines.Job]!!.children.toList().forEach { it.join() }
+    }
+
+    private fun closedRefusal(e: VaultFailure) {
+        assertEquals(FailureKind.OWNER_CHECK_REQUIRED, e.kind)
+        assertEquals(AttachmentManager.CODE_CLOSED, e.code)
+    }
+
+    @Test
+    fun anOpenVaultSendsAndFetchesWithoutAnyProbe() = runTest {
+        assertFalse(m.closed())
+        m.send(m.begin("c1", "", photo()))
+        m.thumbnail("c1", "M5")
+        assertEquals("nothing asked before the first photo", listOf("upload", "send:REQ1", "thumb:M5"), ops.calls)
+    }
+
+    @Test
+    fun closedFollowsTheVault() {
+        closedNow = true
+        assertTrue(m.closed())
+        closedNow = false
+        assertFalse(m.closed())
+    }
+
+    @Test
+    fun whileClosedAPhotoIsNeitherSealedUploadedNorSentAndEnds() = runTest {
+        closedNow = true
+        val p = m.begin("c1", "", photo())
+        closedRefusal(unavailable { m.send(p) })
+        assertTrue(ops.calls.isEmpty())
+        assertTrue("ended as any refused photo", p.thumbnail.all { it == 0.toByte() })
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun aRetryWhileClosedSendsNothingAndACancelDiscardsNothing() = runTest {
+        ops.sendFailures += VaultFailure(FailureKind.NO_RESPONSE)
+        val p = m.begin("c1", "", photo())
+        runCatching { m.send(p) }
+        assertTrue(p.uploaded)
+        ops.calls.clear()
+        closedNow = true
+        closedRefusal(unavailable { m.send(p) })
+        m.cancel(p)
+        assertTrue("no send, no discard while closed", ops.calls.isEmpty())
+        assertTrue(p.thumbnail.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun aCancelAfterTheUploadWhileClosedDiscardsNothing() = runTest {
+        ops.sendFailures += VaultFailure(FailureKind.NO_RESPONSE)
+        val p = m.begin("c1", "", photo())
+        runCatching { m.send(p) }
+        ops.calls.clear()
+        closedNow = true
+        m.cancel(p)
+        assertTrue(ops.calls.isEmpty())
+        assertTrue(p.thumbnail.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun closingDuringTheUploadSendsNoMessageAndNoDiscard() = runTest {
+        val m = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = { closedNow }, scope = this)
+        val p = m.begin("c1", "", photo())
+        ops.duringUpload = { closedNow = true }
+        closedRefusal(unavailable { m.send(p) })
+        settleLaunched()
+        assertEquals(listOf("upload"), ops.calls)
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun aLockDuringTheUploadLaunchesNoDiscard() = runTest {
+        // A lock both clears and closes: the best-effort discard of the upload is not sent then.
+        val m = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = { closedNow }, scope = this)
+        val p = m.begin("c1", "", photo())
+        ops.duringUpload = {
+            closedNow = true
+            m.clear()
+        }
+        assertEquals(AttachmentManager.CODE_UNAVAILABLE, unavailable { m.send(p) }.code)
+        settleLaunched()
+        assertEquals(listOf("upload"), ops.calls)
+    }
+
+    @Test
+    fun aClearDuringTheUploadOfAnOpenVaultStillDiscardsIt() = runTest {
+        val m = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = { closedNow }, scope = this)
+        val p = m.begin("c1", "", photo())
+        ops.duringUpload = { m.clear() }
+        assertEquals(AttachmentManager.CODE_UNAVAILABLE, unavailable { m.send(p) }.code)
+        settleLaunched()
+        assertEquals(listOf("upload", "discard:blob1"), ops.calls)
+    }
+
+    @Test
+    fun whileClosedNothingIsFetchedButMemoryIsStillRead() = runTest {
+        m.thumbnail("c1", "M5")
+        ops.calls.clear()
+        closedNow = true
+        assertArrayEquals("from memory, nothing sent", m.cachedThumbnail("c1", "M5"), m.thumbnail("c1", "M5"))
+        closedRefusal(unavailable { m.thumbnail("c1", "M6") })
+        ops.serve(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + ByteArray(10))
+        closedRefusal(unavailable { m.photo("c1", "M7") })
+        assertTrue(ops.calls.isEmpty())
+    }
+
+    @Test
+    fun closingAfterTheReferenceFetchesNoBlob() = runTest {
+        ops.serve(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + ByteArray(10))
+        ops.duringContent = { closedNow = true }
+        closedRefusal(unavailable { m.photo("c1", "M7") })
+        assertEquals("no fetch, and no delete while closed", listOf("content:M7"), ops.calls)
+    }
+
+    @Test
+    fun closingDuringTheBlobFetchDeletesNothing() = runTest {
+        ops.serve(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + ByteArray(10))
+        ops.duringFetch = { closedNow = true }
+        m.photo("c1", "M7")
+        assertEquals(listOf("content:M7", "fetch:B9"), ops.calls)
+    }
+
+    /** A closed check that lets the first call through and has a lock land right after it. */
+    private fun lockRightAfterTheFirstCheck(): AttachmentManager {
+        var first = true
+        lateinit var mm: AttachmentManager
+        mm = AttachmentManager(ops, onSent = { sent += it }, vaultClosed = {
+            if (first) {
+                first = false
+                mm.clear()
+            }
+            false
+        })
+        return mm
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsAThumbnail() = runTest {
+        val mm = lockRightAfterTheFirstCheck()
+        assertEquals(AttachmentManager.CODE_UNAVAILABLE, unavailable { mm.thumbnail("c1", "M5") }.code)
+        assertNull(mm.cachedThumbnail("c1", "M5"))
+        assertTrue(ops.thumbsServed.single().all { it == 0.toByte() })
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsAPhoto() = runTest {
+        val mm = lockRightAfterTheFirstCheck()
+        ops.serve(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + ByteArray(10))
+        assertEquals(AttachmentManager.CODE_UNAVAILABLE, unavailable { mm.photo("c1", "M7") }.code)
+        ops.calls.clear()
+        ops.serve(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + ByteArray(10))
+        mm.photo("c1", "M7")
+        assertEquals("nothing was kept: fetched again", listOf("content:M7", "fetch:B9", "delete:B9"), ops.calls)
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsAnInlineThumbnail() {
+        val mm = lockRightAfterTheFirstCheck()
+        mm.onEvent("message.new", messageNew("M4"))
+        assertNull(mm.cachedThumbnail("c1", "M4"))
+        mm.onEvent("message.new", messageNew("M4"))
+        assertArrayEquals(thumb, mm.cachedThumbnail("c1", "M4"))
+    }
+
+    private fun messageNew(id: String) = kotlinx.serialization.json.Json.parseToJsonElement(
+        """{"connection_id":"c1","message_id":"$id","direction":"in","text":"","sent_at":"2026-10-15T10:00:00Z",""" +
+            """"attachment":{"att_id":"A4","kind":"photo","size":10,"width":320,"height":240,"state":"fetching",""" +
+            """"thumb":"${Base64s.encodeStd(thumb)}"}}""",
+    ).jsonObject
+
+    @Test
+    fun whileClosedAnInlineThumbnailIsNotKept() {
+        closedNow = true
+        m.onEvent("message.new", messageNew("M4"))
+        assertNull(m.cachedThumbnail("c1", "M4"))
+    }
+
+    @Test
+    fun unsupportedTypeIsAFailureLikeAnyOther() = runTest {
+        ops.sendFailures += VaultOpException("message.send", "unsupported_type")
+        val p = m.begin("c1", "", photo())
+        val e = unavailable { m.send(p) }
+        assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
+        assertFalse(AttachmentManager.retryable(e))
+        assertTrue("final: the photo ends", p.thumbnail.all { it == 0.toByte() })
+        ops.thumbFailure = VaultOpException("message.attachment.get", "unsupported_type")
+        assertEquals("unsupported_type", unavailable { m.thumbnail("c1", "M5") }.code)
+        // Nothing is turned off: the next photo and the next thumbnail go as before.
+        assertFalse(m.closed())
+        m.send(m.begin("c1", "", photo()))
+        m.thumbnail("c1", "M5")
+        assertEquals(2, ops.calls.count { it.startsWith("send:") })
+        assertEquals(2, ops.calls.count { it == "thumb:M5" })
     }
 }

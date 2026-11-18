@@ -6,6 +6,7 @@ import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.FetchedPhoto
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.PendingPhoto
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.media.ImageType
 import com.vettid.core.media.PhotoException
@@ -23,33 +24,56 @@ import java.time.Instant
 class FakeAttachments : AttachmentsRepository {
     val calls = mutableListOf<String>()
     val fail = mutableMapOf<String, Exception>()
-    val availableFlow = MutableStateFlow(true)
-    override val available: StateFlow<Boolean> = availableFlow
+
+    /** [closed]: the vault not open, the owner check due or held, or the release gate checking or pausing. */
+    @Volatile
+    var closedNow = false
+
+    /** Run at each [closed] check (a clear landing right after it). */
+    var duringClosedCheck: (() -> Unit)? = null
+
+    override fun closed(): Boolean = closedNow.also { duringClosedCheck?.invoke() }
+
     var seq = 0
 
     /** Every photo [prepare] made, to check that a cancel wiped them. */
     val prepared = mutableListOf<PreparedPhoto>()
+
+    /** Run while a picture or a shot is prepared (a clear landing then). */
+    var duringPrepare: (() -> Unit)? = null
+
+    /** When set, a shot's preparation waits for it (a preparation on its way). */
+    var prepareGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 
     private fun call(name: String) {
         calls += name
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun probe() = call("probe")
-
     override suspend fun prepare(source: ByteArray): PreparedPhoto {
         call("prepare")
+        duringPrepare?.invoke()
         if (source.isEmpty()) throw PhotoException(PhotoFailure.UNREADABLE)
         return PreparedPhoto(source.copyOf(), byteArrayOf(1, 2, 3), 2_560, 1_920).also { prepared += it }
     }
 
     override suspend fun prepare(shot: Bitmap): PreparedPhoto {
         call("prepareShot")
-        return PreparedPhoto(ByteArray(10), byteArrayOf(1), shot.width, shot.height)
+        duringPrepare?.invoke()
+        prepareGate?.await()
+        return PreparedPhoto(ByteArray(10) { 5 }, byteArrayOf(1), shot.width, shot.height).also { prepared += it }
     }
 
-    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto {
+    /** The clear mark each [begin] was given. */
+    val beginMarks = mutableListOf<Long>()
+
+    /** [AttachmentsRepository.reopened]: a test moves it as the vault opening again. */
+    val reopenedFlow = MutableStateFlow(0L)
+    override val reopened: StateFlow<Long> = reopenedFlow
+
+    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long): PendingPhoto {
         calls += "begin:$caption"
+        beginMarks += clearMark
         return AttachmentAccess.pending(connectionId, caption, photo, "REQ${++seq}")
     }
 
@@ -59,6 +83,8 @@ class FakeAttachments : AttachmentsRepository {
     override suspend fun send(p: PendingPhoto): MessageInfo {
         calls += "send:${p.requestId}"
         sendGate?.await()
+        // As the real one: refused while closed (checked again just before `message.send`).
+        if (closedNow) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
         fail.remove("send")?.let { throw it }
         return MessageInfo(p.connectionId, "M${p.requestId}", true, p.caption, Instant.EPOCH, delivered = false, read = false)
     }

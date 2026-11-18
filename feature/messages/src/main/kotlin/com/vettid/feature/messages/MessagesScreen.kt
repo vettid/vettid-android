@@ -674,8 +674,8 @@ private fun Composer(state: ConversationUiState, name: String, actions: Conversa
             maxLines = COMPOSER_LINES,
             modifier = Modifier.weight(1f).testTag("composer"),
         )
-        // The photo button only for a vault of release A (§10.5.1 "Compatibility").
-        if (state.photosAvailable) PhotoButton(actions.photos, enabled = state.photoDraft == null)
+        // Every vault the app talks to has photos (Rule 3): the button is always offered with the composer.
+        PhotoButton(actions.photos, enabled = state.photoDraft == null)
         Spacer(Modifier.width(Spacing.s))
         FilledIconButton(
             onClick = actions.onSend,
