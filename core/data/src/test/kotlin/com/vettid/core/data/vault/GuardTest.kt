@@ -147,4 +147,20 @@ class GuardTest {
             CheckSink.counter = null
         }
     }
+
+    /**
+     * (VAULT-MESSAGING §11.11.7, §11.12.1) A member-API answer whose `user_guid` is no `user_guid` is malformed
+     * (`CryptoException.Format`, as one without it): the existing failure for a malformed answer, before anything of it is used.
+     */
+    @Test
+    fun aMalformedAnswerIsTheExistingFailure() = runTest {
+        val f = try {
+            vaultGuard { throw com.vettid.core.crypto.CryptoException.Format("json: user_guid is not a user_guid") }
+            error("no failure")
+        } catch (e: VaultFailure) {
+            e
+        }
+        assertEquals(FailureKind.OTHER, f.kind)
+        assertEquals("crypto", f.code)
+    }
 }

@@ -237,8 +237,15 @@ class MemberApiClient(
 
     private fun redeemed(o: JsonObject?): Redeemed {
         val r = o ?: throw IOException("member API: empty")
-        return Redeemed(r.string("vault_id"), r.string("user_guid"), r.optString("email_hint") ?: "")
+        return Redeemed(r.string("vault_id"), userGuid(r), r.optString("email_hint") ?: "")
     }
+
+    /**
+     * The answer's `user_guid` (the redeem's, §11.12.1; the claim's, §11.11.7): one that is no `user_guid`
+     * ([UserGuids.valid]) makes the answer malformed, as a missing one does, so nothing of it is kept or used.
+     */
+    private fun userGuid(o: JsonObject): String =
+        o.string("user_guid").takeIf { UserGuids.valid(it) } ?: throw CryptoException.Format("json: user_guid is not a user_guid")
 
     // --- vault (alternate channel) ---
 
@@ -402,7 +409,7 @@ class MemberApiClient(
     suspend fun recoveryClaim(vaultId: String, recoveryId: String, appKey: ByteArray): Claimed {
         val body = JsonBuilder().string("vault_id", vaultId).string("recovery_id", recoveryId).base64("app_key", appKey).build()
         val o = call("POST", CLAIM, body, vault = vaultId) ?: throw IOException("member API: empty")
-        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "", o.optString("vault_id"), o.optString("recovery_id"))
+        return Claimed(userGuid(o), o.optString("email_hint") ?: "", o.optString("vault_id"), o.optString("recovery_id"))
     }
 
     /**
@@ -415,7 +422,7 @@ class MemberApiClient(
         require(RecoveryCodes.isLocator(locator)) { "not a locator" }
         val body = JsonBuilder().string("locator", locator).base64("app_key", appKey).build()
         val o = call("POST", CLAIM, body, vault = "") ?: throw IOException("member API: empty")
-        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "", o.string("vault_id"), o.string("recovery_id"))
+        return Claimed(userGuid(o), o.optString("email_hint") ?: "", o.string("vault_id"), o.string("recovery_id"))
     }
 
     /**

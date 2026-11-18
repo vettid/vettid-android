@@ -240,6 +240,14 @@ class VaultStateException(message: String, val type: String? = null, val code: S
  */
 class PairingRejectedException : IOException("vault client: pairing rejected on the owner's phone")
 
+/**
+ * (VAULT-MESSAGING §6.7.1) A transfer's `device.paired` without a valid `user_guid` (1-128 printable ASCII), which every
+ * vault release the app accepts sends and which this phone's unlocks need (§11.4): the transfer failed on this phone, and
+ * the handler dropped it as any unpaired transfer is dropped ([VaultDevice.awaitTransfer]). Also a paired transfer stored
+ * without one by an older app build.
+ */
+class TransferWithoutUserGuidException : IOException("vault client: the transfer's device.paired has no valid user_guid")
+
 /** A scanned or pasted code is not a direct-transfer code (§6.7.1: a pairing QR of kind `p`, bundle kind `app`). */
 class NotATransferCodeException(val expired: Boolean = false) :
     IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
@@ -249,6 +257,10 @@ data class TransferInState(
     val startedAt: Instant,
     val sas: String?,
     val paired: Boolean,
+    /**
+     * The member's `user_guid` from the transfer's `device.paired`: set whenever [paired] (a `device.paired` without a valid
+     * one is never applied), null before. A paired record without one was stored by an older app build: never completed.
+     */
     val userGuid: String?,
     /** The scanned code's relay `r` and claim id `c` (GC #6474), null in a record written before them. */
     val codeRelay: String? = null,
@@ -1213,11 +1225,18 @@ class VaultDevice private constructor(
      * Waits for `device.paired`, or (0.10.5) `device.pair.rejected`, which ends the
      * wait with [PairingRejectedException] (§6.7: the owner rejected the pairing or
      * transfer after this device's `hs.fin`; [process] has already dropped its state).
-     * Returns a transfer's `user_guid` (0.17.0, §6.7.1), or null (not a transfer, or a vault release before 0.17.0).
+     * Returns a transfer's `user_guid` (§6.7.1), or null for an enrollment's or a recovery's.
+     *
+     * [transfer]: the wait of a transfer to this phone. It ends with [TransferWithoutUserGuidException] once the handler
+     * dropped the transfer for a `device.paired` without a valid `user_guid`, and nothing of such a `device.paired` is
+     * applied here either (fail closed).
      */
-    private suspend fun awaitPaired(timeout: Duration): String? {
-        val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout)
+    private suspend fun awaitPaired(timeout: Duration, transfer: Boolean = false): String? {
+        val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout) {
+            if (transfer && droppedNoUserGuid) TransferWithoutUserGuidException() else null
+        }
         if (ev.type == TYPE_PAIR_REJECTED) throw PairingRejectedException()
+        if (transfer && transferUserGuid(ev.body) == null) throw TransferWithoutUserGuidException()
         val guid = lock.withLock {
             val o = ev.body
             st.deviceId = VaultJson.str(o, "device_id")
@@ -1416,6 +1435,7 @@ class VaultDevice private constructor(
                 }
             }
             st.transferIn = TransferInRecord(at.toEpochMilli(), attestKey = attestedKey(), codeRelay = code.relay, codeClaim = code.claim)
+            st.noUserGuidDrop = false // a new transfer: an earlier one's failure is not this one's (saved with its record)
             st.scanCode = null // the code is the transfer's from here on
             save()
         }
@@ -1504,14 +1524,36 @@ class VaultDevice private constructor(
     /**
      * Waits for the transfer's `device.paired` (the old app's approval completes
      * the transfer, §6.7.1) or `device.pair.rejected` ([PairingRejectedException]).
-     * Returns the member's `user_guid` from it (0.17.0), which this phone's unlocks
-     * need, or null when the vault sent none (a release before 0.17.0): the transfer
-     * is complete either way.
+     * Returns the member's `user_guid` from it, which this phone's unlocks need (§11.4).
+     * A `device.paired` without a valid one is a failed transfer, dropped by the handler
+     * before anything of it is stored ([TransferWithoutUserGuidException]); so is a paired
+     * transfer an older app build stored without one.
      */
-    suspend fun awaitTransfer(timeout: Duration): String? {
+    suspend fun awaitTransfer(timeout: Duration): String {
         // (A6 audit N1) Applied by the handler already (a restart, or after the screen stopped waiting): nothing to wait for.
-        lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }?.let { return it.userGuid }
-        return awaitPaired(timeout)
+        lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }
+            ?.let { return it.userGuid?.takeIf { g -> validUserGuid(g) } ?: throw TransferWithoutUserGuidException() }
+        // A transfer already dropped for its user_guid ends the wait at once (its mark, before the inbox is searched).
+        return awaitPaired(timeout, transfer = true) ?: throw TransferWithoutUserGuidException()
+    }
+
+    /**
+     * The last transfer to this phone was dropped for a `device.paired` without a valid `user_guid` ([dropNoUserGuid]),
+     * and the member has not been told yet ([DeviceState.noUserGuidDrop], saved with the drop, so it outlives a restart).
+     * Cleared when a new transfer starts and once told ([takeNoUserGuidDrop]). Read by the
+     * transfer's wait and by the settlement, whose own drop may find the transfer already dropped by the handler.
+     */
+    val droppedNoUserGuid: Boolean get() = st.noUserGuidDrop
+
+    /**
+     * The member is told now that the move stopped ([droppedNoUserGuid]): true once, and the mark is cleared and saved.
+     * False when there is nothing to tell.
+     */
+    suspend fun takeNoUserGuidDrop(): Boolean = lock.withLock {
+        if (!st.noUserGuidDrop) return@withLock false
+        st.noUserGuidDrop = false
+        save()
+        true
     }
 
     /**
@@ -1731,10 +1773,53 @@ class VaultDevice private constructor(
         val tr = st.transferIn ?: return
         if (st.deviceId != null || tr.paired) return
         val o = VaultJson.parseObject(body)
-        if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return
+        // Checked first by the handler ([lacksUserGuid]): a device.paired that gets here carries a valid user_guid.
+        val guid = transferUserGuid(o) ?: return
         applyPaired(o)
-        st.transferIn = tr.copy(paired = true, userGuid = transferUserGuid(o))
+        st.transferIn = tr.copy(paired = true, userGuid = guid)
         pairedState.value = true
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) Whether [body], a `device.paired` that arrived for the transfer this device started and is
+     * still waiting for, lacks what every vault release the app accepts sends to a transferred app: `transfer: true` and a
+     * valid `user_guid` ([transferUserGuid]). Such an answer is a failed transfer ([dropNoUserGuid]).
+     */
+    private fun lacksUserGuid(body: ByteArray): Boolean {
+        val tr = st.transferIn ?: return false
+        if (st.deviceId != null || tr.paired) return false
+        return transferUserGuid(VaultJson.parseObject(body)) == null
+    }
+
+    /**
+     * The transfer's `device.paired` had no valid `user_guid` ([lacksUserGuid]): the transfer failed on this phone. Nothing
+     * of that `device.paired` is stored (no device id, vault id, release or token); the transfer is dropped as every unpaired
+     * transfer is ([dropTransferLocked]: the handshake, the session and the SAS, with [DeviceState.droppedTransfer] naming
+     * the keys the app then deletes), and the transfer's wait ends ([awaitTransfer]). The handler saves the drop and settles
+     * the keys after the message ([handleLocked]).
+     */
+    private fun dropNoUserGuid() {
+        dropPairing()
+        st.vault = null
+        st.noUserGuidDrop = true // saved with the drop and the seen mark, by the handler
+        inboxVersion.value++ // wakes the transfer's wait, which reads the mark
+    }
+
+    /**
+     * A `device.paired` in the handler. A transfer's without a valid user_guid is a failed transfer ([lacksUserGuid]),
+     * checked before anything of it is stored or sent (its token, its `device.features`): dropped ([dropNoUserGuid]), and
+     * false. Otherwise its token, the transfer's pairing ([applyTransferPaired]) and the epoch's `device.features`; true.
+     */
+    private fun devicePairedLocked(body: ByteArray): Boolean {
+        if (lacksUserGuid(body)) {
+            dropNoUserGuid()
+            return false
+        }
+        storeVaultToken(VaultJson.parseObject(body))
+        applyTransferPaired(body)
+        // §10.2 (0.87.0): device.features after each epoch this device activates; the pairing's is this one.
+        queueFeaturesLocked()
+        return true
     }
 
     private fun applyPaired(o: JsonObject) {
@@ -2155,11 +2240,14 @@ class VaultDevice private constructor(
         types: Set<String>,
         timeout: Duration,
         match: (JsonObject) -> Boolean = { true },
+        /** Looked at before each search of the inbox (it moves [inboxVersion]): a failure that ends the wait. */
+        abort: () -> Throwable? = { null },
     ): VaultMessage =
         withTimeout(timeout.toMillis()) {
             var found: VaultMessage? = null
             while (found == null) {
                 val v = inboxVersion.value
+                abort()?.let { throw it }
                 found = synchronized(inbox) {
                     val i = inbox.indexOfFirst { it.type in types && match(it.body) }
                     if (i >= 0) inbox.removeAt(i) else null
@@ -2399,12 +2487,8 @@ class VaultDevice private constructor(
         when (inner.type) {
             // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
             // or recovery a fresh one); it replaces the token of hs.resp before maintain() looks at it.
-            "device.paired" -> {
-                storeVaultToken(VaultJson.parseObject(inner.body))
-                applyTransferPaired(inner.body)
-                // §10.2 (0.87.0): device.features after each epoch this device activates; the pairing's is this one.
-                queueFeaturesLocked()
-            }
+            // §6.7.1: a transfer's answer without a valid user_guid is a failed transfer, not handed on as an event either.
+            "device.paired" -> if (!devicePairedLocked(inner.body)) return
             // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
             TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
@@ -3703,9 +3787,6 @@ class VaultDevice private constructor(
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)
         internal val EMPTY = JsonObject(emptyMap())
-        private const val USER_GUID_MAX = 128
-        private const val PRINTABLE_MIN = 0x21
-        private const val PRINTABLE_MAX = 0x7e
 
         /** The unlock result of §11.7.1 (0.27.0): the release does not accept the signer recorded for this key. */
         const val CODE_SIGNER_REFUSED = "signer_refused"
@@ -3717,9 +3798,14 @@ class VaultDevice private constructor(
          */
         internal fun transferUserGuid(o: JsonObject): String? {
             if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return null
-            val g = VaultJson.str(o, "user_guid") ?: return null
-            return g.takeIf { it.length in 1..USER_GUID_MAX && it.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX } }
+            return VaultJson.str(o, "user_guid")?.takeIf(::validUserGuid)
         }
+
+        /**
+         * A `user_guid` this phone may use (VAULT-MESSAGING §6.7.1, §11.4): [com.vettid.core.altchan.UserGuids.valid], the
+         * one check for every `user_guid` that enters the app and every stored value read back (fail closed).
+         */
+        fun validUserGuid(g: String): Boolean = com.vettid.core.altchan.UserGuids.valid(g)
 
         /**
          * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that

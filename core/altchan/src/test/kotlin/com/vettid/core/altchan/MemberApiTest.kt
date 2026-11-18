@@ -42,6 +42,9 @@ class MemberApiTest {
     private var manifestFailFirst = false
     private var instanceMovedFirst = false
     private var recoveryResult = """{"ok":true}"""
+
+    /** The redeem's and the claims' `user_guid` member as sent (JSON, with its comma), or "" for none. */
+    private var guidMember = """"user_guid":"guid-1","""
     private var slotCode: String? = null
     private var expireFirstRegister = false
     private var unauthorizedSecondRegister = false
@@ -182,14 +185,14 @@ class MemberApiTest {
                 val o = StrictJson.parseObject(body)
                 assertEquals(Base64s.encodeStd(appKey.spki()), o.string("app_key"))
                 val ok = o.optString("secret") == "AbCdEfGhIjKlMnOpQrStUv" || (o.optString("email") == "sam@example.org" && o.optString("code") == "K7QM4XRP")
-                if (ok) resp(200, """{"vault_id":"0123456789abcdef0123456789abcdef","user_guid":"guid-1","email_hint":"s***@example.org"}""")
+                if (ok) resp(200, """{"vault_id":"0123456789abcdef0123456789abcdef",$guidMember"email_hint":"s***@example.org"}""")
                 else resp(404, """{"error":"invalid_code","code":"invalid_code"}""")
             }
             "/api/vault/recovery/claim" -> {
                 val o = StrictJson.parseObject(body)
                 assertEquals(Base64s.encodeStd(appKey.spki()), o.string("app_key"))
                 if (o.has("locator")) return claimByLocator(String(body), o.string("locator"), f["vault"]!!)
-                if (o.string("recovery_id") == "01JA0RECVERY0000000000001X") resp(200, """{"user_guid":"guid-1","email_hint":"s***@example.org"}""")
+                if (o.string("recovery_id") == "01JA0RECVERY0000000000001X") resp(200, """{$guidMember"email_hint":"s***@example.org"}""")
                 else resp(409, """{"error":"recovery_not_available","code":"recovery_not_available"}""")
             }
             "/api/vault/status" -> resp(200, statusBody)
@@ -211,7 +214,7 @@ class MemberApiTest {
         return when (locator) {
             "7ZK3M9QX2HTD" -> resp(
                 200,
-                """{"user_guid":"guid-1","email_hint":"s***@example.org","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"01JA0RECVERY0000000000001X"}""",
+                """{$guidMember"email_hint":"s***@example.org","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"01JA0RECVERY0000000000001X"}""",
             )
             "N0TAVA11AB1E" -> resp(409, """{"error":"recovery_not_available","code":"recovery_not_available","message":"No recovery code is valid now"}""")
             "RATE11M1TED0" -> MockResponse.Builder().code(429).addHeader("Retry-After", "754").addHeader("Content-Type", "application/json")
@@ -813,6 +816,41 @@ class MemberApiTest {
         vault = "0123456789abcdef0123456789abcdef"
         a.vaultStatusAnswer()
         assertEquals("/api/vault/status" to "0123456789abcdef0123456789abcdef", signed.last())
+    }
+
+    /**
+     * (VAULT-MESSAGING §11.4, §11.11.7, §11.12.1) The redeem's and both claims' `user_guid` go through the one check
+     * ([UserGuids.valid]): an answer whose `user_guid` is none, not a string, or no `user_guid` (empty, too long, a space,
+     * non-ASCII, a control character) is a malformed answer, as one without it always was: [CryptoException], nothing returned.
+     */
+    @Test
+    fun anAnswerWhoseUserGuidIsNoUserGuidIsMalformed() = runBlocking<Unit> {
+        val a = api(MemberAuth.AppKey(appKey) { null })
+        val bad = listOf(
+            "", """"user_guid":"",""", """"user_guid":"${"a".repeat(129)}",""", """"user_guid":"a b",""", """"user_guid":"é",""",
+            """"user_guid":"a\u0007b",""", """"user_guid":"a\nb",""", """"user_guid":"a\tb",""", """"user_guid":"\u007f",""",
+            """"user_guid":"\ud83d\ude00",""", """"user_guid":7,""", """"user_guid":null,""", """"user_guid":["g"],""",
+        )
+        val calls: List<Pair<String, suspend () -> Any>> = listOf(
+            "redeem (secret)" to { a.redeemSecret("AbCdEfGhIjKlMnOpQrStUv", appKey.spki()) },
+            "redeem (typed)" to { a.redeemTyped("sam@example.org", "K7QM4XRP", appKey.spki()) },
+            "claim (scanned)" to { a.recoveryClaim("qr-vault", "01JA0RECVERY0000000000001X", appKey.spki()) },
+            "claim (typed)" to { a.recoveryClaimByLocator("7ZK3M9QX2HTD", appKey.spki()) },
+        )
+        for (m in bad) {
+            guidMember = m
+            for ((name, call) in calls) {
+                val e = runCatching { call() }
+                assertTrue("$name with [$m]: ${e.getOrNull()}", e.exceptionOrNull() is com.vettid.core.crypto.CryptoException)
+            }
+        }
+        // The edges that are a user_guid.
+        for (g in listOf("a".repeat(128), "!~", "8f14e45f-ceea-467f-a0e6-1e1e2c2b5a3d")) {
+            guidMember = """"user_guid":"$g","""
+            assertEquals(g, a.redeemSecret("AbCdEfGhIjKlMnOpQrStUv", appKey.spki()).userGuid)
+            assertEquals(g, a.recoveryClaim("qr-vault", "01JA0RECVERY0000000000001X", appKey.spki()).userGuid)
+            assertEquals(g, a.recoveryClaimByLocator("7ZK3M9QX2HTD", appKey.spki()).userGuid)
+        }
     }
 
     /** VAULT-MESSAGING 0.25.0 §11.11.10, MEMBER-API 2.4.0: the typed form's claim by locator. */

@@ -91,15 +91,10 @@ data class TransferInUiState(
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorShown: String? = null,
     val errorCode: String? = null,
-    /**
-     * [TransferInStep.DONE]: the vault gave this phone the member's `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), so it
-     * unlocks later. False after a transfer from a vault release before 0.17.0: the screen says it cannot unlock yet.
-     */
-    val canUnlockLater: Boolean = true,
     /** (A6 audit N1) The member asked to cancel a transfer whose code was shown: confirmed first. */
     val confirmCancel: Boolean = false,
 ) {
-    override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error, canUnlockLater=$canUnlockLater)"
+    override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error)"
 }
 
 /** What the transfer screens on the new phone can ask for. */
@@ -156,12 +151,26 @@ class TransferInViewModel @Inject constructor(
                 move.transferInWaiting()
             } catch (_: VaultFailure) {
                 null
-            } ?: return@launch
+            } ?: return@launch toldStoppedMove()
             if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return@launch
             val deadline = w.startedAt.plus(WINDOW)
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
             waiter = viewModelScope.launch { waitForApproval(deadline) { move.awaitTransferIn() } }
         }
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) No transfer waits: if the last one stopped for its `user_guid` before a restart, its
+     * existing "The move stopped on this phone", once (the repository clears it as it is read).
+     */
+    private suspend fun toldStoppedMove() {
+        if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return
+        val stopped = try {
+            move.takeTransferStopped()
+        } catch (_: VaultFailure) {
+            false
+        }
+        if (stopped) state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
     }
 
     override fun scan() = state.update { it.copy(step = TransferInStep.SCAN, inputProblem = null, error = null) }
@@ -266,13 +275,13 @@ class TransferInViewModel @Inject constructor(
      * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository
      * collects for about 90 s (the relay's visibility timeout + 25 s + 5 s) and then completes or drops; nothing here extends it.
      */
-    private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Boolean) {
+    private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Unit) {
         startTicker(deadline)
         try {
-            val canUnlock = wait()
+            wait()
             ticker?.cancel()
             val phoneSecret = vault.usesPhoneSecret
-            state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock, phoneSecret = phoneSecret) }
+            state.update { it.copy(step = TransferInStep.DONE, sas = null, phoneSecret = phoneSecret) }
         } catch (e: VaultFailure) {
             ticker?.cancel()
             state.update {
