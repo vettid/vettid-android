@@ -164,7 +164,7 @@ class SocialManager internal constructor(
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
 
-    /** `pending.list` (§10.4.2): the cut, the ticket of each read, what an older release answered. */
+    /** `pending.list` (§10.4.2): the cut and the ticket of each read. */
     private val pending = PendingAsks()
     private val pendingFailureFlow = MutableStateFlow<VaultFailure?>(null)
 
@@ -695,7 +695,7 @@ class SocialManager internal constructor(
         try {
             refreshRequests()
         } catch (_: VaultFailure) {
-            // a release before 0.10.2 has no request list; the screens retry
+            // a failed read is left to the screens, which retry
         }
     }
 
@@ -1644,7 +1644,7 @@ class SocialManager internal constructor(
                 .mapNotNullTo(listed) { (it as? JsonObject)?.let { o -> ApprovalParser.grant(o, t) } }
             grantsOk = true
         } catch (_: VaultFailure) {
-            // an older release without grants: nothing listed
+            // a failed list covers nothing: what was known of it stays (grantsOk false)
         }
         try {
             vaultGuard(resend = true) { a.criticalUseList() }["incoming"].let { it as? JsonArray }.orEmpty()
@@ -2111,43 +2111,34 @@ class SocialManager internal constructor(
 
     /**
      * Includes [include] and declines [decline] in one change (§10.12 `share.decide{include, decline}`, 0.21.0: one
-     * flush, nothing changed on an error); declined items are not asked again. A vault before 0.21.0 refuses that
-     * form (`bad_request`, nothing changed): the two lists then go as two `{items, approve}` calls.
+     * flush, nothing changed on an error); declined items are not asked again. Any refusal, `bad_request` included, is
+     * thrown and nothing else is sent (the app requires the vault's current release, which takes this form).
      */
     override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) = decideShareWith(
         ruleId,
         include,
         decline,
-        both = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
-        one = { items, approve -> vaultGuard { api().shareDecide(ruleId, items, approve) } },
+        send = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
     )
 
     internal suspend fun decideShareWith(
         ruleId: String,
         include: List<String>,
         decline: List<String>,
-        both: suspend () -> JsonObject,
-        one: suspend (items: List<String>, approve: Boolean) -> JsonObject,
+        send: suspend () -> JsonObject,
     ) {
         if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
         // The subject, before the decision takes the rule's question out of the list and the events.
         val subject = subjectOfRule(ruleId)
-        val answers = mutableListOf<JsonObject>()
-        decideRun("share:$ruleId", whole = false) {
-            SharePending.decide(
-                include,
-                decline,
-                both = { answers.add(both()) },
-                one = { items, approve -> answers.add(one(items, approve)) },
-            )
-        }
+        var answer: JsonObject? = null
+        decideRun("share:$ruleId", whole = false) { answer = send() }
         // The vault's answer says what the decision changed (it also reaches the subject's other rules); only an answer
         // without either list falls back to what was sent.
-        val told = answers.filter { "included" in it || "declined" in it }
-        val done = if (told.isEmpty()) {
+        val told = answer?.takeIf { "included" in it || "declined" in it }
+        val done = if (told == null) {
             (include + decline).toSet()
         } else {
-            told.flatMap { listOf("included", "declined").flatMap { k -> ids(it, k) } }.toSet()
+            listOf("included", "declined").flatMap { k -> ids(told, k) }.toSet()
         }
         val read = applyShareDecided(ruleId, done, subject)
         // Sent but not named by the answer: the vault did not hold them pending. They leave this rule's question here

@@ -15,7 +15,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.time.Instant
 
-/** VAULT-MESSAGING 0.21.0 §10.12: pending share decisions from `share.pending.list`, and one `share.decide` for both lists. */
+/** VAULT-MESSAGING 0.21.0 §10.12: pending share decisions from `share.pending.list`. */
 class SharePendingTest {
     private val t = Instant.parse("2026-10-08T12:00:00Z")
 
@@ -93,35 +93,6 @@ class SharePendingTest {
         }
     }
 
-    @Test
-    fun aMixedDecisionIsOneCall() = runTest {
-        val calls = mutableListOf<String>()
-        SharePending.decide(listOf("a", "b"), listOf("c"), both = { calls += "both" }, one = { i, ok -> calls += "$i:$ok" })
-        assertEquals(listOf("both"), calls)
-    }
-
-    @Test
-    fun anOlderVaultGetsTwoCalls() = runTest {
-        val calls = mutableListOf<String>()
-        SharePending.decide(
-            listOf("a"), listOf("c"),
-            both = { throw VaultFailure(FailureKind.OTHER, "bad_request") },
-            one = { i, ok -> calls += "$i:$ok" },
-        )
-        assertEquals(listOf("[a]:true", "[c]:false"), calls)
-        calls.clear()
-        SharePending.decide(emptyList(), listOf("c"), both = { throw VaultFailure(FailureKind.OTHER, "bad_request") }, one = { i, ok -> calls += "$i:$ok" })
-        assertEquals(listOf("[c]:false"), calls)
-        // A limit (say) changed nothing and is the member's to see: not retried.
-        try {
-            SharePending.decide(listOf("a"), emptyList(), both = { throw VaultFailure(FailureKind.LIMIT, "limit") }, one = { _, _ -> fail() })
-            fail()
-        } catch (e: VaultFailure) {
-            assertEquals(FailureKind.LIMIT, e.kind)
-        }
-    }
-
-    /** 0.23.0: entries carry `ask_rule_id` and `shared`; each decision gets its subject's rules, to name the one that asks. */
     @Test
     fun entriesSayWhichRuleAsksAndWhatIsAlreadyShared() = runTest {
         val two = o(

@@ -5,8 +5,7 @@ package com.vettid.core.data.social
  * rules of the same connection (or agent) is asked once. Since 0.23.0 the vault applies a `share.decide` of the item
  * in one rule to every rule of that subject where it waits (and a decline also where it is included), so the app shows
  * it in the first of those rules (by `rule_id`, the order `share.pending.list` keeps) and notes the others in
- * [ShareItem.alsoIn]. A rule left with no item of its own is not shown. With a vault before 0.23.0 the item comes back
- * in the next rule after the first answer, as that vault still asks per rule.
+ * [ShareItem.alsoIn]. A rule left with no item of its own is not shown.
  */
 object ShareQuestions {
     fun dedupe(approvals: List<Approval>): List<Approval> {

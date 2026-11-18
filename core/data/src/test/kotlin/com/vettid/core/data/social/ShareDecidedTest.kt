@@ -196,7 +196,34 @@ class ShareDecidedTest {
     }
 
     private suspend fun SocialManager.decide(rule: String, include: List<String>, answer: String) =
-        decideShareWith(rule, include, emptyList(), both = { o(answer) }, one = { _, _ -> o(answer) })
+        decideShareWith(rule, include, emptyList(), send = { o(answer) })
+
+    /**
+     * The app requires the vault's current release, which takes `share.decide{include, decline}`: a `bad_request` (or a
+     * `limit`) is a refusal like any other. It is thrown to the screen, nothing else is sent (no `{items, approve}` calls),
+     * and the question stays as it was, its feed item unread.
+     */
+    @Test
+    fun aRefusalIsThrownWithNoSecondCallAndTheQuestionStays() = runTest {
+        listOf(VaultFailure(FailureKind.OTHER, "bad_request"), VaultFailure(FailureKind.LIMIT, "limit")).forEach { refusal ->
+            val m = manager()
+            m.refresh(entry("r1", "i1"), entry("r1", "i2"))
+            runCurrent()
+            feedReads.clear()
+            var sent = 0
+            try {
+                m.decideShareWith("r1", listOf("i1"), listOf("i2"), send = { sent++; throw refusal })
+                error("${refusal.code} must be thrown")
+            } catch (e: VaultFailure) {
+                assertEquals(refusal.kind, e.kind)
+                assertEquals(refusal.code, e.code)
+            }
+            runCurrent()
+            assertEquals("sent once, nothing after it", 1, sent)
+            assertEquals(setOf("i1", "i2"), m.items("r1")?.toSet())
+            assertTrue(feedReads.isEmpty())
+        }
+    }
 
     @Test
     fun aDecisionMadeHereLeavesTheSubjectsOtherRule() = runTest {
@@ -217,6 +244,18 @@ class ShareDecidedTest {
         m.decide("r1", listOf("i1"), """{"included":["i1","i3"],"declined":[]}""")
         runCurrent()
         assertNull(m.share("r2"))
+    }
+
+    /** A decline's answer too: the items it names as declined leave, also another rule's (a decline reaches the subject). */
+    @Test
+    fun theAnswersDeclinedItemsLeaveToo() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r2", "i3"), entry("r2", "i4"))
+        runCurrent()
+        m.decideShareWith("r1", emptyList(), listOf("i1"), send = { o("""{"included":[],"declined":["i1","i3"]}""") })
+        runCurrent()
+        assertNull(m.share("r1"))
+        assertEquals(listOf("i4"), m.items("r2"))
     }
 
     @Test
@@ -275,7 +314,7 @@ class ShareDecidedTest {
 
     private suspend fun SocialManager.decideNotFound(rule: String, include: List<String>) {
         try {
-            decideShareWith(rule, include, emptyList(), both = { throw VaultFailure(FailureKind.NOT_FOUND) }, one = { _, _ -> o("{}") })
+            decideShareWith(rule, include, emptyList(), send = { throw VaultFailure(FailureKind.NOT_FOUND) })
             error("expected not_found")
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.NOT_FOUND, e.kind)
