@@ -52,9 +52,13 @@ class FakeVotes : VotesRepository {
     /** Runs when [refresh] is asked, before it answers (the vault's list changing meanwhile). */
     var onRefresh: () -> Unit = {}
 
-    override suspend fun refresh() {
+    /** What [refresh] answers: false as for a read a lock voided. */
+    var refreshApplied = true
+
+    override suspend fun refresh(): Boolean {
         call("refresh")
         onRefresh()
+        return refreshApplied
     }
 
     override fun refreshQuietly() {

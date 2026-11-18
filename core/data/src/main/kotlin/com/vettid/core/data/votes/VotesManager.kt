@@ -155,8 +155,11 @@ interface VotesRepository {
     /** **Close it now**: locks the window; the notice goes only when that went through, else the failure is thrown. */
     suspend fun closeWindowNow()
 
-    /** Reads `vote.list`. Throws the vault's failure. */
-    suspend fun refresh()
+    /**
+     * Reads `vote.list`. True when the list read was applied; false when a lock or a hold came while it was out, which voids
+     * it (nothing of it is written). Throws the vault's failure.
+     */
+    suspend fun refresh(): Boolean
 
     fun refreshQuietly()
 
@@ -328,6 +331,12 @@ class VotesManager(
     private var generation = 0
 
     /**
+     * Bumped by [stopSync] (a lock or hold through [clear], and the release gate's pause, which stops the sync without a
+     * clear): a [syncOnce] that began before it sends nothing more, whatever stage it is at. Under [lock].
+     */
+    private var syncRun = 0L
+
+    /**
      * When the recheck on open last downloaded rows.json for a vote (epoch ms, by [VoteKeys.of]; #319 item 2), as [stamps]
      * keeps it (the lead's review of #321, M1: a cold start must not reset the cap). Read lazily under [attemptsSync]; not
      * cleared by a lock (that is when the recheck runs again); a wipe ([forgetStored]) clears it. No choice, no verdict.
@@ -384,7 +393,10 @@ class VotesManager(
     fun onEvent(m: VaultMessage) {
         if (m.type != "vote.event") return
         refreshQuietly()
-        if (VaultJson.str(m.body, "event") == "check_due") scope.launch { runCatching { submitDue() } }
+        if (VaultJson.str(m.body, "event") == "check_due") {
+            val live = liveFor(synchronized(lock) { generation })
+            scope.launch { runCatching { submitDue(live) } }
+        }
     }
 
     override fun refreshQuietly() {
@@ -393,24 +405,26 @@ class VotesManager(
         scope.launch { runCatching { read(fromQueue = true) } }
     }
 
-    override suspend fun refresh() {
-        read(fromQueue = false)
-    }
+    override suspend fun refresh(): Boolean = read(fromQueue = false) != null
 
     /**
-     * Reads `vote.list` and applies it. Returns whether it was applied: false when a lock or a hold ([clear]) came while it
-     * was out, which voids it (nothing of it is written). Every vault the app talks to has votes (the app requires the vault's
-     * current release), so `unsupported_type` is a failure like any other: thrown, the list FAILED, and the next read asks again.
+     * Reads `vote.list` and applies it. Returns the generation it was applied under, or null when a lock or a hold ([clear])
+     * came while it was out, which voids it (nothing of it is written). Every vault the app talks to has votes (the app
+     * requires the vault's current release), so `unsupported_type` is a failure like any other: thrown, the list FAILED, and
+     * the next read asks again.
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod")
-    private suspend fun read(fromQueue: Boolean): Boolean {
+    private suspend fun read(fromQueue: Boolean): Int? {
         return reads.withLock {
             if (fromQueue) queued = false
-            // Taken before anything is asked of the vault: a clear() from here on voids the answer.
-            val gen = synchronized(lock) { generation }
+            // Taken before anything is asked of the vault, and with "loading" set under the same lock: a clear() from here on
+            // voids the answer and leaves the state NOT_LOADED, never LOADING.
+            val (gen, before) = synchronized(lock) {
+                val was = loadState.value
+                if (votesFlow.value.isEmpty()) loadState.value = ListLoad.LOADING
+                generation to was
+            }
             val epoch = storeEpochNow()
-            val before = loadState.value
-            if (votesFlow.value.isEmpty()) loadState.value = ListLoad.LOADING
             val acks = synchronized(lock) { pendingAck.toList() }
             try {
                 val all = ArrayList<VoteSummary>()
@@ -427,7 +441,7 @@ class VotesManager(
                 val head = checkNotNull(first)
                 val shown = all.distinctBy { it.key }
                 synchronized(lock) {
-                    if (gen != generation) return@withLock false
+                    if (gen != generation) return@withLock null
                     votesFlow.value = shown
                     reconnectFlow.value = head.reconnect
                     droppedFlow.value = head.dropped
@@ -443,7 +457,7 @@ class VotesManager(
                     forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
                     forgetRecheckStamps(epoch, shown.mapTo(HashSet()) { it.key })
                 }
-                true
+                gen
             } catch (e: CancellationException) {
                 synchronized(lock) { if (gen == generation) cutOff(before) }
                 throw e
@@ -618,10 +632,14 @@ class VotesManager(
 
     fun stopSync() {
         synchronized(lock) {
+            syncRun++
             syncJob?.cancel()
             syncJob = null
         }
     }
+
+    /** Whether work begun under [gen] may still write or send: no lock or hold ([clear]) came since. */
+    private fun liveFor(gen: Int): () -> Boolean = { synchronized(lock) { gen == generation } }
 
     /**
      * One run: the service list, the proposals, and the results that are due, as **separate stages** (VAULT-MESSAGING 0.81.5
@@ -632,31 +650,37 @@ class VotesManager(
     suspend fun syncOnce() {
         if (!site.configured) return
         syncs.withLock {
+            val run = synchronized(lock) { syncRun }
             // A list read voided by a lock or a hold: nothing more of this run (the next unlock starts the sync again).
-            if (!read(fromQueue = false)) return@withLock
+            val gen = read(fromQueue = false) ?: return@withLock
+            // From here every stage, and every call to the vault in it, first looks again: a lock or hold (the generation) or
+            // the sync stopped (the release gate's pause) since the read ends the run with nothing more sent.
+            val live = { synchronized(lock) { gen == generation && run == syncRun } }
             var first: VaultFailure? = null
             suspend fun stage(block: suspend () -> Unit) {
+                if (!live()) return
                 try {
                     block()
                 } catch (e: VaultFailure) {
                     if (first == null && e.code != CODE_TOO_LARGE) first = e
                 }
             }
-            stage { syncLists() }
-            stage { syncProposals(only = null) }
-            stage { submitDue() }
+            stage { syncLists(live) }
+            stage { syncProposals(only = null, live) }
+            stage { submitDue(live) }
             first?.let { throw it }
         }
     }
 
     override suspend fun siteCheck(connectionId: String, proposalId: String) {
         if (!site.configured) return
-        syncs.withLock { syncProposals(only = proposalId) }
+        val live = liveFor(synchronized(lock) { generation })
+        syncs.withLock { syncProposals(only = proposalId, live) }
         refreshQuietly()
     }
 
     @Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
-    private suspend fun syncLists() {
+    private suspend fun syncLists(live: () -> Boolean) {
         val doc = (site.get("services.json", VoteSite.LIST_MAX) as? SiteAnswer.Found)?.bytes ?: return
         val sig = (site.get("services.json.sig", SIG_MAX) as? SiteAnswer.Found)?.bytes ?: return
         val version = VoteSync.versionOf(doc) ?: 0
@@ -679,11 +703,11 @@ class VotesManager(
             is VoteSync.ListPlan.Confirm -> listOf(VoteSync.confirmCall(plan.version, plan.sha256))
             is VoteSync.ListPlan.Send -> VoteSync.listCalls(plan.lists)
         }
-        for (b in bodies) send(b) ?: break
+        for (b in bodies) send(b, live) ?: break
     }
 
     @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
-    private suspend fun syncProposals(only: String?) {
+    private suspend fun syncProposals(only: String?, live: () -> Boolean) {
         val held = votesFlow.value.map { it.proposalId }.distinct()
         val index = (site.get("index.json", INDEX_MAX) as? SiteAnswer.Found)?.let { VoteSync.indexOf(it.bytes) }.orEmpty()
         val byId = index.mapNotNull { e -> VoteSync.proposalIdOf(e)?.let { it to e } }.toMap()
@@ -698,7 +722,7 @@ class VotesManager(
         var first: VaultFailure? = null
         for (call in VoteSync.entryCalls(entries)) {
             try {
-                send(call)
+                send(call, live)
             } catch (e: VaultFailure) {
                 if (first == null) first = e
             }
@@ -749,21 +773,24 @@ class VotesManager(
 
     /**
      * Sends one `vote.site.sync` body within the limits (§10.19.8): inline at or under 245,760 bytes, otherwise as a
-     * claim-check blob to the app's own vault, and never over 8,257,532 bytes. Null when it was not sent.
+     * claim-check blob to the app's own vault, and never over 8,257,532 bytes. Null when it was not sent: also when [live]
+     * says the run is over (a lock, a hold or the sync stopped), looked at before each call to the vault.
      */
     @Suppress("ReturnCount")
-    private suspend fun send(body: JsonObject): JsonObject? {
+    private suspend fun send(body: JsonObject, live: () -> Boolean): JsonObject? {
         val bytes = VoteSync.encoded(body)
         if (bytes.size > VoteSync.BODY_MAX) return null
         when (VoteSync.inline(bytes)) {
-            VoteSync.Inline.FITS -> return vaultGuard { ops().sync(body) }
+            VoteSync.Inline.FITS -> return if (live()) vaultGuard { ops().sync(body) } else null
             VoteSync.Inline.TOO_LARGE -> Unit // a claim-check blob, below
             // Not an inner message at all (the strict body check failed): the vault would refuse it either way. Not sent.
             VoteSync.Inline.OTHER -> return null
         }
         val sealed = ClaimBlob.seal(bytes)
         try {
+            if (!live()) return null
             val id = uploadWithRetry(sealed.blob) ?: return null
+            if (!live()) return null
             return vaultGuard {
                 ops().syncBlob(id, Base64s.encodeStd(sealed.key), Base64s.encodeStd(sealed.sha256), sealed.size)
             }
@@ -792,9 +819,11 @@ class VotesManager(
      * owner decision a, thread 01M6HK8A1VMV41M8TTASXV4BSK) closed and `gave_up`, which is not final: run again whenever the app
      * opens, as a `pending` one, but at most once a day per record, keyed off the state (a `gave_up` check has no `due_at`).
      */
-    private suspend fun submitDue() {
+    private suspend fun submitDue(live: () -> Boolean) {
         val at = now()
         for (v in votesFlow.value) {
+            // A lock, a hold or the sync stopped since the run began: no further check is started.
+            if (!live()) return
             val c = v.check ?: continue
             val pending = c.state == CheckState.PENDING && !(c.dueAt != null && c.dueAt.isAfter(at))
             val due = v.state == VoteState.CLOSED && (pending || c.state == CheckState.GAVE_UP && dailyDue(v.key, at))

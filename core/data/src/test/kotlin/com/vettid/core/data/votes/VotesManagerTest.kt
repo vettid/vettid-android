@@ -95,8 +95,12 @@ class VotesManagerTest {
         var castGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var submitAnswer: JsonObject = obj("""{"proposal_id":"$PID","check":{"state":"verified"}}""")
 
+        /** Runs as each call reaches the vault, after it is recorded (a lock or pause landing just then). */
+        var onGo: (String) -> Unit = {}
+
         private fun go(type: String) {
             synchronized(this) { calls += type }
+            onGo(type)
             refuse[type]?.let { throw VaultOpException(type, it) }
         }
 
@@ -169,11 +173,15 @@ class VotesManagerTest {
         val maxes = mutableMapOf<String, Long>()
         override val configured: Boolean get() = hasSite
 
+        /** Runs as each read is asked, after it is recorded (a lock or pause landing while the site is read). */
+        var onRead: (String) -> Unit = {}
+
         override suspend fun get(path: String, maxBytes: Long): SiteAnswer {
             synchronized(this) {
                 reads += path
                 maxes[path] = maxBytes
             }
+            onRead(path)
             return answers[path] ?: SiteAnswer.Absent
         }
 
@@ -316,7 +324,8 @@ class VotesManagerTest {
         eventually { synchronized(ops) { ops.calls.count { it == "list" } } == 1 }
         m.clear()
         ops.listGate!!.complete(Unit)
-        read.await()
+        // refresh() says the read was voided (the notifier then keeps the generic title).
+        assertFalse(read.await())
         assertTrue(m.votes.value.isEmpty())
         assertTrue(m.reconnect.value.isEmpty())
         assertTrue(m.dropped.value.isEmpty())
@@ -324,9 +333,105 @@ class VotesManagerTest {
         assertEquals(ListLoad.NOT_LOADED, m.load.value)
         assertEquals(VotesEntry(), VoteRules.entry(m.votes.value, m.reconnect.value))
         ops.listGate = null
-        m.refresh()
+        assertTrue(m.refresh())
         assertEquals(listOf("$CONN/$PID"), m.votes.value.map { it.key })
         assertEquals(ListLoad.LOADED, m.load.value)
+    }
+
+    private fun dueVote(id: String) = summary(id = id, state = "closed", extra = ""","ballot":{"state":"recorded"},"check":{"state":"pending"}""")
+
+    /** A lock or hold (`clear()`) during a sync's first stage: no later stage runs, nothing more is read or sent. */
+    @Test
+    fun aClearBetweenSyncStagesSendsNothingMore() = runTest {
+        val ops = Ops().apply { list = listing(dueVote(PID)) }
+        var m: VotesManager? = null
+        val site = Site().apply { onRead = { if (it == "services.json") m!!.clear() } }
+        m = manager(ops, site)
+        m.syncOnce()
+        assertEquals(listOf("services.json"), site.reads)
+        assertEquals(listOf("list"), ops.calls)
+    }
+
+    /**
+     * The release gate's pause stops the sync without a clear (the votes stay in memory): a run already past its list read
+     * starts no further stage, so no proposal is read and no due check runs.
+     */
+    @Test
+    fun theReleaseGatesPauseBetweenSyncStagesSendsNothingMore() = runTest {
+        val ops = Ops().apply { list = listing(dueVote(PID)) }
+        var m: VotesManager? = null
+        val site = Site().apply { onRead = { if (it == "services.json") m!!.stopSync() } }
+        m = manager(ops, site)
+        m.syncOnce()
+        assertEquals(listOf("services.json"), site.reads)
+        assertEquals(listOf("list"), ops.calls)
+        assertEquals(1, m.votes.value.size)
+    }
+
+    /** A pause during one due check: the next due vote is not checked (the vault is not even asked for it). */
+    @Test
+    fun aPauseDuringTheDueChecksStartsNoFurtherCheck() = runTest {
+        val second = "01JBQZ0000000000000000000F"
+        var m: VotesManager? = null
+        val ops = Ops().apply {
+            list = listing(dueVote(PID), dueVote(second))
+            onGo = { if (it == "get:$CONN/$PID") m!!.stopSync() }
+        }
+        m = manager(ops)
+        m.syncOnce()
+        assertTrue(ops.calls.contains("get:$CONN/$PID"))
+        assertFalse(ops.calls.contains("get:$CONN/$second"))
+        // Without the pause both are checked.
+        ops.onGo = {}
+        m.syncOnce()
+        assertTrue(ops.calls.contains("get:$CONN/$second"))
+    }
+
+    /** A lock while a proposal is read from the site: the `vote.site.sync` built from it is not sent. */
+    @Test
+    fun aLockWhileTheSiteIsReadSendsNoSync() = runTest {
+        val ops = Ops().apply { list = listing(summary()) }
+        var m: VotesManager? = null
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            answers["p/$PID/proposal.json"] = ok("""{"proposal_id":"$PID"}""")
+            onRead = { if (it == "p/$PID/proposal.json") m!!.clear() }
+        }
+        m = manager(ops, site)
+        m.syncOnce()
+        assertFalse(ops.calls.contains("sync"))
+        // The screen's own site check follows the same rule.
+        site.onRead = {}
+        m.refresh()
+        site.onRead = { if (it == "p/$PID/proposal.json") m!!.clear() }
+        m.siteCheck(CONN, PID)
+        assertFalse(ops.calls.contains("sync"))
+        site.onRead = {}
+        m.refresh()
+        m.siteCheck(CONN, PID)
+        assertTrue(ops.calls.contains("sync"))
+    }
+
+    /** A request that travels as a blob: a lock before the upload sends nothing; one during the upload sends no `syncBlob`. */
+    @Test
+    fun aLockAroundTheBlobUploadSendsNoBlobCall() = runTest {
+        val ids = (1..4).map { "01JBQZ0000000000000000001$it" }
+        val ops = Ops().apply { list = listing(*ids.map { summary(id = it) }.toTypedArray()) }
+        var m: VotesManager? = null
+        val site = Site().apply {
+            answers["index.json"] = ok("[]")
+            for (id in ids) answers["p/$id/proposal.json"] = ok("x".repeat(60_000))
+            onRead = { if (it == "p/${ids.last()}/proposal.json.sigstore.json") m!!.clear() }
+        }
+        m = manager(ops, site)
+        m.syncOnce()
+        assertFalse(ops.calls.contains("upload"))
+        site.onRead = {}
+        ops.onGo = { if (it == "upload") m!!.clear() }
+        m.syncOnce()
+        assertTrue(ops.calls.contains("upload"))
+        assertTrue(ops.blobs.isEmpty())
+        assertFalse(ops.calls.any { it.startsWith("syncBlob") })
     }
 
     /** A sync whose list read a lock voided goes no further: nothing is fetched from the site and nothing is sent. */

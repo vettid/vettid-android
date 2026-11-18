@@ -25,7 +25,7 @@ object NoVotes : VotesRepository {
 
     private fun unsupported(): Nothing = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
-    override suspend fun refresh() = unsupported()
+    override suspend fun refresh(): Boolean = unsupported()
 
     override fun refreshQuietly() = Unit
 

@@ -440,8 +440,11 @@ The A2 exit test:
   cleared at lock and hold with the devices list (`PhaseSteps.VOTES`). **Every vault the app talks to has votes** (Rule 3: the
   app requires the vault's current release, and a vault behind sees only the update screen), so there is no availability flag:
   `unsupported_type` from `vote.list` is a failure like any other (the list FAILED, asked again by the next read). A list answered
-  after a lock or hold is voided by `VotesManager`'s `generation`, taken before the vault is asked, and a sync whose list read was
-  voided fetches and sends nothing. `VoteRules` (pure) maps what the vault decided to a chip and
+  after a lock or hold is voided by `VotesManager`'s `generation`, taken before the vault is asked (with "loading" set under the
+  same lock), and `refresh()` says whether the read was applied (the notifier's `refreshVotes` is true only then). A sync whose
+  list read was voided fetches and sends nothing; after it, each stage, each due check and each call to the vault first looks
+  again at that generation and at `syncRun` (bumped by `stopSync`: a lock or hold, and the release gate's pause), so nothing more
+  is sent once either moved. The screen's site check follows the generation the same way. `VoteRules` (pure) maps what the vault decided to a chip and
   to notes (`VoteNote`); every text of the plan's table is in `feature/votes/.../strings.xml` and `VoteTextsTest` holds the approved
   ones word for word (a changed text is the owner's to approve; the strings under "Proposed" there are not yet approved). The
   vote screen is `FLAG_SECURE`; the proof is written only where the member's "Save to…" points, only on their action, never to a
