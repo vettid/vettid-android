@@ -243,6 +243,13 @@ class UnlockStuckTest {
         rule.waitForIdle()
         rule.onNodeWithTag("unlock_move_failure").assertExists()
         rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        // Any other move failure stays on the stuck and the recover-only screens alike: only the no-user_guid card steps aside.
+        val incomplete = com.vettid.core.data.vault.MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete")
+        for (other in listOf(ok.copy(keysGone = true, moveFailure = incomplete), ok.copy(stateRollback = true, moveFailure = incomplete))) {
+            state = other
+            rule.waitForIdle()
+            rule.onNodeWithTag("unlock_move_failure").assertExists()
+        }
         // Any other refusal of the kind keeps its own text.
         state = ok.copy(moveFailure = com.vettid.core.data.vault.MoveFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"))
         rule.waitForIdle()
