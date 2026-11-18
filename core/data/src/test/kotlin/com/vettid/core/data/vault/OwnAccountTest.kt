@@ -19,7 +19,6 @@ import java.time.Instant
 class OwnAccountTest {
     private val snap = AccountSnapshot(
         asOf = "2026-10-21T00:00:00Z",
-        emailHint = "a***@example.org",
         email = "ada@example.org",
         state = "member",
         firstName = "Ada",
@@ -90,7 +89,7 @@ class OwnAccountTest {
         assertNotNull(own.keep(own.mark(), view(snap, null), open))
         val info = own.publish { s, r -> LocalAccount(emailHint = "a***@example.org").toInfo(s, r) }!!
         assertEquals("Ada Lovelace", info.fullName)
-        assertEquals("ada@example.org", info.displayEmail)
+        assertEquals("ada@example.org", info.email)
     }
 
     @Test
@@ -103,7 +102,9 @@ class OwnAccountTest {
         assertNull(info.firstName)
         assertNull(info.email)
         assertNull(info.nameRequest)
-        assertEquals("a***@example.org", info.displayEmail)
+        assertEquals("a***@example.org", info.emailHint)
+        // And the shell shows nothing of it (ANDROID-PLAN §4 "The member's own profile").
+        assertNull(info.shownInShell())
     }
 
     @Test
@@ -147,17 +148,6 @@ class OwnAccountTest {
         assertTrue(written.contains("a***@example.org"))
     }
 
-    @Test
-    fun anAccountAnswerWritesOnlyTheMaskedEmail() {
-        var disk: LocalAccount? = null
-        val record = AccountRecord(LocalAccount(userGuid = "u", emailHint = "o***@example.org"), readable = true, persist = { disk = it })
-        assertTrue(record.refreshed(record.recordGeneration, AccountUpdate(snap, request)))
-        assertEquals(LocalAccount(userGuid = "u", emailHint = "a***@example.org"), disk)
-        // The same hint again: nothing to write.
-        disk = null
-        assertFalse(record.refreshed(record.recordGeneration, AccountUpdate(snap, request)))
-        assertNull(disk)
-    }
     @Test
     fun anOlderAnswerNeverReplacesANewerOne() {
         val own = OwnAccount()

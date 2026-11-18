@@ -61,7 +61,7 @@ class StateUnreadableShownTest {
 
     @Test
     fun theRecoveryOpenShowsItsOwnTextAndAllowsALaterTry() {
-        val t = openAnswerText(RecoveryOpenOutcome("state_unreadable"), false)
+        val t = openAnswerText(RecoveryOpenOutcome("state_unreadable", attemptUsed = false), false)
         assertEquals(R.string.onboarding_open_state_unreadable, t.res)
         assertEquals(
             "Your vault can't be opened right now. Nothing in it has been changed. Wait for a VettID update before you " +

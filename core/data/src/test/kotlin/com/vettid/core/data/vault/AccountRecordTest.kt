@@ -1,7 +1,5 @@
 package com.vettid.core.data.vault
 
-import com.vettid.core.vault.AccountSnapshot
-import com.vettid.core.vault.NameRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -54,30 +52,6 @@ class AccountRecordTest {
         val f = Fixture(old)
         assertTrue(f.record.opened(f.record.recordGeneration, atMs = 42))
         assertEquals(42L, f.disk!!.lastOpenedAtMs)
-    }
-
-    @Test
-    fun anAccountAnswerThatAWipeOvertookIsNotKept() {
-        val f = Fixture(old)
-        val since = f.record.recordGeneration
-        // `account.get` is on its way when `device.unlinked` wipes the phone.
-        f.wipe()
-        val u = AccountUpdate(
-            AccountSnapshot(asOf = "2026-10-16T00:00:00Z", emailHint = "o***@example.com"),
-            NameRequest(seq = 3, firstName = "Old", lastName = "Name", state = "pending"),
-        )
-        assertFalse(f.record.refreshed(since, u))
-        assertNull(f.disk)
-        assertEquals(LocalAccount(), f.record.value)
-        assertNull(f.record.value.toInfo())
-    }
-
-    @Test
-    fun anAccountAnswerIsKept() {
-        val f = Fixture(old)
-        val u = AccountUpdate(AccountSnapshot(asOf = "2026-10-16T00:00:00Z", emailHint = "n***@example.com"), null)
-        assertTrue(f.record.refreshed(f.record.recordGeneration, u))
-        assertEquals("n***@example.com", f.disk!!.emailHint)
     }
 
     @Test

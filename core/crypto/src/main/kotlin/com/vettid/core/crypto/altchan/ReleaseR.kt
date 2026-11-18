@@ -151,10 +151,11 @@ object RecoveryOpen {
         val used: Int,
         val retryAt: Instant?,
         /**
-         * (0.34.0) Whether THIS request used an attempt (the spend happened), as the vault says; null from a vault
-         * that does not send it. The app never infers it from the code, `attempts` or `retry_at`.
+         * (0.34.0) Whether THIS request used an attempt (the spend happened), as the vault says: REQUIRED in every result
+         * (§11.14.6), so a result without it does not parse (it is an answer the app cannot read). The app never infers
+         * it from the code, `attempts` or `retry_at`.
          */
-        val attemptUsed: Boolean? = null,
+        val attemptUsed: Boolean,
     ) {
         private val bundle = vaultBundle?.copyOf()
 
@@ -168,7 +169,7 @@ object RecoveryOpen {
                 val attempts = o.optObj("attempts")
                 val used = attempts?.uint("used", 0, ATTEMPTS.toLong())?.toInt() ?: 0
                 val retry = o.optString("retry_at")?.let { runCatching { Instant.parse(it) }.getOrNull() }
-                val attemptUsed = if (o.has("attempt_used")) o.bool("attempt_used") else null
+                val attemptUsed = o.bool("attempt_used")
                 return if (ok) {
                     Result(
                         true, "", o.uint("state_seq", 0, StrictJson.MAX_SAFE_INTEGER), o.uint("header_seq", 0, StrictJson.MAX_SAFE_INTEGER),

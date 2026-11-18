@@ -47,6 +47,17 @@ object AltResults {
         }
     }
 
+    /**
+     * The body of `vault.recovery.open.result` (§11.14.6). A body that does not parse (a member missing or of the wrong
+     * type, `attempt_used` among them: REQUIRED in every result) is a result the app cannot read, so the attempt may have
+     * been used: [AltResultException], never a result read with a member left out.
+     */
+    fun recoveryOpen(body: ByteArray): com.vettid.core.crypto.altchan.RecoveryOpen.Result = try {
+        com.vettid.core.crypto.altchan.RecoveryOpen.Result.parse(body)
+    } catch (_: CryptoException) {
+        throw AltResultException("recovery open result unreadable")
+    }
+
     internal fun obj(b: ByteArray): JsonObject = try {
         StrictJson.parseObject(b)
     } catch (_: CryptoException) {

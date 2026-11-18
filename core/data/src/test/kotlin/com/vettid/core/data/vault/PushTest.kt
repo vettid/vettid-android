@@ -56,7 +56,9 @@ class PushTest {
     @Test
     fun theAnswersOfPushRegister() {
         assertEquals(PushRegisterOutcome.Unavailable, PushWire.outcome(VaultFailure(FailureKind.OTHER, "unavailable")))
-        assertEquals("a vault release from before §14", PushRegisterOutcome.Unavailable, PushWire.outcome(VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")))
+        // Every vault the app opens has push.register: `unsupported_type` is a refusal like any code the app does not know.
+        assertEquals(PushRegisterOutcome.Refused("unsupported_type"), PushWire.outcome(VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")))
+        assertEquals(PushRegisterOutcome.Refused("something_new"), PushWire.outcome(VaultFailure(FailureKind.OTHER, "something_new")))
         assertEquals(PushRegisterOutcome.GatewayError(120), PushWire.outcome(VaultFailure(FailureKind.OTHER, "gateway_error", retryAfterSeconds = 120)))
         assertEquals(PushRegisterOutcome.GatewayError(null), PushWire.outcome(VaultFailure(FailureKind.OTHER, "gateway_error")))
         assertEquals(PushRegisterOutcome.Limit, PushWire.outcome(VaultFailure(FailureKind.LIMIT, "limit", limit = VaultLimit("push_registrations", 20))))
@@ -94,7 +96,9 @@ class PushTest {
         assertEquals(PushConfirmOutcome.Refused("forbidden"), PushWire.confirmOutcome(opFailure("forbidden")))
         assertEquals(PushConfirmOutcome.Refused("credential_required"), PushWire.confirmOutcome(opFailure("credential_required")))
         assertEquals(PushConfirmOutcome.Unavailable, PushWire.confirmOutcome(opFailure("unavailable")))
-        assertEquals("a vault release from before 0.30.0", PushConfirmOutcome.Unavailable, PushWire.confirmOutcome(opFailure("unsupported_type", kind = FailureKind.NOT_SUPPORTED)))
+        // Every vault the app opens has push.confirm: `unsupported_type` is a refusal like any code the app does not know.
+        assertEquals(PushConfirmOutcome.Refused("unsupported_type"), PushWire.confirmOutcome(opFailure("unsupported_type", kind = FailureKind.NOT_SUPPORTED)))
+        assertEquals(PushConfirmOutcome.Refused("something_new"), PushWire.confirmOutcome(opFailure("something_new")))
         assertEquals(PushConfirmOutcome.NoAnswer, PushWire.confirmOutcome(VaultFailure(FailureKind.NETWORK)))
         assertEquals(PushConfirmOutcome.NoAnswer, PushWire.confirmOutcome(VaultFailure(FailureKind.NO_RESPONSE)))
         // Without the op's exception (no message known): a gateway error is retried with the same code.

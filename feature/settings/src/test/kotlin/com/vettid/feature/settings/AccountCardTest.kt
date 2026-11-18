@@ -28,6 +28,21 @@ class AccountCardTest {
         rule.onNodeWithText("a***@example.org", substring = true, useUnmergedTree = true).assertDoesNotExist()
     }
 
+    /** The snapshot always carries `email` (VAULT-MESSAGING 0.20.0): without a readable one, no address, never the hint. */
+    @Test
+    fun anOpenVaultWithoutAnAddressShowsNoHint() {
+        show(AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace"))
+        rule.onNodeWithTag("account_card").assertTextContains("Ada Lovelace", substring = true)
+        rule.onNodeWithText("a***@example.org", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun anOpenVaultWithoutNamesOrAddressShowsNoHintInTheNamesPlace() {
+        show(AccountInfo("a***@example.org", state = "member"))
+        rule.onNodeWithTag("account_card").assertExists()
+        rule.onNodeWithText("a***@example.org", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
     @Test
     fun theOpenVaultsNameAndAddressAreShown() {
         show(AccountInfo("a***@example.org", state = "member", firstName = "Ada", lastName = "Lovelace", email = "ada@example.org"))

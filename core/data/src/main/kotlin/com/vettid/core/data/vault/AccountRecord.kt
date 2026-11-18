@@ -282,15 +282,6 @@ internal class AccountRecord(
     fun opened(since: Int, atMs: Long): Boolean = update(since) { it.copy(lastOpenedAtMs = maxOf(it.lastOpenedAtMs ?: 0, atMs)) }
 
     /**
-     * What the record keeps of `account.get` ([accountUpdate]), for the record the request was sent for: the masked email
-     * only. The snapshot and the name request stay in memory ([OwnAccount]).
-     */
-    fun refreshed(since: Int, u: AccountUpdate): Boolean = update(since) {
-        val hint = u.snapshot?.emailHint?.takeIf { h -> h.isNotEmpty() } ?: it.emailHint
-        if (hint == it.emailHint) null else it.copy(emailHint = hint)
-    }
-
-    /**
      * The record written again as it is: a record of an older build that still holds the account snapshot or the name
      * request ([LocalAccount]) loses them on the phone too. [RecordStore.UNBOUND]: it rewrites whatever record is current.
      */
