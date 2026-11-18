@@ -13,7 +13,7 @@ import android.graphics.Bitmap
 import com.vettid.core.data.presence.NoPresence
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
-import com.vettid.core.data.presence.queryWhileAvailable
+import com.vettid.core.data.presence.queryOncePolicyRead
 import com.vettid.core.data.social.AttachmentManager
 import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -322,7 +322,7 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // Presence is asked when the conversation opens, and only then (ANDROID-PLAN §4 "Presence"): never from a list.
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(connectionId, shown)
+            if (c.askable) presence.queryOncePolicyRead(connectionId, shown)
         }
         viewModelScope.launch {
             // Read while open: every new incoming message is marked read (best effort).

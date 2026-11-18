@@ -27,7 +27,7 @@ import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceShare
 import com.vettid.core.data.presence.PresenceState
-import com.vettid.core.data.presence.queryWhileAvailable
+import com.vettid.core.data.presence.queryOncePolicyRead
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
@@ -1015,7 +1015,7 @@ class ConnectionDetailViewModel @Inject constructor(
         // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
         viewModelScope.launch {
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(id, shown)
+            if (c.askable) presence.queryOncePolicyRead(id, shown)
         }
     }
 

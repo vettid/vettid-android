@@ -9,8 +9,10 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -60,9 +62,14 @@ class PresenceManagerTest {
         /** Called at each `presence.get`, before it answers. */
         var onGet: () -> Unit = {}
 
+        /** While set, `presence.get` / `presence.set` wait for it before they answer (an answer still on its way). */
+        var getGate: CompletableDeferred<Unit>? = null
+        var setGate: CompletableDeferred<Unit>? = null
+
         override suspend fun get(): JsonObject {
             synchronized(this) { gets += "get" }
             onGet()
+            getGate?.await()
             refuse["get"]?.let { throw VaultOpException("presence.get", it) }
             if (getFailures > 0) {
                 getFailures--
@@ -73,6 +80,7 @@ class PresenceManagerTest {
 
         override suspend fun set(version: Long, state: String?, share: String?, except: List<String>?): JsonObject {
             synchronized(this) { sets += SetCall(version, state, share, except) }
+            setGate?.await()
             refuse["set"]?.let { throw VaultOpException("presence.set", it) }
             if (conflicts > 0) {
                 conflicts--
@@ -546,6 +554,57 @@ class PresenceManagerTest {
         m.refreshPolicy()
         m.query("c1")
         assertEquals(listOf("c1"), ops.queries)
+    }
+
+    @Test
+    fun aReadAndAChangeAnsweredAfterALockOrTheHoldAreNotApplied() = runTest {
+        val ops = Ops()
+        val m = open(ops)
+        val getGate = CompletableDeferred<Unit>()
+        val setGate = CompletableDeferred<Unit>()
+        ops.getGate = getGate
+        ops.setGate = setGate
+        val read = launch { runCatching { m.refreshPolicy() } }
+        val write = launch { runCatching { m.update { it.copy(state = PresenceState.BUSY) } } }
+        settle { ops.gets.size == 2 && ops.sets.size == 1 }
+        // The lock or the hold comes while both are on their way; then the vault answers them.
+        m.clear()
+        getGate.complete(Unit)
+        setGate.complete(Unit)
+        settle { read.isCompleted && write.isCompleted }
+        assertNull(m.policy.value)
+        // No stale policy lets a connection be asked: nothing is sent until the policy is read again.
+        m.query("c1")
+        assertTrue(ops.queries.isEmpty())
+        ops.getGate = null
+        ops.setGate = null
+        m.refreshPolicy()
+        m.query("c1")
+        assertEquals(listOf("c1"), ops.queries)
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheReadAndTheChange() = runTest {
+        val ops = Ops()
+        lateinit var m: PresenceManager
+        // The lock lands between the open check and what follows it: the check said open, the generation moved meanwhile.
+        var clearAtCheck = true
+        val closedThenCleared = {
+            if (clearAtCheck) {
+                clearAtCheck = false
+                m.clear()
+            }
+            false
+        }
+        m = PresenceManager(this, ops = { ops }, closed = closedThenCleared, now = { clock })
+        m.refreshPolicy()
+        assertEquals(1, ops.gets.size)
+        assertNull(m.policy.value)
+        clearAtCheck = true
+        m.update { it.copy(state = PresenceState.BUSY) }
+        assertNull(m.policy.value)
+        m.query("c1")
+        assertTrue(ops.queries.isEmpty())
     }
 
     @Test

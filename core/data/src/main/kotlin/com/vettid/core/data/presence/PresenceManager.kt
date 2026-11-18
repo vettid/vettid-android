@@ -160,8 +160,11 @@ class PresenceManager(
     }
 
     override suspend fun refreshPolicy() {
-        reads.withLock { readPolicy() }
+        reads.withLock { readPolicy(generationNow()) }
     }
+
+    /** The generation now: taken before the open check, so that a [clear] after the check voids what was sent. */
+    private fun generationNow(): Int = synchronized(lock) { generation }
 
     /** Nothing is sent while the vault is not open or the owner check is due or held (§3.6.3): `owner_check_required`, unsent. */
     private fun ensureOpen() {
@@ -186,10 +189,12 @@ class PresenceManager(
         }
     }
 
-    /** `presence.get`, applied unless a lock came meanwhile. Not sent while [closed]. */
-    private suspend fun readPolicy(): PresencePolicy {
+    /**
+     * `presence.get`, applied only under [gen] (taken before any open check): a lock or hold ([clear]) since then voids it.
+     * Not sent while [closed].
+     */
+    private suspend fun readPolicy(gen: Int): PresencePolicy {
         ensureOpen()
-        val gen = synchronized(lock) { generation }
         val body = vaultGuard(resend = true) { ops().get() }
         val read = PresenceWire.policy(body) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
         synchronized(lock) {
@@ -204,27 +209,30 @@ class PresenceManager(
 
     override suspend fun update(change: (PresencePolicy) -> PresencePolicy) {
         writes.withLock {
+            val gen = generationNow()
             ensureOpen()
-            var current = policyFlow.value ?: readPolicy()
+            var current = policyFlow.value ?: readPolicy(gen)
             var attempt = 0
             while (true) {
                 val next = change(current).let { it.copy(except = PresencePolicy.cleaned(it.except)) }
                 if (next.copy(version = current.version) == current) return
                 try {
-                    send(current, next)
+                    send(current, next, gen)
                     return
                 } catch (e: VaultFailure) {
                     // A conflict: read the policy again and put the member's change on it, once (ANDROID-PLAN §4 "Presence").
                     if (e.kind != FailureKind.CONFLICT || ++attempt > 1) throw e
-                    current = readPolicy()
+                    current = readPolicy(gen)
                 }
             }
         }
     }
 
-    /** `presence.set` of what [next] changes from [current], with [current]'s version; the answer's version is [next]'s. */
-    private suspend fun send(current: PresencePolicy, next: PresencePolicy) {
-        val gen = synchronized(lock) { generation }
+    /**
+     * `presence.set` of what [next] changes from [current], with [current]'s version; the answer's version is [next]'s,
+     * applied only under [gen] (the update's, taken before its open check).
+     */
+    private suspend fun send(current: PresencePolicy, next: PresencePolicy, gen: Int) {
         val body = vaultGuard {
             ops().set(
                 current.version,
@@ -236,7 +244,7 @@ class PresenceManager(
         val version = PresenceWire.version(body)
         // An answer without a version is not guessed at: the policy is read again.
         if (version == null) {
-            readPolicy()
+            readPolicy(gen)
         } else {
             synchronized(lock) { if (gen == generation) policyFlow.value = next.copy(version = version) }
         }

@@ -251,7 +251,7 @@ private val NO_RECENT: StateFlow<Set<String>> = MutableStateFlow(emptySet())
  * answered, and again when the policy is read after a hold or a failed read. Nothing is sent while it is not. Collects
  * until the screen's scope ends.
  */
-suspend fun PresenceRepository.queryWhileAvailable(connectionId: String, visible: Flow<Boolean> = flowOf(true)) {
+suspend fun PresenceRepository.queryOncePolicyRead(connectionId: String, visible: Flow<Boolean> = flowOf(true)) {
     // Asks, only while the screen is shown ([visible]: at least STARTED), when the policy is read and the connection has no
     // reading (on opening, after a hold took the readings, when a reading went stale) and once each time the screen comes back.
     // While it is not shown nothing is sent: a question counts as the member's activity (§10.17), so a page left open in the
