@@ -616,13 +616,20 @@ private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
                 }
                 DrawerItem(key = it.key, label = stringResource(it.label), icon = it.icon, badge = badge)
             }
-                // The Votes entry shows only with a vote or a connection to connect again (ANDROID-PLAN 0.1.102): no empty screen.
-                .filterNot { item -> item.key == TopLevelDestination.Votes.key && !badges.votesShown }
-                // The Wallet entry only when the vault has wallets (never in a build without the wallet).
-                .filterNot { item -> item.key == TopLevelDestination.Wallet.key && !badges.walletShown }
-                // The Location entry only when the vault has location (learnt at unlock).
-                .filterNot { item -> item.key == TopLevelDestination.Location.key && !badges.locationShown }
+                .filter { item -> shownInDrawer(item.key, badges) }
         }
+
+/**
+ * Whether the drawer lists the entry [key]. The Votes entry shows only with a vote or a connection to connect again
+ * (ANDROID-PLAN 0.1.102: no empty screen); the Wallet entry only when the vault has wallets (never in a build without the
+ * wallet). Every other entry, Location included, is always listed: the drawer exists only while the vault is open and no
+ * release update is required, and the owner check covers it.
+ */
+internal fun shownInDrawer(key: String, badges: ShellBadges): Boolean = when (key) {
+    TopLevelDestination.Votes.key -> badges.votesShown
+    TopLevelDestination.Wallet.key -> badges.walletShown
+    else -> true
+}
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {
     if (current == null) return null

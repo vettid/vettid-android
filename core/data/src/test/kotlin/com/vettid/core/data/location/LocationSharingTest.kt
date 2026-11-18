@@ -57,6 +57,9 @@ class LocationSharingTest {
     private var device: String? = "dev-this"
     private var elapsed = 1_000_000_000_000L
 
+    /** Run once at the next look at the check: a lock that lands just after a call's open check. */
+    private var atCheck: (() -> Unit)? = null
+
     private class Sent(val body: JsonObject, val ttl: Duration)
 
     private inner class Ops : LocationOps {
@@ -217,7 +220,13 @@ class LocationSharingTest {
             ops = { ops },
             store = store,
             unlocked = { unlocked },
-            due = { due },
+            due = {
+                atCheck?.let {
+                    atCheck = null
+                    it()
+                }
+                due
+            },
             deviceId = { device },
             isService = { it in services },
             now = { clock },
@@ -794,30 +803,129 @@ class LocationSharingTest {
         assertEquals(0, r.platform.starts)
     }
 
-    // --- availability ---
+    // --- open and not gated: nothing to learn first ---
 
     @Test
-    fun theVaultHasLocationWhenTheListAnswersAndNotWhenItIsUnsupported() = runTest {
+    fun aShareStartsOnAnOpenVaultWithoutTheListReadFirst() = runTest {
         val r = rig()
-        assertEquals(LocationAvailability.UNKNOWN, r.sharing.availability.value)
-        r.sharing.resume()
-        r.settle()
-        assertEquals(LocationAvailability.AVAILABLE, r.sharing.availability.value)
-        unlocked = false
-        r.sharing.clear()
-        assertEquals(LocationAvailability.UNKNOWN, r.sharing.availability.value)
-        unlocked = true
-        r.ops.listRefusal = "unsupported_type"
-        r.sharing.resume()
-        r.settle()
-        assertEquals(LocationAvailability.UNSUPPORTED, r.sharing.availability.value)
+        val s = r.begin()
+        assertEquals(0, r.ops.lists)
+        assertEquals(listOf(s.shareId), r.sharing.outgoing.value.map { it.shareId })
+        assertTrue(r.sharing.serviceState.value.active)
     }
 
     @Test
-    fun aStartLearnsAvailabilityToo() = runTest {
+    fun theListIsReadAndRefusedByTheSameRulesWhileClosedOrGated() = runTest {
         val r = rig()
-        r.begin()
-        assertEquals(LocationAvailability.AVAILABLE, r.sharing.availability.value)
+        for ((open, gated) in listOf(false to false, true to true)) {
+            unlocked = open
+            due = gated
+            val e = runCatching { r.call { r.sharing.refresh() } }.exceptionOrNull() as VaultFailure
+            assertEquals(FailureKind.OWNER_CHECK_REQUIRED, e.kind)
+        }
+        assertEquals("nothing was asked", 0, r.ops.lists)
+        unlocked = true
+        due = false
+        r.ops.outgoing = "[${listed("o1", "dev-this")}]"
+        r.call { r.sharing.refresh() }
+        assertEquals(1, r.ops.lists)
+        assertEquals(listOf("o1"), r.sharing.outgoing.value.map { it.shareId })
+    }
+
+    @Test
+    fun unsupportedTypeIsAFailureLikeAnyOtherAndTheListIsReadAgain() = runTest {
+        val r = rig()
+        r.ops.listRefusal = "unsupported_type"
+        r.sharing.resume()
+        r.settle()
+        assertEquals(1, r.ops.lists)
+        r.ops.listRefusal = null
+        r.ops.outgoing = "[${listed("o1", "dev-this")}]"
+        r.elapse(Duration.ofSeconds(6))
+        assertEquals(2, r.ops.lists)
+        assertEquals(listOf("o1"), r.sharing.outgoing.value.map { it.shareId })
+        assertTrue(r.sharing.serviceState.value.active)
+    }
+
+    // --- an answer from before a lock ---
+
+    @Test
+    fun aListAnsweredAfterALockTakesNothingUp() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("o1", "dev-this")}]"
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
+        val read = backgroundScope.async { runCatching { r.sharing.refresh() } }
+        r.settle()
+        withContext(Dispatchers.Default) { withTimeout(10_000) { r.ops.listAsked.await() } }
+        // The vault locks and opens again while the answer is on its way.
+        unlocked = false
+        r.sharing.clear()
+        unlocked = true
+        gate.complete(Unit)
+        r.settle()
+        read.await()
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        assertEquals(0, r.platform.starts)
+    }
+
+    @Test
+    fun aStartAnsweredAfterALockAddsNothing() = runTest {
+        val r = rig()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.startGate = gate
+        r.ops.startAsked = kotlinx.coroutines.CompletableDeferred()
+        val a = backgroundScope.async { runCatching { r.sharing.start(ShareRequest("c1")) } }
+        r.settle()
+        withContext(Dispatchers.Default) { withTimeout(10_000) { r.ops.startAsked.await() } }
+        unlocked = false
+        r.sharing.clear()
+        unlocked = true
+        gate.complete(Unit)
+        r.settle()
+        a.await()
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheList() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("o1", "dev-this")}]"
+        // The check passes, then the vault locks (and opens again) before the list is asked: its answer is from before the lock.
+        atCheck = {
+            unlocked = false
+            r.sharing.clear()
+            unlocked = true
+        }
+        r.call { r.sharing.refresh() }
+        assertEquals(1, r.ops.lists)
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        // a read after the lock is taken
+        r.call { r.sharing.refresh() }
+        assertEquals(listOf("o1"), r.sharing.outgoing.value.map { it.shareId })
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheStart() = runTest {
+        val r = rig()
+        atCheck = {
+            unlocked = false
+            r.sharing.clear()
+            unlocked = true
+        }
+        r.call { r.sharing.start(ShareRequest("c1")) }
+        r.settle()
+        assertEquals(1, r.ops.starts.size)
+        assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertFalse(r.sharing.serviceState.value.active)
+        r.emit(r.fix())
+        assertTrue(r.ops.updates.isEmpty())
     }
 
     // --- a fix's age, by the uptime clock ---
@@ -967,16 +1075,6 @@ class LocationSharingTest {
         assertFalse(r.sharing.serviceState.value.active)
         assertEquals(1, r.sharing.outgoing.value.size)
         assertEquals(0, r.platform.starts)
-    }
-
-    @Test
-    fun aVaultWithoutLocationIsAskedNoMoreAndNothingIsShown() = runTest {
-        val r = rig()
-        r.ops.listRefusal = "unsupported_type"
-        r.sharing.resume()
-        r.settle()
-        assertEquals(1, r.ops.lists)
-        assertFalse(r.sharing.serviceState.value.active)
     }
 
     @Test

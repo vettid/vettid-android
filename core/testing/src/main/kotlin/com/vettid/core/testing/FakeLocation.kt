@@ -2,7 +2,6 @@ package com.vettid.core.testing
 
 import com.vettid.core.data.location.AskResult
 import com.vettid.core.data.location.IncomingShare
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.OutgoingShare
 import com.vettid.core.data.location.PositionOffset
@@ -25,9 +24,6 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
 
     override val outgoing = MutableStateFlow<List<OutgoingShare>>(emptyList())
     override val serviceState = MutableStateFlow(ServiceState())
-
-    /** Whether the vault has location; a test sets UNKNOWN to see the sheet read it first ([refresh] then makes it AVAILABLE). */
-    override val availability = MutableStateFlow(LocationAvailability.AVAILABLE)
 
     /** Connections whose once share ended without a position; a test sets it. */
     override val missedOnce = MutableStateFlow<Set<String>>(emptySet())
@@ -122,10 +118,13 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
         outgoing.value = emptyList()
     }
 
+    /** What a list read finds (a test sets it): runs at each [refresh] that does not fail. */
+    var onRefresh: () -> Unit = {}
+
     override suspend fun refresh() {
         refreshes++
         fail?.let { fail = null; throw it }
-        if (availability.value == LocationAvailability.UNKNOWN) availability.value = LocationAvailability.AVAILABLE
+        onRefresh()
     }
 
     /** The first position of [shareId] went out. */

@@ -46,7 +46,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.LengthSystem
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.OutgoingShare
@@ -147,16 +146,11 @@ data class ShareLocationUiState(
     val errorCode: String? = null,
     /** Miles or kilometers for the precision notes (Settings → Units). */
     val units: com.vettid.core.data.prefs.DistanceUnits = com.vettid.core.data.prefs.DistanceUnits.AUTOMATIC,
-    /** Whether this vault has location; the phone's permission is not asked for until it is known to. */
-    val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     /** The start was refused because nothing could be sent (location off for VettID or on the phone, the app not in front). */
     val issue: SendIssue? = null,
     /** Opened from a request while a share to this connection is active: nothing is started (another would replace it). */
     val alreadySharing: Boolean = false,
 ) {
-    /** The vault is known to have location. */
-    val available: Boolean get() = availability == LocationAvailability.AVAILABLE
-
     /** Exact needs precise location: not offered once the member allowed only approximate (before the first ask it is). */
     val exactAvailable: Boolean get() = permission != LocationPermission.APPROXIMATE
 
@@ -198,12 +192,9 @@ class ShareLocationViewModel @Inject constructor(
     }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
-    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, location.availability, units) { s, shares, a, u ->
-        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, availability = a, units = u)
+    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, units) { s, shares, u ->
+        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, units = u)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
-
-    // Declared before init: an initializer after it would reset the job that init's open() started.
-    private var readJob: kotlinx.coroutines.Job? = null
 
     init {
         if (requestId != null) open()
@@ -216,28 +207,6 @@ class ShareLocationViewModel @Inject constructor(
     /** Opens the sheet with the defaults: For a while, 1 hour, Approximate, every minute, no trail. */
     fun open() {
         local.update { ShareLocationUiState(id, open = true, permission = it.permission) }
-        // Whether the vault has location is read first when it is not known yet (the permission waits for it).
-        readAvailability()
-    }
-
-    /** Reads again whether the vault has location after it failed, keeping what the member has chosen (A6 audit E27). */
-    fun retry() {
-        // Not while a read is on its way (a second tap).
-        if (readJob?.isActive == true) return
-        local.update { it.copy(error = null, errorCode = null) }
-        readAvailability()
-    }
-
-    private fun readAvailability() {
-        if (location.availability.value == LocationAvailability.UNKNOWN) {
-            readJob = viewModelScope.launch {
-                try {
-                    location.refresh()
-                } catch (e: VaultFailure) {
-                    local.update { it.copy(error = e.kind, errorCode = e.shownCode) }
-                }
-            }
-        }
     }
 
     /** Closes the sheet; a share that was started goes on. */
@@ -277,12 +246,15 @@ class ShareLocationViewModel @Inject constructor(
     private fun fitted(precision: SharePrecision, p: LocationPermission) =
         if (precision == SharePrecision.EXACT && p == LocationPermission.APPROXIMATE) SharePrecision.APPROXIMATE else precision
 
-    /** **Start sharing**: `location.share.start`, then the service. Needs the permission (asked first by the screen). */
+    /**
+     * **Start sharing**: `location.share.start`, then the service. Needs the permission (asked first by the screen). Answering a
+     * request, the vault's list is read first, so that a share to this connection is seen even when the list was not read yet
+     * since the unlock.
+     */
     fun start() {
         val s = local.value
-        val known = location.availability.value == LocationAvailability.AVAILABLE
         val inFlight = s.busy || s.startedId != null
-        if (inFlight || s.permission == LocationPermission.NONE || !known) return
+        if (inFlight || s.permission == LocationPermission.NONE) return
         // A refusal from an earlier tap does not stay once the share it was about is gone.
         if (s.alreadySharing) local.update { it.copy(alreadySharing = false) }
         // Answering a request while already sharing with this connection is off (as Share once is): the view model refuses it too.
@@ -294,6 +266,13 @@ class ShareLocationViewModel @Inject constructor(
         local.update { it.copy(busy = true, error = null, errorCode = null, issue = null) }
         viewModelScope.launch {
             try {
+                if (requestId != null) {
+                    location.refresh()
+                    if (activeShareTo(id)) {
+                        local.update { it.copy(busy = false, alreadySharing = true) }
+                        return@launch
+                    }
+                }
                 val precision = fitted(s.precision, s.permission)
                 val share = location.start(ShareRequest(id, timing, precision, trail = s.trail && !s.once, requestId = requestId))
                 forgetRequest()
@@ -313,7 +292,6 @@ data class ShareLocationActions(
     val onInterval: (ShareInterval) -> Unit = {},
     val onTrail: (Boolean) -> Unit = {},
     val onStart: () -> Unit = {},
-    val onRetry: () -> Unit = {},
     val onDismiss: () -> Unit = {},
 )
 
@@ -488,17 +466,6 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
             body = failureText(e.messageRes(), e.vaultCode(state.errorCode)),
             modifier = Modifier.testTag("share_location_error"),
             announce = LiveRegionMode.Polite,
-            // While the vault's location support is unknown, Start stays off: a failed read must be possible to repeat.
-            actions = if (state.availability == LocationAvailability.UNKNOWN) {
-                {
-                    androidx.compose.material3.TextButton(
-                        onClick = actions.onRetry,
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("share_location_retry"),
-                    ) { Text(stringResource(R.string.connections_retry)) }
-                }
-            } else {
-                null
-            },
         )
     }
     if (state.alreadySharing) {
@@ -512,7 +479,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
     PrimaryButton(
         stringResource(R.string.connections_location_start),
         actions.onStart,
-        enabled = !busy && state.available,
+        enabled = !busy,
         busy = busy,
         modifier = Modifier.testTag("share_location_start"),
     )

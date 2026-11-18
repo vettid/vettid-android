@@ -13,9 +13,6 @@ import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.presence.NoPresence
-import com.vettid.core.data.location.LocationAvailability
-import com.vettid.core.data.location.LocationRepository
-import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
@@ -74,8 +71,6 @@ data class SettingsUiState(
      * Settings → Privacy → Presence is offered, with the status as its line.
      */
     val presenceShown: Boolean = false,
-    /** The vault has location (not UNSUPPORTED, as the Location drawer entry): Settings → Privacy → Map server is offered. */
-    val mapServerShown: Boolean = false,
     /** The status the Presence row shows (the name of the state, a `@StringRes` of `:core:data`); null until the policy is read. */
     val presenceStateRes: Int? = null,
 )
@@ -90,7 +85,6 @@ class SettingsViewModel @Inject constructor(
     private val profiles: ProfileRepository,
     private val screenshots: ScreenshotAllowance,
     presence: PresenceRepository = NoPresence,
-    location: LocationRepository = NoLocation,
 ) : ViewModel() {
     private val local = MutableStateFlow(
         SettingsUiState(
@@ -104,9 +98,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { appLock.method.collect { m -> local.update { it.copy(appLockMethod = m) } } }
         viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
-        viewModelScope.launch {
-            location.availability.collect { a -> local.update { it.copy(mapServerShown = a != LocationAvailability.UNSUPPORTED) } }
-        }
         viewModelScope.launch {
             presence.policy.collect { p ->
                 local.update { it.copy(presenceShown = p != null, presenceStateRes = p?.let { x -> PresenceText.stateName(x.state) }) }

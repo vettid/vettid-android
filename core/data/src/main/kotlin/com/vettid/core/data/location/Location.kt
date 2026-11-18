@@ -303,9 +303,6 @@ interface LocationRepository {
     /** Connections whose `once` share ended without a position being found (memory only; cleared at the next share). */
     val missedOnce: StateFlow<Set<String>> get() = NO_MISSED
 
-    /** Whether this vault has location: learnt from `location.share.list` (at unlock) or the first start. */
-    val availability: StateFlow<LocationAvailability> get() = NO_AVAILABILITY
-
     /** The app came to the front: a service start the system refused in the background is tried again. */
     fun onForeground() = Unit
 
@@ -400,20 +397,14 @@ data class IncomingShare(
     override fun toString(): String = "IncomingShare"
 }
 
-/** Whether this vault has location: learnt by asking, since no message lists a release's features. */
-enum class LocationAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
-
 private val NO_MISSED: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 private val NO_INCOMING: StateFlow<List<IncomingShare>> = MutableStateFlow(emptyList())
-
-private val NO_AVAILABILITY: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 
 /** Sharing where there is none (a screen's default): nothing is shared or sent. */
 object NoLocation : LocationRepository {
     override val outgoing: StateFlow<List<OutgoingShare>> = MutableStateFlow(emptyList())
     override val serviceState: StateFlow<ServiceState> = MutableStateFlow(ServiceState())
-    override val availability: StateFlow<LocationAvailability> = MutableStateFlow(LocationAvailability.UNSUPPORTED)
 
     override suspend fun start(request: ShareRequest): OutgoingShare = throw VaultFailure(FailureKind.NOT_SUPPORTED)
 
