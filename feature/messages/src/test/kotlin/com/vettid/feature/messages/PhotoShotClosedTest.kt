@@ -77,4 +77,34 @@ class PhotoShotClosedTest {
         assertTrue(attachments.prepared.single().wiped)
         vm.viewModelScope.cancel()
     }
+
+    @Test
+    fun aShotCancelledWhilePreparedNeverBecomesADraft() {
+        val attachments = FakeAttachments()
+        val vm = conversation(attachments)
+        attachments.duringPrepare = { vm.cancelPhotos() } // the X while it is prepared
+        vm.onShot(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
+        assertNull(vm.uiState.value.photoDraft)
+        assertTrue("wiped", attachments.prepared.single().wiped)
+        // The next shot is not taken for cancelled.
+        attachments.duringPrepare = null
+        vm.onShot(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
+        assertEquals(1, vm.uiState.value.photoDraft!!.photos.size)
+        vm.viewModelScope.cancel()
+    }
+
+    @Test
+    fun cancelStopsAShotsPreparation() {
+        val attachments = FakeAttachments()
+        val vm = conversation(attachments)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        attachments.prepareGate = gate
+        vm.onShot(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888))
+        assertTrue(vm.uiState.value.photoDraft!!.preparing)
+        vm.cancelPhotos()
+        gate.complete(Unit)
+        assertNull(vm.uiState.value.photoDraft)
+        assertTrue("the preparation was stopped, nothing made", attachments.prepared.isEmpty())
+        vm.viewModelScope.cancel()
+    }
 }

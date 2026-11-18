@@ -5,6 +5,7 @@ import com.vettid.core.media.PreparedPhoto
 import com.vettid.core.media.SharedPhotos
 import com.vettid.core.vault.FetchedAttachment
 import com.vettid.core.vault.SentAttachment
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.After
@@ -44,6 +45,7 @@ class AttachmentClearTest {
     @After
     fun tearDown() {
         m.testHook = null
+        m.prepareHook = null
         SharedPhotos.clear()
     }
 
@@ -71,5 +73,45 @@ class AttachmentClearTest {
         assertTrue("and zeroed", offer.bytes.all { it == 0.toByte() })
         assertEquals("the other pending photo is wiped", 1, listOf(a, b).count { it.photo.wiped })
         assertEquals("counted as a clear", 1L, m.cleared.value)
+    }
+
+    private fun picture(): android.graphics.Bitmap =
+        android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888)
+            .also { it.eraseColor(android.graphics.Color.BLUE) }
+
+    /** [AttachmentManager.prepare] whose caller is cancelled just as the photo is made: the photo comes back to nobody. */
+    private suspend fun kotlinx.coroutines.CoroutineScope.cancelledAsMade(prepare: suspend () -> PreparedPhoto): PreparedPhoto {
+        val made = java.util.concurrent.atomic.AtomicReference<PreparedPhoto?>()
+        lateinit var job: kotlinx.coroutines.Job
+        m.prepareHook = { p ->
+            made.set(p)
+            job.cancel()
+        }
+        job = launch { prepare() }
+        job.join()
+        assertTrue("the caller was cancelled", job.isCancelled)
+        return made.get()!!
+    }
+
+    @Test
+    fun aShotPreparedForACancelledCallerIsWiped() = runTest {
+        val shot = picture()
+        val made = cancelledAsMade { m.prepare(shot) }
+        assertTrue("not dropped with its bytes", made.wiped)
+    }
+
+    @Test
+    fun aPickPreparedForACancelledCallerIsWiped() = runTest {
+        val out = java.io.ByteArrayOutputStream()
+        picture().compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+        val jpeg = out.toByteArray()
+        val made = cancelledAsMade { m.prepare(jpeg) }
+        assertTrue("not dropped with its bytes", made.wiped)
+    }
+
+    @Test
+    fun aPhotoPreparedForAWaitingCallerIsHandedOverWhole() = runTest {
+        val p = m.prepare(picture())
+        assertFalse(p.wiped)
     }
 }

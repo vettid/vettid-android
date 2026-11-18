@@ -172,7 +172,10 @@ data class ConversationUiState(
     val serviceRefused: Boolean = false,
     /** Photos picked or taken, prepared in memory, waiting for Send or Cancel. */
     val photoDraft: PhotoDraft? = null,
-    /** Changes at every clear of the attachment memory: the bubbles drop their decoded thumbnails. */
+    /**
+     * Changes at every clear of the attachment memory (the bubbles drop their decoded thumbnails) and when the vault opens
+     * again after a thumbnail was refused while it was closed (the bubbles ask again).
+     */
     val photoGeneration: Long = 0,
     /**
      * What presence knows of this person (ANDROID-PLAN §4 "Presence"): the line under the title. Null for a service, for a
@@ -310,9 +313,16 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // A lock, the hold or due state, a wipe or an unlink (ANDROID-PLAN 0.1.39 "Memory only"): the draft, the
             // pending upload and the thumbnails shown go, and the bubbles read their thumbnails again.
-            attachments.cleared.drop(1).collect { gen ->
+            attachments.cleared.drop(1).collect {
                 dropPhotos(discard = false)
-                local.update { it.copy(photoGeneration = gen) }
+                local.update { it.copy(photoGeneration = it.photoGeneration + 1) }
+            }
+        }
+        viewModelScope.launch {
+            // The vault opened again after a thumbnail was refused while it was closed (the owner check passed under its
+            // cover, the release gate lifted): the bubbles that show a placeholder ask again.
+            attachments.reopened.drop(1).collect {
+                local.update { it.copy(photoGeneration = it.photoGeneration + 1) }
             }
         }
         viewModelScope.launch {
@@ -490,16 +500,17 @@ class ConversationViewModel @Inject constructor(
 
     /** A shot from the app's camera, upright, in memory (no file); recycled here once prepared. */
     fun onShot(shot: Bitmap) {
-        // The generation before the open check: a clear right after it voids what is prepared (this job is not
-        // [photoJob], so a clear's dropPhotos does not reach it).
+        // The generation before the open check: a clear right after it voids what is prepared.
         val generation = attachments.cleared.value
         if (attachments.closed()) {
             shot.recycle()
             local.update { it.copy(capturing = false) }
             return
         }
+        photosCancelled = false
         local.update { it.copy(capturing = false, photoDraft = PhotoDraft(preparing = true)) }
-        viewModelScope.launch {
+        // [photoJob], so that Cancel and a clear (dropPhotos) stop it; one cancelled while preparing gets nothing back.
+        photoJob = viewModelScope.launch {
             val draft = try {
                 PhotoDraft(photos = listOf(attachments.prepare(shot)))
             } catch (e: PhotoException) {
@@ -507,8 +518,8 @@ class ConversationViewModel @Inject constructor(
             } finally {
                 shot.recycle()
             }
-            if (attachments.cleared.value != generation) {
-                // A clear while it was prepared: nothing of it is kept.
+            if (photosCancelled || attachments.cleared.value != generation) {
+                // Cancelled, or a clear while it was prepared: nothing of it is kept.
                 draft.photos.forEach { it.wipe() }
                 local.update { it.copy(photoDraft = null) }
                 return@launch
@@ -537,12 +548,14 @@ class ConversationViewModel @Inject constructor(
             var d = draft
             while (d.photos.isNotEmpty()) {
                 if (photosCancelled) return@launch
+                // The mark before the open check, carried into begin: a clear after the check ends the photo unsent.
+                val mark = attachments.cleared.value
                 if (attachments.closed()) {
                     // Closed (before the first photo or between two): nothing more is begun; the draft waits for Send.
                     local.update { it.copy(photoDraft = d.copy(sending = false, inFlight = false)) }
                     return@launch
                 }
-                val p = pendingPhoto ?: attachments.begin(connectionId, if (d.sent == 0) d.caption.trim() else "", d.photos.first())
+                val p = pendingPhoto ?: attachments.begin(connectionId, if (d.sent == 0) d.caption.trim() else "", d.photos.first(), mark)
                 pendingPhoto = p
                 local.update { s -> s.copy(photoDraft = s.photoDraft?.copy(inFlight = true)) }
                 try {

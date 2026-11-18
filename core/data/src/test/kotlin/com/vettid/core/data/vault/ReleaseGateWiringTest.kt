@@ -83,6 +83,26 @@ class ReleaseGateWiringTest {
             .has("vaultClosed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
     }
 
+    /**
+     * `AttachmentsRepository.closed()` turns true before the attachments' clear of a lock, the hold or due state and a wipe
+     * (the forget paths drop the session first; callers carry the clear mark into `begin` for those).
+     */
+    @Test
+    fun theVaultIsClosedBeforeTheLockHoldAndWipeClearPhotos() {
+        // A lock: the clears run on the phase already published (the phase's collector).
+        code.has("clearAttachments = { attachments.clear() },")
+        assertTrue(block("phaseFlow.asStateFlow().collectSurviving(\"phase\") {").any { it.startsWith("phaseSteps.onPhase(it) {") })
+        // The hold or due state: on an owner-check value that is already held (held means gated).
+        val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
+        held.has("val now = OwnProfileStep.held(v)")
+        val opens = held.indexOf("if (now && !wasHeld) {")
+        assertTrue(opens >= 0)
+        assertTrue(held.subList(opens, held.size).contains("steps.step { attachments.clear() }"))
+        // A wipe: the release gate's clear (a pause) is its first step, before the attachments'.
+        val wipe = block("private suspend fun eraseAfterMark()")
+        assertTrue(wipe.indexOf("steps.step { releaseUpdate.clear() }") in 0 until wipe.indexOf("steps.step { attachments.clear() }"))
+    }
+
     @Test
     fun noAttachmentProbeAndTheClearsStay() {
         assertTrue("no probe", code.none { it.contains("attachments.probe") })

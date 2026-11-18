@@ -98,8 +98,21 @@ interface AttachmentsRepository {
      * The vault is not open on this phone, the daily owner check is due or held, or the release gate checks or pauses
      * (Rule 3): no photo is taken in, and every call that would reach the vault or the mailbox is refused
      * (`owner_check_required`) or, for a cleanup, left undone.
+     *
+     * It turns true before the [clear] of a lock (the clears run on the phase already published as locked), of the hold
+     * or due state (they run on an owner-check value that is already gated) and of a wipe (its first step, the release
+     * gate's clear, pauses). It does not before the forget paths' [clear] (signing out, a missing vault, an abandoned
+     * recovery, the end of a deletion), which drop the session first and publish the phase after. So a caller never
+     * relies on it alone: it reads [cleared] before asking it, and a send carries that mark into [begin], so that a clear
+     * between the two ends the photo under the clear's own lock.
      */
     fun closed(): Boolean
+
+    /**
+     * Counts each time the vault opened again after a fetch was refused because it was [closed] (the owner check passed,
+     * the release gate lifted, the next unlock): the bubbles that showed a placeholder ask again.
+     */
+    val reopened: StateFlow<Long>
 
     /**
      * Prepares a picked picture's bytes for sending, off the main thread (ANDROID-PLAN "Preparing it, in memory"):
@@ -111,8 +124,11 @@ interface AttachmentsRepository {
     /** Prepares a camera shot (upright, in memory); the caller recycles [shot]. */
     suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto
 
-    /** Starts sending [photo] to [connectionId] with [caption] (it goes with the first photo only). */
-    fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto
+    /**
+     * Starts sending [photo] to [connectionId] with [caption] (it goes with the first photo only). [clearMark] is [cleared]
+     * as the caller read it before it asked [closed]: a clear since then ends the photo before anything is sent.
+     */
+    fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long = cleared.value): PendingPhoto
 
     /**
      * Uploads [p] (unless it already is) and sends `message.send` with it under [PendingPhoto.requestId]. A lost
@@ -211,6 +227,18 @@ class AttachmentManager(
     @Volatile
     internal var testHook: ((String) -> Unit)? = null
 
+    /** TEST hook: called with each photo prepared, before it is handed back (a cancellation landing then). */
+    @VisibleForTesting
+    @Volatile
+    internal var prepareHook: ((PreparedPhoto) -> Unit)? = null
+
+    private val reopenedFlow = MutableStateFlow(0L)
+    override val reopened: StateFlow<Long> = reopenedFlow.asStateFlow()
+
+    /** Watches [closed] after a refused fetch, until the vault opens again ([reopened]); one at a time. */
+    private var watcher: kotlinx.coroutines.Job? = null
+    private val watchLock = Any()
+
     /** `attachment_fetches`: at most 2 `content` fetches of this device at once (§10.5.1). */
     private val fetches = Semaphore(MAX_FETCHES)
 
@@ -219,6 +247,23 @@ class AttachmentManager(
     /** Nothing reaches the vault or the mailbox while [closed]: `owner_check_required`, as for presence and location. */
     private fun ensureOpen() {
         if (closed()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, CODE_CLOSED)
+    }
+
+    /** [ensureOpen] for a fetch: a refusal is a placeholder on screen, so the vault opening again is told ([reopened]). */
+    private fun ensureOpenToFetch() {
+        if (!closed()) return
+        watchClosed()
+        ensureOpen()
+    }
+
+    private fun watchClosed() {
+        synchronized(watchLock) {
+            if (watcher?.isActive == true) return
+            watcher = scope.launch {
+                while (closed()) kotlinx.coroutines.delay(WATCH_MS)
+                reopenedFlow.value++
+            }
+        }
     }
 
     /**
@@ -232,14 +277,32 @@ class AttachmentManager(
         ensureOpen()
     }
 
-    override suspend fun prepare(source: ByteArray): PreparedPhoto =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(source) }
+    override suspend fun prepare(source: ByteArray): PreparedPhoto = preparedOrWiped { com.vettid.core.media.Photos.prepare(source) }
 
     override suspend fun prepare(shot: android.graphics.Bitmap): PreparedPhoto =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { com.vettid.core.media.Photos.prepare(shot) }
+        preparedOrWiped { com.vettid.core.media.Photos.prepare(shot) }
 
-    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto =
-        PendingPhoto(connectionId, caption, photo, ops.newRequestId(), clearedFlow.value).also { pending += it }
+    /**
+     * Prepares off the main thread. A caller cancelled meanwhile (Cancel, the screen gone) never gets the photo: it is
+     * wiped here, not dropped with its bytes.
+     */
+    private suspend fun preparedOrWiped(make: () -> PreparedPhoto): PreparedPhoto {
+        val made = java.util.concurrent.atomic.AtomicReference<PreparedPhoto?>()
+        try {
+            return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                make().also {
+                    made.set(it)
+                    prepareHook?.invoke(it)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            made.get()?.wipe()
+            throw e
+        }
+    }
+
+    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long): PendingPhoto =
+        PendingPhoto(connectionId, caption, photo, ops.newRequestId(), clearMark).also { pending += it }
 
     /**
      * (ANDROID-PLAN "Memory only, wiped at lock") A clear (a lock, the hold or due state, a wipe, an unlink) came since [p]
@@ -389,7 +452,7 @@ class AttachmentManager(
         thumbs.get(cacheKey(connectionId, messageId))?.let { return it.copyOf() }
         // The mark before the open check: a clear right after the check voids the answer.
         val mark = clearedFlow.value
-        ensureOpen()
+        ensureOpenToFetch()
         val t = vaultGuard { ops.thumb(connectionId, messageId) }
         if (!acceptableThumb(t)) throw VaultFailure(FailureKind.OTHER, CODE_TYPE)
         keepUnlessCleared(mark, t) { thumbs.put(cacheKey(connectionId, messageId), t) }
@@ -430,10 +493,10 @@ class AttachmentManager(
     @Suppress("ThrowsCount")
     private suspend fun fetch(connectionId: String, messageId: String): FetchedPhoto {
         // Here, after the wait for a turn: the vault may have closed meanwhile.
-        ensureOpen()
+        ensureOpenToFetch()
         val ref = vaultGuard { ops.content(connectionId, messageId) }.blob
         val raw = try {
-            ensureOpen()
+            ensureOpenToFetch()
             vaultGuard { ops.fetchBlob(ref.id) }
         } finally {
             // Every fetched blob is deleted, good or bad (§5.5): the mailbox's blob storage is shared. Not while closed:
@@ -546,6 +609,9 @@ class AttachmentManager(
         internal const val HOOK_EVENT = "event"
         internal const val HOOK_WIPE = "wipe"
         private const val MAX_FETCHES = 2
+
+        /** How often [closed] is looked at again after a refused fetch (as presence's watch). */
+        internal const val WATCH_MS = 5_000L
         private const val KEY_BYTES = 32
 
         /** Whether a failed `message.send` is retried as the same request: no answer, `busy`, or a relay error. */

@@ -129,4 +129,68 @@ class ConversationPhotosClosedTest {
         advanceUntilIdle()
         assertNull("the next one goes as before", vm.uiState.value.photoDraft)
     }
+
+    @Test
+    fun theBubblesAskAgainWhenTheVaultOpensAgain() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        assertEquals(0L, vm.uiState.value.photoGeneration)
+        attachments.clear() // the hold's clear: the bubbles drop their thumbnails and are refused
+        advanceUntilIdle()
+        assertEquals(1L, vm.uiState.value.photoGeneration)
+        attachments.reopenedFlow.value++ // the check passed under its cover
+        advanceUntilIdle()
+        assertEquals("a new generation, never one already used", 2L, vm.uiState.value.photoGeneration)
+        attachments.clear()
+        advanceUntilIdle()
+        assertEquals(3L, vm.uiState.value.photoGeneration)
+    }
+
+    @Test
+    fun aSendCarriesTheMarkReadBeforeTheOpenCheck() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        // A clear that lands right after the open check (a sign-out drops the session before the phase changes).
+        attachments.duringClosedCheck = {
+            attachments.duringClosedCheck = null
+            attachments.clear()
+        }
+        vm.sendPhotos()
+        advanceUntilIdle()
+        assertEquals("the mark from before the clear, so the manager ends the photo", listOf(0L), attachments.beginMarks)
+    }
+
+    @Test
+    fun aRefusalWhileAPhotoIsOnItsWayEndsThatPhoto() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        vm.onPicked(picks(byteArrayOf(1), byteArrayOf(2)))
+        advanceUntilIdle()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        attachments.sendGate = gate
+        vm.sendPhotos()
+        advanceUntilIdle()
+        attachments.closedNow = true // the owner check comes due while the first photo is on its way
+        gate.complete(Unit)
+        advanceUntilIdle()
+        val d = vm.uiState.value.photoDraft!!
+        assertEquals(PhotoProblem.NOT_SENT, d.problem)
+        assertFalse(d.retry)
+        assertFalse(d.sending)
+        assertEquals("that photo ends, the other waits", 1, d.photos.size)
+        assertEquals(1, attachments.calls.count { it.startsWith("begin") })
+    }
+
+    @Test
+    fun aPickCancelledWhilePreparedNeverBecomesADraft() = runTest {
+        val vm = conversation()
+        advanceUntilIdle()
+        attachments.duringPrepare = { vm.cancelPhotos() }
+        vm.onPicked(picks(byteArrayOf(1)))
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.photoDraft)
+        assertTrue("wiped", attachments.prepared.single().wiped)
+    }
 }

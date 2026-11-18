@@ -6,6 +6,7 @@ import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.FetchedPhoto
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.PendingPhoto
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.media.ImageType
 import com.vettid.core.media.PhotoException
@@ -41,6 +42,9 @@ class FakeAttachments : AttachmentsRepository {
     /** Run while a picture or a shot is prepared (a clear landing then). */
     var duringPrepare: (() -> Unit)? = null
 
+    /** When set, a shot's preparation waits for it (a preparation on its way). */
+    var prepareGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     private fun call(name: String) {
         calls += name
         fail.remove(name)?.let { throw it }
@@ -56,11 +60,20 @@ class FakeAttachments : AttachmentsRepository {
     override suspend fun prepare(shot: Bitmap): PreparedPhoto {
         call("prepareShot")
         duringPrepare?.invoke()
+        prepareGate?.await()
         return PreparedPhoto(ByteArray(10) { 5 }, byteArrayOf(1), shot.width, shot.height).also { prepared += it }
     }
 
-    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto): PendingPhoto {
+    /** The clear mark each [begin] was given. */
+    val beginMarks = mutableListOf<Long>()
+
+    /** [AttachmentsRepository.reopened]: a test moves it as the vault opening again. */
+    val reopenedFlow = MutableStateFlow(0L)
+    override val reopened: StateFlow<Long> = reopenedFlow
+
+    override fun begin(connectionId: String, caption: String, photo: PreparedPhoto, clearMark: Long): PendingPhoto {
         calls += "begin:$caption"
+        beginMarks += clearMark
         return AttachmentAccess.pending(connectionId, caption, photo, "REQ${++seq}")
     }
 
@@ -70,6 +83,8 @@ class FakeAttachments : AttachmentsRepository {
     override suspend fun send(p: PendingPhoto): MessageInfo {
         calls += "send:${p.requestId}"
         sendGate?.await()
+        // As the real one: refused while closed (checked again just before `message.send`).
+        if (closedNow) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
         fail.remove("send")?.let { throw it }
         return MessageInfo(p.connectionId, "M${p.requestId}", true, p.caption, Instant.EPOCH, delivered = false, read = false)
     }
