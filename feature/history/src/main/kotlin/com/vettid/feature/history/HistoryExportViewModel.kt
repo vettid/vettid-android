@@ -31,9 +31,6 @@ import javax.inject.Inject
 enum class ExportRefusal {
     /** A clone alarm is open (`credential_frozen` / `rotation_required`, §3.5.9). */
     ALARM,
-
-    /** The vault release predates `audit.export` (VAULT-MESSAGING 0.22.0): `unsupported_type` or `bad_request`. */
-    OLD_VAULT,
 }
 
 /** The steps of a History export (ANDROID-PLAN 0.1.17): preview → confirm → PIN → reading → "Save to…" → done. */
@@ -185,7 +182,7 @@ class HistoryExportViewModel @Inject constructor(
     }
 
     private fun pinRefused(s: ExportStep.Pin, e: VaultFailure): ExportStep {
-        refusal(e)?.let { if (it == ExportRefusal.ALARM) return ExportStep.Refused(it) }
+        refusal(e)?.let { return ExportStep.Refused(it) }
         return when (e.kind) {
             FailureKind.NOT_FOUND -> ExportStep.NothingToExport
             FailureKind.OWNER_CHECK_REQUIRED -> ExportStep.Failed(e.kind, shownCode = e.shownCode)
@@ -317,13 +314,8 @@ class HistoryExportViewModel @Inject constructor(
     }
 
     private companion object {
-        const val CODE_BAD_REQUEST = "bad_request"
-
-        fun refusal(e: VaultFailure): ExportRefusal? = when {
-            e.kind == FailureKind.CREDENTIAL_FROZEN || e.kind == FailureKind.ROTATION_REQUIRED -> ExportRefusal.ALARM
-            e.kind == FailureKind.NOT_SUPPORTED || e.code == "unsupported_type" -> ExportRefusal.OLD_VAULT
-            e.code == CODE_BAD_REQUEST -> ExportRefusal.OLD_VAULT
-            else -> null
-        }
+        /** Every other failure (`bad_request` for a filter the vault refuses, `unsupported_type`…) is an ordinary one. */
+        fun refusal(e: VaultFailure): ExportRefusal? =
+            if (e.kind == FailureKind.CREDENTIAL_FROZEN || e.kind == FailureKind.ROTATION_REQUIRED) ExportRefusal.ALARM else null
     }
 }

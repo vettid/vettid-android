@@ -416,9 +416,7 @@
     <string name="onboarding_open_wrong_wait">PIN or password is wrong. The vault does not tell us which. %1$d of 10 attempts left. Your next attempt is possible on %2$s.</string>
     <string name="onboarding_open_wrong_again">That is the same PIN and password as your last attempt, and they are still wrong. This was not counted. Change one of them before you try again.</string>
     <string name="onboarding_open_attempt_lost">Something went wrong on the way and one attempt was used without being tested. %1$d of 10 left. Your PIN and password were not judged wrong. A slow or interrupted service can cause this.</string>
-    <string name="onboarding_open_quiet">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest.</string>
     <string name="onboarding_open_quiet_nodate">This vault cannot be recovered yet: it has no record of when its app was last used with its PIN and password. Try again later.</string>
-    <string name="onboarding_open_wait">You can try again on %1$s.</string>
     <string name="onboarding_open_quiet_nothing">This vault\'s app was used with its PIN and password recently. A vault can be recovered only some time after that: from %1$s at the earliest. Nothing was used.</string>
     <string name="onboarding_open_quiet_used">The vault\'s app was used with its PIN and password while this attempt was on its way, or the service recorded that it was. One attempt was used without being tested. %1$d left.</string>
     <string name="onboarding_open_wait_nothing">You can try again on %1$s. Nothing was used.</string>
@@ -429,7 +427,6 @@
     <string name="onboarding_open_lost_not_here">Your vault was not recovered onto this phone by the last attempt. Go back and try again.</string>
     <string name="onboarding_open_back">Back to the recovery</string>
     <string name="onboarding_open_wait_nodate">You cannot try again yet. Try again later.</string>
-    <string name="onboarding_open_attempts_left">Attempts left: %1$d of 10.</string>
     <string name="onboarding_open_busy">The service is busy right now. Nothing was used. Try again in a minute.</string>
     <string name="onboarding_open_retry">The service was too slow just now. Nothing was used. Try again.</string>
     <string name="onboarding_open_stored_mismatch">The vault\'s stored data could not be opened. Nothing was used. Contact VettID.</string>

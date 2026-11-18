@@ -93,7 +93,10 @@ class RecoverLeaveScreenTest {
         val vm = RecoveryOpenViewModel(vault, vault)
         var opened = 0
         val state = androidx.compose.runtime.mutableStateOf(
-            RecoveryOpenUiState(step = OpenStep.DONE, outcome = com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1)),
+            RecoveryOpenUiState(
+                step = OpenStep.DONE,
+                outcome = com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1, attemptUsed = false),
+            ),
         )
         rule.setContent { RecoveryOpenPane(state.value, vm, onOpened = { opened++ }) }
         rule.waitForIdle()

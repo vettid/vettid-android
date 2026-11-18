@@ -14,7 +14,6 @@
     <!-- Owner-approved 2026-11-12: call.start refused calls_off. -->
     <string name="calls_end_calls_off">Calls with %1$s are off.</string>
     <string name="calls_end_owner_check_required">Confirm it\'s you before calling. Your daily check is due.</string>
-    <string name="calls_end_not_supported">Calls are not available for your vault yet</string>
     <string name="calls_end_no_address">VettID cannot reach the network for calls. Check that this phone is online and that VettID is allowed to use the network.</string>
     <string name="calls_end_could_not_connect">Couldn\'t connect the call. Try calling again.</string>
     <string name="calls_end_connection_lost">Connection lost</string>

@@ -325,7 +325,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         call("recoveryOpen")
         lastPin = pin
         lastPassword = password
-        return recoveryOpenOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1)
+        return recoveryOpenOutcomes.removeFirstOrNull() ?: com.vettid.core.data.vault.RecoveryOpenOutcome("ok", 1, attemptUsed = false)
     }
 
     override suspend fun recoveryOpened(): Boolean = recoveryOpenedValue

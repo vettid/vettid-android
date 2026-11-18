@@ -146,10 +146,6 @@ fun HistoryExportContent(step: ExportStep, words: ExportFilterWords, actions: Hi
                 stringResource(R.string.history_export_alarm_title), stringResource(R.string.history_export_alarm),
                 NoticeKind.URGENT, actions.onClose, m, stringResource(R.string.history_export_alarm_open) to actions.onOpenAlarm,
             )
-            ExportRefusal.OLD_VAULT -> Message(
-                stringResource(R.string.history_export_old_vault_title), stringResource(R.string.history_export_old_vault),
-                NoticeKind.INFO, actions.onClose, m,
-            )
         }
         is ExportStep.Pin -> PinStep(step, actions, m)
         is ExportStep.Reading -> Progress(

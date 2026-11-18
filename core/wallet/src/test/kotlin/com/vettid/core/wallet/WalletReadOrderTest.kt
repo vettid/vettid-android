@@ -102,15 +102,16 @@ class WalletReadOrderTest {
         assertEquals(2, m.wallets.value.size)
     }
 
-    /** An older read answered `unsupported_type` does not hide the wallets a newer read showed. */
+    /** An older read that failed (`unsupported_type`, a failure like any other) does not hide the wallets a newer read showed. */
     @Test
-    fun anOlderUnsupportedAnswerDoesNotOverrideANewerList() = runBlocking {
+    fun anOlderFailedReadDoesNotOverrideANewerList() = runBlocking {
         wallet()
         val m = manager()
         m.open()
         ops.slowReadRefuses = true
         duringAnOlderRead(m) { m.refresh() }
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
+        assertEquals(1, m.wallets.value.size)
     }
 
     /** The first list read again after a change fails: the first list stays shown and open() still sends a pending limit. */
@@ -219,7 +220,7 @@ class WalletReadOrderTest {
         ops.listFails = true
         gate.complete(Unit)
         opening.join()
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
         assertEquals("the first list, as read", listOf(w.id), m.wallets.value.map { it.id })
     }
 
@@ -256,7 +257,7 @@ class WalletReadOrderTest {
             }
         }
         m.open()
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
         assertEquals("the first list, as read", listOf(w.id), m.wallets.value.map { it.id })
     }
 }

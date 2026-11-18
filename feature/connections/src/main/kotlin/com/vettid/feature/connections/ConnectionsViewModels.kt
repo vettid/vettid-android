@@ -22,13 +22,12 @@ import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.prefs.InMemoryPreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.presence.NoPresence
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresencePolicy
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceShare
 import com.vettid.core.data.presence.PresenceState
-import com.vettid.core.data.presence.queryWhileAvailable
+import com.vettid.core.data.presence.queryOncePolicyRead
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
@@ -123,8 +122,8 @@ class ConnectionsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
-    private val cardOn = combine(presence.availability, presence.policy, prefs.preferences) { a, p, pref ->
-        a == PresenceAvailability.AVAILABLE && p?.share == PresenceShare.ALL && !pref.presenceCardAnswered
+    private val cardOn = combine(presence.policy, prefs.preferences) { p, pref ->
+        p?.share == PresenceShare.ALL && !pref.presenceCardAnswered
     }
 
     val uiState: StateFlow<ConnectionsUiState> = combine(
@@ -648,8 +647,8 @@ data class ConnectionDetailUiState(
      */
     val authRefused: Boolean = false,
     /**
-     * Presence (ANDROID-PLAN §4 "Presence"): null for a service, for a connection that is not active, and wherever the vault
-     * has no presence (nothing of it is shown then).
+     * Presence (ANDROID-PLAN §4 "Presence"): null for a service, for a connection that is not active, and until the
+     * member's policy is read (nothing of it is shown then: the vault is locked, held or due, or not read yet).
      */
     val presence: DetailPresence? = null,
     /** The member shares their location with this connection until [DetailLocation.until] (ANDROID-PLAN §4 "Location"). */
@@ -738,7 +737,7 @@ data class DetailLocation(
  */
 data class DetailPresence(
     val reading: PresenceReading,
-    val shared: Boolean?,
+    val shared: Boolean,
     /** The member's own status is Invisible: nothing is shared, whatever the switch would say. */
     val invisible: Boolean = false,
     /** The refresh icon works: the connection was not asked in the last minute (asking again would send nothing). */
@@ -858,16 +857,11 @@ class ConnectionDetailViewModel @Inject constructor(
         val units: com.vettid.core.data.prefs.DistanceUnits,
     )
 
-    /** What presence knows of this connection, while the vault has presence; null otherwise. */
-    private class PresenceView(val reading: PresenceReading?, val shared: Boolean?, val invisible: Boolean, val canRefresh: Boolean)
+    /** What presence knows of this connection, once the member's policy is read; null otherwise. */
+    private class PresenceView(val reading: PresenceReading?, val shared: Boolean, val invisible: Boolean, val canRefresh: Boolean)
 
-    private fun ownPresence() = combine(presence.availability, presence.policy, presence.readings, presence.recent) {
-        a, policy, r, recent ->
-        if (a == PresenceAvailability.AVAILABLE) {
-            PresenceView(r[id], policy?.sharesWith(id), policy?.state == PresenceState.INVISIBLE, id !in recent)
-        } else {
-            null
-        }
+    private fun ownPresence() = combine(presence.policy, presence.readings, presence.recent) { policy, r, recent ->
+        policy?.let { PresenceView(r[id], it.sharesWith(id), it.state == PresenceState.INVISIBLE, id !in recent) }
     }
 
     /** The member's outgoing location share with this connection, if one is active (ANDROID-PLAN §4 "Location"). */
@@ -1021,7 +1015,7 @@ class ConnectionDetailViewModel @Inject constructor(
         // Presence is asked when the page opens (and on refresh), never from a list (ANDROID-PLAN §4 "Presence").
         viewModelScope.launch {
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(id, shown)
+            if (c.askable) presence.queryOncePolicyRead(id, shown)
         }
     }
 

@@ -15,13 +15,12 @@ internal const val MAINNET_PAYEE = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 
 internal fun sampleReview(
     capRefusal: CapText? = null,
-    hasCap: Boolean = true,
     toFeeSats: Long = 0,
     change: Long = 58_800,
     sendAll: Boolean = false,
 ) = Review(
     address = PAYEE, payeeSats = 40_000, changeSats = change, feeSats = 1_200, vsize = 200, totalOutSats = 41_200, toFeeSats = toFeeSats,
-    sendAll = sendAll, leftBehind = 0, hasCap = hasCap, capRefusal = capRefusal,
+    sendAll = sendAll, leftBehind = 0, capRefusal = capRefusal,
 )
 
 /** The sending core as the screens see it: canned answers, and what was asked. */

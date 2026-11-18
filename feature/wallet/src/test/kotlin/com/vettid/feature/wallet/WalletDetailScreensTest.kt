@@ -135,8 +135,18 @@ class WalletDetailScreensTest {
         assertEquals(2, again)
     }
 
+    /** A read of the wallets that failed before this wallet was shown: the list's failure, with Try again, not a spinner. */
     @Test
-    fun theMenuHasTheFourItemsAndNotTheW1dOnes() {
+    fun aFailedFirstReadIsSaidWithTryAgain() {
+        var retried = 0
+        show(WalletDetailUiState(name = "Savings", listFailed = FailureKind.NETWORK), WalletDetailActions(onRetryList = { retried++ }))
+        rule.onNodeWithText("Your wallets couldn't be read.").assertIsDisplayed()
+        rule.onNodeWithTag("wallet_retry").performClick()
+        assertEquals(1, retried)
+    }
+
+    @Test
+    fun theMenuHasItsFiveItemsAndNoPhraseItem() {
         val got = mutableListOf<String>()
         show(
             detail(),
@@ -149,7 +159,8 @@ class WalletDetailScreensTest {
         )
         rule.onNodeWithTag("wallet_menu").performClick()
         rule.onNodeWithText("Show recovery phrase").assertDoesNotExist()
-        rule.onNodeWithText("Spending limits").assertDoesNotExist()
+        // Spending limits is always there (Rule 3: every vault has them).
+        rule.onNodeWithTag("wallet_menu_limits").assertExists()
         rule.onNodeWithTag("wallet_menu_details").performClick()
         rule.onNodeWithTag("wallet_menu").performClick()
         rule.onNodeWithTag("wallet_menu_chain_server").performClick()

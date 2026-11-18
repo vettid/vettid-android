@@ -262,9 +262,9 @@ anything of Firebase or Google beyond that.
 
 Voice calls between connections are in every build, release included (owner decision 2026-11-14): the call code,
 the media stack (each native library as pinned) and the call permissions (`:app:check<Variant>Calls`, run by
-`:app:checkReleaseApk`, `:app:checkFossReleaseApk` and `:app:checkStagingApk`). Nothing of calls shows until the vault
-says it has them: the app asks after each unlock (`call.list`), and a vault without calls (`unsupported_type`) or one
-not yet answered shows no call button, Call or calls row. The keys and the frame format are in
+`:app:checkReleaseApk`, `:app:checkFossReleaseApk` and `:app:checkStagingApk`). Every vault the app opens has calls
+(the app requires the vault's current release), so calls show while the vault is open on this phone and no release
+update is required; a locked vault shows no call button, Call or calls row. The keys and the frame format are in
 [docs/calls/CALL-MEDIA.md](docs/calls/CALL-MEDIA.md).
 
 **The call-test build** is a staging build that can break the rules of calls on purpose, so that two phones can

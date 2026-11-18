@@ -237,7 +237,7 @@ const val HISTORY_LIMIT_MAX = 200
 
 /**
  * `wallet.psbt.inspect{wallet_id, psbt}` (§10.18), without the credential: the vault's `<summary>` of the PSBT it would sign, and
- * (0.56.0) `cap: {ok, reason?, remaining_sats?, allowed_after?}` when it implements spending limits. [psbtBase64] is standard base64
+ * (0.56.0) `cap: {ok, reason?, limit_sats?, remaining_sats?, allowed_after?}`, always. [psbtBase64] is standard base64
  * of at most 65,536 bytes. `invalid_psbt` (the reason is the error's message) means the vault would not sign it; the app shows the
  * vault's summary, never its own figures, and compares the two before it asks for the password.
  */

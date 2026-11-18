@@ -116,24 +116,68 @@ class WalletsManagerTest {
     fun theListMakesTheWalletsAvailable() = runBlocking {
         withWallet()
         val m = manager()
-        assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+        assertFalse(m.listed.value)
         m.open()
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
         assertEquals(listOf("Savings"), m.wallets.value.map { it.name })
     }
 
+    /**
+     * Rule 3: `unsupported_type` is a failure like any other. It latches nothing: the manager stays open (the drawer entry stays),
+     * the wallets are not marked listed, and every later read asks the vault again.
+     */
     @Test
-    fun aVaultWithoutWalletsIsAskedOnce() = runBlocking {
+    fun unsupportedTypeIsAFailureThatLatchesNothing() = runBlocking {
+        withWallet()
         ops.unsupported = true
         val m = manager()
         val e = runCatching { m.open() }.exceptionOrNull() as VaultFailure
         assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
-        assertEquals(WalletAvailability.UNSUPPORTED, m.availability.value)
-        m.open()
-        assertEquals(1, ops.calls.count { it == "list" })
-        // A new unlock asks again.
+        assertTrue(m.isOpen.value)
+        assertFalse(m.listed.value)
+        assertEquals("the screens can say it", FailureKind.NOT_SUPPORTED, m.listFailure.value)
+        assertTrue(m.wallets.value.isEmpty())
+        assertTrue(runCatching { m.refresh() }.exceptionOrNull() is VaultFailure)
+        assertEquals(2, ops.calls.count { it == "list" })
+        // A transaction's wallet is not "none" for a list that could not be read: the failure is thrown.
+        assertTrue(runCatching { m.walletOfTransaction("ab".repeat(32)) }.exceptionOrNull() is VaultFailure)
+        assertEquals(3, ops.calls.count { it == "list" })
+        // Try again once the vault answers: the wallets are shown.
+        ops.unsupported = false
+        m.refresh()
+        assertTrue(m.listed.value)
+        assertNull("a list shown clears the failure", m.listFailure.value)
+        assertEquals(listOf("Savings"), m.wallets.value.map { it.name })
+        ops.unsupported = true
+        assertTrue(runCatching { m.refresh() }.exceptionOrNull() is VaultFailure)
         m.clear()
-        assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+        assertFalse(m.listed.value)
+        assertNull("a clear forgets it", m.listFailure.value)
+    }
+
+    /**
+     * With no latch, the generation is what keeps an answer from before a lock out of the next session: a read taken before the
+     * lock and answered after the next open is dropped, and the new session's own read is what is shown.
+     */
+    @Test
+    fun aListAnsweredAfterALockAndAReopenIsNotShown() = runBlocking {
+        withWallet()
+        val m = manager()
+        val gate = CompletableDeferred<Unit>()
+        ops.listGate = gate
+        val stale = async(Dispatchers.Default) { runCatching { m.open() } }
+        delay(100)
+        m.clear()
+        ops.listGate = null
+        // The vault's wallets changed meanwhile; the new session reads them.
+        ops.wallets.clear()
+        val now = WalletFixtures.wallet(id = "01WALLET0000000000000000BB").also { ops.wallets[it.id] = it }
+        m.open()
+        assertEquals(listOf(now.id), m.wallets.value.map { it.id })
+        gate.complete(Unit)
+        stale.await()
+        assertEquals("the read from before the lock is dropped", listOf(now.id), m.wallets.value.map { it.id })
+        assertTrue(m.listed.value)
     }
 
     @Test
@@ -381,6 +425,8 @@ class WalletsManagerTest {
     @Test
     fun createRevealsWithTheSamePasswordAndLeavesTheWalletNotBackedUp() = runBlocking {
         val m = manager()
+        m.open()
+        ops.calls.clear()
         val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         assertEquals(listOf("create:testnet4", "reveal"), ops.calls)
         assertEquals(24, c.phrase!!.wordCount)
@@ -396,6 +442,7 @@ class WalletsManagerTest {
     fun aRevealThatFailsKeepsTheWallet() = runBlocking {
         ops.revealFails = true
         val m = manager()
+        m.open()
         val c = m.create("Savings", Network.SIGNET, "pw".toCharArray())
         assertNull(c.phrase)
         assertNotNull(c.revealFailure)
@@ -419,6 +466,7 @@ class WalletsManagerTest {
     @Test
     fun deleteForgetsTheWalletAndItsFlag() = runBlocking {
         val m = manager()
+        m.open()
         val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray())
         m.confirmBackup(c.wallet.id)
         m.delete(c.wallet.id, "pw".toCharArray())
@@ -465,7 +513,7 @@ class WalletsManagerTest {
         ops.listGate!!.complete(Unit)
         reading.await()
         assertTrue(m.wallets.value.isEmpty())
-        assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+        assertFalse(m.listed.value)
     }
 
     @Test
@@ -559,6 +607,7 @@ class WalletsManagerTest {
                 }
         }
         m = WalletsManager(CoroutineScope(SupervisorJob() + Dispatchers.Default), { gated }, { n -> chain.open(n) }, WalletFlags(flagsFile), { it in offered }, { now })
+        m.open()
         val e = runCatching { m.revealPhrase("01WALLET0000000000000000AA", "pw".toCharArray()) }.exceptionOrNull() as VaultFailure
         assertEquals(WalletsManager.CLEARED, e.code)
         assertTrue(revealed!!.words().isEmpty())

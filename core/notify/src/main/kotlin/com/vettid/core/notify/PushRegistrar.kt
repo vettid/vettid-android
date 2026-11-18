@@ -43,13 +43,13 @@ enum class PushRegState {
     /** `gateway_error` (or no token from the push service): tried again, 1 minute doubling to 1 hour. */
     RETRYING,
 
-    /** `unavailable`: the vault's release has no push gateway. */
+    /** `unavailable`: the vault has no push gateway URL (VAULT-MESSAGING §14.1). */
     UNAVAILABLE,
 
     /** `limit` (`push_registrations`): nothing is sent for 24 hours. */
     LIMITED,
 
-    /** Another refusal (`bad_request`, `forbidden`): not retried before the vault next opens. */
+    /** Another refusal (`bad_request`, `forbidden`, or a code the app does not know): not retried before the vault next opens. */
     REFUSED,
 }
 

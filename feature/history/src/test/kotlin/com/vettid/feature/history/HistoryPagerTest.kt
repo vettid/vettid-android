@@ -3,8 +3,9 @@ package com.vettid.feature.history
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditOps
-import com.vettid.core.data.vault.AuditRecord
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HistoryManager
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.AuditEntry
 import com.vettid.core.vault.AuditPage
 import com.vettid.core.vault.VaultOpException
@@ -19,13 +20,15 @@ import java.time.Duration
 import java.time.Instant
 import java.util.Base64
 
-/** Cursor paging, `partial`, the filter sent, the S4 fallback and the chain check (VAULT-MESSAGING 0.20.0 §10.9). */
+/** Cursor paging, `partial`, the filter sent, a refused search and the chain check (VAULT-MESSAGING §10.9). */
 class HistoryPagerTest {
     private val t0: Instant = Instant.parse("2026-10-07T12:00:00Z")
 
     /**
      * A log of [n] entries, seq 1..n, one minute apart (seq n newest), properly chained; kinds cycle through [kinds],
-     * even seqs belong to connection c1. [mode]: how the vault treats the search (0.20.0, S4 ignoring it, refusing).
+     * even seqs belong to connection c1. [mode]: how the vault treats the search (§10.9; [Mode.LOOSE]: a vault that
+     * ignores every filter, `connection_id` and `kinds` too, so the list shows what it answered; [Mode.REFUSES]:
+     * `bad_request`).
      */
     private class Log(
         n: Int,
@@ -34,7 +37,7 @@ class HistoryPagerTest {
         val mode: Mode = Mode.V020,
         val budget: Int = Int.MAX_VALUE,
     ) : AuditOps {
-        enum class Mode { V020, IGNORES, REFUSES }
+        enum class Mode { V020, LOOSE, REFUSES }
 
         var all: List<AuditEntry>
             private set
@@ -81,14 +84,14 @@ class HistoryPagerTest {
             val untilAt = until?.let { Instant.parse(it) }
             val candidates = all.asReversed()
                 .filter { beforeSeq == null || it.seq < beforeSeq }
-                .filter { connectionId == null || it.connectionId == connectionId }
-                .filter { e -> kinds == null || kinds.any { e.kind == it || e.kind.startsWith("$it.") } }
+                .filter { !honour || connectionId == null || it.connectionId == connectionId }
+                .filter { e -> !honour || kinds == null || kinds.any { e.kind == it || e.kind.startsWith("$it.") } }
                 .filter { !honour || sinceAt == null || !Instant.parse(it.at).isBefore(sinceAt) }
                 .filter { !honour || untilAt == null || Instant.parse(it.at).isBefore(untilAt) }
             if (honour && q != null) {
                 // The scan budget: at most [budget] candidates evaluated per request.
                 val evaluated = candidates.take(budget)
-                val matches = evaluated.filter { AuditFilter.matches(q, AuditFilter.kindText(it.kind)) }.take(limit)
+                val matches = evaluated.filter { matches(q, it.kind) }.take(limit)
                 val ranOut = candidates.size > budget && matches.size < limit
                 val cursor = when {
                     ranOut -> evaluated.last().seq
@@ -105,6 +108,10 @@ class HistoryPagerTest {
         companion object {
             fun b64(b: ByteArray): String = Base64.getEncoder().encodeToString(b)
 
+            /** §10.9's search over the kind alone: itself and with `.`, `_`, `-` as spaces, lower-case substring. */
+            fun matches(q: String, kind: String): Boolean =
+                listOf(kind, kind.replace('.', ' ').replace('_', ' ').replace('-', ' ')).any { it.lowercase().contains(q.lowercase()) }
+
             fun hash(prev: ByteArray, seq: Long, atMs: Long, kind: String, conn: String?): ByteArray {
                 fun u(v: Long, n: Int) = ByteArray(n) { i -> (v ushr (8 * (n - 1 - i))).toByte() }
                 fun lp(s: String?): ByteArray {
@@ -119,12 +126,10 @@ class HistoryPagerTest {
         }
     }
 
-    private val text: (AuditRecord) -> List<String> = { AuditFilter.kindText(it.kind) }
-
     @Test
     fun pagesOf50NewestFirstWithTheCursor() = runTest {
         val log = Log(120, listOf("vault.unlocked"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text, minPerLoad = 1)
+        val pager = HistoryPager(HistoryManager { log }, minPerLoad = 1)
         val first = pager.reset(AuditFilter())
         assertEquals(50, log.calls.single()["limit"])
         assertNull(log.calls.single()["before_seq"])
@@ -146,7 +151,7 @@ class HistoryPagerTest {
     @Test
     fun theCategoryConnectionAndDatesAreSent() = runTest {
         val log = Log(10, listOf("vault.unlocked", "message.sent"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text)
+        val pager = HistoryPager(HistoryManager { log })
         val since = t0.minus(Duration.ofMinutes(5))
         val until = t0
         val s = pager.reset(AuditFilter(category = AuditCategory.VAULT_ACCESS, connectionId = "c1", since = since, until = until))
@@ -164,7 +169,7 @@ class HistoryPagerTest {
         // One match in ten; the vault evaluates 30 entries per request.
         val kinds = List(9) { "vault.unlocked" } + "credential.password_changed"
         val log = Log(400, kinds, t0, budget = 30)
-        val pager = HistoryPager(HistoryManager { log }, text, minPerLoad = 10, maxPagesPerLoad = 8)
+        val pager = HistoryPager(HistoryManager { log }, minPerLoad = 10, maxPagesPerLoad = 8)
         val s = pager.reset(AuditFilter(query = "password changed"))
         assertEquals("password changed", log.calls.first()["q"])
         // 3 matches per partial page: 4 pages for 10.
@@ -172,49 +177,57 @@ class HistoryPagerTest {
         assertEquals(listOf(null, 371L, 341L, 311L), log.calls.map { it["before_seq"] })
         assertEquals(12, s.entries.size)
         assertTrue(s.partial)
-        assertFalse(s.localSearch)
         assertFalse(s.end)
         assertTrue(s.entries.all { it.kind == "credential.password_changed" })
     }
 
     @Test
-    fun aRefusedSearchIsSentAgainWithoutItAndRunsHere() = runTest {
+    fun aRefusedSearchIsAFailureAndIsNotSentAgainWithoutIt() = runTest {
         val log = Log(50, listOf("vault.unlocked", "message.sent"), t0, Log.Mode.REFUSES)
         val repo = HistoryManager { log }
-        val pager = HistoryPager(repo, text)
-        val s = pager.reset(AuditFilter(query = "message"))
-        assertEquals("message", log.calls[0]["q"])
-        assertNull(log.calls[1]["q"])
-        assertTrue(repo.searchUnsupported)
-        assertTrue(s.localSearch)
-        assertEquals(25, s.entries.size)
-        assertTrue(s.entries.all { it.kind == "message.sent" })
-        // The session stops sending it.
-        pager.reset(AuditFilter(query = "vault"))
-        assertNull(log.calls.last()["q"])
+        val pager = HistoryPager(repo)
+        val e = runCatching { pager.reset(AuditFilter(query = "message")) }.exceptionOrNull()
+        assertEquals("bad_request", (e as VaultFailure).code)
+        assertEquals(FailureKind.OTHER, e.kind)
+        assertEquals(listOf<Any?>("message"), log.calls.map { it["q"] })
+        assertTrue(pager.snapshot.entries.isEmpty())
+        // The next search is sent again: nothing of the refusal is kept for the session.
+        runCatching { pager.reset(AuditFilter(query = "vault")) }
+        assertEquals("vault", log.calls.last()["q"])
+        // A list without a search reads as ever.
+        assertEquals(50, pager.reset(AuditFilter()).entries.size)
     }
 
     @Test
-    fun anIgnoredSearchIsNoticedAndRunsHere() = runTest {
-        // An S4 vault (0.15.0–0.19.0) ignores q, since and until: the answer is unfiltered.
-        val log = Log(50, listOf("vault.unlocked", "message.sent"), t0, Log.Mode.IGNORES)
-        val repo = HistoryManager { log }
-        val pager = HistoryPager(repo, text)
-        val s = pager.reset(AuditFilter(query = "vault unlocked", since = t0.minus(Duration.ofMinutes(19))))
-        assertEquals("vault unlocked", log.calls[0]["q"])
-        assertTrue(repo.searchUnsupported)
-        assertTrue(s.localSearch)
-        // The 20 newest minutes, vault.unlocked only (odd seqs... every other entry).
-        assertEquals(10, s.entries.size)
-        assertTrue(s.entries.all { it.kind == "vault.unlocked" && !it.at!!.isBefore(t0.minus(Duration.ofMinutes(19))) })
+    fun theListIsWhatTheVaultAnsweredWithNothingFilteredOnThisPhone() = runTest {
+        // A vault that answers more than the category, connection, search and dates select: the phone filters and
+        // searches nothing itself.
+        val log = Log(50, listOf("vault.unlocked", "message.sent"), t0, Log.Mode.LOOSE)
+        val pager = HistoryPager(HistoryManager { log })
+        val since = t0.minus(Duration.ofMinutes(19))
+        val filter = AuditFilter(category = AuditCategory.VAULT_ACCESS, connectionId = "c1", query = "vault unlocked", since = since)
+        val s = pager.reset(filter)
+        assertTrue(
+            log.calls.all {
+                it["q"] == "vault unlocked" && it["since"] == since.toString() && it["connection_id"] == "c1" &&
+                    it["kinds"] == listOf("vault", "owner_check")
+            },
+        )
+        assertEquals((50L downTo 1L).toList(), s.entries.map { it.seq })
+        // Listed as answered: entries of another category and of no connection or another one.
+        assertTrue(s.entries.any { it.kind == "message.sent" })
+        assertTrue(s.entries.any { it.connectionId == null })
+        log.append("message.sent")
+        val r = pager.refresh()
+        assertEquals(51L, r.entries.first().seq)
+        assertEquals("message.sent", r.entries.first().kind)
     }
 
     @Test
-    fun aVaultSearchIsTrusted() = runTest {
+    fun aVaultSearchIsShownAsAnswered() = runTest {
         val log = Log(50, listOf("vault.unlocked", "message.sent"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text)
+        val pager = HistoryPager(HistoryManager { log })
         val s = pager.reset(AuditFilter(query = "MESSAGE"))
-        assertFalse(s.localSearch)
         assertEquals(25, s.entries.size)
     }
 
@@ -225,7 +238,7 @@ class HistoryPagerTest {
         val ops = AuditOps { _, kinds, _, limit, _, _, _ ->
             AuditPage(tampered.asReversed().filter { e -> kinds == null || kinds.any { e.kind.startsWith(it) } }.take(limit), seq = 10)
         }
-        val pager = HistoryPager(HistoryManager { ops }, text)
+        val pager = HistoryPager(HistoryManager { ops })
         assertTrue(pager.reset(AuditFilter()).chainBroken)
         assertFalse(pager.reset(AuditFilter(category = AuditCategory.VAULT_ACCESS)).chainBroken)
     }
@@ -234,7 +247,7 @@ class HistoryPagerTest {
     fun theDetailFindsAnEntryReadBefore() = runTest {
         val log = Log(5, listOf("vault.unlocked"), t0)
         val repo = HistoryManager { log }
-        HistoryPager(repo, text).reset(AuditFilter())
+        HistoryPager(repo).reset(AuditFilter())
         assertEquals("e3", repo.cached(3)?.entryId)
         repo.clear()
         assertNull(repo.cached(3))
@@ -243,7 +256,7 @@ class HistoryPagerTest {
     @Test
     fun aRefreshPutsWhatArrivedSinceOnTopAndKeepsTheRest() = runTest {
         val log = Log(120, listOf("vault.unlocked"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text, minPerLoad = 1)
+        val pager = HistoryPager(HistoryManager { log }, minPerLoad = 1)
         pager.reset(AuditFilter())
         pager.more()
         // An export: the vault records `audit.exported` (and nothing else changed).
@@ -264,13 +277,13 @@ class HistoryPagerTest {
     @Test
     fun aRefreshUnderAFilterAddsOnlyWhatMatches() = runTest {
         val log = Log(10, listOf("vault.unlocked"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text)
+        val pager = HistoryPager(HistoryManager { log })
         pager.reset(AuditFilter(category = AuditCategory.VAULT_ACCESS))
         log.append("audit.exported")
         log.append("vault.unlocked")
         val s = pager.refresh()
         assertEquals(listOf(12L) + (10L downTo 1L).toList(), s.entries.map { it.seq })
-        val sec = HistoryPager(HistoryManager { log }, text)
+        val sec = HistoryPager(HistoryManager { log })
         sec.reset(AuditFilter(category = AuditCategory.SECURITY))
         log.append("audit.exported")
         assertEquals(listOf(13L, 11L), sec.refresh().entries.map { it.seq })
@@ -279,7 +292,7 @@ class HistoryPagerTest {
     @Test
     fun moreThanAPageArrivedStartsOver() = runTest {
         val log = Log(60, listOf("vault.unlocked"), t0)
-        val pager = HistoryPager(HistoryManager { log }, text)
+        val pager = HistoryPager(HistoryManager { log })
         pager.reset(AuditFilter())
         repeat(55) { log.append("vault.unlocked") }
         val s = pager.refresh()

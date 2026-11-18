@@ -11,10 +11,9 @@ import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.NoCallAccess
 import android.graphics.Bitmap
 import com.vettid.core.data.presence.NoPresence
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
-import com.vettid.core.data.presence.queryWhileAvailable
+import com.vettid.core.data.presence.queryOncePolicyRead
 import com.vettid.core.data.social.AttachmentManager
 import com.vettid.core.data.social.AttachmentsRepository
 import com.vettid.core.data.social.ConnectionInfo
@@ -148,7 +147,7 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
-    /** Whether this build and this vault have calls ([CallAccess]); the call button follows it. */
+    /** Whether calls can be made now ([CallAccess]: this build has them and the vault is open); the button follows it. */
     val call: CallAvailability = CallAvailability.NOT_IN_BUILD,
     /** The calls with this connection, as the vault's history has them. */
     val calls: List<CallHistoryEntry> = emptyList(),
@@ -179,7 +178,7 @@ data class ConversationUiState(
     val photoGeneration: Long = 0,
     /**
      * What presence knows of this person (ANDROID-PLAN §4 "Presence"): the line under the title. Null for a service, for a
-     * connection that is not active, and where the vault has no presence.
+     * connection that is not active, and until the member's policy is read.
      */
     val presence: PresenceReading? = null,
 ) {
@@ -190,11 +189,7 @@ data class ConversationUiState(
     val noComposer: Boolean get() = serviceRefused || connection?.service == true
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
 
-    /**
-     * A call button is shown: the connection is active and the vault said it has calls. A vault without calls
-     * (`NOT_IN_VAULT`), or one not asked yet, shows no button (owner decision 2026-11-14: every build has calls, so
-     * a vault without them must show nothing new).
-     */
+    /** A call button is shown: the connection is active and the vault is open (every vault the app opens has calls). */
     val callShown: Boolean
         get() = active && !noComposer && (call == CallAvailability.READY || call == CallAvailability.IN_CALL)
 
@@ -243,7 +238,7 @@ class ConversationViewModel @Inject constructor(
                 val off = !p.of(connectionId).allowed
                 s.copy(callsOff = off)
             }
-            .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
+            .combine(presence.policy) { s, p -> s to (p != null) }
             .combine(presence.readings) { (s, on), r ->
                 // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
                 val reading = r[connectionId] ?: PresenceReading.Checking
@@ -286,7 +281,7 @@ class ConversationViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // The calls of this conversation: read when the vault is known to have calls, and again after each call
+            // The calls of this conversation: read when the vault is open, and again after each call
             // (the availability goes from "in a call" back to "ready").
             calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
@@ -297,7 +292,7 @@ class ConversationViewModel @Inject constructor(
                     delay(HISTORY_AGAIN_MS)
                     takeCalls(calls.history(connectionId))
                 } else if (a != CallAvailability.IN_CALL) {
-                    // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
+                    // Not open (locked, the release check, not in the build): nothing of the
                     // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
                     callsRead = false
                     local.update { it.copy(calls = emptyList(), callsNotShown = false, callsStale = false) }
@@ -327,7 +322,7 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             // Presence is asked when the conversation opens, and only then (ANDROID-PLAN §4 "Presence"): never from a list.
             val c = uiState.map { it.connection }.filterNotNull().first()
-            if (c.askable) presence.queryWhileAvailable(connectionId, shown)
+            if (c.askable) presence.queryOncePolicyRead(connectionId, shown)
         }
         viewModelScope.launch {
             // Read while open: every new incoming message is marked read (best effort).

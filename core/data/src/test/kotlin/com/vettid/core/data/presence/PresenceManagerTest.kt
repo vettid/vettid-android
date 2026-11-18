@@ -9,8 +9,10 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -60,9 +62,14 @@ class PresenceManagerTest {
         /** Called at each `presence.get`, before it answers. */
         var onGet: () -> Unit = {}
 
+        /** While set, `presence.get` / `presence.set` wait for it before they answer (an answer still on its way). */
+        var getGate: CompletableDeferred<Unit>? = null
+        var setGate: CompletableDeferred<Unit>? = null
+
         override suspend fun get(): JsonObject {
             synchronized(this) { gets += "get" }
             onGet()
+            getGate?.await()
             refuse["get"]?.let { throw VaultOpException("presence.get", it) }
             if (getFailures > 0) {
                 getFailures--
@@ -73,6 +80,7 @@ class PresenceManagerTest {
 
         override suspend fun set(version: Long, state: String?, share: String?, except: List<String>?): JsonObject {
             synchronized(this) { sets += SetCall(version, state, share, except) }
+            setGate?.await()
             refuse["set"]?.let { throw VaultOpException("presence.set", it) }
             if (conflicts > 0) {
                 conflicts--
@@ -113,16 +121,32 @@ class PresenceManagerTest {
     private suspend fun TestScope.open(ops: Ops): PresenceManager = manager(ops).also { it.refreshPolicy() }
 
     @Test
-    fun theVaultHasPresenceWhenItAnswersPresenceGet() = runTest {
-        val m = manager(Ops())
-        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
+    fun thePolicyIsReadByPresenceGetAndNothingIsAskedBeforeIt() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        assertNull(m.policy.value)
+        // Before the first read (just after an unlock or the hold) no connection is asked, and an event reads nothing more.
+        m.query("c1")
+        m.onEvent(event("sync.event", """{"kind":"presence.changed","version":5}"""))
+        // A read would run on the IO dispatcher: give it the time to show.
+        repeat(QUIET_ROUNDS) {
+            advanceUntilIdle()
+            Thread.sleep(SLEEP_MS)
+        }
+        assertTrue(ops.queries.isEmpty())
+        assertTrue(ops.gets.isEmpty())
+        assertTrue(m.readings.value.isEmpty())
         m.refreshPolicy()
-        assertEquals(PresenceAvailability.AVAILABLE, m.availability.value)
         assertEquals(PresencePolicy(4, PresenceState.AVAILABLE, PresenceShare.ALL, emptyList()), m.policy.value)
+        // Open, not gated, the policy read: presence is there, with nothing else to learn first.
+        m.query("c1")
+        assertEquals(listOf("c1"), ops.queries)
+        assertEquals(PresenceReading.Checking, m.readings.value["c1"])
     }
 
     @Test
-    fun anUnsupportedTypeMeansNoPresenceAndNothingIsAskedOrChanged() = runTest {
+    fun anUnsupportedTypeIsAFailureLikeAnyOtherAndClosesNothing() = runTest {
+        // Every vault the app talks to has presence (the release gate): `unsupported_type` is no lasting "no presence".
         val ops = Ops().apply { refuse["get"] = "unsupported_type" }
         val m = manager(ops)
         try {
@@ -131,19 +155,14 @@ class PresenceManagerTest {
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
         }
-        assertEquals(PresenceAvailability.UNSUPPORTED, m.availability.value)
+        assertNull(m.policy.value)
+        ops.refuse.remove("get")
+        m.refreshPolicy()
+        m.update { it.copy(state = PresenceState.BUSY) }
         m.query("c1")
-        assertTrue(ops.queries.isEmpty())
-        assertTrue(m.readings.value.isEmpty())
-        // Not asked again before the next unlock.
-        try {
-            m.update { it.copy(state = PresenceState.BUSY) }
-            fail("refused")
-        } catch (e: VaultFailure) {
-            assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
-        }
-        assertEquals(1, ops.gets.size)
-        assertTrue(ops.sets.isEmpty())
+        assertEquals(2, ops.gets.size)
+        assertEquals("busy", ops.sets.single().state)
+        assertEquals(listOf("c1"), ops.queries)
     }
 
     @Test
@@ -249,19 +268,19 @@ class PresenceManagerTest {
 
     @Test
     fun aFailedFirstReadIsTriedAgainWithABackoffUntilItWorks() = runTest {
-        // Each read notes the virtual time and the availability at that moment. `settle` runs every waiting timer, so the
+        // Each read notes the virtual time and whether a policy was held at that moment. `settle` runs every waiting timer, so the
         // retries can follow one another within one settle: the test checks the times of the reads, not a count at a moment.
         val ops = Ops().apply { getFailures = 2 }
         val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
-        val reads = mutableListOf<Pair<Long, PresenceAvailability>>()
-        ops.onGet = { synchronized(reads) { reads += testScheduler.currentTime to m.availability.value } }
+        val reads = mutableListOf<Pair<Long, Boolean>>()
+        ops.onGet = { synchronized(reads) { reads += testScheduler.currentTime to (m.policy.value != null) } }
         m.start()
-        settle { m.availability.value == PresenceAvailability.AVAILABLE }
+        settle { m.policy.value != null }
         assertEquals(3, ops.gets.size)
         val (t0, a0) = reads[0]
         val (t1, a1) = reads[1]
         val (t2, a2) = reads[2]
-        assertEquals(listOf(PresenceAvailability.UNKNOWN, PresenceAvailability.UNKNOWN, PresenceAvailability.UNKNOWN), listOf(a0, a1, a2))
+        assertEquals(listOf(false, false, false), listOf(a0, a1, a2))
         // The backoff: 5 s after the first failure, then 15 s.
         assertTrue("first retry after ${t1 - t0} ms", t1 - t0 >= 5_000)
         assertTrue("second retry after ${t2 - t1} ms", t2 - t1 >= 15_000)
@@ -272,20 +291,22 @@ class PresenceManagerTest {
     }
 
     @Test
-    fun theRetryStopsWhileClosedAndWhenTheFeatureIsMissing() = runTest {
+    fun theRetryStopsWhileClosedAndKeepsGoingAfterAnUnsupportedType() = runTest {
         val ops = Ops()
         val m = PresenceManager(this, ops = { ops }, closed = { closed }, now = { clock })
         closed = true
         m.start()
         advanceTimeBy(300_000)
         assertTrue(ops.gets.isEmpty())
+        assertNull(m.policy.value)
         closed = false
-        val missing = Ops().apply { refuse["get"] = "unsupported_type" }
-        val n = PresenceManager(this, ops = { missing }, closed = { closed }, now = { clock })
+        // `unsupported_type` ends nothing: the opening read is tried again until the policy is there.
+        val refused = Ops().apply { refuse["get"] = "unsupported_type" }
+        val n = PresenceManager(this, ops = { refused }, closed = { closed }, now = { clock })
+        refused.onGet = { if (refused.gets.size >= 3) refused.refuse.remove("get") }
         n.start()
-        settle { n.availability.value == PresenceAvailability.UNSUPPORTED }
-        advanceTimeBy(300_000)
-        assertEquals(1, missing.gets.size)
+        settle { n.policy.value != null }
+        assertEquals(3, refused.gets.size)
     }
 
     @Test
@@ -462,7 +483,7 @@ class PresenceManagerTest {
         // Nobody told the manager: the deadline simply moved, or passed the other way.
         closed = false
         advanceTimeBy(6_000)
-        settle { m.availability.value == PresenceAvailability.AVAILABLE }
+        settle { m.policy.value != null }
         assertEquals(1, ops.gets.size)
     }
 
@@ -525,12 +546,65 @@ class PresenceManagerTest {
         // The hold clears everything held; after the check the policy is read again and the connection can be asked.
         m.clear()
         assertNull(m.policy.value)
-        assertEquals(PresenceAvailability.UNKNOWN, m.availability.value)
         assertTrue(m.readings.value.isEmpty())
+        // Nothing is asked until the policy is read again, even with the vault open.
         closed = false
+        m.query("c1")
+        assertTrue(ops.queries.isEmpty())
         m.refreshPolicy()
         m.query("c1")
         assertEquals(listOf("c1"), ops.queries)
+    }
+
+    @Test
+    fun aReadAndAChangeAnsweredAfterALockOrTheHoldAreNotApplied() = runTest {
+        val ops = Ops()
+        val m = open(ops)
+        val getGate = CompletableDeferred<Unit>()
+        val setGate = CompletableDeferred<Unit>()
+        ops.getGate = getGate
+        ops.setGate = setGate
+        val read = launch { runCatching { m.refreshPolicy() } }
+        val write = launch { runCatching { m.update { it.copy(state = PresenceState.BUSY) } } }
+        settle { ops.gets.size == 2 && ops.sets.size == 1 }
+        // The lock or the hold comes while both are on their way; then the vault answers them.
+        m.clear()
+        getGate.complete(Unit)
+        setGate.complete(Unit)
+        settle { read.isCompleted && write.isCompleted }
+        assertNull(m.policy.value)
+        // No stale policy lets a connection be asked: nothing is sent until the policy is read again.
+        m.query("c1")
+        assertTrue(ops.queries.isEmpty())
+        ops.getGate = null
+        ops.setGate = null
+        m.refreshPolicy()
+        m.query("c1")
+        assertEquals(listOf("c1"), ops.queries)
+    }
+
+    @Test
+    fun aLockJustAfterTheOpenCheckVoidsTheReadAndTheChange() = runTest {
+        val ops = Ops()
+        lateinit var m: PresenceManager
+        // The lock lands between the open check and what follows it: the check said open, the generation moved meanwhile.
+        var clearAtCheck = true
+        val closedThenCleared = {
+            if (clearAtCheck) {
+                clearAtCheck = false
+                m.clear()
+            }
+            false
+        }
+        m = PresenceManager(this, ops = { ops }, closed = closedThenCleared, now = { clock })
+        m.refreshPolicy()
+        assertEquals(1, ops.gets.size)
+        assertNull(m.policy.value)
+        clearAtCheck = true
+        m.update { it.copy(state = PresenceState.BUSY) }
+        assertNull(m.policy.value)
+        m.query("c1")
+        assertTrue(ops.queries.isEmpty())
     }
 
     @Test
@@ -549,5 +623,6 @@ class PresenceManagerTest {
     private companion object {
         const val TRIES = 200
         const val SLEEP_MS = 10L
+        const val QUIET_ROUNDS = 20
     }
 }

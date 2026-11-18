@@ -323,27 +323,22 @@ class ImportViewModelTest {
         assertTrue(ops.calls.none { it.startsWith("create") })
     }
 
+    /** Rule 3: the limits step is always asked, and Back from the password returns to it. */
     @Test
-    fun aListedWalletWithoutCapsSkipsTheLimitsStep() = runTest {
-        ops.wallets["01OLD00000000000000000000A"] = ops.wallet("01OLD00000000000000000000A").copy(capsSupported = false)
+    fun theLimitsStepIsAlwaysAsked() = runTest {
         val vm = vm()
         vm.fill()
         vm.toLimits()
+        assertEquals(ImportStep.LIMITS, vm.state.value.step)
+        vm.toPassword()
         assertEquals(ImportStep.PASSWORD, vm.state.value.step)
-        assertFalse(vm.state.value.limitsAsked)
         vm.previous()
-        assertEquals(ImportStep.FORM, vm.state.value.step)
-        vm.toLimits()
-        vm.setPassword("pw")
-        vm.import()
-        eventually { vm.state.value.importedId != null }
-        assertTrue(ops.calls.none { it.startsWith("caps.") })
-        assertTrue(wallets.capsPending.value.isEmpty())
-        assertEquals(ImportStep.PASSWORD, vm.state.value.step)
+        assertEquals(ImportStep.LIMITS, vm.state.value.step)
     }
 
+    /** An import answered without `caps` fails closed: the failure is shown on the password step, nothing is kept or set. */
     @Test
-    fun aCreateAnswerWithoutCapsDropsTheLimitAndSaysSo() = runTest {
+    fun aCreateAnswerWithoutCapsIsAFailureAndKeepsNothing() = runTest {
         ops.noCaps = true
         val vm = vm()
         vm.fill()
@@ -353,10 +348,11 @@ class ImportViewModelTest {
         vm.toPassword()
         vm.setPassword("pw")
         vm.import()
-        eventually { vm.state.value.importedId != null }
-        assertEquals(ImportStep.DONE, vm.state.value.step)
-        assertTrue(vm.state.value.capsUnsupported)
-        assertFalse(vm.state.value.capsFailed)
+        eventually { !vm.state.value.busy }
+        assertEquals(ImportStep.PASSWORD, vm.state.value.step)
+        assertEquals(FailureKind.OTHER, vm.state.value.error)
+        assertNull(vm.state.value.importedId)
+        assertFalse(vm.state.value.finished)
         assertTrue(wallets.capsPending.value.isEmpty())
         assertTrue(ops.calls.none { it.startsWith("caps.") })
     }

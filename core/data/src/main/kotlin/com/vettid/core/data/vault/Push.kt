@@ -32,7 +32,7 @@ data class PushStateView(val platform: String, val appId: String, val state: Str
 sealed interface PushRegisterOutcome {
     data class Registered(val push: PushStateView) : PushRegisterOutcome
 
-    /** `unavailable`: the vault's release has no push gateway (or does not know the type yet). */
+    /** `unavailable`: the vault has no push gateway URL (§14.1). */
     data object Unavailable : PushRegisterOutcome
 
     /** `gateway_error`, with the body's `retry_after` (seconds) when it has one: try again later. */
@@ -41,7 +41,7 @@ sealed interface PushRegisterOutcome {
     /** `limit` (`push_registrations`): no `push.register` for 24 hours (owner decision 2026-10-10). */
     data object Limit : PushRegisterOutcome
 
-    /** Any other refusal (`bad_request`, `forbidden`, `credential_required`): [code]. */
+    /** Any other refusal (`bad_request`, `forbidden`, `credential_required`, and any code the app does not know): [code]. */
     data class Refused(val code: String) : PushRegisterOutcome
 
     /** No answer (no network, a timeout, the vault not open on this phone). */
@@ -69,10 +69,10 @@ sealed interface PushConfirmOutcome {
     /** `bad_request` with message `no_pending_registration`: the vault has nothing to confirm. Register again. */
     data object NoPending : PushConfirmOutcome
 
-    /** `unavailable`: the vault's release has no push gateway (or does not know the type). */
+    /** `unavailable`: the vault has no push gateway URL (§14.1). */
     data object Unavailable : PushConfirmOutcome
 
-    /** Any other refusal (`bad_request`, `forbidden`, `credential_required`): [code]. */
+    /** Any other refusal (`bad_request`, `forbidden`, `credential_required`, and any code the app does not know): [code]. */
     data class Refused(val code: String) : PushConfirmOutcome
 
     /** No answer (no network, a timeout, the vault not open on this phone): the pending registration is untouched. */
@@ -144,7 +144,7 @@ object PushWire {
 
     /** The outcome of a `push.register` that failed with [f]. */
     fun outcome(f: VaultFailure): PushRegisterOutcome = when (f.code) {
-        "unavailable", "unsupported_type" -> PushRegisterOutcome.Unavailable
+        "unavailable" -> PushRegisterOutcome.Unavailable
         "gateway_error" -> PushRegisterOutcome.GatewayError(f.retryAfterSeconds.takeIf { it > 0 })
         "limit" -> PushRegisterOutcome.Limit
         null -> PushRegisterOutcome.NoAnswer
@@ -164,7 +164,7 @@ object PushWire {
                 PushConfirmOutcome.GatewayError(f.retryAfterSeconds.takeIf { it > 0 })
             }
             "bad_request" -> if (message == MESSAGE_NO_PENDING) PushConfirmOutcome.NoPending else PushConfirmOutcome.Refused("bad_request")
-            "unavailable", "unsupported_type" -> PushConfirmOutcome.Unavailable
+            "unavailable" -> PushConfirmOutcome.Unavailable
             null -> PushConfirmOutcome.NoAnswer
             else -> when (f.kind) {
                 FailureKind.NETWORK, FailureKind.NO_RESPONSE -> PushConfirmOutcome.NoAnswer

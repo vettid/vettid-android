@@ -826,8 +826,7 @@ class VaultApi(
 
     /**
      * [q], [since] (inclusive) and [until] (exclusive, RFC 3339) are the search of VAULT-MESSAGING 0.20.0 §10.9, sent
-     * only when given; a search answers `partial` when its scan budget ran out. A vault before 0.20.0 ignores them
-     * (§10.1: unknown members are ignored), so a caller checks what comes back.
+     * only when given; a search answers `partial` when its scan budget ran out.
      */
     @Suppress("LongParameterList")
     suspend fun auditList(

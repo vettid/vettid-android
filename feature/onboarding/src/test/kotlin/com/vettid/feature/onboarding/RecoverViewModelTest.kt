@@ -393,7 +393,7 @@ class RecoverViewModelTest {
 
     @Test
     fun credentialBackupAbsentAsksForThePasswordAsBefore() = runTest {
-        // A vault that did not say: the password's answer decides (an older vault's credential_lost: no recovery).
+        // A vault that did not say: the password's answer decides (`no_backup`: no recovery).
         vault.recoverOutcome = RecoverOutcome.NO_BACKUP
         val vm = unlockedWith(null)
         assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
@@ -426,6 +426,21 @@ class RecoverViewModelTest {
         assertEquals(FailureKind.BAD_PASSWORD, vm.uiState.value.error)
         assertEquals("", vm.uiState.value.password)
         assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+    }
+
+    /** A refusal the app does not know (here `unsupported_type`) is an error: never "no backup", and the registration stays. */
+    @Test
+    fun anUnknownRefusalOfTheRecoverKeepsTheRegistration() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PASSWORD
+        vault.fail["recoverCredential"] = FakeVault.failure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPassword("whatever")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+        assertEquals("unsupported_type", vm.uiState.value.errorCode)
+        assertFalse("abandonRecovery" in vault.calls)
     }
 
     @Test

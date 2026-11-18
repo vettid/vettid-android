@@ -102,13 +102,14 @@ data class AccountInfo(
     val nameAllowedAfter: Instant? = null,
     /** The latest name change this app asked for (`account.get`'s `name_request`, §10.8). */
     val nameRequest: NameRequestView? = null,
-    /** The member's full address from the snapshot (VAULT-MESSAGING 0.20.0 `email`); null from an older vault. */
+    /**
+     * The member's full address from the snapshot (VAULT-MESSAGING 0.20.0 `email`, required in every snapshot), shown to
+     * the member only; null before a snapshot, or when the snapshot's does not read as an address (nothing is shown then,
+     * never the masked [emailHint]).
+     */
     val email: String? = null,
 ) {
     val hasSnapshot: Boolean get() = state != null
-
-    /** The address to show: the full [email] when the snapshot carries it, else the masked [emailHint] (S4 vaults). */
-    val displayEmail: String? get() = email?.takeIf { it.isNotBlank() } ?: emailHint.takeIf { it.isNotEmpty() }
 
     /** "First Last" (§10.8); null before the snapshot carried the names. */
     val fullName: String? get() = com.vettid.core.data.account.AccountNames.full(firstName, lastName)
@@ -129,6 +130,15 @@ data class AccountInfo(
  * masked hint (which only the unlock screen shows).
  */
 fun AccountInfo?.shownInShell(): AccountInfo? = this?.takeIf { it.hasSnapshot }
+
+/**
+ * The name the top bar, the avatar sheet and the Settings card show for [shownInShell]'s account: "First Last", else the
+ * full address (VAULT-MESSAGING 0.20.0 `email`); null when it has neither (the caller's placeholder). Never the masked hint.
+ */
+fun AccountInfo.shellName(): String? = fullName ?: email
+
+/** The address under the names; null without names (the address is then the name) or without an address. Never the hint. */
+fun AccountInfo.shellDetail(): String? = fullName?.let { email }
 
 /** The member's subscription (§11.13): `trial`, `active`, `expired` or `canceled`. */
 data class SubscriptionInfo(val typeName: String?, val status: String?, val paid: Boolean, val expiresAt: Instant?) {
@@ -743,13 +753,38 @@ enum class RecoverOutcome {
     RECOVERED,
 
     /**
-     * The vault keeps no backup copy of its credential (`no_backup`, or an older vault's `credential_lost`): it cannot
-     * be recovered (VAULT-MESSAGING 0.16.0); it can only be deleted on the account site and replaced.
+     * The vault keeps no backup copy of its credential (`no_backup`): it cannot be recovered (VAULT-MESSAGING 0.16.0);
+     * it can only be deleted on the account site and replaced.
      */
     NO_BACKUP,
 
     /** `credential_required`: the vault has no credential (should not happen past enrollment). */
     CREDENTIAL_REQUIRED,
+    ;
+
+    companion object {
+        /**
+         * The outcome a refusal of `credential.recover` with [code] stands for; null for every other code, which the
+         * caller throws as the vault's error (nothing is recovered).
+         */
+        fun ofRefusal(code: String?): RecoverOutcome? = when (code) {
+            "no_backup" -> NO_BACKUP
+            "credential_required" -> CREDENTIAL_REQUIRED
+            else -> null
+        }
+
+        /**
+         * `credential.recover` sent by [recover]: [RECOVERED] when it returned, the outcome of a refusal [ofRefusal] knows,
+         * and any other refusal thrown as it came (the caller's guard makes it a [VaultFailure]; nothing is recovered and the
+         * recovery's registration stays).
+         */
+        suspend fun answering(recover: suspend () -> Unit): RecoverOutcome = try {
+            recover()
+            RECOVERED
+        } catch (e: com.vettid.core.vault.VaultOpException) {
+            ofRefusal(e.code) ?: throw e
+        }
+    }
 }
 
 /**

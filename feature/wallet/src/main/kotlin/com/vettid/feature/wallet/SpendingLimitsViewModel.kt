@@ -8,7 +8,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.wallet.SpendingLimitsRoute
 import com.vettid.core.wallet.CapsSeen
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -44,8 +43,6 @@ enum class LimitsStep {
 data class SpendingLimitsUiState(
     val loaded: Boolean = false,
     val name: String = "",
-    /** The wallet's vault enforces spending limits (`caps` is in `wallet.list`). */
-    val supported: Boolean = true,
     val perTx: Long? = null,
     val perPeriod: Long? = null,
     /** The wallet's version as this phone holds it, with [perTx] and [perPeriod]. */
@@ -67,6 +64,8 @@ data class SpendingLimitsUiState(
     /** The vault's code of [error] (or this app's: [WalletsManager.CAPS_PENDING]). */
     val errorCode: String? = null,
     val closed: Boolean = false,
+    /** The read of the wallets failed before this wallet was shown: said, with Try again ([SpendingLimitsViewModel.retryList]). */
+    val listFailed: FailureKind? = null,
 ) {
     /** What the form comes to against the limits as they stand. */
     val plan: CapsPlan get() = CapsEdit.plan(perTx, perPeriod, form, raiseForm)
@@ -107,25 +106,39 @@ class SpendingLimitsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.capsPending) { list, availability, pending ->
-                Triple(list.firstOrNull { it.id == walletId }, availability, WalletsManager.isPending(pending, walletId))
-            }.collect { (w, availability, pending) ->
+            combine(wallets.wallets, wallets.listed, wallets.capsPending) { list, listed, pending ->
+                Triple(list.firstOrNull { it.id == walletId }, listed, WalletsManager.isPending(pending, walletId))
+            }.collect { (w, listed, pending) ->
                 if (w == null) {
-                    val gone = seen || availability != WalletAvailability.UNKNOWN
+                    val gone = seen || listed
                     if (gone) mutable.update { it.copy(closed = true, pin = "", password = "") }
                     return@collect
                 }
                 seen = true
                 mutable.update {
                     it.copy(
-                        loaded = true, name = w.name, supported = w.capsSupported, perTx = w.perTxSats, perPeriod = w.perPeriodSats,
+                        loaded = true, name = w.name, perTx = w.perTxSats, perPeriod = w.perPeriodSats,
                         version = w.version, spent = w.spentSats, capsPending = pending,
                     )
                 }
             }
         }
+        viewModelScope.launch { wallets.listFailure.collect { f -> mutable.update { it.copy(listFailed = f) } } }
         // The screen reads the wallet when it opens: the limits and the period's total are the vault's, not a memory of it.
         viewModelScope.launch { readAgain() }
+    }
+
+    /** "Try again" on a read of the wallets that failed before this wallet was shown. */
+    fun retryList() {
+        if (mutable.value.loaded || mutable.value.closed) return
+        mutable.update { it.copy(listFailed = null) }
+        viewModelScope.launch {
+            try {
+                wallets.refresh()
+            } catch (e: VaultFailure) {
+                mutable.update { it.copy(listFailed = e.kind) }
+            }
+        }
     }
 
     private suspend fun readAgain() {
@@ -144,7 +157,8 @@ class SpendingLimitsViewModel @Inject constructor(
 
     private fun open(raise: Boolean) {
         val s = mutable.value
-        if (!s.idle || s.step != LimitsStep.OVERVIEW || !s.supported) return
+        // The form is chosen against the limits read: none before they are.
+        if (!s.idle || s.step != LimitsStep.OVERVIEW || !s.loaded) return
         mutable.update {
             it.copy(
                 step = if (raise) LimitsStep.RAISE else LimitsStep.LOWER, raiseForm = raise, form = CapsEditForm(),

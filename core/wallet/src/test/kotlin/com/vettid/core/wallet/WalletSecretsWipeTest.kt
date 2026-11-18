@@ -49,7 +49,7 @@ class WalletSecretsWipeTest {
     @Test
     fun createWipesThePasswordAfterTheCreateAndTheRevealOnSuccess() = runBlocking {
         val pw = "pw".toCharArray()
-        assertTrue(manager().create("Savings", Network.TESTNET4, pw).phrase != null)
+        assertTrue(manager().also { it.open() }.create("Savings", Network.TESTNET4, pw).phrase != null)
         assertEquals(listOf("create:testnet4", "reveal"), ops.calls.filter { it.startsWith("create") || it == "reveal" })
         assertWiped(pw)
     }
@@ -57,7 +57,7 @@ class WalletSecretsWipeTest {
     @Test
     fun createWipesThePasswordWhenTheVaultRefuses() = runBlocking {
         val pw = "wrong".toCharArray()
-        assertTrue(runCatching { manager().create("Savings", Network.TESTNET4, pw) }.exceptionOrNull() is VaultFailure)
+        assertTrue(runCatching { manager().also { it.open() }.create("Savings", Network.TESTNET4, pw) }.exceptionOrNull() is VaultFailure)
         assertWiped(pw)
     }
 
@@ -72,11 +72,11 @@ class WalletSecretsWipeTest {
     fun importWipesThePasswordButNotTheWordsTheCallerOwns() = runBlocking {
         val pw = "pw".toCharArray()
         val words = "a b c".toCharArray()
-        manager().import("Old", Network.TESTNET4, pw, words, null)
+        manager().also { it.open() }.import("Old", Network.TESTNET4, pw, words, null)
         assertWiped(pw)
         assertEquals("a b c", String(words))
         val bad = "wrong".toCharArray()
-        assertTrue(runCatching { manager().import("Old", Network.TESTNET4, bad, "a b c".toCharArray(), null) }.isFailure)
+        assertTrue(runCatching { manager().also { it.open() }.import("Old", Network.TESTNET4, bad, "a b c".toCharArray(), null) }.isFailure)
         assertTrue(bad.all { it == '\u0000' })
     }
 
