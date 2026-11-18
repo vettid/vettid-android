@@ -74,6 +74,7 @@ class LocationSharingTest {
 
         /** The answer to `location.share.list`. */
         var outgoing: String = "[]"
+        var incoming: String = "[]"
         var listRefusal: String? = null
         var stopRefusal: String? = null
 
@@ -121,7 +122,7 @@ class LocationSharingTest {
                 val id = ((it as JsonObject)["share_id"] as JsonPrimitive).content
                 synchronized(this) { id !in taken }
             }
-            val answer = obj("""{"outgoing":${kotlinx.serialization.json.JsonArray(kept)},"incoming":[]}""")
+            val answer = obj("""{"outgoing":${kotlinx.serialization.json.JsonArray(kept)},"incoming":$incoming}""")
             listGate?.await()
             return answer
         }
@@ -896,20 +897,27 @@ class LocationSharingTest {
     fun aLockJustAfterTheOpenCheckVoidsTheList() = runTest {
         val r = rig()
         r.ops.outgoing = "[${listed("o1", "dev-this")}]"
+        r.ops.incoming = "[${incomingEntry("i1", "c-in")}]"
         // The check passes, then the vault locks (and opens again) before the list is asked: its answer is from before the lock.
         atCheck = {
             unlocked = false
             r.sharing.clear()
             unlocked = true
         }
-        r.call { r.sharing.refresh() }
+        val e = runCatching { r.call { r.sharing.refresh() } }.exceptionOrNull() as VaultFailure
+        assertEquals("voided_by_lock", e.code)
         assertEquals(1, r.ops.lists)
         assertTrue(r.sharing.outgoing.value.isEmpty())
+        assertTrue("the incoming side too", r.sharing.incoming.value.isEmpty())
         assertFalse(r.sharing.serviceState.value.active)
         // a read after the lock is taken
         r.call { r.sharing.refresh() }
         assertEquals(listOf("o1"), r.sharing.outgoing.value.map { it.shareId })
+        assertEquals(listOf("i1"), r.sharing.incoming.value.map { it.shareId })
     }
+
+    private fun incomingEntry(id: String, connection: String) =
+        """{"share_id":"$id","connection_id":"$connection","mode":"continuous","precision":"approximate","interval_seconds":60,"history":false,"started_at":"$t0","expires_at":"${t0.plusSeconds(3_600)}"}"""
 
     @Test
     fun aLockJustAfterTheOpenCheckVoidsTheStart() = runTest {
@@ -919,13 +927,85 @@ class LocationSharingTest {
             r.sharing.clear()
             unlocked = true
         }
-        r.call { r.sharing.start(ShareRequest("c1")) }
+        val e = runCatching { r.call { r.sharing.start(ShareRequest("c1")) } }.exceptionOrNull() as VaultFailure
+        assertEquals("nothing is sent under a newer generation", "voided_by_lock", e.code)
         r.settle()
-        assertEquals(1, r.ops.starts.size)
+        assertTrue(r.ops.starts.isEmpty())
         assertTrue(r.sharing.outgoing.value.isEmpty())
         assertFalse(r.sharing.serviceState.value.active)
         r.emit(r.fix())
         assertTrue(r.ops.updates.isEmpty())
+    }
+
+    // --- answering a request: the list read first, under one generation ---
+
+    @Test
+    fun answeringARequestReadsTheListThenStarts() = runTest {
+        val r = rig()
+        val s = r.call { r.sharing.startAnsweringRequest(ShareRequest("c1", requestId = "r1")) }
+        assertEquals(1, r.ops.lists)
+        assertEquals(listOf("r1"), r.ops.starts.map { it.requestId })
+        assertEquals(listOf(s!!.shareId), r.sharing.outgoing.value.map { it.shareId })
+    }
+
+    @Test
+    fun aShareToTheAskerOnlyTheVaultListsStartsNothing() = runTest {
+        val r = rig()
+        // Nothing in memory (not read since the unlock); the vault lists a share to the asker, sent by another device.
+        r.ops.outgoing = "[${listed("o1", "dev-other")}]"
+        val s = r.call { r.sharing.startAnsweringRequest(ShareRequest("c-o1", requestId = "r1")) }
+        assertNull(s)
+        assertTrue(r.ops.starts.isEmpty())
+    }
+
+    @Test
+    fun aFailedReadStartsNothing() = runTest {
+        val r = rig()
+        r.ops.listRefusal = "internal"
+        assertTrue(runCatching { r.call { r.sharing.startAnsweringRequest(ShareRequest("c-o1")) } }.isFailure)
+        assertTrue(r.ops.starts.isEmpty())
+    }
+
+    @Test
+    fun aReadVoidedByALockStartsNothingEvenWithTheVaultOpenAgain() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("o1", "dev-other")}]"
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.ops.listGate = gate
+        r.ops.listAsked = kotlinx.coroutines.CompletableDeferred()
+        val answer = backgroundScope.async { runCatching { r.sharing.startAnsweringRequest(ShareRequest("c-o1", requestId = "r1")) } }
+        r.settle()
+        withContext(Dispatchers.Default) { withTimeout(10_000) { r.ops.listAsked.await() } }
+        // The vault locks and opens again while the list is on its way: the list in memory is cleared, the vault is open.
+        unlocked = false
+        r.sharing.clear()
+        unlocked = true
+        gate.complete(Unit)
+        r.settle()
+        val result = answer.await()
+        assertEquals("voided_by_lock", (result.exceptionOrNull() as VaultFailure).code)
+        assertTrue("the share to the asker is not replaced", r.ops.starts.isEmpty())
+    }
+
+    @Test
+    fun aLockJustAfterTheReadsOpenCheckStartsNothing() = runTest {
+        val r = rig()
+        r.ops.outgoing = "[${listed("o1", "dev-other")}]"
+        atCheck = {
+            unlocked = false
+            r.sharing.clear()
+            unlocked = true
+        }
+        assertTrue(runCatching { r.call { r.sharing.startAnsweringRequest(ShareRequest("c-o1")) } }.isFailure)
+        assertTrue(r.ops.starts.isEmpty())
+    }
+
+    @Test
+    fun answeringRefusesAServiceBeforeAnythingIsRead() = runTest {
+        val r = rig(services = setOf("svc"))
+        val e = runCatching { r.call { r.sharing.startAnsweringRequest(ShareRequest("svc")) } }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.SERVICE_FORBIDDEN, e.kind)
+        assertEquals(0, r.ops.lists)
     }
 
     // --- a fix's age, by the uptime clock ---

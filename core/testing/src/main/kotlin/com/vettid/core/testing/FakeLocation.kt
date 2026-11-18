@@ -16,6 +16,7 @@ import java.time.Instant
  * lists a share (ending [lifetimeSeconds] after [now]); a failure in [fail] is thrown instead. A test sets `lastSentAt` through
  * [sent] to say that the first position went out. No position is involved anywhere.
  */
+@Suppress("TooManyFunctions") // one per repository call, as the repository has
 class FakeLocation(private val now: () -> Instant = Instant::now, private val lifetimeSeconds: Long = 3_600) : LocationRepository {
     val started = mutableListOf<ShareRequest>()
     val stopped = mutableListOf<String>()
@@ -128,6 +129,14 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
         refreshes++
         refreshFail?.let { refreshFail = null; throw it }
         onRefresh()
+    }
+
+    /** As `LocationSharing`: the list is read ([refresh]), then nothing starts while a share to the asker is active. */
+    override suspend fun startAnsweringRequest(request: ShareRequest): OutgoingShare? {
+        refresh()
+        val active = com.vettid.core.data.location.activeShareTo(outgoing.value, serviceState.value, request.connectionId, now())
+        if (active != null) return null
+        return start(request)
     }
 
     /** The first position of [shareId] went out. */

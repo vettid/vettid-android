@@ -61,7 +61,6 @@ import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.location.ShareTiming
-import com.vettid.core.data.location.startAnsweringRequest
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
@@ -82,6 +81,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -138,6 +138,11 @@ data class ShareLocationUiState(
     val permission: LocationPermission = LocationPermission.NONE,
     /** The member refused the permission when asked. */
     val permissionDenied: Boolean = false,
+    /**
+     * The daily owner check is due or held ([com.vettid.core.data.vault.OwnerCheckView.gated], the gate of the other location
+     * screens): Start is held, and the phone's permission is not asked for, until it passes.
+     */
+    val held: Boolean = false,
     /** `location.share.start` is out. */
     val busy: Boolean = false,
     /** The share that was started from this sheet, as the repository lists it now; null before, and once it is gone. */
@@ -178,6 +183,7 @@ class ShareLocationViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val location: LocationRepository = NoLocation,
     prefs: PreferencesRepository = InMemoryPreferencesRepository(),
+    private val ownerCheck: com.vettid.core.data.vault.OwnerCheckRepository? = null,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val units = prefs.preferences.map { it.distanceUnits }.distinctUntilChanged()
@@ -193,9 +199,15 @@ class ShareLocationViewModel @Inject constructor(
     }
     private val local = MutableStateFlow(ShareLocationUiState(id))
 
-    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, units) { s, shares, u ->
-        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, units = u)
+    /** The check due or held, judged again whenever it changes and at each tap ([heldNow]: a deadline passes by time alone). */
+    private val heldFlow = ownerCheck?.ownerCheck?.map { it?.gated(java.time.Instant.now()) == true } ?: flowOf(false)
+
+    val uiState: StateFlow<ShareLocationUiState> = combine(local, location.outgoing, units, heldFlow) { s, shares, u, h ->
+        s.copy(started = s.startedId?.let { sid -> shares.firstOrNull { it.shareId == sid } }, units = u, held = h)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ShareLocationUiState(id))
+
+    /** The daily owner check is due or held now: nothing is started and the phone's permission is not asked for. */
+    fun heldNow(): Boolean = ownerCheck?.ownerCheck?.value?.gated(java.time.Instant.now()) == true
 
     init {
         if (requestId != null) open()
@@ -255,7 +267,7 @@ class ShareLocationViewModel @Inject constructor(
     fun start() {
         val s = local.value
         val inFlight = s.busy || s.startedId != null
-        if (inFlight || s.permission == LocationPermission.NONE) return
+        if (inFlight || s.permission == LocationPermission.NONE || heldNow()) return
         // A refusal from an earlier tap does not stay once the share it was about is gone.
         if (s.alreadySharing) local.update { it.copy(alreadySharing = false) }
         // Answering a request while already sharing with this connection is off (as Share once is): the view model refuses it too.
@@ -479,7 +491,7 @@ private fun Form(state: ShareLocationUiState, name: String, actions: ShareLocati
     PrimaryButton(
         stringResource(R.string.connections_location_start),
         actions.onStart,
-        enabled = !busy,
+        enabled = !busy && !state.held,
         busy = busy,
         modifier = Modifier.testTag("share_location_start"),
     )

@@ -219,12 +219,37 @@ class LocationSharing(
     // --- starting ---
 
     override suspend fun start(request: ShareRequest): OutgoingShare {
+        refuseUnsendable(request)
+        // Taken before the open check: a lock that lands just after it voids the start.
+        return startUnder(request, synchronized(lock) { generation })
+    }
+
+    /** Out of the vault's bounds, or toward a service (the vault refuses `location.share.start` toward one): nothing is sent. */
+    private fun refuseUnsendable(request: ShareRequest) {
         if (!request.withinBounds()) throw VaultFailure(FailureKind.OTHER, "bad_request")
-        // A service can't receive a location (the vault refuses `location.share.start` toward one): nothing is sent.
         if (isService(request.connectionId)) throw VaultFailure(FailureKind.SERVICE_FORBIDDEN)
-        // Taken before the open check: a lock that lands just after it voids the answer.
-        val gen = synchronized(lock) { generation }
+    }
+
+    override suspend fun startAnsweringRequest(request: ShareRequest): OutgoingShare? {
+        refuseUnsendable(request)
+        // The read applies under this generation or throws: a lock before its answer voids it, so nothing is judged on a list
+        // the lock cleared. A lock after the read makes the start under the same generation throw, before anything is sent.
+        val gen = read(resume = false)
+        val active = synchronized(lock) {
+            val stopping = ServiceState(stoppingShares = stopMarks.keys.toSet())
+            activeShareTo(tracked.values.map { it.share }, stopping, request.connectionId, now())
+        }
+        if (active != null) return null
+        return startUnder(request, gen)
+    }
+
+    /**
+     * `location.share.start` under [gen], taken before any open check: a [clear] since then (a lock, even one opened again) starts
+     * nothing and throws, and one during the start voids its answer here.
+     */
+    private suspend fun startUnder(request: ShareRequest, gen: Int): OutgoingShare {
         requireOpen()
+        if (synchronized(lock) { gen != generation }) throw voided()
         // One start per connection at a time: a second tap or call cannot start twice.
         val first = synchronized(lock) { starting.add(request.connectionId) }
         if (!first) throw VaultFailure(FailureKind.OTHER, "busy")
@@ -276,6 +301,9 @@ class LocationSharing(
         persist()
         return share
     }
+
+    /** A lock came between the start of a call and its answer (or its send): nothing of it is applied. */
+    private fun voided() = VaultFailure(FailureKind.OTHER, "voided_by_lock")
 
     private fun requireOpen() {
         if (!unlocked() || due()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
@@ -621,7 +649,8 @@ class LocationSharing(
         read(resume = false)
     }
 
-    private suspend fun read(resume: Boolean) {
+    /** Applies the list under the generation it returns; throws when a lock came between the read and its answer. */
+    private suspend fun read(resume: Boolean): Int {
         // Taken before the open check: a lock (or, for the incoming side, a hold) that lands just after it voids the answer.
         val gen = synchronized(lock) { generation }
         val receiveToken = receiving.begin()
@@ -633,7 +662,7 @@ class LocationSharing(
         val stored = withContext(io) { store.load() }
         val listed = readable(body, stored)
         val toStop = synchronized(lock) {
-            if (gen != generation) return
+            if (gen != generation) throw voided()
             val stops = apply(listed, stored, resume, startSeq, startEpoch)
             recompute()
             stops
@@ -641,6 +670,7 @@ class LocationSharing(
         persist()
         // A share the member stopped is never taken up: the stop is sent for it, and the mark goes when the vault took it.
         if (toStop.isNotEmpty()) scope.launch { toStop.forEach { stopQuietly(it) } }
+        return gen
     }
 
     /** The vault's outgoing shares; the stored ids name this phone as a source only when its device id is not known. */

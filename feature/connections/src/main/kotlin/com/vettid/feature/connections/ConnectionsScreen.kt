@@ -212,7 +212,12 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onInterval = share::setInterval,
                 onTrail = share::setTrail,
                 onStart = {
-                    if (shareState.permission == LocationPermission.NONE) askLocation.launch(LocationPermission.ASKED) else share.start()
+                    // Not while the daily check is due or held: no permission is asked for then, and nothing starts.
+                    when {
+                        share.heldNow() -> Unit
+                        shareState.permission == LocationPermission.NONE -> askLocation.launch(LocationPermission.ASKED)
+                        else -> share.start()
+                    }
                 },
                 onDismiss = share::dismiss,
             ),

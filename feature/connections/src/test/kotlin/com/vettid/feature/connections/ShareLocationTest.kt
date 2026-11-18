@@ -244,6 +244,35 @@ class ShareLocationTest {
     }
 
     @Test
+    fun whileTheDailyCheckIsDueNothingStartsAndThePermissionIsNotAsked() = runTest {
+        val vault = com.vettid.core.testing.FakeVault()
+        fun check(state: com.vettid.core.data.vault.OwnerCheckState) =
+            com.vettid.core.data.vault.OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+        vault.ownerCheck.value = check(com.vettid.core.data.vault.OwnerCheckState.DUE)
+        val vm = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location, prefs, vault)
+        vm.open()
+        assertTrue(read(vm.uiState).held)
+        assertTrue("the screen asks no permission while this is true", vm.heldNow())
+        vm.permissionResult(LocationPermission.PRECISE)
+        vm.start()
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        // the check passes: Start works again
+        vault.ownerCheck.value = check(com.vettid.core.data.vault.OwnerCheckState.OK)
+        assertFalse(read(vm.uiState).held)
+        assertFalse(vm.heldNow())
+        vm.start()
+        advanceUntilIdle()
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun theStartButtonIsOffWhileTheCheckIsDueOrHeld() {
+        sheet(open.copy(held = true))
+        rule.onNodeWithTag("share_location_start").assertIsNotEnabled()
+    }
+
+    @Test
     fun theStartButtonIsOffWhileAStartIsOut() {
         sheet(open.copy(busy = true))
         rule.onNodeWithTag("share_location_start").assertIsNotEnabled()

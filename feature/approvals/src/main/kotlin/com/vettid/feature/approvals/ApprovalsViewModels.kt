@@ -7,7 +7,6 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.DevicesRepository
 import com.vettid.core.data.devices.PairingRepository
 import com.vettid.core.data.devices.PairingStage
-import com.vettid.core.data.location.startAnsweringRequest
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalDocument
 import com.vettid.core.data.social.DocumentApproval
