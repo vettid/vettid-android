@@ -61,6 +61,7 @@ import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.location.settingsIntent
 import com.vettid.core.data.location.textRes
 import com.vettid.core.data.location.ShareTiming
+import com.vettid.core.data.location.startAnsweringRequest
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.messageRes
@@ -266,15 +267,14 @@ class ShareLocationViewModel @Inject constructor(
         local.update { it.copy(busy = true, error = null, errorCode = null, issue = null) }
         viewModelScope.launch {
             try {
-                if (requestId != null) {
-                    location.refresh()
-                    if (activeShareTo(id)) {
-                        local.update { it.copy(busy = false, alreadySharing = true) }
-                        return@launch
-                    }
-                }
                 val precision = fitted(s.precision, s.permission)
-                val share = location.start(ShareRequest(id, timing, precision, trail = s.trail && !s.once, requestId = requestId))
+                val request = ShareRequest(id, timing, precision, trail = s.trail && !s.once, requestId = requestId)
+                // Answering a request: the list is read first and nothing starts while a share to the asker is active.
+                val share = if (requestId != null) location.startAnsweringRequest(request) else location.start(request)
+                if (share == null) {
+                    local.update { it.copy(busy = false, alreadySharing = true) }
+                    return@launch
+                }
                 forgetRequest()
                 local.update { it.copy(busy = false, startedId = share.shareId) }
             } catch (e: VaultFailure) {

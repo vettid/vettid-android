@@ -82,6 +82,54 @@ class LocationRequestTest {
     }
 
     @Test
+    fun shareOnceReadsTheListBeforeItStarts() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        var startedAtRead = -1
+        location.onRefresh = { startedAtRead = location.started.size }
+        m.shareOnce()
+        runCurrent()
+        assertEquals(1, location.refreshes)
+        assertEquals("nothing was started before the read", 0, startedAtRead)
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun aShareToTheAskerOnlyTheVaultKnowsStartsNothing() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        // The list in memory is stale (empty: not read yet since the unlock); the vault lists an active share to the asker.
+        val listed = com.vettid.core.data.location.OutgoingShare(
+            "s9", "c1", false, com.vettid.core.data.location.SharePrecision.CITY, 60L, false, now.plusSeconds(3_600), null, false,
+        )
+        location.onRefresh = { location.outgoing.value = listOf(listed) }
+        m.shareOnce()
+        runCurrent()
+        assertTrue(location.started.isEmpty())
+        val s = m.uiState.value
+        assertFalse(s.busy)
+        assertFalse(s.done)
+        assertEquals("the screen says until when, as for a share already known", listed.expiresAt, s.sharingUntil)
+        assertFalse(social.calls.contains("dismissLocationRequest:r1"))
+        assertEquals(listOf("location:r1"), social.approvals.value.map { it.key })
+    }
+
+    @Test
+    fun aFailedListReadStartsNothingAndShowsTheError() = runTest {
+        val m = vm(ask())
+        runCurrent()
+        location.refreshFail = VaultFailure(FailureKind.NETWORK)
+        m.shareOnce()
+        runCurrent()
+        assertTrue(location.started.isEmpty())
+        val s = m.uiState.value
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertFalse(s.busy)
+        assertFalse(s.done)
+        assertEquals(listOf("location:r1"), social.approvals.value.map { it.key })
+    }
+
+    @Test
     fun whenNothingCanBeSentTheRequestStaysWithTheReason() = runTest {
         val m = vm(ask())
         runCurrent()

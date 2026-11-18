@@ -146,6 +146,19 @@ fun activeShareTo(shares: List<OutgoingShare>, service: ServiceState, connection
             it.shareId !in service.stoppingShares
     }.maxByOrNull { it.expiresAt }
 
+/**
+ * Answering a connection's request for location (Approvals' **Share once**, the share sheet opened from a request): the vault's
+ * `location.share.list` is read first ([LocationRepository.refresh]), so that a share to the asker not read yet since the unlock
+ * (or made on another device) is seen, then [activeShareTo] is judged on what was read, and the share is started only when there is
+ * none: another would replace it. Returns null, with nothing started, when a share to the asker is active. Throws the read's or the
+ * start's [VaultFailure]; a failed read starts nothing. The one place this rule lives, so that the two cannot drift apart.
+ */
+suspend fun LocationRepository.startAnsweringRequest(request: ShareRequest, now: () -> Instant = Instant::now): OutgoingShare? {
+    refresh()
+    if (activeShareTo(outgoing.value, serviceState.value, request.connectionId, now()) != null) return null
+    return start(request)
+}
+
 /** A share is stalled when this long (on top of its update interval) has passed without a position accepted by the vault. */
 val STALL_GRACE: Duration = Duration.ofMinutes(15)
 

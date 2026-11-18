@@ -614,7 +614,7 @@ class ShareLocationTest {
     @Test
     fun aFailedListReadStartsNothingAndSaysWhy() = runTest {
         val vm = fromRequest()
-        location.fail = VaultFailure(FailureKind.NETWORK)
+        location.refreshFail = VaultFailure(FailureKind.NETWORK)
         vm.permissionResult(LocationPermission.PRECISE)
         advanceUntilIdle()
         assertTrue(location.started.isEmpty())

@@ -121,9 +121,12 @@ class FakeLocation(private val now: () -> Instant = Instant::now, private val li
     /** What a list read finds (a test sets it): runs at each [refresh] that does not fail. */
     var onRefresh: () -> Unit = {}
 
+    /** A failure the next [refresh] throws (the list read alone; [fail] is for the calls that change something). */
+    var refreshFail: VaultFailure? = null
+
     override suspend fun refresh() {
         refreshes++
-        fail?.let { fail = null; throw it }
+        refreshFail?.let { refreshFail = null; throw it }
         onRefresh()
     }
 
