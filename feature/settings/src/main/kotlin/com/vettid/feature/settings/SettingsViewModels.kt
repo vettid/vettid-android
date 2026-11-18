@@ -16,7 +16,6 @@ import com.vettid.core.data.presence.NoPresence
 import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceText
 import com.vettid.core.data.vault.AccountInfo
@@ -70,7 +69,10 @@ data class SettingsUiState(
     val screenshotsStayOn: Boolean = false,
     /** (Release R) The vault has a phone secret: Settings → Security → New phone secret is offered. */
     val phoneSecret: Boolean = false,
-    /** The vault has presence (ANDROID-PLAN §4 "Presence"): Settings → Privacy → Presence is offered, with the status as its line. */
+    /**
+     * The member's presence policy is read (ANDROID-PLAN §4 "Presence"; not while the vault is locked, held or due):
+     * Settings → Privacy → Presence is offered, with the status as its line.
+     */
     val presenceShown: Boolean = false,
     /** The vault has location (not UNSUPPORTED, as the Location drawer entry): Settings → Privacy → Map server is offered. */
     val mapServerShown: Boolean = false,
@@ -106,8 +108,8 @@ class SettingsViewModel @Inject constructor(
             location.availability.collect { a -> local.update { it.copy(mapServerShown = a != LocationAvailability.UNSUPPORTED) } }
         }
         viewModelScope.launch {
-            combine(presence.availability, presence.policy) { a, p -> (a == PresenceAvailability.AVAILABLE) to p }.collect { (on, p) ->
-                local.update { it.copy(presenceShown = on, presenceStateRes = p?.let { x -> PresenceText.stateName(x.state) }) }
+            presence.policy.collect { p ->
+                local.update { it.copy(presenceShown = p != null, presenceStateRes = p?.let { x -> PresenceText.stateName(x.state) }) }
             }
         }
     }

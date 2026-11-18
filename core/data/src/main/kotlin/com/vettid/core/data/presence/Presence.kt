@@ -90,9 +90,6 @@ sealed interface PresenceReading {
     data class Known(val state: PresenceState, val lastActive: Instant?) : PresenceReading
 }
 
-/** Whether this vault has presence: learnt by asking (`presence.get`), since no message lists a release's features. */
-enum class PresenceAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
-
 /** How long ago a connection was last active, as the line shows it (ANDROID-PLAN §4 "Presence"). */
 sealed interface PresenceAge {
     /** Under 5 minutes: the vault rounds `last_active` down to 5 minutes, so "0 min ago" would be said. */
@@ -216,16 +213,16 @@ interface PresenceOps {
  * past a lock or the owner check's hold, and none of it is sent while the vault is locked, due or held.
  */
 interface PresenceRepository {
-    /** Whether this vault has presence. Nothing of presence is shown unless [PresenceAvailability.AVAILABLE]. */
-    val availability: StateFlow<PresenceAvailability>
-
-    /** The member's policy; null until read, and after a lock. */
+    /**
+     * The member's policy; null until read, and after a lock or the hold. Nothing of presence is shown, and no connection is
+     * asked, while it is null: it is read once the vault is open and the owner check neither due nor held.
+     */
     val policy: StateFlow<PresencePolicy?>
 
     /** What each asked connection answered (or not), by connection id. */
     val readings: StateFlow<Map<String, PresenceReading>>
 
-    /** Reads the policy again (`presence.get`). Throws the vault's failure; `unsupported_type` also ends [availability]. */
+    /** Reads the policy again (`presence.get`). Throws the vault's failure. */
     suspend fun refreshPolicy()
 
     /**
@@ -250,18 +247,18 @@ interface PresenceRepository {
 private val NO_RECENT: StateFlow<Set<String>> = MutableStateFlow(emptySet())
 
 /**
- * [PresenceRepository.query] each time the vault has presence: when the screen opens before the first `presence.get` is
- * answered, and again when presence comes back after a hold or a failed read. Nothing is sent while there is none. Collects
+ * [PresenceRepository.query] each time the policy is read: when the screen opens before the first `presence.get` is
+ * answered, and again when the policy is read after a hold or a failed read. Nothing is sent while it is not. Collects
  * until the screen's scope ends.
  */
 suspend fun PresenceRepository.queryWhileAvailable(connectionId: String, visible: Flow<Boolean> = flowOf(true)) {
-    // Asks, only while the screen is shown ([visible]: at least STARTED), when presence is there and the connection has no
+    // Asks, only while the screen is shown ([visible]: at least STARTED), when the policy is read and the connection has no
     // reading (on opening, after a hold took the readings, when a reading went stale) and once each time the screen comes back.
     // While it is not shown nothing is sent: a question counts as the member's activity (§10.17), so a page left open in the
     // background must not keep asking.
     val held = readings.map { connectionId in it }.distinctUntilChanged()
     var shown = false
-    combine(availability, held, visible) { a, has, v -> Triple(a == PresenceAvailability.AVAILABLE, has, v) }
+    combine(policy, held, visible) { p, has, v -> Triple(p != null, has, v) }
         .distinctUntilChanged()
         .collect { (on, has, v) ->
             val appeared = v && !shown
@@ -271,10 +268,8 @@ suspend fun PresenceRepository.queryWhileAvailable(connectionId: String, visible
         }
 }
 
-/** Presence where there is none (a screen's default): never available, nothing sent. */
+/** Presence where there is none (a screen's default): no policy, nothing sent. */
 object NoPresence : PresenceRepository {
-    override val availability: StateFlow<PresenceAvailability> =
-        MutableStateFlow(PresenceAvailability.UNSUPPORTED)
     override val policy: StateFlow<PresencePolicy?> = MutableStateFlow(null)
     override val readings: StateFlow<Map<String, PresenceReading>> =
         MutableStateFlow(emptyMap())

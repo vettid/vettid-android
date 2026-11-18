@@ -34,8 +34,8 @@ internal class VaultPresenceOps(private val api: com.vettid.core.vault.VaultApi)
 /**
  * [PresenceRepository] over [PresenceOps] (ANDROID-PLAN §4 "Presence"; VAULT-MESSAGING §10.17).
  *
- * - **Whether there is presence.** No message lists a vault release's features, so after every unlock the vault is asked
- *   for the policy ([start]): an answer means presence, `unsupported_type` means none until the next unlock.
+ * - **The policy.** Every vault the app talks to has presence (the app requires the vault's current release). After every
+ *   unlock and at the end of the hold the policy is read ([start]); nothing of presence is shown or asked until it is.
  * - **Memory only.** The policy and the readings are cleared by [clear] (a lock, the hold, a wipe) and never written.
  * - **The hold.** While [closed] (the vault is not open, or the daily owner check is due or held) nothing is sent: a
  *   query reads as unknown at once, a change is refused with `owner_check_required`.
@@ -61,7 +61,6 @@ class PresenceManager(
     }
 
     private val lock = Any()
-    private val availabilityFlow = MutableStateFlow(PresenceAvailability.UNKNOWN)
     private val policyFlow = MutableStateFlow<PresencePolicy?>(null)
     private val readingFlow = MutableStateFlow<Map<String, PresenceReading>>(emptyMap())
     private val writes = Mutex()
@@ -81,7 +80,6 @@ class PresenceManager(
     private var watcher: Job? = null
     private val recentFlow = MutableStateFlow<Set<String>>(emptySet())
 
-    override val availability: StateFlow<PresenceAvailability> = availabilityFlow.asStateFlow()
     override val policy: StateFlow<PresencePolicy?> = policyFlow.asStateFlow()
     override val readings: StateFlow<Map<String, PresenceReading>> = readingFlow.asStateFlow()
     override val recent: StateFlow<Set<String>> = recentFlow.asStateFlow()
@@ -106,11 +104,10 @@ class PresenceManager(
             strays.clear()
             policyFlow.value = null
             readingFlow.value = emptyMap()
-            availabilityFlow.value = PresenceAvailability.UNKNOWN
         }
     }
 
-    /** After an unlock and after the hold: asks whether the vault has presence and reads the policy (quietly). */
+    /** After an unlock and after the hold: reads the policy (quietly). */
     fun start() {
         synchronized(lock) {
             starter?.cancel()
@@ -119,9 +116,8 @@ class PresenceManager(
     }
 
     /**
-     * The opening `presence.get`, tried again after a failure that says nothing about the feature (transport, no response, an
-     * unreadable answer) while the vault is open; `unsupported_type` ends it as "no presence", a closed vault ends it (the
-     * check passing calls [start] again).
+     * The opening `presence.get`, tried again after a failure (transport, no response, an unreadable answer) while the vault
+     * is open, so that the policy is there; a closed vault ends it (the check passing calls [start] again).
      */
     private suspend fun probe() {
         var n = 0
@@ -130,7 +126,7 @@ class PresenceManager(
                 refreshPolicy()
                 return
             } catch (e: VaultFailure) {
-                if (e.kind == FailureKind.NOT_SUPPORTED || e.kind == FailureKind.OWNER_CHECK_REQUIRED) return
+                if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) return
             }
             delay(retryDelays[minOf(n++, retryDelays.size - 1)].toMillis())
         }
@@ -144,12 +140,14 @@ class PresenceManager(
         }
     }
 
-    /** Presence is on, and the event's `version` (when it names one) is newer than the policy held: our own change echoes back. */
+    /**
+     * The policy is held (until then the opening read brings it), and the event's `version` (when it names one) is newer
+     * than it: our own change echoes back.
+     */
     private fun changedBeyondHeld(m: VaultMessage): Boolean {
-        if (availabilityFlow.value != PresenceAvailability.AVAILABLE) return false
+        val held = policyFlow.value?.version ?: return false
         val version = (m.body["version"] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
-        val held = policyFlow.value?.version
-        return version == null || held == null || version > held
+        return version == null || version > held
     }
 
     private fun refreshPolicyQuietly() {
@@ -162,10 +160,7 @@ class PresenceManager(
     }
 
     override suspend fun refreshPolicy() {
-        reads.withLock {
-            ensureSupported()
-            readPolicy()
-        }
+        reads.withLock { readPolicy() }
     }
 
     /** Nothing is sent while the vault is not open or the owner check is due or held (§3.6.3): `owner_check_required`, unsent. */
@@ -191,30 +186,15 @@ class PresenceManager(
         }
     }
 
-    /** A vault whose release has no presence is asked no more until the next unlock. */
-    private fun ensureSupported() {
-        if (availabilityFlow.value == PresenceAvailability.UNSUPPORTED) throw VaultFailure(FailureKind.NOT_SUPPORTED)
-    }
-
-    private fun markUnsupported(gen: Int) {
-        synchronized(lock) { if (gen == generation) availabilityFlow.value = PresenceAvailability.UNSUPPORTED }
-    }
-
     /** `presence.get`, applied unless a lock came meanwhile. Not sent while [closed]. */
     private suspend fun readPolicy(): PresencePolicy {
         ensureOpen()
         val gen = synchronized(lock) { generation }
-        val body = try {
-            vaultGuard(resend = true) { ops().get() }
-        } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED) markUnsupported(gen)
-            throw e
-        }
+        val body = vaultGuard(resend = true) { ops().get() }
         val read = PresenceWire.policy(body) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
         synchronized(lock) {
             if (gen == generation) {
                 policyFlow.value = read
-                availabilityFlow.value = PresenceAvailability.AVAILABLE
                 // Readings that waited for the check are asked again.
                 readingFlow.value = readingFlow.value.filterValues { it != PresenceReading.Closed }
             }
@@ -224,7 +204,6 @@ class PresenceManager(
 
     override suspend fun update(change: (PresencePolicy) -> PresencePolicy) {
         writes.withLock {
-            ensureSupported()
             ensureOpen()
             var current = policyFlow.value ?: readPolicy()
             var attempt = 0
@@ -338,11 +317,11 @@ class PresenceManager(
     }
 
     /**
-     * Under [lock]: the generation to ask under, or null when nothing is to be sent (no presence, being sent, or a reading
-     * under a minute old).
+     * Under [lock]: the generation to ask under, or null when nothing is to be sent (the policy not read since the last lock
+     * or hold, being sent, or a reading under a minute old).
      */
     private fun generationToAsk(id: String): Int? {
-        if (availabilityFlow.value != PresenceAvailability.AVAILABLE || id in sending) return null
+        if (policyFlow.value == null || id in sending) return null
         val ask = asks[id]
         val fresh = ask != null && Duration.between(ask.askedAt, now()) < MINUTE && readingFlow.value.containsKey(id)
         return if (fresh) null else generation

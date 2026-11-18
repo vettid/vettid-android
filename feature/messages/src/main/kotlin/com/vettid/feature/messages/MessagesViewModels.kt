@@ -11,7 +11,6 @@ import com.vettid.core.data.calls.CallHistoryEntry
 import com.vettid.core.data.calls.NoCallAccess
 import android.graphics.Bitmap
 import com.vettid.core.data.presence.NoPresence
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresenceReading
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.queryWhileAvailable
@@ -179,7 +178,7 @@ data class ConversationUiState(
     val photoGeneration: Long = 0,
     /**
      * What presence knows of this person (ANDROID-PLAN §4 "Presence"): the line under the title. Null for a service, for a
-     * connection that is not active, and where the vault has no presence.
+     * connection that is not active, and until the member's policy is read.
      */
     val presence: PresenceReading? = null,
 ) {
@@ -239,7 +238,7 @@ class ConversationViewModel @Inject constructor(
                 val off = !p.of(connectionId).allowed
                 s.copy(callsOff = off)
             }
-            .combine(presence.availability) { s, a -> s to (a == PresenceAvailability.AVAILABLE) }
+            .combine(presence.policy) { s, p -> s to (p != null) }
             .combine(presence.readings) { (s, on), r ->
                 // Not asked yet is "Checking…"; a closed vault (owner check) shows no line.
                 val reading = r[connectionId] ?: PresenceReading.Checking

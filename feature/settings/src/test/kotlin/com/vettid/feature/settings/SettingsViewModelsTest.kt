@@ -71,6 +71,27 @@ class SettingsViewModelsTest {
     }
 
     @Test
+    fun thePresenceRowIsOfferedOnceThePolicyIsReadAndGoesWithIt() = runTest {
+        // Not read: the vault is locked, held or due, or its first `presence.get` has not been answered.
+        val presence = com.vettid.core.testing.FakePresence(initial = null)
+        val vm = SettingsViewModel(
+            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates(), screenshots(),
+            presence = presence,
+        )
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.presenceShown)
+        presence.policy.value = com.vettid.core.data.presence.PresencePolicy(1, com.vettid.core.data.presence.PresenceState.BUSY)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.presenceShown)
+        val busy = com.vettid.core.data.presence.PresenceText.stateName(com.vettid.core.data.presence.PresenceState.BUSY)
+        assertEquals(busy, vm.uiState.value.presenceStateRes)
+        // A lock or the hold clears the policy: the row goes.
+        presence.policy.value = null
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.presenceShown)
+    }
+
+    @Test
     fun allowScreenshotsIsOffUntilTurnedOnAndNeverStoredOrSentToTheVault() = runTest {
         val allowance = screenshots()
         val vm = viewModel(allowance)
