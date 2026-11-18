@@ -66,7 +66,7 @@ class FinishMoveRunnerTest {
         advanceUntilIdle()
         f.answer.complete(UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete"))
         advanceUntilIdle()
-        assertEquals(FailureKind.TRANSFER_INCOMPLETE, f.runner.failure.value)
+        assertEquals(FailureKind.TRANSFER_INCOMPLETE, f.runner.failure.value?.kind)
         assertFalse(f.runner.finishing.value)
         f.manager.cancel()
     }
@@ -79,7 +79,7 @@ class FinishMoveRunnerTest {
         )
         val r = runCatching { runner.run("975310") }
         assertTrue(r.isFailure)
-        assertEquals(FailureKind.NETWORK, runner.failure.value)
+        assertEquals(FailureKind.NETWORK, runner.failure.value?.kind)
         manager.cancel()
     }
 

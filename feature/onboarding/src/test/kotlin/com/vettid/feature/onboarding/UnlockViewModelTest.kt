@@ -197,10 +197,10 @@ class UnlockViewModelTest {
     /** Release R: a "Finish the move" that did not open the vault says why on the unlock screen it leads to. */
     @Test
     fun aFailedFinishTheMoveIsShownHere() = runTest {
-        vault.finishMoveFailure.value = FailureKind.TRANSFER_INCOMPLETE
+        vault.finishMoveFailure.value = com.vettid.core.data.vault.MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete")
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        assertEquals(FailureKind.TRANSFER_INCOMPLETE, vm.uiState.value.moveFailure)
+        assertEquals(FailureKind.TRANSFER_INCOMPLETE, vm.uiState.value.moveFailure?.kind)
         vm.dismissMoveFailure()
         advanceUntilIdle()
         assertNull(vm.uiState.value.moveFailure)

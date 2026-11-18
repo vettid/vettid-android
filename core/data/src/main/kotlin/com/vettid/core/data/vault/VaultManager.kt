@@ -5098,7 +5098,7 @@ class VaultManager(
 
     override val finishingMove: StateFlow<Boolean> get() = finishMoveRunner.finishing
 
-    override val finishMoveFailure: StateFlow<FailureKind?> get() = finishMoveRunner.failure
+    override val finishMoveFailure: StateFlow<MoveFailure?> get() = finishMoveRunner.failure
 
     override fun acknowledgeFinishMoveFailure() = finishMoveRunner.clearFailure()
 

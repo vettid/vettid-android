@@ -126,6 +126,17 @@ class ReleaseUpdateRequiredTest {
         rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
     }
 
+    /** Another NOT_SUPPORTED (no previous release to go back to) is not a phone without a user_guid. */
+    @Test
+    fun anotherNotSupportedIsNotAPhoneWithoutAUserGuid() {
+        val p = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NOT_SUPPORTED, failureCode = "no_previous_release",
+            vaultOpen = false,
+        )
+        rule.setContent { ReleaseUpdateFlowContent(ReleaseUpdateFlowUiState(progress = p, required = true), flowActions) }
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertDoesNotExist()
+    }
+
     /** The code with another kind is not the unlock guard's refusal: no recover-or-erase text. */
     @Test
     fun theCodeAloneIsNotAPhoneWithoutAUserGuid() {

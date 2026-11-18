@@ -58,7 +58,8 @@ data class FinishMoveUiState(
     /** The PIN field can be used: not held, not running, not done. */
     val pinAllowed: Boolean get() = held == null && !busy && !done
 
-    override fun toString(): String = "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, held=$held)"
+    override fun toString(): String =
+        "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, noUserGuid=$noUserGuid, held=$held)"
 }
 
 /**
@@ -93,7 +94,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
     }
 
-    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null) }
+    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null, noUserGuid = false) }
 
     fun finish() {
         val s = state.value
