@@ -189,7 +189,8 @@ class ConnectionsViewModelsTest {
     @Test
     fun aScannedLinkIsNotSentAgainWhenTheViewModelIsRebuiltFromSavedState() = runTest {
         social.acceptResult = AcceptedConnection("c7", "Inviter")
-        val saved = SavedStateHandle(mapOf(AcceptRoute.ARG to link()))
+        val scanned = link() // once: link() reads the clock for its expiry
+        val saved = SavedStateHandle(mapOf(AcceptRoute.ARG to scanned))
         AcceptViewModel(saved, social, social)
         advanceUntilIdle()
         assertEquals(1, social.calls.count { it == "acceptInvite" })
@@ -199,7 +200,7 @@ class ConnectionsViewModelsTest {
         advanceUntilIdle()
         assertEquals(1, social.calls.count { it == "acceptInvite" })
         assertEquals(AcceptStep.INPUT, rebuilt.uiState.value.step)
-        assertEquals(link(), rebuilt.uiState.value.input)
+        assertEquals(scanned, rebuilt.uiState.value.input)
         // The member can still ask again.
         rebuilt.accept()
         advanceUntilIdle()
