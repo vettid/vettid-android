@@ -212,14 +212,13 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onInterval = share::setInterval,
                 onTrail = share::setTrail,
                 onStart = {
-                    // The phone's permission is asked for only once the vault is known to have location.
+                    // Not while the daily check is due or held: no permission is asked for then, and nothing starts.
                     when {
-                        !shareState.available -> Unit
+                        share.heldNow() -> Unit
                         shareState.permission == LocationPermission.NONE -> askLocation.launch(LocationPermission.ASKED)
                         else -> share.start()
                     }
                 },
-                onRetry = share::retry,
                 onDismiss = share::dismiss,
             ),
         )

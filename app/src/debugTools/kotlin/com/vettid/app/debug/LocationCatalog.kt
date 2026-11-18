@@ -5,7 +5,6 @@ package com.vettid.app.debug
 
 import androidx.compose.runtime.Composable
 import com.vettid.core.data.account.AccountNames
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.OutgoingShare
 import com.vettid.core.data.location.SendIssue
 import com.vettid.core.data.location.SharePrecision
@@ -91,7 +90,7 @@ internal object LocationCatalog {
     private val defaultServer = MapServer.of(AppPreferences())
 
     private val open = ShareLocationUiState(
-        "c1", open = true, permission = LocationPermission.PRECISE, availability = LocationAvailability.AVAILABLE,
+        "c1", open = true, permission = LocationPermission.PRECISE,
     )
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
@@ -149,12 +148,11 @@ internal object LocationCatalog {
                     outgoing = listOf(OutgoingRow("s1", "c1", "Samira", SharePrecision.APPROXIMATE, Instant.now().plusSeconds(3_600), Instant.now().minusSeconds(120), false)),
                     incoming = listOf(IncomingRow("in1", "c2", "Kim", Instant.now().minusSeconds(300), Instant.now().plusSeconds(7_200))),
                     requests = listOf(RequestRow("location:r1", "c3", "Lee")),
-                    availability = LocationAvailability.AVAILABLE,
                 ),
                 chrome, LocationActions(),
             )
         },
-        "location.screen_empty" to { LocationScreen(LocationUiState(availability = LocationAvailability.AVAILABLE), chrome, LocationActions()) },
+        "location.screen_empty" to { LocationScreen(LocationUiState(), chrome, LocationActions()) },
         "location.position" to { Position(PositionOffset(3_200.0, 45.0)) },
         // Distances in miles and feet (Settings → Units, owner decision 2026-11-05).
         "location.position_miles" to { Position(PositionOffset(3_200.0, 45.0), units = DistanceUnits.MILES) },

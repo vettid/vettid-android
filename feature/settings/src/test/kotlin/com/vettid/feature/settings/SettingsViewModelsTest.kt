@@ -56,21 +56,6 @@ class SettingsViewModelsTest {
         SettingsViewModel(vault, vault, prefs, lock, vault, allowance)
 
     @Test
-    fun theMapServerRowIsOfferedOnlyWhereTheVaultHasLocation() = runTest {
-        val location = com.vettid.core.testing.FakeLocation()
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNSUPPORTED
-        val vm = SettingsViewModel(
-            vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, screenshots(),
-            location = location,
-        )
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.mapServerShown)
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.AVAILABLE
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.mapServerShown)
-    }
-
-    @Test
     fun thePresenceRowIsOfferedOnceThePolicyIsReadAndGoesWithIt() = runTest {
         // Not read: the vault is locked, held or due, or its first `presence.get` has not been answered.
         val presence = com.vettid.core.testing.FakePresence(initial = null)

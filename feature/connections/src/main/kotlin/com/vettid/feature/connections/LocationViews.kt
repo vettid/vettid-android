@@ -44,7 +44,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.location.IncomingShare
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LengthSystem
 import com.vettid.core.data.location.LengthSystems
 import com.vettid.core.data.prefs.DistanceUnits
@@ -325,7 +324,6 @@ data class LocationUiState(
     val outgoing: List<OutgoingRow> = emptyList(),
     val incoming: List<IncomingRow> = emptyList(),
     val requests: List<RequestRow> = emptyList(),
-    val availability: LocationAvailability = LocationAvailability.UNKNOWN,
     val error: FailureKind? = null,
     val errorCode: String? = null,
     /** Share ids whose stop is out (a second tap waits). */
@@ -348,8 +346,7 @@ class LocationViewModel @Inject constructor(
         location.outgoing,
         location.incoming,
         combine(connections.connections, approvals.approvals, location.serviceState) { c, a, s -> Triple(c, a, s) },
-        location.availability,
-    ) { s, out, inc, (cs, asks, service), availability ->
+    ) { s, out, inc, (cs, asks, service) ->
         val names = cs.associate { it.id to firstNameOf(it) }
         s.copy(
             outgoing = out.filter { it.expiresAt.isAfter(Instant.now()) }.map {
@@ -363,7 +360,6 @@ class LocationViewModel @Inject constructor(
             },
             requests = asks.filterIsInstance<Approval.LocationRequest>()
                 .map { RequestRow(it.key, it.connectionId, names[it.connectionId]) },
-            availability = availability,
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, LocationUiState())
 

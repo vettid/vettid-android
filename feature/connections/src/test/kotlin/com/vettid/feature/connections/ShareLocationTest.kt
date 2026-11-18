@@ -5,6 +5,7 @@ package com.vettid.feature.connections
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -211,50 +212,85 @@ class ShareLocationTest {
         assertTrue(ShareLocationUiState("c1", open = true, busy = true, startedId = null).holdsInput)
     }
 
-    // --- vaults without location ---
+    // --- an open vault has location: nothing is learnt first ---
 
     @Test
-    fun theSheetReadsWhetherTheVaultHasLocationBeforeAnythingIsAsked() = runTest {
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
+    fun theSheetReadsNothingWhenItOpensAndStartsAtOnce() = runTest {
         val vm = vm()
         vm.open()
         vm.setPermission(LocationPermission.PRECISE)
         advanceUntilIdle()
-        assertEquals(1, location.refreshes)
-        assertTrue(read(vm.uiState).available)
+        assertEquals(0, location.refreshes)
+        vm.start()
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), location.started.map { it.connectionId })
+        assertEquals(0, location.refreshes)
     }
 
     @Test
-    fun nothingStartsAndNoPermissionIsAskedWhileTheVaultIsNotKnownToHaveLocation() = runTest {
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
-        location.fail = VaultFailure(FailureKind.NOT_SUPPORTED)
+    fun withoutThePermissionNothingStarts() = runTest {
         val vm = vm()
         vm.open()
-        vm.setPermission(LocationPermission.PRECISE)
-        advanceUntilIdle()
-        assertFalse(read(vm.uiState).available)
-        assertEquals(FailureKind.NOT_SUPPORTED, read(vm.uiState).error)
+        vm.setPermission(LocationPermission.NONE)
         vm.start()
         advanceUntilIdle()
         assertTrue(location.started.isEmpty())
     }
 
     @Test
-    fun theStartButtonWaitsForTheVaultToBeKnownToHaveLocation() {
-        sheet(open.copy(availability = com.vettid.core.data.location.LocationAvailability.UNKNOWN))
+    fun theStartButtonIsOnUnlessAStartIsOut() {
+        sheet(open)
+        rule.onNodeWithTag("share_location_start").assertIsEnabled()
+    }
+
+    @Test
+    fun whileTheDailyCheckIsDueNothingStartsAndThePermissionIsNotAsked() = runTest {
+        val vault = com.vettid.core.testing.FakeVault()
+        fun check(state: com.vettid.core.data.vault.OwnerCheckState) =
+            com.vettid.core.data.vault.OwnerCheckView(state, null, 86_400, 0, hold = true, holdOffUntil = null)
+        vault.ownerCheck.value = check(com.vettid.core.data.vault.OwnerCheckState.DUE)
+        val vm = ShareLocationViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), location, prefs, vault)
+        vm.open()
+        assertTrue(read(vm.uiState).held)
+        assertTrue("the screen asks no permission while this is true", vm.heldNow())
+        vm.permissionResult(LocationPermission.PRECISE)
+        vm.start()
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        // the check passes: Start works again
+        vault.ownerCheck.value = check(com.vettid.core.data.vault.OwnerCheckState.OK)
+        assertFalse(read(vm.uiState).held)
+        assertFalse(vm.heldNow())
+        vm.start()
+        advanceUntilIdle()
+        assertEquals(1, location.started.size)
+    }
+
+    @Test
+    fun theStartButtonIsOffWhileTheCheckIsDueOrHeld() {
+        sheet(open.copy(held = true))
         rule.onNodeWithTag("share_location_start").assertIsNotEnabled()
     }
 
     @Test
-    fun theCardIsHiddenOnAVaultWithoutLocationAndShownWhileItIsNotKnown() = runTest {
+    fun theStartButtonIsOffWhileAStartIsOut() {
+        sheet(open.copy(busy = true))
+        rule.onNodeWithTag("share_location_start").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theCardIsOnAnActivePersonsPageAndNeverOnAServiceOrAPendingOne() = runTest {
         val social = FakeSocial().also { it.seed(listOf(FakeSocial.connection("c1", "Sam"))) }
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
         val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing(), location = location)
-        assertTrue(read(vm.uiState).locationOffered)
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNSUPPORTED
-        assertFalse(read(vm.uiState).locationOffered)
-        val c = FakeSocial.connection("c1", "Sam")
-        rule.setContent { ConnectionDetailScreen(ConnectionDetailUiState("c1", c, null, loading = false, locationOffered = false), DetailActions()) }
+        val person = read(vm.uiState)
+        val c = androidx.compose.runtime.mutableStateOf(person.connection!!)
+        rule.setContent { ConnectionDetailScreen(person.copy(connection = c.value, loading = false), DetailActions()) }
+        rule.onNodeWithTag("detail_location").assertExists()
+        c.value = FakeSocial.connection("c1", "Sam").copy(service = true)
+        rule.waitForIdle()
+        assertEquals(0, rule.onAllNodesWithTag("detail_location").fetchSemanticsNodes().size)
+        c.value = FakeSocial.connection("c1", "Sam", state = com.vettid.core.data.social.ConnectionState.PENDING)
+        rule.waitForIdle()
         assertEquals(0, rule.onAllNodesWithTag("detail_location").fetchSemanticsNodes().size)
     }
 
@@ -339,7 +375,7 @@ class ShareLocationTest {
     }
 
     private val open = ShareLocationUiState(
-        "c1", open = true, permission = LocationPermission.PRECISE, availability = com.vettid.core.data.location.LocationAvailability.AVAILABLE,
+        "c1", open = true, permission = LocationPermission.PRECISE,
         units = com.vettid.core.data.prefs.DistanceUnits.KILOMETERS,
     )
 
@@ -568,31 +604,55 @@ class ShareLocationTest {
     }
 
     @Test
-    fun whileTheVaultsLocationSupportIsUnknownAFailedReadCanBeTriedAgain() = runTest {
-        location.availability.value = com.vettid.core.data.location.LocationAvailability.UNKNOWN
-        location.fail = VaultFailure(FailureKind.NETWORK)
-        val vm = vm()
-        vm.open()
-        vm.setOnce(true)
-        advanceUntilIdle()
-        assertEquals(FailureKind.NETWORK, read(vm.uiState).error)
-        assertFalse(read(vm.uiState).available)
-        var tried = 0
-        sheet(read(vm.uiState), ShareLocationActions(onRetry = { tried++ }))
-        rule.onNodeWithTag("share_location_retry").assertIsDisplayed().performClick()
-        assertEquals(1, tried)
-        // The view model reads again and keeps what the member chose.
-        vm.retry()
-        advanceUntilIdle()
-        assertNull(read(vm.uiState).error)
-        assertTrue(read(vm.uiState).available)
-        assertTrue(read(vm.uiState).once)
-    }
-
-    @Test
-    fun aKnownAvailabilityHasNoTryAgainOnItsErrorCard() {
+    fun aFailedStartsErrorCardHasNoTryAgainAndStartStaysOn() {
         sheet(open.copy(error = FailureKind.NETWORK))
         rule.onNodeWithTag("share_location_error").assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithTag("share_location_retry").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("share_location_start").assertIsEnabled()
+    }
+
+    // --- answering a request: the list is read first ---
+
+    @Test
+    fun answeringARequestReadsTheListBeforeStarting() = runTest {
+        val vm = fromRequest()
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertEquals(1, location.refreshes)
+        assertEquals("r1", location.started.single().requestId)
+    }
+
+    @Test
+    fun aShareTheListReadFindsStartsNothing() = runTest {
+        val vm = fromRequest()
+        // The share to this connection is known only once the list is read (it was not read yet since the unlock).
+        val held = location.outgoing.value
+        location.outgoing.value = emptyList()
+        val listed = com.vettid.core.data.location.OutgoingShare(
+            "s9", "c1", false, SharePrecision.APPROXIMATE, 60L, false, Instant.now().plusSeconds(3_600), null, false,
+        )
+        location.onRefresh = { location.outgoing.value = held + listed }
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        val s = read(vm.uiState)
+        assertTrue(s.alreadySharing)
+        assertFalse(s.busy)
+    }
+
+    @Test
+    fun aFailedListReadStartsNothingAndSaysWhy() = runTest {
+        val vm = fromRequest()
+        location.refreshFail = VaultFailure(FailureKind.NETWORK)
+        vm.permissionResult(LocationPermission.PRECISE)
+        advanceUntilIdle()
+        assertTrue(location.started.isEmpty())
+        val s = read(vm.uiState)
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertFalse(s.busy)
+        // tapped again, it reads and starts
+        vm.start()
+        advanceUntilIdle()
+        assertEquals(1, location.started.size)
     }
 }

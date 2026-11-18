@@ -129,7 +129,6 @@ class LocationSharing(
 
     /** The platform refused the positions (the permission was taken away) since they were last asked for. */
     private var refused = false
-    private val availabilityFlow = MutableStateFlow(LocationAvailability.UNKNOWN)
     private var inFront = false
     private var notRunningShown = false
 
@@ -154,7 +153,6 @@ class LocationSharing(
     private var resumer: Job? = null
     private var reopener: Job? = null
     private var onceTimer: Job? = null
-    private var unsupported = false
 
     /** The best fix while a `once` share waits (held for at most 60 s), and the time of the last position sent. */
     private var held: Fix? = null
@@ -162,7 +160,6 @@ class LocationSharing(
 
     override val outgoing: StateFlow<List<OutgoingShare>> = outgoingFlow.asStateFlow()
     override val serviceState: StateFlow<ServiceState> = stateFlow.asStateFlow()
-    override val availability: StateFlow<LocationAvailability> = availabilityFlow.asStateFlow()
     override val missedOnce: StateFlow<Set<String>> = missedFlow.asStateFlow()
     override val incoming: StateFlow<List<IncomingShare>> get() = receiving.incoming
 
@@ -199,7 +196,6 @@ class LocationSharing(
                 read(resume = false)
                 return
             } catch (e: VaultFailure) {
-                if (e.kind == FailureKind.NOT_SUPPORTED) return
                 val wait = if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) watchEvery else retryDelays[minOf(n++, retryDelays.size - 1)]
                 delay(wait.toMillis())
             }
@@ -223,15 +219,42 @@ class LocationSharing(
     // --- starting ---
 
     override suspend fun start(request: ShareRequest): OutgoingShare {
+        refuseUnsendable(request)
+        // Taken before the open check: a lock that lands just after it voids the start.
+        return startUnder(request, synchronized(lock) { generation })
+    }
+
+    /** Out of the vault's bounds, or toward a service (the vault refuses `location.share.start` toward one): nothing is sent. */
+    private fun refuseUnsendable(request: ShareRequest) {
         if (!request.withinBounds()) throw VaultFailure(FailureKind.OTHER, "bad_request")
-        // A service can't receive a location (the vault refuses `location.share.start` toward one): nothing is sent.
         if (isService(request.connectionId)) throw VaultFailure(FailureKind.SERVICE_FORBIDDEN)
+    }
+
+    override suspend fun startAnsweringRequest(request: ShareRequest): OutgoingShare? {
+        refuseUnsendable(request)
+        // The read applies under this generation or throws: a lock before its answer voids it, so nothing is judged on a list
+        // the lock cleared. A lock after the read makes the start under the same generation throw, before anything is sent.
+        val gen = read(resume = false)
+        val active = synchronized(lock) {
+            val stopping = ServiceState(stoppingShares = stopMarks.keys.toSet())
+            activeShareTo(tracked.values.map { it.share }, stopping, request.connectionId, now())
+        }
+        if (active != null) return null
+        return startUnder(request, gen)
+    }
+
+    /**
+     * `location.share.start` under [gen], taken before any open check: a [clear] since then (a lock, even one opened again) starts
+     * nothing and throws, and one during the start voids its answer here.
+     */
+    private suspend fun startUnder(request: ShareRequest, gen: Int): OutgoingShare {
         requireOpen()
+        if (synchronized(lock) { gen != generation }) throw voided()
         // One start per connection at a time: a second tap or call cannot start twice.
         val first = synchronized(lock) { starting.add(request.connectionId) }
         if (!first) throw VaultFailure(FailureKind.OTHER, "busy")
         try {
-            return startOnce(request)
+            return startOnce(request, gen)
         } finally {
             synchronized(lock) { starting.remove(request.connectionId) }
         }
@@ -248,16 +271,10 @@ class LocationSharing(
         if (blocked != SendIssue.NONE) throw VaultFailure(FailureKind.OTHER, blocked.code)
     }
 
-    private suspend fun startOnce(request: ShareRequest): OutgoingShare {
+    /** [gen] is the start's, taken before its open check: a [clear] since then voids the answer here. */
+    private suspend fun startOnce(request: ShareRequest, gen: Int): OutgoingShare {
         ensureCanSend()
-        val gen = synchronized(lock) { generation }
-        val body = try {
-            vaultGuard { ops().start(request) }
-        } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED) availabilityFlow.value = LocationAvailability.UNSUPPORTED
-            throw e
-        }
-        availabilityFlow.value = LocationAvailability.AVAILABLE
+        val body = vaultGuard { ops().start(request) }
         val started = ShareWire.started(body) ?: throw VaultFailure(FailureKind.OTHER, "unreadable_result")
         val share = OutgoingShare(
             shareId = started.shareId,
@@ -284,6 +301,9 @@ class LocationSharing(
         persist()
         return share
     }
+
+    /** A lock came between the start of a call and its answer (or its send): nothing of it is applied. */
+    private fun voided() = VaultFailure(FailureKind.OTHER, "voided_by_lock")
 
     private fun requireOpen() {
         if (!unlocked() || due()) throw VaultFailure(FailureKind.OWNER_CHECK_REQUIRED, "owner_check_required")
@@ -436,14 +456,12 @@ class LocationSharing(
             wasGated = false
             resumed = false
             paused = false
-            unsupported = false
             refused = false
             starting.clear()
             stopTries.clear()
             stopNext.clear()
             endedAt.clear()
             missedFlow.value = emptySet()
-            availabilityFlow.value = LocationAvailability.UNKNOWN
             stopService()
             publish()
             if (notRunningShown) {
@@ -514,8 +532,7 @@ class LocationSharing(
                 read(resume = true)
                 return
             } catch (e: VaultFailure) {
-                if (e.kind == FailureKind.NOT_SUPPORTED) return
-                // Never a tight loop: at least the watch interval, or the backoff for a failure that says nothing about the feature.
+                // Never a tight loop: at least the watch interval, or the backoff for any other failure.
                 val wait = if (e.kind == FailureKind.OWNER_CHECK_REQUIRED) watchEvery else retryDelays[minOf(n++, retryDelays.size - 1)]
                 delay(wait.toMillis())
             }
@@ -632,31 +649,20 @@ class LocationSharing(
         read(resume = false)
     }
 
-    private suspend fun read(resume: Boolean) {
-        if (unsupported) throw VaultFailure(FailureKind.NOT_SUPPORTED)
-        requireOpen()
-        val (gen, startSeq, startEpoch) = synchronized(lock) { Triple(generation, seq, epoch) }
+    /** Applies the list under the generation it returns; throws when a lock came between the read and its answer. */
+    private suspend fun read(resume: Boolean): Int {
+        // Taken before the open check: a lock (or, for the incoming side, a hold) that lands just after it voids the answer.
+        val gen = synchronized(lock) { generation }
         val receiveToken = receiving.begin()
-        val body = try {
-            vaultGuard(resend = true) { ops().list() }
-        } catch (e: VaultFailure) {
-            if (e.kind == FailureKind.NOT_SUPPORTED) {
-                synchronized(lock) {
-                    if (gen == generation) {
-                        unsupported = true
-                        availabilityFlow.value = LocationAvailability.UNSUPPORTED
-                    }
-                }
-            }
-            throw e
-        }
+        requireOpen()
+        val (startSeq, startEpoch) = synchronized(lock) { seq to epoch }
+        val body = vaultGuard(resend = true) { ops().list() }
         // The incoming side is judged by its own epoch, under its own monitor: an answer across a lock or a hold writes nothing.
         receiving.applyList(body, receiveToken)
         val stored = withContext(io) { store.load() }
         val listed = readable(body, stored)
         val toStop = synchronized(lock) {
-            if (gen != generation) return
-            availabilityFlow.value = LocationAvailability.AVAILABLE
+            if (gen != generation) throw voided()
             val stops = apply(listed, stored, resume, startSeq, startEpoch)
             recompute()
             stops
@@ -664,6 +670,7 @@ class LocationSharing(
         persist()
         // A share the member stopped is never taken up: the stop is sent for it, and the mark goes when the vault took it.
         if (toStop.isNotEmpty()) scope.launch { toStop.forEach { stopQuietly(it) } }
+        return gen
     }
 
     /** The vault's outgoing shares; the stored ids name this phone as a source only when its device id is not known. */

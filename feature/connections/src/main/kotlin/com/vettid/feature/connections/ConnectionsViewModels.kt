@@ -15,7 +15,6 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.location.AskResult
 import com.vettid.core.data.location.IncomingShare
-import com.vettid.core.data.location.LocationAvailability
 import com.vettid.core.data.location.LocationRepository
 import com.vettid.core.data.location.NoLocation
 import com.vettid.core.data.location.SendIssue
@@ -653,8 +652,6 @@ data class ConnectionDetailUiState(
     val presence: DetailPresence? = null,
     /** The member shares their location with this connection until [DetailLocation.until] (ANDROID-PLAN §4 "Location"). */
     val location: DetailLocation? = null,
-    /** Not offered on a vault known to have no location (shown while that is not known yet). */
-    val locationOffered: Boolean = true,
     /** The member's once share to this connection ended without a position being found. */
     val locationMissed: Boolean = false,
     /** This connection shares its location with the member (the incoming card), if it does. */
@@ -819,11 +816,10 @@ class ConnectionDetailViewModel @Inject constructor(
             repo.connections,
             repo.authentication,
             combine(calls.availability, calls.permissions, ownVotes()) { c, p, v -> Triple(c, p, v) },
-            combine(ownPresence(), ownLocation(), location.availability, location.incoming, units, ::Extras),
+            combine(ownPresence(), ownLocation(), location.incoming, units, ::Extras),
         ) { s, cs, auth, (call, perms, v), extras ->
             val p = extras.presence
             val shared = extras.location
-            val offered = extras.availability
             val incoming = extras.incoming.firstOrNull { it.connectionId == id && it.expiresAt.isAfter(Instant.now()) }
             val c = cs.firstOrNull { it.id == id } ?: s.connection
             s.copy(
@@ -842,7 +838,6 @@ class ConnectionDetailViewModel @Inject constructor(
                 },
                 location = shared.location,
                 locationMissed = shared.missed,
-                locationOffered = offered != LocationAvailability.UNSUPPORTED,
                 units = extras.units,
                 incoming = incoming?.let { DetailIncoming(it.shareId, it.expiresAt, it.last?.at, it.last?.accuracyM, it.precision) },
             )
@@ -852,7 +847,6 @@ class ConnectionDetailViewModel @Inject constructor(
     private class Extras(
         val presence: PresenceView?,
         val location: LocationView,
-        val availability: LocationAvailability,
         val incoming: List<IncomingShare>,
         val units: com.vettid.core.data.prefs.DistanceUnits,
     )
