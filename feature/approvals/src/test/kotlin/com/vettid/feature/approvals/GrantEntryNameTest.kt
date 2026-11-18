@@ -1,5 +1,7 @@
 package com.vettid.feature.approvals
 
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -32,15 +34,42 @@ class GrantEntryNameTest {
 
     @Test
     fun anEntryWithoutItsNameIsNotNamedFromThePhonesItems() {
-        show(GrantEntry("item", "i1", "Your passport", available = true))
+        // As the parser leaves an entry the vault sent without being available.
+        show(GrantEntry("item", "i1", "Your passport", available = false))
         rule.onNodeWithText("Passport").assertDoesNotExist()
         rule.onNodeWithText("(not in your vault)", substring = true).assertExists()
+        rule.onNodeWithTag("grant_entry_0").assertIsNotEnabled()
+    }
+
+    @Test
+    fun anUnreadableEntryIsInTheVaultAndNeverGrantable() {
+        // Sent as available without a name that shows: the parser marks it unreadable and unavailable.
+        show(GrantEntry("item", "i1", "Your passport", available = false, unreadable = true))
+        rule.onNodeWithText("An item in your vault").assertExists()
+        rule.onNodeWithText("(not in your vault)", substring = true).assertDoesNotExist()
+        rule.onNodeWithText("Passport").assertDoesNotExist()
+        rule.onNodeWithTag("grant_entry_0").assertIsNotEnabled()
+    }
+
+    @Test
+    fun anUnreadableEntryWithANameShowsIt() {
+        // Unreadable for its labels: its name shows, and it is still not grantable.
+        show(GrantEntry("item", "i1", null, available = false, name = "Travel passport", category = "other", unreadable = true))
+        rule.onNodeWithText("\u2068Travel passport\u2069").assertExists()
+        rule.onNodeWithTag("grant_entry_0").assertIsNotEnabled()
+    }
+
+    @Test
+    fun anAvailableEntryWhoseNameShowsNothingIsNeverGrantable() {
+        // A second line of defence behind the parser: the screen grants an item only by a name that shows.
+        show(GrantEntry("item", "i1", "Your passport", available = true, name = "\u200b"))
+        rule.onNodeWithTag("grant_entry_0").assertIsNotEnabled()
     }
 
     @Test
     fun anEntryIsNamedByTheVault() {
         show(GrantEntry("item", "i1", "Your passport", available = true, name = "Travel passport"))
         rule.onNodeWithText("\u2068Travel passport\u2069").assertExists()
-        rule.onNodeWithTag("grant_entry_0").assertExists()
+        rule.onNodeWithTag("grant_entry_0").assertIsEnabled()
     }
 }

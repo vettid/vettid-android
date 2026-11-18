@@ -50,8 +50,8 @@ interface ItemsRepository {
 
     /**
      * Replaces a `critical` item's content (sealed) and tags with the password: one credential operation, the kept
-     * values merged by the vault (§10.7 Kept values). A vault before 0.21.0 refuses fields without `value`
-     * (`bad_request`); the app then opens the values with the same password and sends them all.
+     * values merged by the vault (§10.7 Kept values). For a critical item not written since the upgrade (no `size`),
+     * a refusal (`bad_request`) makes the app open the values with the same password and send them all.
      */
     suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long
 

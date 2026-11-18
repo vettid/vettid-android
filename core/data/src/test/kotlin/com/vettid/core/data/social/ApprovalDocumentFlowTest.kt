@@ -98,7 +98,7 @@ class ApprovalDocumentFlowTest {
     )
 
     /** Another open ask, of another kind: a grant request of the same connection. */
-    private val grant = """{"request_id":"g1","connection_id":"c1","items":[{"kind":"item","ref":"IT1","label":"Passport","available":true}],"uses":1,"expires_in":3600,"exp":"$exp"}"""
+    private val grant = """{"request_id":"g1","connection_id":"c1","items":[{"kind":"item","ref":"IT1","label":"Passport","available":true,"name":"Passport","category":"other","labels":[]}],"uses":1,"expires_in":3600,"exp":"$exp"}"""
 
     private suspend fun TestScope.grantPending(m: SocialManager) {
         m.onEvent(VaultMessage(Inner(id = Ulid.new(), type = "grant.pending", ts = at, body = grant.toByteArray())))

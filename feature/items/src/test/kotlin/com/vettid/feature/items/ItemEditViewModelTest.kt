@@ -633,6 +633,48 @@ class ItemEditViewModelTest {
     }
 
     @Test
+    fun anotherTagsPreviewGoesAtOnceBeforeThePause() = runTest {
+        social.connections.value = listOf(
+            com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
+        )
+        items.effect = com.vettid.core.data.items.ShareEffect(
+            shares = listOf(com.vettid.core.data.items.EffectShare("r1", com.vettid.core.data.items.ShareSubject("c1"), com.vettid.core.data.items.ShareMode.AUTO)),
+        )
+        val vm = vm(template = "allergies")
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // A tag added: the preview of the old tags goes before the pause, and the new one comes after it.
+        vm.setTagInput("travel")
+        vm.addTag()
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // The same for a failure.
+        items.fail["shareEffect"] = VaultFailure(FailureKind.NETWORK, "network")
+        vm.setTagInput("home")
+        vm.addTag()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.impactError)
+        vm.setTagInput("id")
+        vm.addTag()
+        assertNull(vm.uiState.value.impactError)
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // Tags the vault would refuse (more than 16): no preview at all, and no dry run is asked.
+        val asked = items.calls.count { it == "shareEffect" }
+        for (i in 1..16) {
+            vm.setTagInput("t$i")
+            vm.addTag()
+        }
+        assertTrue(vm.uiState.value.draft.tags.size > com.vettid.core.data.items.ItemChecks.MAX_TAGS)
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        assertNull(vm.uiState.value.impactError)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        assertEquals(asked, items.calls.count { it == "shareEffect" })
+    }
+
+    @Test
     fun aFailedDryRunDoesNotStopTheSave() = runTest {
         // The dry run only previews: the vault applies its rules to the real save either way.
         items.fail["shareEffect"] = VaultFailure(FailureKind.OTHER, "bad_request")

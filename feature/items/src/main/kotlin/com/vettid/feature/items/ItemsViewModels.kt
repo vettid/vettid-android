@@ -458,21 +458,21 @@ class ItemEditViewModel @Inject constructor(
 
     /**
      * What saving would do to sharing (§10.7 Dry run): asked again when the tags (or a new item's sensitivity)
-     * change, after a short pause. An existing item whose tags did not change gains and leaves nothing.
+     * change, after a short pause. An existing item whose tags did not change gains and leaves nothing. The preview
+     * (or failure) of other tags goes at once, before the pause, and so does it while a tag is invalid.
      */
     @Suppress("ReturnCount")
     private fun impact() {
         val s = state.value
         if (s.loading) return
         val d = s.draft
-        val tags = ItemChecks.normalizeTags(d.tags) ?: return
-        val key = tags to d.sensitivity
-        if (key == impactKey) return
+        val tags = ItemChecks.normalizeTags(d.tags)
+        val key = tags?.let { it to d.sensitivity }
+        if (key != null && key == impactKey) return
         impactKey = key
         impactJob?.cancel()
-        if (!s.isNew && tags == savedTags) {
-            return state.update { it.copy(shareImpact = emptyList(), impactError = null, impactErrorCode = null, impactLimit = null) }
-        }
+        state.update { it.copy(shareImpact = emptyList(), impactError = null, impactErrorCode = null, impactLimit = null) }
+        if (tags == null || !s.isNew && tags == savedTags) return
         impactJob = viewModelScope.launch {
             delay(IMPACT_DEBOUNCE_MS)
             try {

@@ -202,8 +202,8 @@ class ItemsManager(
     @Suppress("ReturnCount")
     override suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long {
         val d = draft.copy(sensitivity = Sensitivity.CRITICAL)
-        // A critical item without `size` is kept by an older vault, or not written since the upgrade. Notes kept without
-        // a kept field would pass an older vault, which ignores `keep_notes`, and lose them: the values are opened first.
+        // A critical item without `size` is a critical item not written since the upgrade (§10.7). Kept notes without a
+        // kept field are not left to the vault for it: the values are opened first, as when the vault refuses the edit.
         val unsure = d.keeps && d.base?.bytes == null
         if (unsure && d.fields.none { it.kept }) return putCriticalMerged(itemId, version, d, password)
         val (content, tags) = content(d)
@@ -217,7 +217,7 @@ class ItemsManager(
         return ref.version
     }
 
-    /** For a vault before 0.21.0: the stored values opened with the same password, merged, and sent in full. */
+    /** For a critical item not written since the upgrade: the stored values opened with the same password, merged, and sent in full. */
     private suspend fun putCriticalMerged(itemId: String, version: Long, d: ItemDraft, password: String): Long {
         val full = merged(d, revealCritical(itemId, password))
         val (content, tags) = content(full)

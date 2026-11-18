@@ -744,7 +744,8 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
         // The asker's own words (§10.8 "Showing received text"): cleaned and isolated before they sit in a sentence.
         val theirs = AccountNames.isolateOrNull(e.label)
         val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
-        val grantable = (e.kind == "item" && e.available) || answer != null
+        // An item entry is granted only while its name shows (the parser already reads one without it as unavailable).
+        val grantable = (e.kind == "item" && e.available && itemName != null) || answer != null
         Row(
             Modifier
                 .fillMaxWidth()
@@ -763,6 +764,8 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
                         theirs ?: AccountNames.isolate(ItemCategories.humanize(e.ref)),
                     )
                     e.available && itemName != null -> itemName
+                    // Sent as available but unreadable: it is in the member's vault, so never "not in your vault".
+                    e.unreadable -> itemName ?: stringResource(R.string.approvals_share_unnamed)
                     else -> stringResource(R.string.approvals_grant_item_missing, theirs ?: AccountNames.isolate(e.ref))
                 }
                 Text(title, style = MaterialTheme.typography.bodyLarge)

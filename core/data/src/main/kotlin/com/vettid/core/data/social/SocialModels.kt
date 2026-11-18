@@ -293,8 +293,9 @@ data class GrantDecision(
 /**
  * An item of a grant request (§10.12): an item the asker names, or a category the member answers. [label] is the
  * asker's own words. For an available `item` entry the member's vault adds the item's current [name], [category] and
- * the [labels] of the fields it would grant (VAULT-MESSAGING 0.21.0); an `item` entry without [name] is never
- * [available] ([ApprovalParser.grant]).
+ * the [labels] of the fields it would grant (VAULT-MESSAGING 0.21.0). [unreadable]: the vault sent the `item` entry as
+ * available without what that carries (a name that shows, a category, labels); it is then never [available]
+ * ([ApprovalParser.grant]), and is still in the member's vault.
  */
 data class GrantEntry(
     val kind: String,
@@ -304,6 +305,7 @@ data class GrantEntry(
     val name: String? = null,
     val category: String? = null,
     val labels: List<com.vettid.core.data.items.FieldLabel>? = null,
+    val unreadable: Boolean = false,
 )
 
 /**
