@@ -209,14 +209,17 @@ The A2 exit test:
   (`CallsModule.callsOpen`: `Unlocked && !required`), `CLOSED` otherwise, which shows no conversation button, no Call
   and no calls row; no history is read while closed. An incoming offer rings only once the vault is open on this phone:
   it waits for an unlock that is completing up to 10 s (`UNLOCK_WAIT`; else it is refused, no `call.ringing`, no
-  microphone) and the vault and the update screen are looked at again after the wait. `CALLS_TEST` is false in every release, and `CallsTestCheck.MARKER` is
+  microphone) and the vault and the update screen are looked at again after the wait. An incoming offer does not ring
+  while the daily owner check is due or held (owner decision a, 2026-11-17; `CallVault.ownerCheckGated`, `OwnerCheckView.gated`
+  as for presence and location: looked at before the wait and again after it; refused as above, the member's other devices may answer). `CALLS_TEST` is false in every release, and `CallsTestCheck.MARKER` is
   among `checkReleaseApk`'s forbidden strings. The post-quantum DTLS field trial (`MediaConfig.dtlsPqcTrial`) is off; only a debug switch may set it.
   `WebRtcMediaEngine` has no unit test (it needs the native library): two phones are its test.
   In the app: `CallAccess` (`:core:data`) is all that the screens know of calls (`NoCallAccess` is their default and
   the tests'); `app/src/calls` (every build) wires `CallsController` (`:core:calls`: the `call.list` read after unlock,
   which decides nothing of whether calls show: it tells whether the vault is C2 (until it has, calls are placed in
   form 2, so they need the connection's identity key, and answered with keep-alives), starts the permission read and
-  the stale-call sweep, and in a test build reads the signer class; a refused read is made again at the next recheck; microphone, audio route, tones,
+  the stale-call sweep, and in a test build reads the signer class; a refused read is made again at the next recheck, and
+  a read (or a history read) that a lock overtook applies nothing; `call.start`'s `unsupported_type` ends `FAILED`; microphone, audio route, tones,
   `CallService` of types `phoneCall|microphone`; the end at lock and after 12 h) on `VaultManager.vaultApi()`.
   `VaultCallSignalling` is where a call's checks are asked for: nothing reaches `CallMachine` that has not passed
   `callIncoming` / `callAccept`, each against the fingerprint the connection's details show. Only `CallApi` makes

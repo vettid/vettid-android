@@ -26,7 +26,6 @@ object CallTexts {
         CallEnd.OWN_VAULT_BUSY to R.string.calls_end_own_vault_busy,
         CallEnd.CALLS_OFF to R.string.calls_end_calls_off,
         CallEnd.OWNER_CHECK_REQUIRED to R.string.calls_end_owner_check_required,
-        CallEnd.NOT_SUPPORTED to R.string.calls_end_not_supported,
         CallEnd.NO_ADDRESS to R.string.calls_end_no_address,
         CallEnd.COULD_NOT_CONNECT to R.string.calls_end_could_not_connect,
         CallEnd.CONNECTION_LOST to R.string.calls_end_connection_lost,
@@ -42,7 +41,7 @@ object CallTexts {
     fun staysOpen(reason: CallEnd): Boolean = reason in STAYS_OPEN
 
     private val STAYS_OPEN = setOf(
-        CallEnd.OWNER_CHECK_REQUIRED, CallEnd.NOT_SUPPORTED, CallEnd.NO_ADDRESS, CallEnd.COULD_NOT_CONNECT, CallEnd.NOT_ENCRYPTED,
+        CallEnd.OWNER_CHECK_REQUIRED, CallEnd.NO_ADDRESS, CallEnd.COULD_NOT_CONNECT, CallEnd.NOT_ENCRYPTED,
         CallEnd.FAILED, CallEnd.OWN_VAULT_BUSY, CallEnd.CALLS_OFF,
     )
 

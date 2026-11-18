@@ -111,6 +111,9 @@ object CallsModule {
         /** The root UI shows the release update over every phase while its progress is non-null (VettIdApp). */
         override val updateShowing: Boolean get() = m.releaseUpdate.progress.value != null
 
+        /** The daily owner check due or held now (the rule presence and location follow): no ring (owner decision a, 2026-11-17). */
+        override val ownerCheckGated: Boolean get() = m.ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true
+
         /**
          * The events of the vault device in use, from the moment its session exists (before the vault is open): the
          * call that was waiting in the mailbox at an unlock is collected right then, and the device's events are not

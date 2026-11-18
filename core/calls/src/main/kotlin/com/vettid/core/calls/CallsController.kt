@@ -79,6 +79,12 @@ interface CallVault {
     /** True while the release-update screen covers the app: no screen could answer a call, so none rings. */
     val updateShowing: Boolean get() = false
 
+    /**
+     * True while the daily owner check is due or held, as of now: this phone does not ring then (owner decision a,
+     * 2026-11-17). The member's other devices may still answer.
+     */
+    val ownerCheckGated: Boolean
+
     val gateway: CallGateway
 
     /** The fingerprint of [connectionId]'s pinned identity key, as the connection's details show it; null if unknown. */
@@ -280,13 +286,15 @@ class CallsController(
      * open vault). The call events wait with it, on purpose: the offer's candidates and hang-up stay behind it. No call
      * is live on this phone while the vault is not open, so nothing else is held up; during a live call it does not
      * wait at all, so that call's events never wait (the phone drops such an offer, busy in another call, and the vault
-     * rings the member's other devices). The vault and the update screen are looked at again after the wait: a lock or
-     * an update screen that came during it is not rung over.
+     * rings the member's other devices). Nothing rings while the daily owner check is due or held (owner decision a,
+     * 2026-11-17): it is looked at before the wait, and again with the vault and the update screen after it, so a lock,
+     * an update screen or a check that came due during the wait is not rung over.
      */
     private suspend fun mayRing(): Boolean {
+        if (vault.ownerCheckGated) return false
         val opened = machine.state.value is CallState.Live ||
             withTimeoutOrNull(UNLOCK_WAIT.toMillis()) { openFlow.first { it } } != null
-        return opened && open && !vault.updateShowing
+        return opened && open && !vault.updateShowing && !vault.ownerCheckGated
     }
 
     /**
@@ -424,7 +432,11 @@ class CallsController(
      */
     @Suppress("ReturnCount")
     private suspend fun readList() {
+        // A read a recheck started is not cancelled by a lock: nothing of it applies after one (the C2 flag, the
+        // permissions, the skipped entries, the sweep, the signer class), so the next opening reads again.
+        val epoch = lockEpoch
         repeat(READ_ATTEMPTS) { attempt ->
+            if (!stillOpen(epoch)) return
             val records = try {
                 vault.gateway.list(HISTORY_LIMIT)
             } catch (_: VaultOpException) {
@@ -433,15 +445,22 @@ class CallsController(
                 delay(READ_RETRY.toMillis() * (attempt + 1))
                 return@repeat
             }
+            if (!stillOpen(epoch)) return
             vaultC2 = records.formTwo
             // (C2) The permission is a C2 vault's: an older one has none, and no switch is shown for it.
             if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
             noteSkipped(records)
-            if (records.formTwo) endStaleC2(records) else endStale(records.calls)
-            if (testBuild) testsAllowedFlow.value = runCatching { vault.signerClass() }.getOrNull() == SIGNER_DEVELOPMENT
+            if (records.formTwo) endStaleC2(records, epoch) else endStale(records.calls, epoch)
+            if (testBuild) {
+                val signer = runCatching { vault.signerClass() }.getOrNull()
+                if (stillOpen(epoch)) testsAllowedFlow.value = signer == SIGNER_DEVELOPMENT
+            }
             return
         }
     }
+
+    /** Whether the vault is still open in the opening of [epoch] (no lock since it was taken). */
+    private fun stillOpen(epoch: Long): Boolean = open && epoch == lockEpoch
 
     /** A read's skipped entries, in the diagnostics (this phone's own record of them). */
     private fun noteSkipped(list: CallList) {
@@ -481,11 +500,12 @@ class CallsController(
      * and only this device's own calls (other devices' are left alone). A live active call of this device ends
      * `failed`; its own outgoing call still ringing past `exp` ends `timeout`.
      */
-    private suspend fun endStaleC2(list: CallList) {
+    private suspend fun endStaleC2(list: CallList, epoch: Long) {
         val me = vault.deviceId()
         val vaultNow = list.now
         if (machine.state.value is CallState.Live || me == null || vaultNow == null) return
         for (r in list.calls) {
+            if (!stillOpen(epoch) || machine.state.value is CallState.Live) return
             val reason = staleReasonC2(r, me, vaultNow) ?: continue
             runCatching { vault.gateway.end(r.callId, reason) }
                 .onSuccess { diagnosticsFlow.update { it.copy(staleEnded = it.staleEnded + 1) } }
@@ -513,7 +533,7 @@ class CallsController(
      * device's. Both are right only while one app is the member's only call device; with the vault's V2 and V3
      * (CALLS-PLAN §6.1) this sweep goes away, or it must use a device id and a vault time from the list.
      */
-    private suspend fun endStale(records: List<CallRecord>) {
+    private suspend fun endStale(records: List<CallRecord>, epoch: Long) {
         if (machine.state.value is CallState.Live) return
         val t = now()
         val stale = records.filter { r ->
@@ -524,6 +544,7 @@ class CallsController(
             }
         }
         for (r in stale) {
+            if (!stillOpen(epoch) || machine.state.value is CallState.Live) return
             val reason = if (r.state == STATE_RINGING && r.direction == DIRECTION_OUT) CallReason.TIMEOUT else CallReason.FAILED
             runCatching { vault.gateway.end(r.callId, reason) }
                 .onSuccess { diagnosticsFlow.update { it.copy(staleEnded = it.staleEnded + 1) } }
@@ -544,11 +565,8 @@ class CallsController(
                 vault.gateway.permissions()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: VaultOpException) {
-                // `unsupported_type` from a vault the read found C2 cannot happen; any refusal leaves things as they are.
-                if (e.code == UNSUPPORTED) {
-                    synchronized(permissionLock) { if (epoch == permissionEpoch) permissionsFlow.value = CallPermissions() }
-                }
+            } catch (_: VaultOpException) {
+                // Any refusal leaves things as they are.
                 return
             } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
                 delay(READ_RETRY.toMillis() * (attempt + 1))
@@ -586,7 +604,10 @@ class CallsController(
         permissionReads.trySend(Unit)
     }
 
-    /** Bumped by every lock (with [permissionEpoch]): a history read begun before one notes nothing after it. */
+    /**
+     * Bumped by every lock (with [permissionEpoch]): a `call.list` read (the after-unlock one or history's) begun before
+     * one applies nothing after it.
+     */
     @Volatile
     private var lockEpoch = 0L
 
@@ -693,7 +714,6 @@ class CallsController(
         val RING_STALE: Duration = Duration.ofMinutes(2)
         private val READ_RETRY: Duration = Duration.ofSeconds(2)
         private const val READ_ATTEMPTS = 3
-        private const val UNSUPPORTED = "unsupported_type"
         private const val SIGNER_DEVELOPMENT = "development"
 
         /** How long an offer waits for an unlock that is just completing before it is dropped. */

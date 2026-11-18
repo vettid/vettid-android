@@ -64,7 +64,7 @@ internal class VaultCallSignalling(
      */
     private val peerKey: suspend (connectionId: String) -> ByteArray? = { null },
     /** (C2) Whether to call in form 2 and answer with keep-alives: the vault is C2, or not yet known to be older. */
-    private val vaultIsC2: () -> Boolean = { false },
+    private val vaultIsC2: () -> Boolean = { true },
 ) : CallSignalling {
     override val formTwo: Boolean get() = vaultIsC2()
 

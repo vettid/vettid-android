@@ -158,13 +158,18 @@ class CallsControllerTest {
         override val unlockedNow: Boolean get() = unlocked.value && !phaseClosed
         override val vaultLeft = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         override var updateShowing = false
+        override var ownerCheckGated = false
         override val gateway = Gateway()
         override val droppedForTime = MutableSharedFlow<String>(extraBufferCapacity = 8)
         override val recheck = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         var refreshed = 0
         var signer: String? = "vettid"
+        var signerGate: suspend () -> Unit = {}
 
-        override suspend fun signerClass(): String? = signer
+        override suspend fun signerClass(): String? {
+            signerGate()
+            return signer
+        }
 
         override suspend fun refreshConnections() {
             refreshed++
@@ -1485,5 +1490,190 @@ class CallsControllerTest {
         gate.send(Unit)
         runCurrent()
         assertEquals("the old history read noted nothing", 1, c.diagnostics.value.listSkipped)
+    }
+
+    /**
+     * A read a recheck started is not cancelled by a lock: when it answers after the lock it applies nothing (no skipped
+     * entries kept while locked, no sweep, no signer class, no C2 flag), so the next opening reads the list again.
+     */
+    @Test
+    fun aListReadOvertakenByALockAppliesNothing() = runTest {
+        vault.signer = "development"
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(1, vault.gateway.sent.count { it.startsWith("list") })
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        var reads = 0
+        vault.gateway.listGate = { if (reads++ == 0) gate.receive() }
+        vault.gateway.list = { listOf(record("A", "active", "in")) }
+        vault.gateway.skipped = listOf(com.vettid.core.vault.SkippedCall("01JXBAD0000000000000000002", "conn-1"))
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals("the recheck's read is out", 2, vault.gateway.sent.count { it.startsWith("list") })
+        vault.unlocked.value = false
+        runCurrent()
+        gate.send(Unit)
+        runCurrent()
+        assertEquals("nothing of it kept while locked", emptyList<String>(), c.diagnostics.value.listSkippedIds)
+        assertTrue("no sweep after the lock", vault.gateway.sent.none { it.startsWith("end(") })
+        assertFalse(c.testsAllowed.value)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals("the next opening reads again", 3, vault.gateway.sent.count { it.startsWith("list") })
+        assertTrue("and its own read applies", c.testsAllowed.value)
+    }
+
+    /**
+     * (C2) The read answers during a live call placed before it (in form 2): the call's keep-alives go on, and the sweep
+     * leaves the live call alone although the vault lists it as this device's active call.
+     */
+    @Test
+    fun aListReadThatAnswersDuringALiveCallLeavesItAlone() = runTest {
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.gateway.listGate = { gate.receive() }
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = T0
+        vault.gateway.list = { listOf(CallRecord(CALL_ID, "conn-1", "out", "audio", "active", null, T0.toString(), deviceId = "dev-me")) }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        assertTrue(vault.gateway.sent.contains("start(conn-1) form2"))
+        engines.last.emit(MediaEvent.LocalCandidate(candidate(1)))
+        val answer = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T61", type = "call.answer", ts = T0, body = """{"call_id":"$CALL_ID"}""".toByteArray())
+        vault.gateway.channel.send(CallEvent.Answer(VaultMessage(answer)))
+        runCurrent()
+        assertEquals("keep-alives before the read answers", listOf(CALL_ID), vault.gateway.keepalives)
+        gate.send(Unit)
+        runCurrent()
+        advanceTimeBy(30_001)
+        assertEquals("and after it", listOf(CALL_ID, CALL_ID), vault.gateway.keepalives)
+        assertTrue("the live call was not swept", vault.gateway.sent.none { it.startsWith("end(") })
+        assertTrue(c.state.value is CallState.Live)
+    }
+
+    /**
+     * Owner decision a, 2026-11-17: no ring while the daily owner check is due or held. The offer is refused as any offer
+     * that cannot ring (counted, no `call.ringing`, no ringtone); once the check is done an offer rings again.
+     */
+    @Test
+    fun anOfferDoesNotRingWhileTheOwnerCheckIsDueOrHeld() = runTest {
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.ownerCheckGated = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T80", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertTrue(!audio.ringtone)
+        assertEquals(1, c.diagnostics.value.refused)
+
+        vault.ownerCheckGated = false // the check was done
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T81", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, (c.state.value as CallState.Live).phase)
+        assertEquals(listOf(CALL_ID), vault.gateway.ringings)
+    }
+
+    /** A check that comes due while an offer waits for the unlock: the owner check is looked at again after the wait. */
+    @Test
+    fun anOfferDoesNotRingWhenTheOwnerCheckComesDueWhileItWaits() = runTest {
+        val c = controller()
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T82", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        advanceTimeBy(1_000)
+        vault.ownerCheckGated = true
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+        assertTrue(vault.gateway.ringings.isEmpty())
+        assertEquals(1, c.diagnostics.value.refused)
+    }
+
+    /** An offer that comes while the check is due does not wait for the unlock at all: refused at once, nothing held up. */
+    @Test
+    fun anOfferWhileTheOwnerCheckIsDueIsRefusedAtOnce() = runTest {
+        val c = controller()
+        runCurrent()
+        vault.gateway.incoming = true
+        vault.ownerCheckGated = true
+        vault.gateway.channel.send(CallEvent.Offer(VaultMessage(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T83", type = "call.offer", ts = T0, body = """{"connection_id":"conn-1"}""".toByteArray()))))
+        runCurrent()
+        assertEquals("refused before any wait", 1, c.diagnostics.value.refused)
+        vault.ownerCheckGated = false
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(CallState.Idle, c.state.value)
+    }
+
+    /** The recheck's read retries after a failure: not once a lock came meanwhile. */
+    @Test
+    fun aRetryAfterALockSendsNothing() = runTest {
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        controller()
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.list = { throw java.io.IOException("relay") }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        assertEquals(2, vault.gateway.sent.count { it.startsWith("list") })
+        vault.unlocked.value = false
+        runCurrent()
+        advanceTimeBy(10_000)
+        assertEquals("no read while locked", 2, vault.gateway.sent.count { it.startsWith("list") })
+    }
+
+    /** A lock during the sweep of a read a recheck started: the calls after it are not ended (S10 and C2 alike). */
+    @Test
+    fun aLockStopsTheSweep() = runTest {
+        for (c2 in listOf(false, true)) {
+            val v = Vault()
+            v.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+            CallsController(v, FakeEngines(), backgroundScope, audio, audio, { true }, { }, now = { T0 })
+            v.unlocked.value = true
+            runCurrent()
+            if (c2) {
+                v.gateway.version = 2
+                v.gateway.vaultNow = T0
+            }
+            fun rec(id: String) = CallRecord(id, "conn-1", "in", "audio", "active", null, T0.toString(), deviceId = "dev-me")
+            v.gateway.list = { listOf(rec("A"), rec("B")) }
+            val gate = Channel<Unit>(Channel.UNLIMITED)
+            v.gateway.endGate = gate
+            v.recheck.emit(Unit)
+            runCurrent()
+            v.unlocked.value = false
+            runCurrent()
+            gate.send(Unit)
+            gate.send(Unit)
+            runCurrent()
+            assertEquals("c2=$c2", 1, v.gateway.sent.count { it.startsWith("end(") })
+        }
+    }
+
+    /** A lock while the test build asks for the signer class: what it answers is not applied after the lock. */
+    @Test
+    fun theSignerClassIsNotAppliedAfterALock() = runTest {
+        vault.signer = "development"
+        vault.gateway.list = { throw VaultOpException("call.list", "owner_check_required") }
+        val c = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        vault.gateway.list = { emptyList() }
+        val gate = Channel<Unit>(Channel.UNLIMITED)
+        vault.signerGate = { gate.receive() }
+        vault.recheck.emit(Unit)
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        gate.send(Unit)
+        runCurrent()
+        assertFalse(c.testsAllowed.value)
     }
 }

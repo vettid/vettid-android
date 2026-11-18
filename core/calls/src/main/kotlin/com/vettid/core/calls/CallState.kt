@@ -64,9 +64,6 @@ enum class CallEnd {
     /** The daily owner check is due: no calls until it is done. */
     OWNER_CHECK_REQUIRED,
 
-    /** This vault's release has no calls. */
-    NOT_SUPPORTED,
-
     /** This device found no network address to be reached at (for example a blocked network permission). */
     NO_ADDRESS,
 

@@ -446,7 +446,6 @@ internal class CallMachine(
         "calls_off" -> CallEnd.CALLS_OFF
         "not_found", "connection_unavailable" -> CallEnd.UNAVAILABLE
         "owner_check_required" -> CallEnd.OWNER_CHECK_REQUIRED
-        "unsupported_type" -> CallEnd.NOT_SUPPORTED
         else -> CallEnd.FAILED
     }
 
