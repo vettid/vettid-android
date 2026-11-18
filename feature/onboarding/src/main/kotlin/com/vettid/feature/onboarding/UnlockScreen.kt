@@ -261,7 +261,9 @@ fun UnlockContent(
                     modifier = Modifier.testTag("unlock_owner_check"),
                 )
             }
-            state.moveFailure?.let { f ->
+            // The no-user_guid card is not shown beside the recover-or-erase notice, which says the same, nor beside the
+            // recover-only notice of an ended release or a rollback, which offers no erase and is the way forward there.
+            state.moveFailure?.takeUnless { state.moveNoUserGuid && (state.stuckNoticeShown || state.recoverOnly) }?.let { f ->
                 // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it. No usable
                 // user_guid on this phone: the recover-or-erase notice's words, with no erase here (that comes after the
                 // next PIN, with its confirmation), never "does not support this yet".
@@ -378,7 +380,8 @@ fun UnlockContent(
                     // No usable user_guid: the recover-or-erase notice below says it; where it is not shown (a kept check
                     // waiting) its words alone, with no actions (owner decision a, 2026-11-18). Not beside an ended release
                     // or a rollback, whose notice offers no erase.
-                    UnlockMessage.NoUserGuid -> if (!state.eraseOffered && !state.recoverOnly) {
+                    // Not beside the move card of the same failure, which has the same words and its Continue.
+                    UnlockMessage.NoUserGuid -> if (!state.eraseOffered && !state.recoverOnly && !state.moveNoUserGuid) {
                         NoticeCard(
                             NoticeKind.URGENT,
                             stringResource(R.string.unlock_stuck_title),

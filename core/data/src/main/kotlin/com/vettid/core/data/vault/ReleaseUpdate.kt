@@ -123,7 +123,7 @@ interface ReleaseUpdateOps {
     fun changeUnresolved(): Boolean = false
 
     /** (N6) Why the update is held, in the gate's words ([VaultRepository.changeHold]); null when it is not. */
-    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+    val changeHold: StateFlow<FailureKind?> get() = NO_FAILURE
 
     /** Locks the vault and waits (bounded) until the member API no longer sees it unlocked. */
     suspend fun lock()
@@ -233,7 +233,7 @@ interface ReleaseUpdateRepository {
     val behind: StateFlow<Boolean> get() = NOT_REQUIRED
 
     /** (Rule 3) Why the last read of the manifest failed in this opening; null when none did, or one succeeded since. */
-    val checkFailure: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+    val checkFailure: StateFlow<FailureKind?> get() = NO_FAILURE
 
     /**
      * (Rule 3) The vault's background work waits: the vault is behind, or a read of the manifest failed in this opening
@@ -254,7 +254,7 @@ interface ReleaseUpdateRepository {
     fun changeUnresolved(): Boolean = false
 
     /** (N6) Why the update is held, observed by its screens; null when it is not. */
-    val changeHold: StateFlow<FailureKind?> get() = NO_FINISH_MOVE_FAILURE
+    val changeHold: StateFlow<FailureKind?> get() = NO_FAILURE
 
     /**
      * (VAULT-MESSAGING §11.14.9 step 2; chosen, not in the spec) Which PIN the vault expects, as a generation
