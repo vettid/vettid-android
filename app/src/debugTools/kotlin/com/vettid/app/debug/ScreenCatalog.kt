@@ -510,7 +510,7 @@ object ScreenCatalog {
     private val approvals: List<Approval> = listOf(
         request,
         Approval.Authentication("a1", "c1", "Confirm before I send the keys", t0, t0.plusSeconds(600), "Sam Rivera"),
-        Approval.GrantRequest("g1", "c2", listOf(GrantEntry("item", "01JITEM", "Passport", true), GrantEntry("category", "insurance", "Your insurance card", false)), 1, 604_800, "Booking the trip", t0, t0.plusSeconds(86_400), "Alex (work)"),
+        Approval.GrantRequest("g1", "c2", listOf(GrantEntry("item", "01JITEM", "Passport", true, name = "Passport"), GrantEntry("category", "insurance", "Your insurance card", false)), 1, 604_800, "Booking the trip", t0, t0.plusSeconds(86_400), "Alex (work)"),
         Approval.CriticalUse("u1", "c1", "Signing key", "Private key", "sign", CRITICAL_PAYLOAD, ApprovalParser.payloadSha256(CRITICAL_PAYLOAD)!!, "Sign the lease agreement", t0, t0.plusSeconds(86_400), "Sam Rivera"),
         Approval.ShareDecision("r1", "c1", null, listOf(ShareItem("i1", "Allergy list", "health", "data")), "tagged", t0, null, "Sam Rivera"),
         Approval.DeviceRequest("device.session.pending", "s1", "Office laptop", "desktop", null, t0, t0.plusSeconds(300)),

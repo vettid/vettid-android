@@ -137,7 +137,7 @@ class ApprovalParserTest {
         val g = ApprovalParser.parse(
             "grant.pending",
             o(
-                """{"request_id":"G1","connection_id":"C1","items":[{"kind":"item","ref":"IT1","label":"Passport","available":true},""" +
+                """{"request_id":"G1","connection_id":"C1","items":[{"kind":"item","ref":"IT1","label":"Passport","available":true,"name":"Passport"},""" +
                     """{"kind":"category","ref":"insurance","available":false}],"uses":2,"expires_in":3600,"reason":"trip","exp":"2026-10-05T12:00:00.000Z"}""",
             ),
             at,
@@ -194,7 +194,6 @@ class ApprovalParserTest {
         assertEquals(listOf(com.vettid.core.data.items.FieldLabel("f1", "Number", "text")), e.labels)
         assertNull(g.entries[1].name)
         assertNull(g.entries[1].labels)
-        // An older vault: no name, no labels.
         assertNull(g.entries[2].labels)
 
         // 0.21.0 §10.13: the field's kind, and whether it can hold a seed at all.
@@ -209,6 +208,25 @@ class ApprovalParserTest {
         val older = ApprovalParser.parse("critical-secret-use.pending", o(body.replace(",\"kind\":\"%s\"", "")), at) as Approval.CriticalUse
         assertNull(older.kind)
         assertNull(older.suitable)
+    }
+
+    @Test
+    fun anAvailableItemEntryWithoutItsNameIsNeverGranted() {
+        // 0.21.0 §10.12: every available item entry carries the item's name. One without it cannot show what it would
+        // grant: it reads as unavailable, so it is neither preselected nor grantable. Other entries are as sent.
+        val g = ApprovalParser.parse(
+            "grant.pending",
+            o(
+                """{"request_id":"R1","connection_id":"C1","items":[{"kind":"item","ref":"01A","label":"Your passport","available":true},""" +
+                    """{"kind":"item","ref":"01B","available":true,"name":"Visa"},{"kind":"item","ref":"01C","available":true,"name":7},""" +
+                    """{"kind":"item","ref":"01D","available":true,"name":" \u200b "},{"kind":"category","ref":"insurance","available":true}],""" +
+                    """"exp":"2026-10-11T12:00:00.000Z"}""",
+            ),
+            at,
+        ) as Approval.GrantRequest
+        assertEquals(listOf(false, true, false, false, true), g.entries.map { it.available })
+        assertEquals(listOf(1), g.grantable)
+        assertEquals("Your passport", g.entries[0].label)
     }
 
     @Test

@@ -342,20 +342,45 @@ class ItemsManagerTest {
     }
 
     @Test
-    fun aVaultWithoutSizeGetsASecretItemsValuesInFull() = scope.runTest {
-        // Before 0.21.0 a vault keeps no values: the app reads them (never shown) and sends them all.
+    fun aSecretItemWithoutSizeIsRefusedWithNothingRevealedOrSent() = scope.runTest {
+        // Every `item.get` of a secret item has `size` (§10.7): a draft that keeps values without it is never revealed
+        // and sent in full; the update is refused before anything goes to the vault.
         ops.items["01S"] = secretLogin(size = null)
-        ops.revealed["01S"] = item(
-            "01S", "Login", "secret", ItemField("f1", "User", "text", JsonPrimitive("sam")), ItemField("f2", "Password", "password", JsonPrimitive("old")),
-        ).copy(notes = "branch")
         val draft = ItemDraft.of(m.get("01S"))
-        assertFalse(ItemChecks.check(draft).sizeKnown)
-        m.update("01S", 2, draft.copy(fields = listOf(draft.fields[0], draft.fields[1].copy(text = "new", kept = false))))
-        assertTrue("reveal" in ops.calls)
+        assertNull(draft.base!!.bytes)
+        val cases = listOf(
+            // One field kept, one typed.
+            draft.copy(fields = listOf(draft.fields[0], draft.fields[1].copy(text = "new", kept = false))),
+            // Every field typed, the notes kept.
+            draft.copy(fields = draft.fields.map { it.copy(text = "x", kept = false) }),
+            // Kept values with no base at all.
+            draft.copy(base = null),
+        )
+        for (d in cases) {
+            try {
+                m.update("01S", 2, d)
+                fail()
+            } catch (e: VaultFailure) {
+                assertEquals(FailureKind.OTHER, e.kind)
+                assertEquals("bad_request", e.code)
+            }
+        }
+        assertFalse("reveal" in ops.calls)
+        assertFalse("put" in ops.calls)
+        assertTrue(ops.puts.isEmpty())
+    }
+
+    @Test
+    fun aSecretItemWithoutSizeIsSavedWhenNothingIsKept() = scope.runTest {
+        // With every value typed and the notes replaced, nothing rests on the stored values: the save goes as typed.
+        ops.items["01S"] = secretLogin(size = null)
+        val draft = ItemDraft.of(m.get("01S"))
+        val typed = draft.copy(fields = draft.fields.map { it.copy(text = "x", kept = false) }, keepNotes = false, notes = "n")
+        assertEquals(3L, m.update("01S", 2, typed))
+        assertFalse("reveal" in ops.calls)
         val content = ops.puts.single()[0] as ItemContent
-        assertEquals(listOf(JsonPrimitive("sam"), JsonPrimitive("new")), content.fields!!.map { it.value })
-        assertEquals("branch", content.notes)
-        assertFalse(content.keepNotes)
+        assertEquals(listOf(JsonPrimitive("x"), JsonPrimitive("x")), content.fields!!.map { it.value })
+        assertEquals("n", content.notes)
     }
 
     @Test

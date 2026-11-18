@@ -355,18 +355,21 @@ data class ItemEditUiState(
     val error: FailureKind? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
-    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1); null from an older vault. */
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
     val limit: VaultLimit? = null,
     val tagInput: String = "",
     val dirty: Boolean = false,
     val confirmDiscard: Boolean = false,
     /** Set when saved: the item to show. */
     val savedId: String? = null,
-    /**
-     * What saving does to sharing with the tags as they are now: the vault's dry run (§10.7, 0.21.0), or for an
-     * older vault the share rules the item newly matches.
-     */
+    /** What saving does to sharing with the tags as they are now: the vault's dry run (§10.7), never worked out here. */
     val shareImpact: List<ShareImpact> = emptyList(),
+    /** The dry run failed: what saving does to sharing is not known, and the failure is shown in its place. */
+    val impactError: FailureKind? = null,
+    /** The code `error_vault_code` names with [impactError], or null. */
+    val impactErrorCode: String? = null,
+    /** The limit a `limit` failure of the dry run named. */
+    val impactLimit: VaultLimit? = null,
     val dialog: EditDialog? = null,
     /** The field whose value input takes the focus (once: just added). */
     val focusField: Int? = null,
@@ -415,9 +418,8 @@ class ItemEditViewModel @Inject constructor(
     private val sharing: SharingRepository,
     private val connections: ConnectionsRepository,
 ) : ViewModel() {
-    /** The share rules, read only for a vault without the dry run (before 0.21.0). */
+    /** The share rules, read only to name the `ask` rule a dry run's entry names (§10.12 Overlapping rules). */
     private var rules: List<ShareRule>? = null
-    private var noDryRun = false
     private var savedTags: List<String> = emptyList()
     private var impactKey: Pair<List<String>, Sensitivity>? = null
     private var impactJob: Job? = null
@@ -468,21 +470,22 @@ class ItemEditViewModel @Inject constructor(
         if (key == impactKey) return
         impactKey = key
         impactJob?.cancel()
-        if (!s.isNew && tags == savedTags) return state.update { it.copy(shareImpact = emptyList()) }
+        if (!s.isNew && tags == savedTags) {
+            return state.update { it.copy(shareImpact = emptyList(), impactError = null, impactErrorCode = null, impactLimit = null) }
+        }
         impactJob = viewModelScope.launch {
             delay(IMPACT_DEBOUNCE_MS)
-            val impact = try {
-                if (noDryRun) localImpact(tags, d.sensitivity) else dryRun(s, tags, d.sensitivity)
+            try {
+                val impact = dryRun(s, tags, d.sensitivity)
+                state.update { it.copy(shareImpact = impact, impactError = null, impactErrorCode = null, impactLimit = null) }
             } catch (e: VaultFailure) {
-                // A vault before 0.21.0 refuses the dry run (no content: nothing is saved); its rules are read instead.
-                if (e.kind == FailureKind.NOT_SUPPORTED || e.kind == FailureKind.OTHER && e.code == CODE_BAD_REQUEST) {
-                    noDryRun = true
-                    runCatching { localImpact(tags, d.sensitivity) }.getOrDefault(emptyList())
-                } else {
-                    emptyList()
+                // Any refusal is a failure, `bad_request` and `not_supported` included: the effect is never guessed from
+                // the share rules. The next edit asks again.
+                impactKey = null
+                state.update {
+                    it.copy(shareImpact = emptyList(), impactError = e.kind, impactErrorCode = e.shownCode, impactLimit = e.limit)
                 }
             }
-            state.update { it.copy(shareImpact = impact) }
         }
     }
 
@@ -498,14 +501,6 @@ class ItemEditViewModel @Inject constructor(
             e.withdrawals.mapNotNull { x ->
                 x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), ShareMode.ASK, withdrawn = true) }
             }
-    }
-
-    /** Before 0.21.0: the connection rules the item newly matches by its tags (§10.12), as the app reads them. */
-    private suspend fun localImpact(tags: List<String>, sensitivity: Sensitivity): List<ShareImpact> {
-        val all = rules ?: sharing.rules().also { rules = it }
-        val names = connections.connections.value.associate { it.id to it.displayName }
-        return all.filter { r -> r.connectionId != null && r.matches(tags) && !r.matches(savedTags) }
-            .map { r -> ShareImpact(names[r.connectionId].orEmpty(), r.mode, usableOnly = sensitivity == Sensitivity.CRITICAL) }
     }
 
     /** The item's metadata (`item.get`): a data item with its values, a secret or critical one with them kept. */
@@ -827,6 +822,5 @@ class ItemEditViewModel @Inject constructor(
 
     private companion object {
         const val IMPACT_DEBOUNCE_MS = 400L
-        const val CODE_BAD_REQUEST = "bad_request"
     }
 }

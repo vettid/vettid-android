@@ -190,13 +190,10 @@ class ItemsManager(
     }
 
     override suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long {
-        // Every `item.get` of a secret item from a 0.21.0 vault has `size`: without it, the vault keeps no values.
-        val d = if (draft.keeps && draft.base?.bytes == null) {
-            merged(draft, detail(vaultGuard { ops().reveal(itemId) }))
-        } else {
-            draft
-        }
-        val (content, tags) = content(d)
+        // Every `item.get` of a `data` or `secret` item has `size` (§10.7 Size in `item.get`): a draft that keeps values
+        // without it was not read from the vault as it is, and is refused here; nothing is revealed or sent.
+        if (draft.keeps && draft.base?.bytes == null) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        val (content, tags) = content(draft)
         val ref = vaultGuard { ops().put(content, null, tags, itemId, version) }
         afterWrite()
         return ref.version
@@ -350,8 +347,8 @@ class ItemsManager(
         }
 
         /**
-         * [d] with its kept values taken from [revealed] (the item's values, opened), for a vault that keeps none
-         * (before 0.21.0). A field the item no longer has keeps "" (or `{}`), as the vault would.
+         * [d] with its kept values taken from [revealed] (the item's values, opened): for a critical item without `size`
+         * ([updateCritical]). A field the item no longer has keeps "" (or `{}`), as the vault would.
          */
         fun merged(d: ItemDraft, revealed: ItemDetail): ItemDraft {
             val values = revealed.fields.associate { it.fieldId to it.value }

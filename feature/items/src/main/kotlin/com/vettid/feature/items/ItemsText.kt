@@ -96,25 +96,17 @@ object ItemsText {
 
     /**
      * A failure on the Vault screens: a `limit` in the member's words from the limit it names ([limit], VAULT-MESSAGING
-     * 0.21.0 §10.1); from an older vault, which names none, the likeliest of §10.7 and §10.8 ([creating]: an add, where
-     * `limit` is the vault's item count; [critical]: the credential's; [profile]: the shared profile's). A change made
-     * on another device (`conflict`), else the app's general message.
+     * 0.21.0 §10.1; a vault never sends `limit` without it), else the generic limit text. A change made on another
+     * device (`conflict`), else the app's general message.
      */
     @Composable
-    @Suppress("CyclomaticComplexMethod") // one message per failure
     fun failure(
         kind: FailureKind,
-        creating: Boolean = false,
-        critical: Boolean = false,
-        profile: Boolean = false,
         limit: VaultLimit? = null,
         /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names, or null; an item's `bad_request` keeps its text. */
         shownCode: String? = null,
     ): String = when {
         kind == FailureKind.LIMIT && limit != null -> limit(limit)
-        kind == FailureKind.LIMIT && profile -> stringResource(R.string.items_error_limit_profile)
-        kind == FailureKind.LIMIT && creating && critical -> stringResource(R.string.items_error_limit_critical)
-        kind == FailureKind.LIMIT && creating -> stringResource(R.string.items_error_limit_items)
         kind == FailureKind.LIMIT -> stringResource(R.string.items_error_limit)
         kind == FailureKind.CONFLICT -> stringResource(R.string.items_error_conflict)
         kind == FailureKind.NOT_FOUND -> stringResource(R.string.items_error_not_found)

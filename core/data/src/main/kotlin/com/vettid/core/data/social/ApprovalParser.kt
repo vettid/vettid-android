@@ -198,9 +198,13 @@ object ApprovalParser {
             connectionId = conn,
             entries = body.a("items").mapNotNull { i ->
                 val kind = i.s("kind") ?: return@mapNotNull null
+                val name = i.s("name")
+                // An available `item` entry always carries the item's `name` (0.21.0 §10.12 "What an entry would grant"):
+                // one without a name that shows cannot say what it would grant, so it reads as unavailable, never granted.
+                val available = i.b("available") == true && (kind != "item" || AccountNames.cleaned(name) != null)
                 GrantEntry(
-                    kind, i.s("ref") ?: "", i.s("label"), i.b("available") ?: false,
-                    name = i.s("name"),
+                    kind, i.s("ref") ?: "", i.s("label"), available,
+                    name = name,
                     category = i.s("category"),
                     labels = if (i["labels"] is JsonArray) com.vettid.core.data.items.SharingManager.labels(i) else null,
                 )

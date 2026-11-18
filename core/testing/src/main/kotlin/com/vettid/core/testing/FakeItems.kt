@@ -20,8 +20,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * TEST ONLY. An in-memory vault of items for ViewModel tests: [stored] holds every item with its values; calls are
  * recorded in [calls]; [fail] makes the next call of a name throw; [password] is the credential password critical
  * operations need (a wrong one is `bad_password`). `get` reports each item's `size` (VAULT-MESSAGING 0.21.0) unless
- * [reportSize] is off (an older vault); an update keeps the stored value of a kept field and the kept notes, and the
- * last draft sent is [lastDraft]. [effect] is what [shareEffect] answers.
+ * [reportSize] is off (a critical item not written since the upgrade); an update keeps the stored value of a kept field
+ * and the kept notes, and the last draft sent is [lastDraft]; as [ItemsManager.update], an update of a draft that keeps
+ * values without the size is refused (`bad_request`). [effect] is what [shareEffect] answers.
  */
 @Suppress("TooManyFunctions")
 class FakeItems : ItemsRepository {
@@ -117,6 +118,7 @@ class FakeItems : ItemsRepository {
     override suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long {
         call("update")
         lastDraft = draft
+        if (draft.keeps && draft.base?.bytes == null) throw VaultFailure(FailureKind.OTHER, "bad_request")
         val cur = find(itemId)
         if (cur.version != version) throw VaultFailure(FailureKind.CONFLICT, "conflict")
         stored[itemId] = detail(itemId, version + 1, ItemsManager.merged(draft, cur).copy(sensitivity = cur.sensitivity))

@@ -287,9 +287,6 @@
     <string name="items_problem_tag">Tags use lowercase letters, digits, spaces, hyphens (-) and underscores (_), and start with a letter or digit</string>
     <string name="items_problem_profile">Only standard items can be in your shared profile</string>
     <string name="items_problem_size">The item is too large (at most 64 KB, or 12 KB for a critical item)</string>
-    <string name="items_error_limit_items">Your vault is full: it holds at most 2,000 items</string>
-    <string name="items_error_limit_critical">Your credential is full: it holds at most 1,000 critical items</string>
-    <string name="items_error_limit_profile">Your shared profile is full: at most 32 items, within its size limit</string>
     <string name="items_error_limit">A limit of your vault would be exceeded</string>
     <string name="items_error_conflict">This item was changed on another device. Go back, open it again and repeat your change.</string>
     <string name="items_error_not_found">This item is no longer in your vault</string>
