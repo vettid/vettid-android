@@ -2,7 +2,6 @@ package com.vettid.feature.history
 
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
-import com.vettid.core.data.vault.AuditRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -52,11 +51,8 @@ class HistoryFiltersTest {
         // Picked backwards: the same range.
         assertEquals(since to until, HistoryFilters.days(LocalDate.of(2026, 10, 4), LocalDate.of(2026, 10, 2), zone))
         val f = HistoryFilters.dates(AuditFilter(), DatePreset.CUSTOM, now, zone, since, until)
-        fun r(at: String) = AuditRecord("e", 1, Instant.parse(at), "vault.unlocked")
-        assertTrue(f.acceptsExceptSearch(r("2026-10-02T04:00:00Z")))
-        assertTrue(f.acceptsExceptSearch(r("2026-10-05T03:59:59.999Z")))
-        assertFalse(f.acceptsExceptSearch(r("2026-10-05T04:00:00Z")))
-        assertFalse(f.acceptsExceptSearch(r("2026-10-02T03:59:59Z")))
+        assertEquals(since, f.since)
+        assertEquals(until, f.until)
     }
 
     @Test
@@ -70,17 +66,6 @@ class HistoryFiltersTest {
         assertEquals(64, q.length)
         assertTrue(q.toByteArray(Charsets.UTF_8).size <= 128)
         assertNull(AuditFilter(query = "  ").q)
-    }
-
-    @Test
-    fun theKindIsSearchedInBothForms() {
-        val fields = AuditFilter.kindText("credential.password_changed")
-        assertTrue(AuditFilter.matches("password changed", fields))
-        assertTrue(AuditFilter.matches("PASSWORD_CHANGED", fields))
-        assertFalse(AuditFilter.matches("password  changed", fields))
-        // A match never spans two fields; an empty field never matches.
-        assertFalse(AuditFilter.matches("ada lovelace", listOf("Ada", "Lovelace", "")))
-        assertTrue(AuditFilter.matches("ada lovelace", listOf("Ada Lovelace")))
     }
 
     @Test

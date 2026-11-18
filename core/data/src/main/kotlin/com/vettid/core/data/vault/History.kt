@@ -79,13 +79,6 @@ data class AuditRecord(
             hash = e.hash,
             atText = e.at,
         )
-
-        /** Kinds whose `ref` is an item's id (§10.9 Search, item names): the vault may match `q` on the item's name. */
-        val ITEM_REF_KINDS = setOf(
-            "item.added", "item.updated", "item.deleted", "item.sensitivity_changed", "item.revealed",
-            "share.included", "share.declined", "share.withdrawn", "wallet.created", "wallet.deleted", "wallet.address_issued",
-            "wallet.cap_refused", "wallet.caps_lowered", "wallet.caps_raised",
-        )
     }
 }
 
@@ -108,15 +101,6 @@ data class AuditFilter(
     /** The `kinds` member: the category's prefixes (at most 6 of §10.9's 16), null for all. */
     fun kinds(): List<String>? = category?.prefixes?.takeIf { it.isNotEmpty() }
 
-    /** Whether [r] passes the category, the connection and the date range (what a vault before 0.20.0 may ignore). */
-    fun acceptsExceptSearch(r: AuditRecord): Boolean =
-        (category == null || r.category == category) &&
-            (connectionId == null || r.connectionId == connectionId) &&
-            inRange(r.at)
-
-    private fun inRange(at: Instant?): Boolean =
-        (since == null || (at != null && !at.isBefore(since))) && (until == null || (at != null && at.isBefore(until)))
-
     companion object {
         /** §10.9: `q` is 1–128 bytes. */
         const val MAX_Q_BYTES = 128
@@ -138,15 +122,6 @@ data class AuditFilter(
             }
             return out.toString().trim().takeIf { it.isNotEmpty() }
         }
-
-        /** The kind as §10.9 searches it: itself and with `.`, `_`, `-` as spaces. */
-        fun kindText(kind: String): List<String> = listOf(kind, kind.replace('.', ' ').replace('_', ' ').replace('-', ' '))
-
-        /** §10.9's comparison: lower-case, substring, each field on its own, an empty field never matches. */
-        fun matches(q: String, fields: List<String>): Boolean {
-            val lq = q.lowercase()
-            return fields.any { it.isNotEmpty() && it.lowercase().contains(lq) }
-        }
     }
 }
 
@@ -160,8 +135,6 @@ data class AuditRequest(
     val since: Instant? = null,
     val until: Instant? = null,
 ) {
-    val hasSearch: Boolean get() = q != null || since != null || until != null
-
     companion object {
         /** ANDROID-PLAN 0.1.11: pages of 50. */
         const val DEFAULT_LIMIT = 50
@@ -170,12 +143,11 @@ data class AuditRequest(
 
 /**
  * A page of the log, newest first. [nextBeforeSeq] continues it (null: the end of the results). [partial]: a search
- * ran out of its scan budget (§10.9, 0.20.0). [searchSent]: the request carried `q`/`since`/`until`.
+ * ran out of its scan budget (§10.9, 0.20.0).
  */
 data class AuditResult(
     val entries: List<AuditRecord>,
     val nextBeforeSeq: Long?,
-    val searchSent: Boolean,
     val partial: Boolean = false,
 )
 
@@ -185,12 +157,6 @@ interface HistoryRepository {
 
     /** An entry already read in this session ([auditPage] keeps them), else null. */
     fun cached(seq: Long): AuditRecord?
-
-    /**
-     * The vault answered a search unfiltered (a vault before 0.20.0, which ignores unknown members): this session
-     * stops sending the search and the app filters the entries it loads.
-     */
-    fun searchIgnored()
 
     /**
      * id → name of the vault's devices (`device.list`, §10.3), for the device of an entry (VAULT-MESSAGING 0.23.2:
@@ -232,9 +198,8 @@ internal class VaultAuditOps(private val api: VaultApi) : AuditOps {
 }
 
 /**
- * [HistoryRepository] over [AuditOps]. The search (`q`, `since`, `until`, VAULT-MESSAGING 0.20.0) has no capability
- * signal: it is sent until the vault refuses it with `bad_request` (then the request is sent again without it) or
- * answers it unfiltered ([searchIgnored], a staging S4 vault); from then on this session filters on the phone.
+ * [HistoryRepository] over [AuditOps]. The vault filters and searches (`kinds`, `connection_id`, `q`, `since`, `until`,
+ * VAULT-MESSAGING §10.9); a refusal (`bad_request`) is a failure like any other.
  */
 class HistoryManager(
     private val devices: (suspend () -> Map<String, String>)? = null,
@@ -242,17 +207,9 @@ class HistoryManager(
     // Last, so that `HistoryManager { ops }` reads as before.
     private val ops: suspend () -> AuditOps,
 ) : HistoryRepository {
-    @Volatile
-    var searchUnsupported: Boolean = false
-        private set
-
     private val cache = java.util.concurrent.ConcurrentHashMap<Long, AuditRecord>()
 
     override fun cached(seq: Long): AuditRecord? = cache[seq]
-
-    override fun searchIgnored() {
-        searchUnsupported = true
-    }
 
     @Volatile
     private var deviceCache: Map<String, String>? = null
@@ -278,38 +235,27 @@ class HistoryManager(
     fun clear() {
         cache.clear()
         deviceCache = null
-        searchUnsupported = false
     }
 
     override suspend fun auditPage(request: AuditRequest): AuditResult {
-        val withSearch = request.hasSearch && !searchUnsupported
-        val page = try {
-            fetch(request, withSearch)
-        } catch (e: VaultFailure) {
-            if (!withSearch || e.code != CODE_BAD_REQUEST) throw e
-            searchUnsupported = true
-            fetch(request, search = false)
+        val page = vaultGuard(resend = true) {
+            ops().auditList(
+                connectionId = request.connectionId,
+                kinds = request.kinds,
+                beforeSeq = request.beforeSeq,
+                limit = request.limit,
+                q = request.q,
+                since = request.since?.toString(),
+                until = request.until?.toString(),
+            )
         }
         val records = page.entries.map { AuditRecord.of(it) }
         if (cache.size > MAX_CACHE) cache.clear()
         records.forEach { cache[it.seq] = it }
-        return AuditResult(records, page.nextBeforeSeq, searchSent = withSearch && !searchUnsupported, partial = page.partial)
-    }
-
-    private suspend fun fetch(r: AuditRequest, search: Boolean): AuditPage = vaultGuard(resend = true) {
-        ops().auditList(
-            connectionId = r.connectionId,
-            kinds = r.kinds,
-            beforeSeq = r.beforeSeq,
-            limit = r.limit,
-            q = r.q.takeIf { search },
-            since = r.since?.takeIf { search }?.toString(),
-            until = r.until?.takeIf { search }?.toString(),
-        )
+        return AuditResult(records, page.nextBeforeSeq, partial = page.partial)
     }
 
     private companion object {
-        const val CODE_BAD_REQUEST = "bad_request"
         const val MAX_CACHE = 5_000
     }
 }

@@ -71,7 +71,6 @@ data class HistoryUiState(
     val loading: Boolean = true,
     val loadingMore: Boolean = false,
     val end: Boolean = false,
-    val localSearch: Boolean = false,
     /** The vault's search ran out of its budget on the last page and is going on with older entries. */
     val partial: Boolean = false,
     /** The unfiltered log did not chain (§10.9): the red banner. */
@@ -151,8 +150,7 @@ class HistoryViewModel @Inject constructor(
     )
     val uiState: StateFlow<HistoryUiState> = state.asStateFlow()
 
-    private var known: Map<String, ConnectionInfo> = emptyMap()
-    private val pager = HistoryPager(history, localText = { localText(it) })
+    private val pager = HistoryPager(history)
     private var job: Job? = null
     private var refreshing = false
 
@@ -167,7 +165,6 @@ class HistoryViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             connections.connections.collect { list ->
-                known = list.associateBy { it.id }
                 val services = list.filter { c -> c.service }.map { c -> c.id }.toSet()
                 state.update { it.copy(connectionNames = names(list), serviceConnections = services) }
             }
@@ -204,44 +201,8 @@ class HistoryViewModel @Inject constructor(
         }
     }
 
-    /** A vote entry's vote title, from the list in memory by the pair (the entry's connection, the `ref`'s proposal id). */
-    private fun voteTitleOf(r: AuditRecord): String? =
-        AuditKinds.voteOf(r.kind, r.ref)?.let { state.value.voteTitles[VoteTitles.key(r.connectionId, it)] }?.ifEmpty { null }
-
     private fun names(list: List<ConnectionInfo>): Map<String, String> =
         list.associate { c -> c.id to (AccountNames.cleaned(c.displayName) ?: context.getString(R.string.history_connection_unnamed)) }
-
-    /**
-     * What this phone can search when the vault does not (§10.9's fields it holds): the kind in both forms, the
-     * connection's names (the app no longer uses aliases), and the entry's title in the app's language.
-     */
-    private fun localText(r: AuditRecord): List<String> {
-        val c = r.connectionId?.let { known[it] }
-        val item = AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] }
-        val device = r.deviceId?.let { state.value.deviceNames?.get(it)?.ifEmpty { null } }
-        return AuditFilter.kindText(r.kind) + listOfNotNull(
-            // Without the isolation (FSI/PDI) around the name: a query across the name and the words around it must match.
-            HistoryText.title(
-                context,
-                r.kind,
-                r.ref,
-                EntryNames(
-                    c?.displayName?.ifEmpty { null },
-                    device,
-                    item,
-                    voteTitleOf(r),
-                    wallet = AuditKinds.itemOf(r.kind, r.ref) in state.value.walletItems,
-                ),
-                isolate = false,
-                direction = r.direction,
-            ),
-            // Cleaned like what is shown (§10.8 step 7); the entry is matched against these.
-            AccountNames.cleaned(c?.name), AccountNames.cleaned(c?.firstName), AccountNames.cleaned(c?.lastName),
-            AccountNames.cleaned(c?.accountName),
-            AccountNames.cleaned(item),
-            AccountNames.cleaned(device),
-        )
-    }
 
     fun setCategory(c: AuditCategory?) = setFilter(HistoryFilters.category(state.value.filter, c))
 
@@ -293,7 +254,7 @@ class HistoryViewModel @Inject constructor(
         state.update { it.copy(loading = true, error = null, entries = if (debounce) it.entries else emptyList()) }
         job = viewModelScope.launch {
             if (debounce) delay(SEARCH_DEBOUNCE_MS)
-            load { pager.reset(state.value.filter) }
+            load(reset = true) { pager.reset(state.value.filter) }
         }
     }
 
@@ -344,19 +305,23 @@ class HistoryViewModel @Inject constructor(
     /**
      * Runs one load of the pager and shows what it read (or its failure). Not named `run`: inside `launch { }` a call
      * `run { }` resolves to the standard library's `CoroutineScope.run`, which returned the snapshot without showing
-     * it, so History spun forever (owner, 2026-10-08).
+     * it, so History spun forever (owner, 2026-10-08). A [reset] (a new filter or search) that fails drops the rows
+     * kept while it was typed: they are another filter's, and the failure is then shown in their place.
      */
-    private suspend fun load(block: suspend () -> HistoryPager.Snapshot) {
+    private suspend fun load(reset: Boolean = false, block: suspend () -> HistoryPager.Snapshot) {
         try {
             val snap = block()
             state.update {
                 it.copy(
-                    entries = snap.entries, end = snap.end, localSearch = snap.localSearch, partial = snap.partial,
+                    entries = snap.entries, end = snap.end, partial = snap.partial,
                     chainBroken = it.chainBroken || snap.chainBroken, loading = false, loadingMore = false, error = null,
                 )
             }
         } catch (e: VaultFailure) {
-            state.update { it.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode) }
+            state.update { s ->
+                val failed = s.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode)
+                if (reset) failed.copy(entries = emptyList(), end = false, partial = false) else failed
+            }
         }
     }
 
