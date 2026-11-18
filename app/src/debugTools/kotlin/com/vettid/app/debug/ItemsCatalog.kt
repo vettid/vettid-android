@@ -293,7 +293,12 @@ internal object ItemsCatalog {
         },
         "items.edit_saved_protection_not" to {
             ItemEditScreen(
-                edit(ItemDraft.of(login), isNew = false).copy(protectionTo = Sensitivity.CRITICAL, savedButProtection = true, error = FailureKind.LIMIT),
+                edit(ItemDraft.of(login), isNew = false).copy(
+                    protectionTo = Sensitivity.CRITICAL,
+                    savedButProtection = true,
+                    error = FailureKind.LIMIT,
+                    limit = com.vettid.core.data.vault.VaultLimit("critical_items", 1_000),
+                ),
                 ItemEditActions(),
             )
         },
@@ -557,6 +562,9 @@ internal object ItemsCatalog {
         },
         "items.edit_critical_kept" to {
             ItemEditScreen(edit(ItemDraft.of(phrase.hidden().copy(size = 9_800)), isNew = false), ItemEditActions())
+        },
+        "items.edit_share_impact_failed" to {
+            ItemEditScreen(edit(ItemDraft.of(passport), isNew = false).copy(impactError = FailureKind.NETWORK), ItemEditActions())
         },
         "items.edit_limit" to {
             ItemEditScreen(

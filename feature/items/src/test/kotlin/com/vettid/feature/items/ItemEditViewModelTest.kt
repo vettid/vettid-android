@@ -456,11 +456,29 @@ class ItemEditViewModelTest {
         assertEquals(expected, c.size)
         assertTrue(c.exact)
         assertEquals(com.vettid.core.data.items.ItemChecks.MAX_ITEM_BYTES - expected, c.roomLeft)
-        // An older vault gives no size: nothing is claimed about the room left.
+        // A critical item not written since the upgrade has no size: nothing is claimed about the room left.
+        items.add(FakeItems.item("01C", "Phrase", Sensitivity.CRITICAL, fields = listOf("Words" to "abandon")))
         items.reportSize = false
-        val older = vm(itemId = "01S")
+        val unsized = vm(itemId = "01C")
         advanceUntilIdle()
-        assertNull(older.uiState.value.check.roomLeft)
+        assertNull(unsized.uiState.value.check.roomLeft)
+    }
+
+    @Test
+    fun aSecretItemWithoutSizeIsNotSavedAndNothingIsRevealed() = runTest {
+        // Every `item.get` of a secret item has `size` (§10.7): one without it is refused with the existing text, never
+        // revealed to be sent in full.
+        items.add(FakeItems.item("01S", "Login", Sensitivity.SECRET, fields = listOf("Password" to "old")))
+        items.reportSize = false
+        val vm = vm(itemId = "01S")
+        advanceUntilIdle()
+        vm.setName("Work login")
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FailureKind.OTHER, vm.uiState.value.error)
+        assertFalse("reveal" in items.calls)
+        assertEquals("Login", items.stored.getValue("01S").name)
+        assertTrue(vm.uiState.value.dirty)
     }
 
     @Test
@@ -561,29 +579,128 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun anOlderVaultsRulesShowWhatSavingWouldShare() = runTest {
-        // Before 0.21.0 the vault refuses the dry run (bad_request): the app matches the rules itself.
-        items.fail["shareEffect"] = VaultFailure(FailureKind.OTHER, "bad_request")
+    fun aFailedDryRunIsShownAndNothingIsGuessedFromTheRules() = runTest {
+        // Every refusal of the dry run is a failure, `bad_request` and `not_supported` included: the share rules are
+        // never read to guess what saving would share.
         social.connections.value = listOf(
             com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
         )
-        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r1", 1, "c1", tags = listOf("medical"))
-        sharing.rulesStored += com.vettid.core.data.items.ShareRule(
-            "r2", 1, "c1", tags = listOf("medical", "travel"), match = com.vettid.core.data.items.TagMatch.ALL,
-            mode = com.vettid.core.data.items.ShareMode.AUTO,
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r1", 1, "c1", tags = listOf("medical", "travel", "id", "home"))
+        val limit = com.vettid.core.data.vault.VaultLimit("share_pending", 4_096)
+        val failures = listOf(
+            VaultFailure(FailureKind.OTHER, "bad_request"),
+            VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type"),
+            VaultFailure(FailureKind.NETWORK, "network"),
+            VaultFailure(FailureKind.LIMIT, "limit", limit = limit),
+        )
+        items.fail["shareEffect"] = failures[0]
+        val vm = vm(template = "allergies")
+        advanceUntilIdle()
+        fun failed(f: VaultFailure) {
+            val s = vm.uiState.value
+            assertTrue(s.shareImpact.isEmpty())
+            assertEquals(f.kind, s.impactError)
+            assertEquals(f.limit, s.impactLimit)
+            assertNull(s.error)
+        }
+        failed(failures[0])
+        for ((i, f) in failures.drop(1).withIndex()) {
+            items.fail["shareEffect"] = f
+            vm.setTagInput(listOf("travel", "id", "home")[i])
+            vm.addTag()
+            advanceUntilIdle()
+            failed(f)
+        }
+        assertFalse("rules" in sharing.calls)
+        assertEquals(4, items.calls.count { it == "shareEffect" })
+        // The next edit asks again; an answer replaces the failure.
+        items.effect = com.vettid.core.data.items.ShareEffect(
+            shares = listOf(com.vettid.core.data.items.EffectShare("r1", com.vettid.core.data.items.ShareSubject("c1"), com.vettid.core.data.items.ShareMode.ASK)),
+        )
+        vm.setName("Allergy list")
+        advanceUntilIdle()
+        assertEquals(5, items.calls.count { it == "shareEffect" })
+        assertNull(vm.uiState.value.impactError)
+        assertNull(vm.uiState.value.impactLimit)
+        assertEquals(listOf("Dana Lee"), vm.uiState.value.shareImpact.map { it.connectionName })
+        // A failure after an answer drops the answer: it was for other tags.
+        items.fail["shareEffect"] = VaultFailure(FailureKind.NOT_SUPPORTED, "unsupported_type")
+        vm.removeTag("home")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.impactError)
+        assertFalse("rules" in sharing.calls)
+    }
+
+    @Test
+    fun anotherTagsPreviewGoesAtOnceBeforeThePause() = runTest {
+        social.connections.value = listOf(
+            com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
+        )
+        items.effect = com.vettid.core.data.items.ShareEffect(
+            shares = listOf(com.vettid.core.data.items.EffectShare("r1", com.vettid.core.data.items.ShareSubject("c1"), com.vettid.core.data.items.ShareMode.AUTO)),
         )
         val vm = vm(template = "allergies")
         advanceUntilIdle()
-        assertEquals(listOf("Dana Lee"), vm.uiState.value.shareImpact.map { it.connectionName })
-        assertEquals(com.vettid.core.data.items.ShareMode.ASK, vm.uiState.value.shareImpact.single().mode)
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // A tag added: the preview of the old tags goes before the pause, and the new one comes after it.
         vm.setTagInput("travel")
         vm.addTag()
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
         advanceUntilIdle()
-        assertEquals(2, vm.uiState.value.shareImpact.size)
-        vm.removeTag("medical")
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // The same for a failure.
+        items.fail["shareEffect"] = VaultFailure(FailureKind.NETWORK, "network")
+        vm.setTagInput("home")
+        vm.addTag()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.impactError)
+        vm.setTagInput("id")
+        vm.addTag()
+        assertNull(vm.uiState.value.impactError)
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.shareImpact.size)
+        // Tags the vault would refuse (more than 16): no preview at all, and no dry run is asked.
+        val asked = items.calls.count { it == "shareEffect" }
+        for (i in 1..16) {
+            vm.setTagInput("t$i")
+            vm.addTag()
+        }
+        assertTrue(vm.uiState.value.draft.tags.size > com.vettid.core.data.items.ItemChecks.MAX_TAGS)
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        assertNull(vm.uiState.value.impactError)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.shareImpact.isEmpty())
-        // The fallback stays: no second dry run.
+        assertEquals(asked, items.calls.count { it == "shareEffect" })
+    }
+
+    @Test
+    fun aFailedDryRunDoesNotStopTheSave() = runTest {
+        // The dry run only previews: the vault applies its rules to the real save either way.
+        items.fail["shareEffect"] = VaultFailure(FailureKind.OTHER, "bad_request")
+        val vm = vm(template = "allergies")
+        advanceUntilIdle()
+        assertEquals(FailureKind.OTHER, vm.uiState.value.impactError)
+        vm.save()
+        advanceUntilIdle()
+        assertTrue("create" in items.calls)
+        assertTrue(vm.uiState.value.savedId != null)
+        assertFalse("rules" in sharing.calls)
+    }
+
+    @Test
+    fun anExistingItemsUnchangedTagsClearAFailedDryRun() = runTest {
+        items.add(FakeItems.item("01P", "Passport", tags = listOf("travel")))
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        items.fail["shareEffect"] = VaultFailure(FailureKind.NETWORK, "network")
+        vm.setTagInput("id")
+        vm.addTag()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.impactError)
+        vm.removeTag("id")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.impactError)
         assertEquals(1, items.calls.count { it == "shareEffect" })
     }
 

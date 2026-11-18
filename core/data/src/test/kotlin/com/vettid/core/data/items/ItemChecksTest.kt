@@ -32,6 +32,17 @@ class ItemChecksTest {
     }
 
     @Test
+    fun aNameWithNothingThatShowsIsEmpty() {
+        // Valid at the vault (1-128 bytes), but it names nothing on a screen: refused here as an empty name.
+        for (n in listOf("\u200b", "\u2800", "\u200e", " \u2060 ")) {
+            assertEquals(n, setOf(DraftProblem.NAME_EMPTY), ItemChecks.check(ItemDraft(name = n)).problems)
+        }
+        // A name with something that shows passes, an invisible character beside it included.
+        assertTrue(ItemChecks.check(ItemDraft(name = "Pass\u200dport")).ok)
+        assertTrue(ItemChecks.check(ItemDraft(name = "\u05d3\u05e8\u05db\u05d5\u05df")).ok)
+    }
+
+    @Test
     fun valuesFollowTheirKind() {
         fun bad(kind: String, v: String) = DraftProblem.VALUE_INVALID in ItemChecks.check(draft(text(kind, v))).fieldProblems[0].orEmpty()
         assertTrue(bad("number", "1,5"))

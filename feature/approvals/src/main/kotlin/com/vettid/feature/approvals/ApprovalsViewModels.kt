@@ -250,7 +250,10 @@ data class ApprovalDetailUiState(
     val errorCode: String? = null,
     /** A share decision's items the member unticked: declined, the rest included (§10.12). */
     val shareExcluded: Set<String> = emptySet(),
-    /** The member's `data` and `secret` items (§10.12: only they are granted), to name and answer grant entries. */
+    /**
+     * The member's `data` and `secret` items (§10.12: only they are granted), to answer a grant's category entries and
+     * name a device's item requests.
+     */
     val items: List<ItemSummary> = emptyList(),
     /** A grant request's entries the member chose (indexes); null: the default (every named item that exists). */
     val grantSelected: Set<Int>? = null,

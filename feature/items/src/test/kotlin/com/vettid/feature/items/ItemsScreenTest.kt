@@ -213,6 +213,51 @@ class ItemsScreenTest {
     }
 
     @Test
+    fun aLimitThatNamesNoneIsTheGenericLimitText() {
+        // A vault never sends `limit` without its name (§10.1): nothing is guessed from the item being added.
+        val d = ItemDraft(name = "Phrase", sensitivity = Sensitivity.CRITICAL, tags = listOf("@profile"))
+        rule.setContent { ItemEditScreen(ItemEditUiState(draft = d, check = ItemChecks.check(d), error = FailureKind.LIMIT), ItemEditActions()) }
+        rule.onNodeWithText("A limit of your vault would be exceeded").assertExists()
+        rule.onNodeWithText("is full", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun aFailedDryRunStandsWhereTheSharingNoticeWouldBe() {
+        val d = ItemDraft.of(passport)
+        val impact = listOf(ShareImpact("Dana Lee", com.vettid.core.data.items.ShareMode.AUTO))
+        rule.setContent {
+            ItemEditScreen(
+                ItemEditUiState(
+                    itemId = "01P", draft = d, check = ItemChecks.check(d), shareImpact = impact,
+                    impactError = FailureKind.OTHER, impactErrorCode = null,
+                ),
+                ItemEditActions(),
+            )
+        }
+        rule.onNodeWithTag("item_edit_share_impact_failed").assertTextContains("Sharing", substring = true)
+        rule.onNodeWithTag("item_edit_share_impact_failed").assertTextContains("Your vault refused this item", substring = true)
+        rule.onNodeWithTag("item_edit_share_impact").assertDoesNotExist()
+        rule.onNodeWithTag("item_edit_error").assertDoesNotExist()
+        rule.onNodeWithText("Not saved").assertDoesNotExist()
+    }
+
+    @Test
+    fun aDryRunsNamedLimitIsSaid() {
+        val d = ItemDraft.of(passport)
+        rule.setContent {
+            ItemEditScreen(
+                ItemEditUiState(
+                    itemId = "01P", draft = d, check = ItemChecks.check(d), impactError = FailureKind.LIMIT,
+                    impactLimit = com.vettid.core.data.vault.VaultLimit("share_pending", 4_096),
+                ),
+                ItemEditActions(),
+            )
+        }
+        rule.onNodeWithTag("item_edit_share_impact_failed")
+            .assertTextContains("Too many items are waiting for your sharing decision (at most 4,096). Decide some first.", substring = true)
+    }
+
+    @Test
     fun theSharingNoticeSaysWhatIsGainedAndWithdrawn() {
         val d = ItemDraft.of(passport)
         rule.setContent {

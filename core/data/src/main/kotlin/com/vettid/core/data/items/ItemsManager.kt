@@ -190,13 +190,10 @@ class ItemsManager(
     }
 
     override suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long {
-        // Every `item.get` of a secret item from a 0.21.0 vault has `size`: without it, the vault keeps no values.
-        val d = if (draft.keeps && draft.base?.bytes == null) {
-            merged(draft, detail(vaultGuard { ops().reveal(itemId) }))
-        } else {
-            draft
-        }
-        val (content, tags) = content(d)
+        // Every `item.get` of a `data` or `secret` item has `size` (§10.7 Size in `item.get`): a draft that keeps values
+        // without it was not read from the vault as it is, and is refused here; nothing is revealed or sent.
+        if (draft.keeps && draft.base?.bytes == null) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        val (content, tags) = content(draft)
         val ref = vaultGuard { ops().put(content, null, tags, itemId, version) }
         afterWrite()
         return ref.version
@@ -205,8 +202,8 @@ class ItemsManager(
     @Suppress("ReturnCount")
     override suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long {
         val d = draft.copy(sensitivity = Sensitivity.CRITICAL)
-        // A critical item without `size` is kept by an older vault, or not written since the upgrade. Notes kept without
-        // a kept field would pass an older vault, which ignores `keep_notes`, and lose them: the values are opened first.
+        // A critical item without `size` is a critical item not written since the upgrade (§10.7). Kept notes without a
+        // kept field are not left to the vault for it: the values are opened first, as when the vault refuses the edit.
         val unsure = d.keeps && d.base?.bytes == null
         if (unsure && d.fields.none { it.kept }) return putCriticalMerged(itemId, version, d, password)
         val (content, tags) = content(d)
@@ -220,7 +217,7 @@ class ItemsManager(
         return ref.version
     }
 
-    /** For a vault before 0.21.0: the stored values opened with the same password, merged, and sent in full. */
+    /** For a critical item not written since the upgrade: the stored values opened with the same password, merged, and sent in full. */
     private suspend fun putCriticalMerged(itemId: String, version: Long, d: ItemDraft, password: String): Long {
         val full = merged(d, revealCritical(itemId, password))
         val (content, tags) = content(full)
@@ -350,8 +347,8 @@ class ItemsManager(
         }
 
         /**
-         * [d] with its kept values taken from [revealed] (the item's values, opened), for a vault that keeps none
-         * (before 0.21.0). A field the item no longer has keeps "" (or `{}`), as the vault would.
+         * [d] with its kept values taken from [revealed] (the item's values, opened): for a critical item without `size`
+         * ([updateCritical]). A field the item no longer has keeps "" (or `{}`), as the vault would.
          */
         fun merged(d: ItemDraft, revealed: ItemDetail): ItemDraft {
             val values = revealed.fields.associate { it.fieldId to it.value }

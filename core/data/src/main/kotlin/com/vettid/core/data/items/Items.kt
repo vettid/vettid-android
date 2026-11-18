@@ -142,7 +142,7 @@ data class ItemDetail(
     val revealed: Boolean = sensitivity == Sensitivity.DATA,
     /**
      * The item's size as the vault counts it (`item.get`'s `size`, VAULT-MESSAGING 0.21.0 §10.7), for the room left
-     * when the values are not at hand; null from an older vault, or for a critical item not written since its upgrade.
+     * when the values are not at hand; null for a critical item not written since the upgrade.
      */
     val size: Int? = null,
 ) {

@@ -379,7 +379,7 @@ class ApprovalsViewModelsTest {
     fun aGrantIsDecidedEntryByEntry() = runTest {
         val g = Approval.GrantRequest(
             "g2", "c1",
-            listOf(GrantEntry("item", "i1", "Your passport", true), GrantEntry("category", "insurance", "Your insurance card", false), GrantEntry("item", "gone", null, false)),
+            listOf(GrantEntry("item", "i1", "Your passport", true, name = "Passport", category = "identity_document", labels = emptyList()), GrantEntry("category", "insurance", "Your insurance card", false), GrantEntry("item", "gone", null, false)),
             1, 604_800, "Booking", now, null,
         )
         social.approvals.value = listOf(g)

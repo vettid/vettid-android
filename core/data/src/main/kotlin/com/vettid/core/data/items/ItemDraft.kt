@@ -3,6 +3,7 @@ package com.vettid.core.data.items
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.item.ItemSpec
 import com.vettid.core.crypto.json.JsonBuilder
+import com.vettid.core.data.account.AccountNames
 
 /**
  * One field being edited: an existing field ([fieldId] set) or a new one. Address kinds use [address], the rest
@@ -222,7 +223,8 @@ object ItemChecks {
         // The draft is checked as it will be sent (canonical forms, §10.7): nothing is trimmed here.
         val name = d.name
         when {
-            CanonicalForms.trim(name).isEmpty() -> problems += DraftProblem.NAME_EMPTY
+            // A name with nothing that shows (§10.7 allows it) could name nothing on a screen, a grant entry included.
+            CanonicalForms.trim(name).isEmpty() || AccountNames.cleaned(name) == null -> problems += DraftProblem.NAME_EMPTY
             bytes(name) > MAX_NAME -> problems += DraftProblem.NAME_TOO_LONG
             !ItemSpec.isCleanText(name, false) -> problems += DraftProblem.BAD_CHARACTER
         }

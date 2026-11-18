@@ -739,14 +739,13 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
     Label(stringResource(R.string.approvals_items_asked))
     val chosen = state.grantIndexes
     a.entries.forEachIndexed { i, e ->
-        // The member's own item as their vault names it (0.21.0: name, category, labels on the entry); an older vault
-        // sends only the id, which the item list names.
-        val local = if (e.kind == "item" && e.name == null) state.items.firstOrNull { it.itemId == e.ref } else null
-        val itemName = AccountNames.isolateOrNull(e.name ?: local?.name)
+        // The member's own item as their vault names it (0.21.0: name, category, labels on an available entry).
+        val itemName = AccountNames.isolateOrNull(e.name)
         // The asker's own words (§10.8 "Showing received text"): cleaned and isolated before they sit in a sentence.
         val theirs = AccountNames.isolateOrNull(e.label)
         val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
-        val grantable = (e.kind == "item" && e.available) || answer != null
+        // An item entry is granted only while its name shows (the parser already reads one without it as unavailable).
+        val grantable = (e.kind == "item" && e.available && itemName != null) || answer != null
         Row(
             Modifier
                 .fillMaxWidth()
@@ -765,6 +764,8 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
                         theirs ?: AccountNames.isolate(ItemCategories.humanize(e.ref)),
                     )
                     e.available && itemName != null -> itemName
+                    // Sent as available but unreadable: it is in the member's vault, so never "not in your vault".
+                    e.unreadable -> itemName ?: stringResource(R.string.approvals_share_unnamed)
                     else -> stringResource(R.string.approvals_grant_item_missing, theirs ?: AccountNames.isolate(e.ref))
                 }
                 Text(title, style = MaterialTheme.typography.bodyLarge)

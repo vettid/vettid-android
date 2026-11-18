@@ -42,16 +42,16 @@ interface ItemsRepository {
     /**
      * Replaces a `data` or `secret` item's content and tags (`version` is the one it was based on; `conflict`
      * otherwise). Kept values (VAULT-MESSAGING 0.21.0 §10.7) go without `value`: a secret item is edited without
-     * `item.reveal`. The draft must already be in canonical form ([CanonicalForms], VAULT-MESSAGING §10.7). A vault
-     * that gave no `size` (before 0.21.0) cannot keep values: the app reads them
-     * (`item.reveal`, never shown) and sends them all.
+     * `item.reveal`. The draft must already be in canonical form ([CanonicalForms], VAULT-MESSAGING §10.7). A draft
+     * that keeps values without the `size` `item.get` gives every such item is refused (`bad_request`), nothing sent:
+     * the values are never revealed to be sent in full.
      */
     suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long
 
     /**
      * Replaces a `critical` item's content (sealed) and tags with the password: one credential operation, the kept
-     * values merged by the vault (§10.7 Kept values). A vault before 0.21.0 refuses fields without `value`
-     * (`bad_request`); the app then opens the values with the same password and sends them all.
+     * values merged by the vault (§10.7 Kept values). For a critical item not written since the upgrade (no `size`),
+     * a refusal (`bad_request`) makes the app open the values with the same password and send them all.
      */
     suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long
 

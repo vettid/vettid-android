@@ -239,14 +239,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.items_error_save),
-                    ItemsText.failure(
-                        e,
-                        creating = state.isNew,
-                        critical = d.sensitivity == Sensitivity.CRITICAL,
-                        profile = state.inProfile,
-                        limit = state.limit,
-                        shownCode = state.errorCode,
-                    ),
+                    ItemsText.failure(e, limit = state.limit, shownCode = state.errorCode),
                     modifier = Modifier.testTag("item_edit_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
                 )
@@ -503,7 +496,16 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
         keyboardActions = KeyboardActions(onDone = { actions.onAddTag() }),
         modifier = Modifier.fillMaxWidth().testTag("item_edit_tag_input"),
     )
-    if (state.shareImpact.isNotEmpty()) {
+    val impactError = state.impactError
+    if (impactError != null) {
+        // The dry run failed: what saving does to sharing is not known, so the failure stands where the effect would.
+        NoticeCard(
+            NoticeKind.WARNING,
+            stringResource(R.string.items_impact_title),
+            ItemsText.failure(impactError, limit = state.impactLimit, shownCode = state.impactErrorCode),
+            modifier = Modifier.testTag("item_edit_share_impact_failed"),
+        )
+    } else if (state.shareImpact.isNotEmpty()) {
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.items_impact_title),

@@ -298,8 +298,7 @@ class VaultApi(
 
     /**
      * What an `item.put` would do to sharing (§10.7 Dry run, 0.21.0): `{version?, shares, withdrawals}`, changing
-     * nothing. Never carries content: an older vault, which knows no `dry_run`, refuses a put without `name`
-     * (`bad_request`) instead of saving anything.
+     * nothing. Never carries content: the vault ignores it in a dry run, and none is needed.
      */
     suspend fun itemPutDryRun(
         itemId: String? = null,
