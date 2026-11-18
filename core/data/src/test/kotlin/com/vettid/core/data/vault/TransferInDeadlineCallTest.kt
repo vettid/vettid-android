@@ -74,8 +74,11 @@ class TransferInDeadlineCallTest {
         assertTrue("every outcome: the phase is read again", start.any { it == "refresh()" })
         assertFalse("not only when paired", start.any { it.contains("paired != null") })
         val wait = body("override suspend fun awaitTransferIn()")
-        val done = "return@guard completeTransferIn(s, rec, local.userGuid"
+        val done = "return@guard completeTransferIn(s, rec, guid)"
         assertTrue("completed in the background: the completed result", wait.any { it.startsWith(done) })
+        // Never without the member's user_guid (VAULT-MESSAGING §6.7.1): a failed transfer.
+        val noGuid = "val guid = local.userGuid.ifEmpty { throw TransferWithoutUserGuidException() }"
+        assertTrue("completed without a user_guid: failed", wait.any { it == noGuid })
         assertTrue("a transfer with nothing to wait for is not waited for", body("override suspend fun awaitTransferIn()")
             .any { it.contains("MoveRepository.CODE_TRANSFER_SESSION_ENDED") })
     }
@@ -101,5 +104,38 @@ class TransferInDeadlineCallTest {
         val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }
         val create = after.indexOfFirst { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" }
         assertTrue("a paired transfer is taken over before NEEDS_CREDENTIAL", take in 0 until create)
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.4) A phone without the member's user_guid fails closed: the unlock refuses before
+     * anything is asked or sent (`no_user_guid`; a damaged record, or a transfer an older app build completed without
+     * one), a paired transfer stored without one is never completed (at the start or after an unlock), and a transfer's
+     * wait never completes one either.
+     */
+    @Test
+    fun aPhoneWithoutAUserGuidFailsClosed() {
+        val unlock = body("private suspend fun unlockStepHeld(")
+        val guard = "if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, " +
+            "UnlockAttempt.CODE_NO_USER_GUID))"
+        val at = unlock.indexOf(guard)
+        assertTrue("the unlock's guard is kept", at >= 0)
+        val opens = unlock.indexOf("): StepOutcome {")
+        assertEquals(
+            "only the owner check's counters come before it",
+            listOf("ownerCheck.beginUnlock()", "ownerCheck.unlockStarting()"),
+            unlock.subList(opens + 1, at).filter { it.isNotEmpty() },
+        )
+        assertTrue("before the unlock is sent", at < unlock.indexOfFirst { it.contains("unlockWithSecret(") })
+        assertEquals("no_user_guid", UnlockAttempt.CODE_NO_USER_GUID)
+        val ev = body("private suspend fun evaluate()")
+        assertTrue(ev.any { it == "TransferInResume.Action.NO_USER_GUID -> Unit" })
+        assertTrue(ev.any { it == "completeTransferIn(s, record.recordGeneration, checkNotNull(pendingIn?.userGuid))" })
+        val after = body("private suspend fun afterUnlocked(")
+        val locked = after.indexOf("val guid = t.userGuid ?: return AppPhase.Locked")
+        assertTrue("never completed without a user_guid", locked >= 0)
+        assertEquals(locked + 1, after.indexOfFirst { it.startsWith("completeTransferIn(") })
+        val complete = body("private suspend fun completeTransferIn(")
+        assertTrue(complete.first().contains("guid: String)"))
+        assertFalse(complete.any { it.contains("guid != null") || it.contains("String?") })
     }
 }

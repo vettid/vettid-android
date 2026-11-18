@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
+import com.vettid.core.vault.TransferWithoutUserGuidException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
@@ -45,6 +46,13 @@ internal object TransferInResume {
 
         /** No code was shown, so no `hs.fin` was sent: nothing can complete it, and it is dropped. */
         DROP,
+
+        /**
+         * (VAULT-MESSAGING §6.7.1) Paired, but stored without the member's `user_guid` by an older app build (this one never
+         * applies such a `device.paired`): never completed, and nothing is taken over. The phone fails closed at the unlock
+         * (`no_user_guid`, [UnlockAttempt.CODE_NO_USER_GUID]).
+         */
+        NO_USER_GUID,
     }
 
     /** The transport bound added to a request's own wait (30 seconds); a request is never given less than wait + this. */
@@ -148,7 +156,7 @@ internal object TransferInResume {
 
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
         t == null -> Action.NONE
-        t.paired && deviceId != null -> Action.COMPLETE
+        t.paired && deviceId != null -> if (t.userGuid == null) Action.NO_USER_GUID else Action.COMPLETE
         t.sas == null -> Action.DROP
         now.isBefore(t.startedAt.plus(TransferInWait.WAIT)) -> Action.WAIT
         else -> Action.DEADLINE
@@ -592,8 +600,8 @@ internal object TransferInResume {
         }
     }
 
-    /** The paired transfer's `user_guid` (null from a vault release before 0.17.0). */
-    data class Approved(val userGuid: String?)
+    /** The paired transfer's `user_guid`. */
+    data class Approved(val userGuid: String)
 
     /**
      * The wait for the approval: [await] for what is left until the one deadline, counted from the start the device stored
@@ -603,14 +611,15 @@ internal object TransferInResume {
     suspend fun awaitApproval(
         pending: () -> TransferInState?,
         now: () -> Instant,
-        await: suspend (Duration) -> String?,
+        await: suspend (Duration) -> String,
         atDeadline: suspend () -> TransferInState?,
     ): Approved? {
         val started = pending()?.startedAt ?: return null
         return try {
             Approved(await(TransferInWait.left(started, now())))
         } catch (_: TimeoutCancellationException) {
-            atDeadline()?.let { Approved(it.userGuid) }
+            // A paired transfer without the member's user_guid (stored by an older app build) is a failed transfer.
+            atDeadline()?.let { Approved(it.userGuid ?: throw TransferWithoutUserGuidException()) }
         }
     }
 

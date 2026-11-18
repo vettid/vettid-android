@@ -53,6 +53,7 @@ import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.keystore.SeedWrapKey
 import com.vettid.core.vault.DeviceConfig
 import com.vettid.core.vault.DeviceSecrets
+import com.vettid.core.vault.TransferWithoutUserGuidException
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultJson
@@ -2096,9 +2097,12 @@ class VaultManager(
         val pendingIn = d.transferInPending
         when (TransferInResume.decide(pendingIn, d.deviceId, Instant.now())) {
             TransferInResume.Action.COMPLETE -> {
-                completeTransferIn(s, record.recordGeneration, pendingIn?.userGuid)
+                completeTransferIn(s, record.recordGeneration, checkNotNull(pendingIn?.userGuid))
                 return@guard AppPhase.Setup(SetupStage.FINISHING)
             }
+            // §6.7.1: paired without the member's user_guid (stored by an older app build): never completed, nothing taken
+            // over; the phone is paired, so it goes on to the unlock screen, whose guard refuses (`no_user_guid`).
+            TransferInResume.Action.NO_USER_GUID -> Unit
             // Not running at the deadline (stopped, killed, the phone off): the same screen as while waiting. Its wait
             // ([awaitTransferIn]) is already at the deadline and runs the settlement there, in the background (about 90 s,
             // never inside this evaluation); the transfer stays pinned meanwhile and is applied or dropped at its end.
@@ -2150,7 +2154,10 @@ class VaultManager(
         if (s.device.credentialVersion == null) {
             // (A6 audit N1) A transfer the vault paired takes the credential over; it never creates one (`exists`).
             s.device.transferInPending?.takeIf { it.paired }?.let { t ->
-                completeTransferIn(s, record.recordGeneration, t.userGuid)
+                // §6.7.1: never completed without the member's user_guid (a record of an older app build): the unlock
+                // screen, whose guard refuses (`no_user_guid`).
+                val guid = t.userGuid ?: return AppPhase.Locked
+                completeTransferIn(s, record.recordGeneration, guid)
                 return AppPhase.Setup(SetupStage.FINISHING)
             }
             return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
@@ -2636,7 +2643,8 @@ class VaultManager(
     ): StepOutcome {
         ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
         ownerCheck.unlockStarting() // (0.84.0) nor the relay notice and its spent re-read, whatever lock came before
-        // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
+        // §11.4 needs the member's user_guid. Fail closed without it: a damaged record, or a transfer an older app build
+        // completed without one (this build fails such a transfer, VAULT-MESSAGING §6.7.1).
         if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
         // typed: any other unlock (the release update's) sends nothing.
@@ -4829,7 +4837,7 @@ class VaultManager(
         throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = dropped ?: e)
     }
 
-    override suspend fun awaitTransferIn(): Boolean = guard {
+    override suspend fun awaitTransferIn(): Unit = guard {
         // Read before the wait and the vault's calls: a lock, a refusal or a wipe from here on keeps the phase it published.
         val gen = generation
         val rec = record.recordGeneration
@@ -4839,8 +4847,10 @@ class VaultManager(
         if (s.device.transferInPending == null) {
             if (s.device.credentialVersion == null) throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED)
             // Completed in the background (the settlement started at the start applied it and took the credential over):
-            // the same result as a normal completion, not a timeout.
-            return@guard completeTransferIn(s, rec, local.userGuid.takeIf { it.isNotEmpty() }).also { publishFinishing(gen) }
+            // the same result as a normal completion, not a timeout. Never without the member's user_guid (a transfer an
+            // older app build completed without one): a failed transfer here, and the unlock's guard refuses later.
+            val guid = local.userGuid.ifEmpty { throw TransferWithoutUserGuidException() }
+            return@guard completeTransferIn(s, rec, guid).also { publishFinishing(gen) }
         }
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
         // (kept across restarts; nothing the member does moves it); then collects for the settlement window (the relay's
@@ -4958,17 +4968,15 @@ class VaultManager(
      * (A6 audit N1) The steps after a transfer's `device.paired`, also after a restart: the member's `user_guid`, the
      * move's markers, and the credential the vault kept (§6.7.1 step 5). The transfer stays pending on the device until
      * they are done, so a failure or a kill on the way is resumed at the next start (never as a `credential.create`,
-     * which the vault would answer `exists`).
+     * which the vault would answer `exists`). Only with the member's [guid]: a `device.paired` without one is never
+     * applied (the transfer fails), and a paired record an older app build stored without one is never completed.
      */
-    private suspend fun completeTransferIn(s: Session, rec: Int, guid: String?): Boolean = transferInLock.withLock {
-        if (s.device.transferInPending == null && s.device.credentialVersion != null) return@withLock guid != null
-        // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so
-        // that this phone unlocks later (§11.4). A vault release before 0.17.0 sends none: the transfer is still
-        // complete, and the unlock screen says why this phone cannot unlock.
-        if (guid != null) {
-            gateway.memberChanged(guid)
-            io { updateLocal(rec) { it.copy(userGuid = guid, vaultId = VaultDeletion.heldVaultId(s.device.vaultId, it.vaultId)) } }
-        }
+    private suspend fun completeTransferIn(s: Session, rec: Int, guid: String) = transferInLock.withLock {
+        if (s.device.transferInPending == null && s.device.credentialVersion != null) return@withLock
+        // §6.7.1: the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so that this
+        // phone unlocks later (§11.4).
+        gateway.memberChanged(guid)
+        io { updateLocal(rec) { it.copy(userGuid = guid, vaultId = VaultDeletion.heldVaultId(s.device.vaultId, it.vaultId)) } }
         // Release R (§11.14.10): "Finish the move" is asked until an unlock from storage with this phone's secret.
         if (local.phone.inUse) {
             io { updateLocal(rec) { it.copy(finishMovePending = true, movedIn = true) } }
@@ -4981,7 +4989,6 @@ class VaultManager(
         s.device.finishTransferIn()
         // FINISHING is the caller's to publish, with the mark it took before its own vault calls (an unlock's end, a
         // refresh, the wait for the transfer): one taken here would be after them, and miss a lock during them.
-        guid != null
     }
 
     override suspend fun abandonTransferIn() = guard {

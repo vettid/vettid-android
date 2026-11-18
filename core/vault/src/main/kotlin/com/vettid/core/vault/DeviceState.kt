@@ -104,8 +104,8 @@ internal data class DroppedTransferRecord(val attestKeys: List<String> = emptyLi
 
 /**
  * (A6 audit N1) The transfer to this phone: when its `hs.init` went out (epoch ms), the SAS once `hs.fin` was sent,
- * and, once `device.paired{transfer: true}` was applied, the member's `user_guid` from it (null from a vault release
- * before 0.17.0).
+ * and, once `device.paired{transfer: true}` was applied, the member's `user_guid` from it (a `device.paired` without a
+ * valid one is never applied: the transfer is dropped). A paired record without one was written by an older app build.
  */
 @Serializable
 internal data class TransferInRecord(

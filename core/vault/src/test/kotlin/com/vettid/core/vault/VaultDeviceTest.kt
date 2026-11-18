@@ -2564,22 +2564,23 @@ class VaultDeviceTest {
             again.handle(v.seal("device.pair.rejected", "{}"))
             assertNull(again.transferInPending)
             assertNull(again.deviceId)
-            // A device.paired that is not a transfer's is not taken as one.
+            // A device.paired that is not a transfer's is not taken as one: for a transfer it is a failed transfer, dropped
+            // (VAULT-MESSAGING §6.7.1: a transfer's always says `transfer: true` and carries the user_guid).
             again.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
             v.answerTransfer(again)
             again.handle(v.seal("device.paired", """{"device_id":"dev-3","role":"app","vault_id":"${v.vaultId}"}"""))
             assertNull(again.deviceId)
-            assertFalse(again.transferInPending!!.paired)
+            assertNull(again.transferInPending)
         }
     }
 
-    /** §6.7.1 (0.17.0): only a transfer's device.paired gives a user_guid, and only a well-formed one. */
+    /** §6.7.1: only a transfer's device.paired gives a user_guid, and only a well-formed one. */
     @Test
     fun aTransfersUserGuidIsCheckedBeforeItIsKept() {
         fun guid(body: String) = VaultDevice.transferUserGuid(VaultJson.parseObject(body.toByteArray()))
         assertEquals("u1", guid("""{"transfer":true,"user_guid":"u1"}"""))
         assertEquals("a".repeat(128), guid("""{"transfer":true,"user_guid":"${"a".repeat(128)}"}"""))
-        // A vault release before 0.17.0 sends none; a plain pairing's is ignored.
+        // None, or a plain pairing's: none (a transfer's answer without one is a failed transfer).
         assertNull(guid("""{"transfer":true}"""))
         assertNull(guid("""{"user_guid":"u1"}"""))
         assertNull(guid("""{"transfer":false,"user_guid":"u1"}"""))
@@ -2591,6 +2592,145 @@ class VaultDeviceTest {
         assertNull(guid("""{"transfer":true,"user_guid":"a\nb"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":"é"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":7}"""))
+    }
+
+    /**
+     * The `device.paired` of a transfer that does not carry what every vault release the app accepts sends (`transfer: true`
+     * and a valid `user_guid`, VAULT-MESSAGING §6.7.1) is a failed transfer, caught as the handler reads it: nothing of it
+     * is stored (no device id, vault id, release or token) or sent (no `device.features`), the transfer is dropped as every
+     * unpaired transfer is (its attested key and phone key deleted), and the wait ends with [TransferWithoutUserGuidException],
+     * whether it was waiting already or comes after (the settlement's look). The next scan is not taken for it.
+     */
+    @Test
+    fun aTransferWithoutAValidUserGuidFailsAndKeepsNothing() = runBlocking<Unit> {
+        withTimeout(60_000) {
+            val head = """"device_id":"dev-2","role":"app","release":"${"a3".repeat(48)}","release_number":3,"credential_version":5"""
+            val bodies = listOf(
+                """{$head,"transfer":true}""",
+                """{$head,"transfer":true,"user_guid":""}""",
+                """{$head,"transfer":true,"user_guid":"${"a".repeat(129)}"}""",
+                """{$head,"transfer":true,"user_guid":"a b"}""",
+                """{$head,"transfer":true,"user_guid":7}""",
+                """{$head,"transfer":true,"user_guid":null}""",
+                """{$head,"transfer":"true","user_guid":"member-0017"}""",
+                """{$head,"user_guid":"member-0017"}""",
+            )
+            for ((i, b) in bodies.withIndex()) {
+                for (waiting in listOf(true, false)) {
+                    val store = InMemoryDeviceStateStore()
+                    val phone = PhoneKeyStandIn(store)
+                    val secrets = appSecrets()
+                    val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), secrets)
+                    val v = FakeVault()
+                    d.scan(v, phone, "att-$i")
+                    v.answer(nextDeposit().second, d)
+                    val release = d.altState.releaseNumber
+                    deposits.clear()
+                    val wait = if (waiting) async(Dispatchers.IO) { runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(10)) } } else null
+                    if (wait != null) kotlinx.coroutines.delay(100) // the wait is in place
+                    d.handle(v.seal("device.paired", b.replace("}", ""","vault_id":"${v.vaultId}","token":"${v.tokenFor(d)}"}""")))
+                    val ended = wait?.await() ?: runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(1)) }
+                    val why = "body $i, waiting $waiting"
+                    assertTrue(why, ended.exceptionOrNull() is TransferWithoutUserGuidException)
+                    assertNull(why, d.transferInPending)
+                    assertNull(why, d.deviceId)
+                    assertNull(why, d.vaultId)
+                    assertFalse(why, d.hasVault)
+                    assertFalse(why, d.paired.value)
+                    assertNull(why, d.pairingSas.value)
+                    assertEquals(why, release, d.altState.releaseNumber)
+                    assertEquals(why, listOf(listOf("att-$i")), phone.drops.toList())
+                    assertNull(why, phone.key)
+                    assertFalse(why, d.droppedTransferPending)
+                    val saved = String(store.load()!!)
+                    assertFalse(why, "dev-2" in saved)
+                    assertFalse(why, v.vaultId in saved)
+                    assertTrue(why, "\"transferIn\":null" in saved)
+                    assertNull("$why: nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+                    // A restart finds nothing of it.
+                    d.stop()
+                    val again = VaultDevice.load(config(store, transferDropped = phone::onDrop), secrets)
+                    assertNull(why, again?.transferInPending)
+                    assertNull(why, again?.deviceId)
+                }
+            }
+        }
+    }
+
+    /** After a transfer failed for its user_guid, the next scan waits for its own answer, and completes with a valid one. */
+    @Test
+    fun theNextTransferAfterAFailedOneIsNotTakenForIt() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val phone = PhoneKeyStandIn(store)
+            val d = VaultDevice.create(config(store, transferDropped = phone::onDrop), appSecrets())
+            val v = FakeVault()
+            d.scan(v, phone, "att-1")
+            v.answer(nextDeposit().second, d)
+            d.handle(v.seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"${v.vaultId}","transfer":true}"""))
+            assertTrue(runCatching { d.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is TransferWithoutUserGuidException)
+            val v2 = FakeVault()
+            d.scan(v2, phone, "att-2")
+            v2.answer(nextDeposit().second, d)
+            assertTrue(
+                "waits for its own answer",
+                runCatching { d.awaitTransfer(java.time.Duration.ofMillis(200)) }.exceptionOrNull() is kotlinx.coroutines.TimeoutCancellationException,
+            )
+            d.handle(v2.transferPaired(d))
+            assertEquals("member-0017", d.awaitTransfer(java.time.Duration.ofSeconds(1)))
+            assertEquals("dev-2", d.deviceId)
+            assertEquals(listOf(listOf("att-1")), phone.drops.toList())
+        }
+    }
+
+    /**
+     * A paired transfer an older app build stored without the member's user_guid (it took a `device.paired` without one):
+     * the wait never returns it as a transfer to complete ([TransferWithoutUserGuidException]); the paired device itself is
+     * kept, as every paired transfer is (the app fails closed at the unlock).
+     */
+    @Test
+    fun aPairedTransferStoredWithoutAUserGuidIsAFailure() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val v = FakeVault()
+            val d = VaultDevice.create(config(store), secrets)
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            d.handle(v.transferPaired(d))
+            d.stop()
+            val saved = String(store.load()!!)
+            assertTrue("\"userGuid\":\"member-0017\"" in saved)
+            store.save(saved.replace(",\"userGuid\":\"member-0017\"", "").toByteArray())
+            val old = VaultDevice.load(config(store), secrets)!!
+            assertTrue(old.transferInPending!!.paired)
+            assertNull(old.transferInPending!!.userGuid)
+            assertTrue(runCatching { old.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is TransferWithoutUserGuidException)
+            assertEquals("dev-2", old.deviceId)
+        }
+    }
+
+    /**
+     * A transfer's wait never applies a `device.paired` without a valid `user_guid`, also one the handler handed on (here
+     * to a phone whose transfer is finished): it ends with [TransferWithoutUserGuidException] and the device is unchanged.
+     */
+    @Test
+    fun aTransfersWaitNeverAppliesAnAnswerWithoutAUserGuid() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val v = FakeVault()
+            val d = VaultDevice.create(config(store), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            v.answerTransfer(d)
+            d.handle(v.transferPaired(d))
+            d.awaitEvent("device.paired", java.time.Duration.ofSeconds(1)) // the good one, taken
+            d.finishTransferIn()
+            assertNull(d.transferInPending)
+            d.handle(v.seal("device.paired", """{"device_id":"dev-9","role":"app","vault_id":"v-other","transfer":true}"""))
+            assertTrue(runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(1)) }.exceptionOrNull() is TransferWithoutUserGuidException)
+            assertEquals("dev-2", d.deviceId)
+            assertEquals(v.vaultId, d.vaultId)
+        }
     }
 
     /**

@@ -10,6 +10,7 @@ import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.NotATransferCodeException
 import com.vettid.core.vault.PairingRejectedException
+import com.vettid.core.vault.TransferWithoutUserGuidException
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
 import com.vettid.core.vault.heldByLockGate
@@ -64,6 +65,10 @@ suspend fun <T> vaultGuard(resend: Boolean = false, block: suspend () -> T): T =
     throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, e.code, cause = e)
 } catch (e: PairingRejectedException) {
     throw VaultFailure(FailureKind.REJECTED, "rejected", cause = e)
+} catch (e: TransferWithoutUserGuidException) {
+    // (VAULT-MESSAGING §6.7.1) A failed transfer, dropped on this phone: the transfer screen's "The move stopped on this
+    // phone" (recover the vault if the move was approved, else a new code).
+    throw VaultFailure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED, cause = e)
 } catch (e: NotATransferCodeException) {
     throw VaultFailure(if (e.expired) FailureKind.INVITE_EXPIRED else FailureKind.INVITE_INVALID, "not_transfer", cause = e)
 } catch (e: RelayException) {

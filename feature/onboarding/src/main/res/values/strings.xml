@@ -187,7 +187,6 @@
     <string name="onboarding_moved_title">Your vault is connected to this phone now</string>
     <string name="onboarding_moved_recovered_body">Your vault now works with the credential on this phone. The credential copy on your old phone no longer works; it erases VettID the next time it reaches your vault. Your desktops and agents stay paired.</string>
     <string name="onboarding_moved_transferred_body">Your vault now works with the credential on this phone. Your old phone erases VettID as soon as it hears from your vault. Unlock with the same PIN and credential password as before.</string>
-    <string name="onboarding_moved_transferred_no_guid_body">Your vault now works with the credential on this phone. Your old phone erases VettID as soon as it hears from your vault. Your vault runs an older release, so this phone cannot unlock it after it locks until your vault is updated.</string>
     <string name="onboarding_moved_go">Go to VettID</string>
 
     <!-- Recovery on this phone (§11.11) -->

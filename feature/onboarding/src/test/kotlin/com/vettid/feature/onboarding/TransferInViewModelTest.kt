@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -52,26 +53,28 @@ class TransferInViewModelTest {
         advanceTimeBy(1500)
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
         assertNull(vm.uiState.value.sas)
-        assertTrue(vm.uiState.value.canUnlockLater)
         assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
         vm.finish()
         advanceUntilIdle()
         assertEquals(AppPhase.Unlocked, vault.phase.value)
     }
 
-    /** VAULT-MESSAGING 0.17.0 §6.7.1: a vault release before 0.17.0 gives no user_guid; the transfer completes with a warning. */
+    /**
+     * VAULT-MESSAGING §6.7.1: a transfer whose answer has no valid user_guid failed and was dropped on this phone; the
+     * repository says so as an ended move (RETRY, `transfer_session_ended`): "The move stopped on this phone", never done.
+     */
     @Test
-    fun aTransferWithoutUserGuidCompletesAndWarns() = runTest {
-        vault.transferGaveUserGuid = false
+    fun aTransferWithoutUserGuidIsAStoppedMove() = runTest {
         val vm = TransferInViewModel(vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(100)
-        vault.transferApproval.complete(Unit)
+        vault.transferApproval.completeExceptionally(FakeVault.failure(FailureKind.RETRY, MoveRepository.CODE_TRANSFER_SESSION_ENDED))
         advanceTimeBy(1500)
-        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
-        assertFalse(vm.uiState.value.canUnlockLater)
-        assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
+        assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
+        assertNull(vm.uiState.value.sas)
+        assertFalse(vm.uiState.value.phoneSecret)
+        assertNotEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
     }
 
     @Test
