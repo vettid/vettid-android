@@ -148,7 +148,7 @@ data class ConversationUiState(
     /** The message the member long-pressed: delete is confirmed first. */
     val deleting: MessageInfo? = null,
     val error: FailureKind? = null,
-    /** Whether this build and this vault have calls ([CallAccess]); the call button follows it. */
+    /** Whether calls can be made now ([CallAccess]: this build has them and the vault is open); the button follows it. */
     val call: CallAvailability = CallAvailability.NOT_IN_BUILD,
     /** The calls with this connection, as the vault's history has them. */
     val calls: List<CallHistoryEntry> = emptyList(),
@@ -190,11 +190,7 @@ data class ConversationUiState(
     val noComposer: Boolean get() = serviceRefused || connection?.service == true
     val active: Boolean get() = connection?.state == ConnectionState.ACTIVE
 
-    /**
-     * A call button is shown: the connection is active and the vault said it has calls. A vault without calls
-     * (`NOT_IN_VAULT`), or one not asked yet, shows no button (owner decision 2026-11-14: every build has calls, so
-     * a vault without them must show nothing new).
-     */
+    /** A call button is shown: the connection is active and the vault is open (every vault the app opens has calls). */
     val callShown: Boolean
         get() = active && !noComposer && (call == CallAvailability.READY || call == CallAvailability.IN_CALL)
 
@@ -286,7 +282,7 @@ class ConversationViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // The calls of this conversation: read when the vault is known to have calls, and again after each call
+            // The calls of this conversation: read when the vault is open, and again after each call
             // (the availability goes from "in a call" back to "ready").
             calls.availability.collectLatest { a ->
                 if (a == CallAvailability.READY) {
@@ -297,7 +293,7 @@ class ConversationViewModel @Inject constructor(
                     delay(HISTORY_AGAIN_MS)
                     takeCalls(calls.history(connectionId))
                 } else if (a != CallAvailability.IN_CALL) {
-                    // Not known to be open with calls (locked, asked again, not in the build or vault): nothing of the
+                    // Not open (locked, the release check, not in the build): nothing of the
                     // vault's history is kept in memory (the rule of #164/#167). During a call the list stays.
                     callsRead = false
                     local.update { it.copy(calls = emptyList(), callsNotShown = false, callsStale = false) }

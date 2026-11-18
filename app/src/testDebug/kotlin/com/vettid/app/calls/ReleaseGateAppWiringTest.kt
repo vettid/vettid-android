@@ -19,6 +19,13 @@ class ReleaseGateAppWiringTest {
         assertTrue(c.contains("override val unlockedNow: Boolean get() = " + "callsOpen(m.phase.value, m.releaseUpdate.required.value)"))
     }
 
+    /** No ring while the daily owner check is due or held (owner decision a, 2026-11-17): the same rule as presence and location. */
+    @Test
+    fun theCallsFollowTheOwnerCheck() {
+        val c = code("src/calls/kotlin/com/vettid/app/calls/CallsModule.kt")
+        assertTrue(c.contains("override val ownerCheckGated: Boolean get() = " + "m.ownerCheck.ownerCheck.value?.gated(java.time.Instant.now()) == true"))
+    }
+
     @Test
     fun theWalletsFollowTheGate() {
         val c = code("src/wallet/kotlin/com/vettid/app/wallet/WalletModule.kt")

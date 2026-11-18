@@ -68,19 +68,19 @@ class ConnectionCallsTest {
         advanceUntilIdle()
         assertEquals(DetailCalls(allowed = true, limited = false), vm.uiState.value.calls)
         assertTrue(vm.uiState.value.canCall)
-        // A build or a vault without calls: no switch.
-        calls.availability.value = CallAvailability.NOT_IN_VAULT
+        // A closed vault: no switch.
+        calls.availability.value = CallAvailability.CLOSED
         advanceUntilIdle()
         assertNull(vm.uiState.value.calls)
     }
 
     /**
-     * Calls are in every build, release included (owner decision 2026-11-14): Call and the calls row follow what the
-     * vault said alone. A vault without calls, one not asked yet and a build without calls show neither (also checked in
-     * the release's configuration: ReleaseCallGateTest in `:app`).
+     * Calls are in every build, release included (owner decision 2026-11-14): Call and the calls row follow whether the
+     * vault is open alone. A closed vault and a build without calls show neither (also checked in the release's
+     * configuration: ReleaseCallGateTest in `:app`).
      */
     @Test
-    fun callAndTheRowShowOnlyOnceTheVaultSaidItHasCalls() = runTest {
+    fun callAndTheRowShowOnlyWhileTheVaultIsOpen() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Ada Lovelace")))
         read()
         val vm = vm()
@@ -92,8 +92,7 @@ class ConnectionCallsTest {
         assertEquals(
             mapOf(
                 CallAvailability.NOT_IN_BUILD to (false to false),
-                CallAvailability.UNKNOWN to (false to false),
-                CallAvailability.NOT_IN_VAULT to (false to false),
+                CallAvailability.CLOSED to (false to false),
                 CallAvailability.READY to (true to true),
                 CallAvailability.IN_CALL to (false to true),
             ),

@@ -239,7 +239,7 @@ class CallMachineTest {
     fun theVaultsRefusalsOfCallStart() = runTest {
         val expected = mapOf(
             "busy" to CallEnd.OWN_VAULT_BUSY, "not_found" to CallEnd.UNAVAILABLE, "connection_unavailable" to CallEnd.UNAVAILABLE,
-            "owner_check_required" to CallEnd.OWNER_CHECK_REQUIRED, "unsupported_type" to CallEnd.NOT_SUPPORTED,
+            "owner_check_required" to CallEnd.OWNER_CHECK_REQUIRED, "unsupported_type" to CallEnd.FAILED,
             "bad_request" to CallEnd.FAILED,
         )
         val m = machine()

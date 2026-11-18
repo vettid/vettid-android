@@ -226,7 +226,7 @@ android {
         getByName("release").kotlin.srcDir("src/noDebugTools/kotlin")
         getByName("staging").kotlin.srcDir("src/noDebugTools/kotlin")
         // Calls: `src/calls` wires :core:calls into every build, release included (owner decision 2026-11-14). What a
-        // member sees is decided at run time: nothing of calls shows until the vault answers the `call.list` probe.
+        // member sees is decided at run time: calls show while the vault is open and its release current.
         getByName("main").kotlin.srcDir("src/calls/kotlin")
         // Wallet (ANDROID-PLAN §4 "Wallet"): `src/wallet` wires :core:chain into the builds that link it (see walletInRelease).
         for (type in listOf("debug", "devStack", "staging")) getByName(type).kotlin.srcDir("src/wallet/kotlin")
@@ -930,7 +930,7 @@ val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull =
 /**
  * Calls in every build (owner decision 2026-11-14): a release dex must reach the call code of :core:crypto and
  * :core:vault, so it must keep these strings (they are in that code and nowhere else, and R8 does not rename strings).
- * Their absence would mean R8 dropped calls, or the probe is no longer wired: the run-time gate would then never open.
+ * Their absence would mean R8 dropped calls, or the controller is no longer wired.
  */
 val callsMarkers = listOf(
     "vettid/vms/2/call-media", "vettid/vms/2/call-frame", "vettid/vms/2/call-share", "vettid/vms/2/call-vouch", "vettid/vms/2/call-key",

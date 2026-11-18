@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
     <string name="messages_title">Messages</string>
     <string name="messages_empty_title">No messages</string>
     <string name="messages_search_open">Search messages</string>
@@ -52,8 +52,6 @@
     <string name="messages_new_empty_title">No connections yet</string>
     <!-- Calls (texts approved 2026-10-12). The button, and a call's line in the conversation. -->
     <string name="messages_call">Call</string>
-    <!-- Unused since 2026-11-14 (owner decision: no call button for a vault without calls); kept. -->
-    <string name="messages_call_not_in_vault" tools:ignore="UnusedResources">Calls are not available for your vault yet</string>
     <!-- Owner-approved 2026-11-12: under the disabled call button while calls with the connection are off (C2). -->
     <string name="messages_calls_off">Calls with %1$s are off. You can turn them on in %1$s\'s details.</string>
     <string name="messages_call_talked">Call, %1$s</string>
