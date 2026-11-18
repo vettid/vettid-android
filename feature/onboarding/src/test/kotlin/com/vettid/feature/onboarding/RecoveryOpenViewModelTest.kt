@@ -34,7 +34,7 @@ class RecoveryOpenViewModelTest {
 
     @Test
     fun okShowsTheAttemptsUsedBeforeTheAppOpens() = runTest {
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 2))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 2, attemptUsed = false))
         val vm = RecoveryOpenViewModel(vault, vault)
         advanceUntilIdle()
         vm.enterAndSend()
@@ -72,7 +72,7 @@ class RecoveryOpenViewModelTest {
         assertEquals(OnboardingStep.RECOVER, onboarding.uiState.value.step)
         assertEquals(RecoverStep.PIN, recover.uiState.value.step)
         assertTrue("the release-R pane", recover.uiState.value.phoneSecret)
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1, attemptUsed = false))
         open.enterAndSend()
         advanceUntilIdle()
         assertEquals(OpenStep.DONE, open.uiState.value.step)
@@ -93,7 +93,7 @@ class RecoveryOpenViewModelTest {
     @Test
     fun aSetUpPhoneOpensAtOnce() = runTest {
         vault.setupComplete = true
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 0))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 0, attemptUsed = false))
         val vm = RecoveryOpenViewModel(vault, vault)
         advanceUntilIdle()
         vm.enterAndSend()
@@ -109,7 +109,7 @@ class RecoveryOpenViewModelTest {
      */
     @Test
     fun aLockPendingAtContinueKeepsThePhoneLockedAndSaysSo() = runTest {
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1, attemptUsed = false))
         val vm = RecoveryOpenViewModel(vault, vault)
         advanceUntilIdle()
         vm.enterAndSend()
@@ -134,7 +134,7 @@ class RecoveryOpenViewModelTest {
                 error("the record could not be written")
             }
         }
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1, attemptUsed = false))
         val vm = RecoveryOpenViewModel(move, vault)
         advanceUntilIdle()
         vm.enterAndSend()
@@ -160,13 +160,13 @@ class RecoveryOpenViewModelTest {
         assertEquals(OpenStep.FINISH, vm.uiState.value.step)
         assertEquals(FailureKind.NO_RESPONSE, vm.uiState.value.failure)
         // The phone's own unlock with a wrong PIN: said as that, still finishing.
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("bad_pin", 1, opened = true))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("bad_pin", 1, opened = true, attemptUsed = false))
         vm.setPin("111111")
         vm.send()
         advanceUntilIdle()
         assertEquals(OpenStep.FINISH, vm.uiState.value.step)
         assertTrue(vm.uiState.value.outcome!!.opened)
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1, attemptUsed = false))
         vm.setPin("975310")
         vm.send()
         advanceUntilIdle()
@@ -192,7 +192,7 @@ class RecoveryOpenViewModelTest {
         advanceUntilIdle()
         assertFalse(vm.uiState.value.canErase)
         // Its own key refused at both epochs: the vault no longer has this phone.
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("device_secret", 1, opened = true))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("device_secret", 1, opened = true, attemptUsed = false))
         vm.setPin("975310")
         vm.send()
         advanceUntilIdle()
@@ -272,21 +272,21 @@ class RecoveryOpenViewModelTest {
     @Test
     fun rightButIncompleteOnlyAfterAnUnansweredOpen() = runTest {
         val at = Instant.parse("2026-10-20T12:00:00Z")
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("attempt_lost", 3, at))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("attempt_lost", 3, at, attemptUsed = true))
         val vm = RecoveryOpenViewModel(vault, vault)
         advanceUntilIdle()
         vm.enterAndSend()
         advanceUntilIdle()
         assertFalse(vm.uiState.value.rightButIncomplete)
         // An attempt_lost before never makes the next answer "right but incomplete".
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("wait", 3, at))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("wait", 3, at, attemptUsed = false))
         vm.again()
         vm.review()
         vm.send()
         advanceUntilIdle()
         assertFalse(vm.uiState.value.rightButIncomplete)
         // The data layer reports that the open before got no answer (kept across a restart).
-        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("wait", 4, at, afterUnanswered = true))
+        vault.recoveryOpenOutcomes.add(RecoveryOpenOutcome("wait", 4, at, afterUnanswered = true, attemptUsed = false))
         vm.again()
         vm.review()
         vm.send()

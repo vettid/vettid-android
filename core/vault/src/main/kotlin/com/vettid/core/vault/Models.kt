@@ -528,16 +528,13 @@ data class TransferPending(
 /**
  * The member's account snapshot from the member API (§11.13, 0.15.0): display only, never a security signal.
  * `email` (VAULT-MESSAGING 0.20.0 / MEMBER-API 2.3.0) is the member's full verified address, shown only to the member;
- * it replaces the masked `email_hint` (`m***@example.com`) of 0.15.0. Both are optional here so that a snapshot of
- * either shape reads (a staging S4 vault stores what the member API sent); the app shows [email] and falls back to
- * [emailHint].
+ * the snapshot no longer carries the masked `email_hint` (that stays in the code-redeem and recovery-claim answers).
  */
 @Serializable
 data class AccountSnapshot(
     val v: Int = 1,
     @SerialName("as_of") val asOf: String? = null,
-    @SerialName("email_hint") val emailHint: String? = null,
-    /** The full address (0.20.0); absent from a vault before it. */
+    /** The full address (0.20.0, required); optional here so that a snapshot without it reads, and shows no address. */
     val email: String? = null,
     /** `member` (or another account state). */
     val state: String? = null,
