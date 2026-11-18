@@ -82,11 +82,38 @@ class CapabilitiesTest {
         }
     }
 
-    /** `attempt_used` (§11.14.6): read as given, never inferred; absent from an older vault. */
+    /** `attempt_used` (§11.14.6): read as given, never inferred. */
     @Test
     fun theOpenResultSaysWhetherThisRequestUsedAnAttempt() {
         assertEquals(true, RecoveryOpen.Result.parse("""{"ok":false,"code":"quiet","attempt_used":true,"attempts":{"used":4,"of":10}}""".toByteArray()).attemptUsed)
         assertEquals(false, RecoveryOpen.Result.parse("""{"ok":false,"code":"quiet","attempt_used":false,"attempts":{"used":3,"of":10}}""".toByteArray()).attemptUsed)
-        assertNull(RecoveryOpen.Result.parse("""{"ok":false,"code":"busy"}""".toByteArray()).attemptUsed)
+        assertEquals(false, RecoveryOpen.Result.parse("""{"ok":false,"code":"busy","attempt_used":false}""".toByteArray()).attemptUsed)
+    }
+
+    /**
+     * `attempt_used` is REQUIRED in every result, `ok` or not (§11.14.6): a result without it, or with a value that is not a
+     * boolean, does not parse, for every result code; the app then treats it as an answer it cannot read ("the attempt may
+     * have been used").
+     */
+    @Test
+    fun anOpenResultWithoutAttemptUsedIsUnreadable() {
+        val codes = listOf(
+            "wrong", "wrong_again", "attempt_lost", "quiet", "wait", "busy", "exhausted", "closed", "not_armed", "stored_mismatch",
+            "counter_unavailable", "no_recovery", "expired", "attestation", "manifest", "wrong_release", "retry", "bad_request",
+            "state_unsupported", "state_unreadable", "device_secret", "vault_missing", "something_new",
+        )
+        for (code in codes) {
+            val base = """{"ok":false,"code":"$code","attempts":{"used":3,"of":10}"""
+            assertThrows(code, CryptoException::class.java) { RecoveryOpen.Result.parse("$base}".toByteArray()) }
+            assertThrows(code, CryptoException::class.java) { RecoveryOpen.Result.parse("""$base,"attempt_used":null}""".toByteArray()) }
+            assertThrows(code, CryptoException::class.java) { RecoveryOpen.Result.parse("""$base,"attempt_used":"true"}""".toByteArray()) }
+            assertThrows(code, CryptoException::class.java) { RecoveryOpen.Result.parse("""$base,"attempt_used":1}""".toByteArray()) }
+            // With it, the same result reads.
+            assertEquals(code, true, RecoveryOpen.Result.parse("""$base,"attempt_used":true}""".toByteArray()).attemptUsed)
+        }
+        val ok = """{"ok":true,"state_seq":5,"header_seq":6,"token":"t","vault_bundle":"AAEC","release":"aa","release_number":13,""" +
+            """"unlock_id":"00","attempts":{"used":1,"of":10}"""
+        assertThrows(CryptoException::class.java) { RecoveryOpen.Result.parse("$ok}".toByteArray()) }
+        assertEquals(true, RecoveryOpen.Result.parse("""$ok,"attempt_used":true}""".toByteArray()).attemptUsed)
     }
 }

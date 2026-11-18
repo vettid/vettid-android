@@ -111,7 +111,6 @@ internal object CallsCatalog {
         "calls.ended_unavailable" to { Ended(CallEnd.UNAVAILABLE) },
         "calls.ended_own_vault_busy" to { Ended(CallEnd.OWN_VAULT_BUSY) },
         "calls.ended_calls_off" to { Ended(CallEnd.CALLS_OFF) },
-        "calls.ended_not_supported" to { Ended(CallEnd.NOT_SUPPORTED) },
         "calls.ended_locked" to { Ended(CallEnd.LOCKED) },
         "calls.microphone_blocked" to {
             Box {

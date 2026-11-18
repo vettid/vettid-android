@@ -363,14 +363,11 @@ class RecoveryOpenViewModel @Inject constructor(
 /**
  * The text of an answer (ANDROID-PLAN 0.1.41's table): a string and its arguments, then, when set, `retry_at`
  * ([withRetryAt]). The date the app was last used is not shown: nothing the app reads carries the vault's quiet period.
- * [attemptsLeft]: a line under it with the attempts left, for the answers whose text does not say whether this request
- * used one.
  */
 data class OpenAnswerText(
     @StringRes val res: Int,
     val args: List<Any> = emptyList(),
     val withRetryAt: Boolean = false,
-    val attemptsLeft: Int? = null,
 )
 
 /**
@@ -407,13 +404,14 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
         "wait" -> waitText(o, left)
         "busy" -> OpenAnswerText(R.string.onboarding_open_busy)
         // (0.34.0) A retry after the spend used an attempt (the entry may have been right).
-        "retry" -> if (o.attemptUsed == true) {
+        "retry" -> if (o.attemptUsed) {
             OpenAnswerText(R.string.onboarding_open_retry_used, listOf(left))
         } else {
             OpenAnswerText(R.string.onboarding_open_retry)
         }
-        // Before the spend nothing was used; after it, the right attempt was (attempt_used; an older vault: attempts).
-        "stored_mismatch", "vault_missing" -> if (o.attemptUsed ?: (o.used != null)) {
+        // Before the spend nothing was used; after it, the right attempt was: only `attempt_used: true` says so (§11.14.6,
+        // never inferred from `attempts`).
+        "stored_mismatch", "vault_missing" -> if (o.attemptUsed) {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch_right)
         } else {
             OpenAnswerText(R.string.onboarding_open_stored_mismatch)
@@ -443,22 +441,20 @@ private fun tableText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText {
 }
 
 /**
- * `quiet` (§11.14.6, ANDROID-PLAN 0.1.41): whether this request used an attempt comes only from `attempt_used`; a vault
- * that does not say gets the neutral text with the attempts left.
+ * `quiet` (§11.14.6, ANDROID-PLAN 0.1.41): whether this request used an attempt comes only from `attempt_used`, which every
+ * readable result carries (an answer without it is unreadable, `onboarding_open_unreadable`).
  */
 private fun quietText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText = when {
-    o.attemptUsed == true -> OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(left))
-    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_quiet_nodate, attemptsLeft = o.left.takeIf { o.attemptUsed == null })
-    o.attemptUsed == false -> OpenAnswerText(R.string.onboarding_open_quiet_nothing, withRetryAt = true)
-    else -> OpenAnswerText(R.string.onboarding_open_quiet, withRetryAt = true, attemptsLeft = o.left)
+    o.attemptUsed -> OpenAnswerText(R.string.onboarding_open_quiet_used, listOf(left))
+    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_quiet_nodate)
+    else -> OpenAnswerText(R.string.onboarding_open_quiet_nothing, withRetryAt = true)
 }
 
-/** `wait`: with an attempt used, as `attempt_lost`; with none, "Nothing was used"; unknown, neutral. */
+/** `wait`: with an attempt used, as `attempt_lost`; with none, "Nothing was used" (with the date when there is one). */
 private fun waitText(o: RecoveryOpenOutcome, left: Int): OpenAnswerText = when {
-    o.attemptUsed == true -> OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(left))
-    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_wait_nodate, attemptsLeft = o.left.takeIf { o.attemptUsed == null })
-    o.attemptUsed == false -> OpenAnswerText(R.string.onboarding_open_wait_nothing, withRetryAt = true)
-    else -> OpenAnswerText(R.string.onboarding_open_wait, withRetryAt = true, attemptsLeft = o.left)
+    o.attemptUsed -> OpenAnswerText(R.string.onboarding_open_attempt_lost, listOf(left))
+    o.retryAt == null -> OpenAnswerText(R.string.onboarding_open_wait_nodate)
+    else -> OpenAnswerText(R.string.onboarding_open_wait_nothing, withRetryAt = true)
 }
 
 /** This phone's own unlock while it finishes a recovery the vault answered `ok` (nothing of the recovery is used). */
@@ -628,7 +624,7 @@ private fun OpenFinishErase(confirm: Boolean, vm: RecoveryOpenViewModel) {
 /** Recovered: the plan's `ok` text, read before the app opens. */
 @Composable
 private fun OpenDone(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel) {
-    val o = state.outcome ?: RecoveryOpenOutcome("ok", state.used)
+    val o = state.outcome ?: RecoveryOpenOutcome("ok", state.used, attemptUsed = true)
     val t = openAnswerText(o, false)
     @Suppress("SpreadOperator") // a string's arguments
     val body = stringResource(t.res, *t.args.toTypedArray())
@@ -754,7 +750,6 @@ private fun OpenAnswer(state: RecoveryOpenUiState, vm: RecoveryOpenViewModel, on
         body = stringResource(t.res, *args.toTypedArray()),
         modifier = Modifier.testTag("open_answer_${o.code}"),
     )
-    t.attemptsLeft?.let { Text(stringResource(R.string.onboarding_open_attempts_left, it), style = MaterialTheme.typography.bodyMedium) }
     if (retryAt != null && now < retryAt.toEpochMilli()) {
         Text(
             stringResource(R.string.onboarding_open_countdown, countdown(retryAt, Instant.ofEpochMilli(now))),

@@ -34,7 +34,7 @@ class RecoveryOpenHandOverTest {
     private val vault = FakeVault(AppPhase.Setup(SetupStage.RECOVERING)).apply {
         phoneSecret = true
         recoveryStageValue = RecoveryStage.PIN
-        recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1))
+        recoveryOpenOutcomes.add(RecoveryOpenOutcome("ok", 1, attemptUsed = false))
     }
 
     /** The recovery flow at its PIN, the open answered `ok`: the `ok` text with Continue. */

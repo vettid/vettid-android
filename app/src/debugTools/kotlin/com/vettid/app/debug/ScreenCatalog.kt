@@ -1382,7 +1382,7 @@ object ScreenCatalog {
         "settings.presence" to {
             PresenceSettingsContent(
                 PresenceSettingsUiState(
-                    available = true, loading = false, policy = PresencePolicy(3, PresenceState.BUSY, PresenceShare.ALL, listOf("c2")),
+                    loading = false, policy = PresencePolicy(3, PresenceState.BUSY, PresenceShare.ALL, listOf("c2")),
                     people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe"), PresencePerson("c3", "Riley Chen")),
                 ),
                 {}, {}, { _, _ -> }, {}, {},
@@ -1391,7 +1391,7 @@ object ScreenCatalog {
         "settings.presence_invisible" to {
             PresenceSettingsContent(
                 PresenceSettingsUiState(
-                    available = true, loading = false, policy = PresencePolicy(4, PresenceState.INVISIBLE, PresenceShare.NONE, listOf("c1")),
+                    loading = false, policy = PresencePolicy(4, PresenceState.INVISIBLE, PresenceShare.NONE, listOf("c1")),
                     people = listOf(PresencePerson("c1", "Samira Rivera"), PresencePerson("c2", "Alex Doe")),
                 ),
                 {}, {}, { _, _ -> }, {}, {},
@@ -1399,7 +1399,7 @@ object ScreenCatalog {
         },
         "settings.presence_error" to {
             PresenceSettingsContent(
-                PresenceSettingsUiState(available = true, loading = false, policy = PresencePolicy(3), error = FailureKind.CONFLICT),
+                PresenceSettingsUiState(loading = false, policy = PresencePolicy(3), error = FailureKind.CONFLICT),
                 {}, {}, { _, _ -> }, {}, {},
             )
         },
@@ -1655,16 +1655,6 @@ object ScreenCatalog {
                 HistoryActions(),
             )
         },
-        "history.search_local" to {
-            HistoryScreen(
-                HistoryUiState(
-                    historyEntries.take(2), filter = AuditFilter(query = "unlocked"), connectionNames = historyNames, loading = false,
-                    end = true, localSearch = true,
-                ),
-                chrome,
-                HistoryActions(),
-            )
-        },
         "history.held" to {
             HistoryScreen(
                 HistoryUiState(historyEntries, connectionNames = historyNames, loading = false, error = FailureKind.OWNER_CHECK_REQUIRED),
@@ -1713,7 +1703,6 @@ object ScreenCatalog {
         },
         "history.export_nothing" to { HistoryExportContent(ExportStep.NothingToExport, exportWords, HistoryExportActions()) },
         "history.export_alarm" to { HistoryExportContent(ExportStep.Refused(ExportRefusal.ALARM), exportWords, HistoryExportActions()) },
-        "history.export_old_vault" to { HistoryExportContent(ExportStep.Refused(ExportRefusal.OLD_VAULT), exportWords, HistoryExportActions()) },
         "history.export_pin" to { HistoryExportContent(ExportStep.Pin(exportPreview, ExportFormat.CSV), exportWords, HistoryExportActions()) },
         "history.export_pin_wrong" to {
             HistoryExportContent(ExportStep.Pin(exportPreview, ExportFormat.CSV, error = FailureKind.BAD_PIN), exportWords, HistoryExportActions())

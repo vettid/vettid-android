@@ -234,8 +234,7 @@ fun VettIdApp(
                                     val shown = account.shownInShell()
                                     AppShell(
                                         launchRoute = launchRoute,
-                                        accountName = shown?.fullName ?: shown?.displayEmail
-                                            ?: stringResource(R.string.account_placeholder_name),
+                                        accountName = accountShellName(shown),
                                         account = shown,
                                         portalUrl = portal,
                                         alarm = alarm,

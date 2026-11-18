@@ -49,8 +49,11 @@ data class RecoveryOpenOutcome(
      * is then the answer of this phone's own unlock (`bad_pin`, `backoff`, …), and nothing of the recovery was used.
      */
     val opened: Boolean = false,
-    /** (0.34.0) Whether THIS request used an attempt, as the vault says; null from a vault that does not say. */
-    val attemptUsed: Boolean? = null,
+    /**
+     * (0.34.0) Whether THIS request used an attempt, as the vault says (`attempt_used`, REQUIRED in every result: an answer
+     * without it is unreadable and is never an outcome). Required here too, so that no outcome the app makes leaves it out.
+     */
+    val attemptUsed: Boolean,
     /**
      * (ANDROID-PLAN 0.1.78) The lost-ok unlock after `409 key_in_use` has been refused for a day: the approved text "Your
      * vault took this phone, but it cannot be unlocked right now. Contact VettID." Nothing is forgotten.

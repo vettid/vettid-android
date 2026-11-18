@@ -48,8 +48,11 @@ class HistoryViewModelTest {
         private val queue = ArrayDeque(pages.toList())
         val calls = mutableListOf<Map<String, Any?>>()
 
-        /** A vault that does not take `q` (VAULT-MESSAGING before 0.15.0): the phone searches what it loaded. */
+        /** A vault that refuses the search (`bad_request`, §10.9: e.g. a `q` it does not take). */
         var refusesSearch = false
+
+        /** Every request fails before it reaches the vault (a transport failure). */
+        var unreachable = false
 
         override suspend fun auditList(
             connectionId: String?,
@@ -61,6 +64,7 @@ class HistoryViewModelTest {
             until: String?,
         ): AuditPage {
             calls += mapOf("connection_id" to connectionId, "before_seq" to beforeSeq, "q" to q, "limit" to limit)
+            if (unreachable) throw java.io.IOException("unreachable")
             if (refusesSearch && q != null) throw VaultOpException("audit.list", "bad_request")
             return queue.removeFirstOrNull()?.invoke() ?: error("unexpected request ${calls.last()}")
         }
@@ -168,40 +172,65 @@ class HistoryViewModelTest {
         assertEquals(listOf(450L), s.entries.map { it.seq })
         assertTrue(s.end)
         assertFalse(s.partial)
-        assertFalse(s.localSearch)
     }
 
     /**
-     * Names follow-up (VAULT-MESSAGING §10.8): when this phone runs the search, a query across a name and the words
-     * around it finds the entry; the title it matches carries no FSI/PDI, nor the controls the cleaning removed.
+     * A search the vault refuses (`bad_request`, §10.9) is a failure like any other: it is shown with its code and Try
+     * again, and never sent again without `q` (no search on this phone); the entries read before it stay.
      */
     @Test
-    fun aLocalSearchAcrossTheNameAndTheWordsAroundItFindsTheEntry() = runTest(main.dispatcher) {
-        val rlo = "\u202E"
-        val named = FakeSocial().apply {
-            seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam$rlo\u200B", lastName = "Lee")))
-        }
-        val full = { AuditPage(listOf(entry(900, "call.permission_off")), seq = 1000) }
-        val vault = Vault(*Array(30) { full }).apply { refusesSearch = true }
-        val model = HistoryViewModel(
-            SavedStateHandle(mapOf("connectionId" to "c1")),
-            HistoryManager { vault },
-            named,
-            RuntimeEnvironment.getApplication(),
-            FakeItems(),
-            FakeVault(),
-        )
+    fun aRefusedSearchIsAFailureAndIsNotSentAgainWithoutIt() = runTest(main.dispatcher) {
+        val vault = Vault({ page(900, 800) }, { page(900, 800) })
+        val model = vm(vault)
         settle(model, ::idle)
-        for (q in listOf("calls from sam lee turned", "FROM Sam Lee", "sam lee turned off", "Lee")) {
-            val before = vault.calls.size
-            model.setQuery(q)
-            val s = settle(model) { idle(it) && it.filter.q == q && vault.calls.size > before }
-            assertEquals(q, listOf(900L), s.entries.map { it.seq })
-        }
-        // Words that are not in the title still miss.
+        vault.refusesSearch = true
+        model.setQuery("unlock")
+        val s = settle(model) { idle(it) && it.error != null }
+        assertEquals(listOf(null, "unlock"), vault.calls.map { it["q"] })
+        assertEquals(FailureKind.OTHER, s.error)
+        assertEquals("bad_request", s.errorCode)
+        // The rows of the search before are not left under this one: the failure is shown in their place.
+        assertTrue(s.entries.isEmpty())
+        assertFalse(s.end)
+        assertFalse(s.partial)
+        // Try again sends the same search.
+        vault.refusesSearch = false
         val before = vault.calls.size
-        model.setQuery("sam lee turned on")
-        assertTrue(settle(model) { idle(it) && it.filter.q == "sam lee turned on" && vault.calls.size > before }.entries.isEmpty())
+        model.retry()
+        val again = settle(model) { idle(it) && vault.calls.size > before && it.error == null }
+        assertEquals("unlock", vault.calls.last()["q"])
+        assertEquals(listOf(900L, 800L), again.entries.map { it.seq })
+    }
+
+    /** A new search that cannot reach the vault drops the rows of the one before and says why. */
+    @Test
+    fun aSearchThatCannotBeSentDropsTheRowsShownBefore() = runTest(main.dispatcher) {
+        // 20 entries (a whole load) of a search still going on with older entries.
+        val twenty = (900L downTo 881L).toList().toLongArray()
+        val vault = Vault({ page(*twenty, partial = true, next = 881) })
+        val model = vm(vault)
+        assertTrue(settle(model, ::idle).partial)
+        vault.unreachable = true
+        model.setQuery("unlock")
+        val s = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertTrue(s.entries.isEmpty())
+        assertFalse(s.end)
+        assertFalse(s.partial)
+    }
+
+    /** A failed older page under the same filter keeps the rows read so far (only a new filter drops them). */
+    @Test
+    fun aFailedOlderPageKeepsItsRows() = runTest(main.dispatcher) {
+        val twenty = (900L downTo 881L).toList()
+        val vault = Vault({ page(*twenty.toLongArray(), next = 881) })
+        val model = vm(vault)
+        settle(model, ::idle)
+        vault.unreachable = true
+        model.loadMore()
+        val s = settle(model) { idle(it) && it.error != null }
+        assertEquals(FailureKind.NETWORK, s.error)
+        assertEquals(twenty, s.entries.map { it.seq })
     }
 
     @Test

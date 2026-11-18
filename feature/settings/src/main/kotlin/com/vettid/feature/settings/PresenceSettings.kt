@@ -34,7 +34,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.prefs.PreferencesRepository
-import com.vettid.core.data.presence.PresenceAvailability
 import com.vettid.core.data.presence.PresencePolicy
 import com.vettid.core.data.presence.PresenceRepository
 import com.vettid.core.data.presence.PresenceShare
@@ -78,7 +77,6 @@ data class PresencePerson(val id: String, val name: String?)
  * at once, so the screen has no unsaved edit and does not report one ([holdsInput] is false by construction).
  */
 data class PresenceSettingsUiState(
-    val available: Boolean = false,
     val policy: PresencePolicy? = null,
     val people: List<PresencePerson> = emptyList(),
     val loading: Boolean = true,
@@ -103,10 +101,9 @@ class PresenceSettingsViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(PresenceSettingsUiState())
 
-    val uiState: StateFlow<PresenceSettingsUiState> = combine(local, presence.availability, presence.policy, connections.connections) {
-        s, a, p, cs ->
+    val uiState: StateFlow<PresenceSettingsUiState> = combine(local, presence.policy, connections.connections) {
+        s, p, cs ->
         s.copy(
-            available = a == PresenceAvailability.AVAILABLE,
             policy = p,
             people = cs.filter { it.state == ConnectionState.ACTIVE && !it.service }
                 .map { PresencePerson(it.id, AccountNames.cleaned(it.displayName) ?: AccountNames.cleaned(it.name)) }

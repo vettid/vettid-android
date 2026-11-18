@@ -1156,7 +1156,7 @@ class VaultManager(
         },
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
-            presence.start() // whether the vault has presence, and the member's policy
+            presence.start() // the member's presence policy
             location.resume() // the location shares this phone is the source of
             feed.releaseHeld() // the feed's events and arrivals held while the release was checked: notified now
         },
@@ -1218,7 +1218,7 @@ class VaultManager(
                     // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
                     // end of this opening's check already ran the reads it owed (they run once).
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
-                    presence.start() // whether the vault has presence, and the member's policy
+                    presence.start() // the member's presence policy
                     location.resume() // the location shares this phone is the source of are taken up again
                     // The release gate's check (Rule 3): the manifest is read by the opening
                     // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
@@ -1281,7 +1281,7 @@ class VaultManager(
                     // Rule 3: the votes' work sends, so it waits for the release check too; the lists wait while the gate pauses
                     // them. Both start when it ends or lifts ([ReleasePauseSteps]).
                     if (!releaseUpdate.required.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
-                    steps.step { presence.start() } // whether the vault has presence, and the policy, again
+                    steps.step { presence.start() } // the presence policy, again
                     steps.step { location.reopenReceived() } // the incoming shares the hold dropped
                     // The lists the hold dropped: approvals and requests.
                     if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }
@@ -2241,16 +2241,14 @@ class VaultManager(
     /** Re-reads the account snapshot (`account.get`, §11.13); kept only when newer (`as_of`). Quiet on failure. */
     override suspend fun refreshAccount() {
         try {
-            // The record this answer is for: after a wipe or a reset meanwhile, nothing of it is kept.
-            val rec = record.recordGeneration
-            // And the own account's: an answer on its way when the vault closes is not kept ([OwnAccount]).
+            // The own account's mark: an answer on its way when the vault closes is not kept ([OwnAccount]). Nothing of it
+            // goes to the account record (the snapshot carries no masked address; it stays in memory only).
             val mark = ownAccount.mark()
             val v = guard { session().openApi.accountGet() }
             // What is new is decided under the own account's lock (`as_of`): an older answer never replaces a newer one.
             val kept = ownAccount.keep(mark, v, ::ownProfileOpen) ?: return
             val u = kept.update
             val stored = kept.before
-            io { record.refreshed(rec, u) }
             publishAccount()
             // An applied name change brings new names to the shared profile's core too.
             if (u.snapshot?.firstName != stored?.firstName || u.snapshot?.lastName != stored?.lastName) {
@@ -4099,10 +4097,10 @@ class VaultManager(
         // The handshake only when it has not completed yet: a phone paired earlier fetches the credential straight away.
         var refused = if (d.deviceId == null) pairRecovered(s, pin, resuming) else null
         if (refused == null) refused = fetchRecovered(s, pin, unlockFirst = resuming)
-        if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+        if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true, attemptUsed = false)
         // Only now, with the credential on this phone, is the recovery over (until then the phone resumes it).
         d.finishRecoveryOpen()
-        return RecoveryOpenOutcome("ok", used)
+        return RecoveryOpenOutcome("ok", used, attemptUsed = false)
     }
 
     /** The recovered phone's handshake; unanswered, an unlock with its own key and the handshake again. The unlock's refusal code. */
@@ -4637,15 +4635,15 @@ class VaultManager(
             is Pairing.Result.Paired -> {
                 val s = session()
                 val refused = fetchRecovered(s, pin, unlockFirst = resuming)
-                if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true)
+                if (refused != null) return RecoveryOpenOutcome(refused, used, opened = true, attemptUsed = false)
                 s.device.finishRecoveryOpen()
                 reuseCleanup(result.identity, openOk = true, pairingComplete = true)
-                RecoveryOpenOutcome("ok", used)
+                RecoveryOpenOutcome("ok", used, attemptUsed = false)
             }
             is Pairing.Result.Failed -> {
                 // Everything is kept; the identity whose open answered `ok` is the one in use again.
                 reuse.newSlot?.let { switchIdentity(it) }
-                RecoveryOpenOutcome(result.code, used, opened = true)
+                RecoveryOpenOutcome(result.code, used, opened = true, attemptUsed = false)
             }
         }
     }
@@ -4747,17 +4745,8 @@ class VaultManager(
         // Read before the vault's call: a lock, a refusal or a wipe from here on keeps the phase it published.
         val gen = generation
         val s = session()
-        val outcome = try {
-            s.openApi.credentialRecover(password)
-            RecoverOutcome.RECOVERED
-        } catch (e: VaultOpException) {
-            when (e.code) {
-                // 0.16.0: a vault without a backup copy cannot be recovered; `credential_lost` is an older vault's word.
-                "credential_lost", CODE_NO_BACKUP -> RecoverOutcome.NO_BACKUP
-                "credential_required" -> RecoverOutcome.CREDENTIAL_REQUIRED
-                else -> throw e
-            }
-        }
+        // 0.16.0: a vault without a backup copy cannot be recovered. Any other code is the vault's error.
+        val outcome = RecoverOutcome.answering { s.openApi.credentialRecover(password) }
         if (outcome == RecoverOutcome.RECOVERED) publishFinishing(gen)
         outcome
     }
@@ -5774,10 +5763,10 @@ private fun newer(a: String?, b: String?): Boolean {
 }
 
 /** The snapshot for display (§11.13). */
-internal fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): AccountInfo {
+internal fun com.vettid.core.vault.AccountSnapshot.toInfo(emailHint: String): AccountInfo {
     fun t(s: String?): Instant? = s?.let { runCatching { Instant.parse(it) }.getOrNull() }
     return AccountInfo(
-        emailHint = emailHint ?: fallbackHint,
+        emailHint = emailHint,
         state = state ?: "",
         accountStatus = accountStatus,
         deletesAt = t(deletesAt),
@@ -5792,9 +5781,16 @@ internal fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String):
     )
 }
 
-/** §11.13 (0.20.0): 3–1,016 bytes of UTF-8 with an `@` and no control characters. */
+/**
+ * §11.13 (0.20.0, 0.21.0): 3–1,016 bytes of UTF-8 with an `@` and no control characters, which for the email are C0, DEL,
+ * C1 (all three [Char.isISOControl]), U+2028 and U+2029.
+ */
 internal fun validEmail(e: String): Boolean =
-    e.toByteArray(Charsets.UTF_8).size in EMAIL_MIN_BYTES..EMAIL_MAX_BYTES && '@' in e && e.none { it.isISOControl() }
+    e.toByteArray(Charsets.UTF_8).size in EMAIL_MIN_BYTES..EMAIL_MAX_BYTES && '@' in e &&
+        e.none { it.isISOControl() || it == LINE_SEPARATOR || it == PARAGRAPH_SEPARATOR }
+
+private const val LINE_SEPARATOR = '\u2028'
+private const val PARAGRAPH_SEPARATOR = '\u2029'
 
 private const val EMAIL_MIN_BYTES = 3
 private const val EMAIL_MAX_BYTES = 1_016

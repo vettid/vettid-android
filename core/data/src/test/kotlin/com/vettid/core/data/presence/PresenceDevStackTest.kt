@@ -3,8 +3,6 @@
 
 package com.vettid.core.data.presence
 
-import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.DevStack
 import com.vettid.core.testing.ExitScenario
 import com.vettid.core.testing.TestAndroidAttester
@@ -23,8 +21,7 @@ import org.junit.Test
  * A2 exit scenario connected the app's vault to the vaultctl peer. Skipped when the stack is not running (CI):
  * `devstack/devstack.sh up`, then `./gradlew :core:data:testDebugUnitTest --tests '*PresenceDevStackTest*'`.
  *
- * What it checks: whether the vault has presence is learnt from `presence.get` (a vault of a release without the feature
- * answers `unsupported_type`, and the test ends there); the default policy (available, all, no exceptions); a state change and an
+ * What it checks: the policy is read by `presence.get`; the default policy (available, all, no exceptions); a state change and an
  * exception for the peer with their versions; and that `presence.query` of the peer is answered (the result itself needs the peer's
  * vault to answer a ping, which the stack's `vaultctl` does not do on demand: the reading is "Checking…" or, at `exp`, unknown).
  * **Not run by the builder** (no dev stack was started for this PR).
@@ -52,15 +49,7 @@ class PresenceDevStackTest {
     }
 
     private suspend fun scenarioWith(m: PresenceManager, c: ExitScenario.Connected) {
-        try {
-            m.refreshPolicy()
-        } catch (e: VaultFailure) {
-            check(e.kind == FailureKind.NOT_SUPPORTED) { "presence.get: ${e.kind}" }
-            check(m.availability.value == PresenceAvailability.UNSUPPORTED) { "availability: ${m.availability.value}" }
-            println("presence: this stack's release does not list the feature (unsupported_type); nothing more to check")
-            return
-        }
-        check(m.availability.value == PresenceAvailability.AVAILABLE)
+        m.refreshPolicy()
         val first = checkNotNull(m.policy.value) { "no policy" }
         check(first.state == PresenceState.AVAILABLE && first.share == PresenceShare.ALL && first.except.isEmpty()) { "default: $first" }
 

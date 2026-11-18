@@ -67,14 +67,14 @@ class PresenceConversationTest {
     }
 
     @Test
-    fun aHoldDuringTheConversationAsksAgainWhenPresenceIsBack() = runTest {
+    fun aHoldDuringTheConversationAsksAgainWhenThePolicyIsReadAgain() = runTest {
         val vm = vm("c1")
         advanceUntilIdle()
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        presence.policy.value = null
         presence.readings.value = emptyMap()
         advanceUntilIdle()
         assertNull(vm.uiState.value.presence)
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        presence.policy.value = com.vettid.core.data.presence.PresencePolicy(2)
         advanceUntilIdle()
         assertEquals(listOf("c1", "c1"), presence.queries)
         assertEquals(PresenceReading.Checking, vm.uiState.value.presence)
@@ -101,9 +101,9 @@ class PresenceConversationTest {
         vm.setVisible(false)
         advanceUntilIdle()
         presence.readings.value = emptyMap()
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.UNKNOWN
+        presence.policy.value = null
         advanceUntilIdle()
-        presence.availability.value = com.vettid.core.data.presence.PresenceAvailability.AVAILABLE
+        presence.policy.value = com.vettid.core.data.presence.PresencePolicy(2)
         advanceUntilIdle()
         assertEquals(1, presence.queries.size)
         vm.setVisible(true)
@@ -120,12 +120,18 @@ class PresenceConversationTest {
     }
 
     @Test
-    fun withoutPresenceInTheVaultThereIsNoLineAndNoQuestion() = runTest {
-        val none = FakePresence(available = false)
-        val vm = vm("c1", none)
+    fun untilThePolicyIsReadThereIsNoLineAndNoQuestionThenBoth() = runTest {
+        // Not read: the vault is locked, held or due, or its first `presence.get` has not been answered.
+        val notRead = FakePresence(initial = null)
+        val vm = vm("c1", notRead)
         advanceUntilIdle()
         assertNull(vm.uiState.value.presence)
-        assertTrue(none.queries.isEmpty())
+        assertTrue(notRead.queries.isEmpty())
+        // Read (the vault open and not gated): the line and the question, with nothing else to wait for.
+        notRead.policy.value = com.vettid.core.data.presence.PresencePolicy(1)
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), notRead.queries)
+        assertEquals(PresenceReading.Checking, vm.uiState.value.presence)
     }
 
     private fun screen(presence: PresenceReading?) {

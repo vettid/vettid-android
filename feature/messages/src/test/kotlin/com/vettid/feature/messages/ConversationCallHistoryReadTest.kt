@@ -100,7 +100,7 @@ class ConversationCallHistoryReadTest {
         calls.availability.value = CallAvailability.READY
         advanceUntilIdle()
         assertEquals(listOf("k1"), vm.uiState.value.calls.map { it.callId })
-        calls.availability.value = CallAvailability.UNKNOWN // locked
+        calls.availability.value = CallAvailability.CLOSED // locked
         advanceUntilIdle()
         assertTrue(vm.uiState.value.calls.isEmpty())
     }
@@ -133,7 +133,7 @@ class ConversationCallHistoryReadTest {
         calls.availability.value = CallAvailability.READY
         advanceUntilIdle()
         assertTrue(vm.uiState.value.callsStale)
-        calls.availability.value = CallAvailability.UNKNOWN // locked
+        calls.availability.value = CallAvailability.CLOSED // locked
         advanceUntilIdle()
         assertFalse("a lock clears it with the lines", vm.uiState.value.callsStale)
         calls.availability.value = CallAvailability.READY // unlocked, and the first read fails: nothing was read since
@@ -184,8 +184,8 @@ class ConversationCallHistoryReadTest {
         calls.availability.value = CallAvailability.IN_CALL
         advanceUntilIdle()
         assertTrue(vm.uiState.value.callsStale)
-        // A vault found without calls clears it with the lines, as a lock does.
-        calls.availability.value = CallAvailability.NOT_IN_VAULT
+        // A lock clears it with the lines.
+        calls.availability.value = CallAvailability.CLOSED
         advanceUntilIdle()
         assertFalse(vm.uiState.value.callsStale)
         assertTrue(vm.uiState.value.calls.isEmpty())

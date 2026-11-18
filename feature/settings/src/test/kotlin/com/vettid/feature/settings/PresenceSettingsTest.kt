@@ -69,7 +69,7 @@ class PresenceSettingsTest {
         val vm = vm()
         advanceUntilIdle()
         assertEquals(listOf("c1", "c2"), vm.uiState.value.people.map { it.id })
-        assertTrue(vm.uiState.value.available)
+        assertEquals(presence.policy.value, vm.uiState.value.policy)
     }
 
     @Test
@@ -184,7 +184,7 @@ class PresenceSettingsTest {
     @Test
     fun theStatusWhoCanSeeItAndTheExceptionsUnderAllSayExcept() {
         val picked = mutableListOf<Pair<String, Boolean>>()
-        show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1, except = listOf("c2")), people = people, loading = false), onPick = { id, on -> picked += id to on })
+        show(PresenceSettingsUiState(policy = PresencePolicy(1, except = listOf("c2")), people = people, loading = false), onPick = { id, on -> picked += id to on })
         for (t in listOf("Presence", "Status", "Available", "Busy", "Away", "Invisible", "Who can see it", "All my connections", "No one", "Exceptions", "Except…")) {
             rule.onNodeWithText(t).performScrollTo().assertIsDisplayed()
         }
@@ -198,7 +198,7 @@ class PresenceSettingsTest {
 
     @Test
     fun underNoOneItSaysOnlyAndInvisibleHasItsNote() {
-        show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1, PresenceState.INVISIBLE, PresenceShare.NONE), people = people, loading = false))
+        show(PresenceSettingsUiState(policy = PresencePolicy(1, PresenceState.INVISIBLE, PresenceShare.NONE), people = people, loading = false))
         rule.onNodeWithText("Only…").performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("Invisible: you appear offline to everyone.").performScrollTo().assertIsDisplayed()
         // The option's line is for choosing it: with Invisible chosen, only the note says it.
@@ -208,7 +208,7 @@ class PresenceSettingsTest {
 
     @Test
     fun theOptionLineIsShownWhileInvisibleIsNotChosenAndTheNoteIsNot() {
-        show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1), people = people, loading = false))
+        show(PresenceSettingsUiState(policy = PresencePolicy(1), people = people, loading = false))
         rule.onNodeWithText("You appear offline to everyone").performScrollTo().assertIsDisplayed()
         assertEquals(0, rule.onAllNodesWithTag("presence_invisible_note").fetchSemanticsNodes().size)
     }
@@ -224,7 +224,7 @@ class PresenceSettingsTest {
     fun tapsReachTheActions() {
         val states = mutableListOf<PresenceState>()
         val shares = mutableListOf<PresenceShare>()
-        show(PresenceSettingsUiState(available = true, policy = PresencePolicy(1), people = people, loading = false), { states += it }, { shares += it })
+        show(PresenceSettingsUiState(policy = PresencePolicy(1), people = people, loading = false), { states += it }, { shares += it })
         rule.onNodeWithTag("presence_state_busy").performScrollTo().performClick()
         rule.onNodeWithTag("presence_share_none").performScrollTo().performClick()
         assertEquals(listOf(PresenceState.BUSY), states)
@@ -234,7 +234,7 @@ class PresenceSettingsTest {
     @Test
     fun atTheLimitOnlyThePickedOnesCanBeChanged() {
         val full = PresencePolicy(1, except = listOf("c2") + (1 until PresencePolicy.MAX_EXCEPT).map { "x$it" })
-        show(PresenceSettingsUiState(available = true, policy = full, people = people, loading = false))
+        show(PresenceSettingsUiState(policy = full, people = people, loading = false))
         rule.onNodeWithTag("presence_person_c1").performScrollTo().assertIsNotEnabled()
         rule.onNodeWithTag("presence_person_c2").performScrollTo().assertIsEnabled()
     }
@@ -246,7 +246,7 @@ class PresenceSettingsTest {
     }
 
     @Test
-    fun theRowIsInPrivacyOnlyWhereTheVaultHasPresence() {
+    fun theRowIsInPrivacyOnceThePolicyIsRead() {
         var opened = 0
         settings(true) { opened++ }
         rule.onNodeWithTag("presence_row").performScrollTo().assertIsDisplayed()
@@ -256,7 +256,7 @@ class PresenceSettingsTest {
     }
 
     @Test
-    fun noRowWithoutPresence() {
+    fun noRowUntilThePolicyIsRead() {
         settings(false)
         assertEquals(0, rule.onAllNodesWithTag("presence_row").fetchSemanticsNodes().size)
     }
