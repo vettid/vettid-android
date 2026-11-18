@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Votes where there are none (a screen's default, so that it needs no vault of votes to be built): empty, never available,
- * and every request is "not supported". Nothing is shown and nothing is sent.
+ * Votes where there are none (a screen's default, so that it needs no vault of votes to be built): empty, and every request
+ * is "not supported". Nothing is shown and nothing is sent.
  */
 @Suppress("TooManyFunctions")
 object NoVotes : VotesRepository {
@@ -17,7 +17,6 @@ object NoVotes : VotesRepository {
     override val reconnect: StateFlow<List<ReconnectEntry>> = MutableStateFlow<List<ReconnectEntry>>(emptyList()).asStateFlow()
     override val dropped: StateFlow<List<DroppedNotice>> = MutableStateFlow<List<DroppedNotice>>(emptyList()).asStateFlow()
     override val problems: StateFlow<List<ProblemsNotice>> = MutableStateFlow<List<ProblemsNotice>>(emptyList()).asStateFlow()
-    override val availability: StateFlow<VotesAvailability> = MutableStateFlow(VotesAvailability.UNSUPPORTED).asStateFlow()
     override val load: StateFlow<ListLoad> = MutableStateFlow(ListLoad.NOT_LOADED).asStateFlow()
     override val hints: StateFlow<Map<String, VoteHint>> = MutableStateFlow<Map<String, VoteHint>>(emptyMap()).asStateFlow()
     override val windowNotClosed: StateFlow<WindowNotClosed?> = MutableStateFlow<WindowNotClosed?>(null).asStateFlow()

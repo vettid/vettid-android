@@ -256,7 +256,6 @@ class VotesManagerTest {
         }
         val m = manager(ops)
         m.refresh()
-        assertEquals(VotesAvailability.AVAILABLE, m.availability.value)
         assertEquals(ListLoad.LOADED, m.load.value)
         // Two services with the same proposal id are two votes.
         assertEquals(listOf("conn-1/$PID", "conn-2/$PID"), m.votes.value.map { it.key })
@@ -274,8 +273,13 @@ class VotesManagerTest {
         assertTrue(t.startsWith("Budget"))
     }
 
+    /**
+     * Every vault the app talks to has votes (the app requires the vault's current release): `unsupported_type` from
+     * `vote.list` is a failure like any other. It is thrown, the list is FAILED (not an empty LOADED list), and the next read,
+     * quiet or not, asks again, with no unlock in between.
+     */
     @Test
-    fun aVaultWithoutVotesIsAskedAgainOnlyAfterTheNextUnlock() = runTest {
+    fun unsupportedTypeIsAFailureLikeAnyOtherAndTheNextReadAsksAgain() = runTest {
         val ops = Ops().apply { refuse["list"] = "unsupported_type" }
         val m = manager(ops)
         try {
@@ -284,17 +288,68 @@ class VotesManagerTest {
         } catch (e: VaultFailure) {
             assertEquals(FailureKind.NOT_SUPPORTED, e.kind)
         }
-        assertEquals(VotesAvailability.UNSUPPORTED, m.availability.value)
+        assertEquals(ListLoad.FAILED, m.load.value)
         m.refreshQuietly()
-        m.refresh()
         advanceUntilIdle()
-        assertEquals(1, ops.calls.count { it == "list" })
-        m.clear()
-        assertEquals(VotesAvailability.UNKNOWN, m.availability.value)
+        eventually { synchronized(ops) { ops.calls.count { it == "list" } } >= 2 }
         ops.refuse.clear()
         ops.list = listing(summary())
         m.refresh()
-        assertEquals(VotesAvailability.AVAILABLE, m.availability.value)
+        assertEquals(3, ops.calls.count { it == "list" })
+        assertEquals(ListLoad.LOADED, m.load.value)
+        assertEquals(listOf("$CONN/$PID"), m.votes.value.map { it.key })
+    }
+
+    /**
+     * With no availability flag, the generation is what voids a list answered after a lock or a hold: it is taken before the
+     * vault is asked, so a `clear()` while `vote.list` is out leaves nothing of the answer (no vote, no reconnect entry, not
+     * LOADED), and the next read applies normally.
+     */
+    @Test
+    fun aListAnsweredAfterALockIsNotApplied() = runTest {
+        val ops = Ops().apply {
+            list = obj("""{"votes":[${summary()}],"dropped":[{"connection_id":"c1","count":1,"last_at":"2026-11-01T10:00:00.000Z"}],"problems":[{"connection_id":"c1","count":16}],"reconnect":[{"connection_id":"c2","service_id":"svc","name":"Example Org"}]}""")
+            listGate = CompletableDeferred()
+        }
+        val m = manager(ops)
+        val read = async { m.refresh() }
+        eventually { synchronized(ops) { ops.calls.count { it == "list" } } == 1 }
+        m.clear()
+        ops.listGate!!.complete(Unit)
+        read.await()
+        assertTrue(m.votes.value.isEmpty())
+        assertTrue(m.reconnect.value.isEmpty())
+        assertTrue(m.dropped.value.isEmpty())
+        assertTrue(m.problems.value.isEmpty())
+        assertEquals(ListLoad.NOT_LOADED, m.load.value)
+        assertEquals(VotesEntry(), VoteRules.entry(m.votes.value, m.reconnect.value))
+        ops.listGate = null
+        m.refresh()
+        assertEquals(listOf("$CONN/$PID"), m.votes.value.map { it.key })
+        assertEquals(ListLoad.LOADED, m.load.value)
+    }
+
+    /** A sync whose list read a lock voided goes no further: nothing is fetched from the site and nothing is sent. */
+    @Test
+    fun aSyncWhoseListReadALockVoidedFetchesAndSendsNothing() = runTest {
+        val ops = Ops().apply {
+            list = listing(summary())
+            listGate = CompletableDeferred()
+        }
+        val site = Site().apply { answers["index.json"] = ok("[]") }
+        val m = manager(ops, site)
+        val run = async { m.syncOnce() }
+        eventually { synchronized(ops) { ops.calls.count { it == "list" } } == 1 }
+        m.clear()
+        ops.listGate!!.complete(Unit)
+        run.await()
+        assertTrue(site.reads.isEmpty())
+        assertEquals(listOf("list"), ops.calls)
+        // The same run after a read that was applied goes on to the site.
+        ops.listGate = null
+        m.syncOnce()
+        assertTrue(site.reads.isNotEmpty())
+        assertTrue(ops.calls.contains("sync"))
     }
 
     @Test

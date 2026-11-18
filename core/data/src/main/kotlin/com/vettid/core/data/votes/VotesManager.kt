@@ -56,9 +56,6 @@ import kotlinx.serialization.json.put
 import java.time.Duration
 import java.time.Instant
 
-/** Whether the vault has the votes feature (VAULT-MESSAGING §10.19.1): learned from `vote.list`, asked again after an unlock. */
-enum class VotesAvailability { UNKNOWN, AVAILABLE, UNSUPPORTED }
-
 /** The lock after a cast failed; [ttlSeconds] is the vault's `credential.unlock_ttl_seconds` (30–3,600), when the app knows it. */
 data class WindowNotClosed(val ttlSeconds: Long?)
 
@@ -147,7 +144,6 @@ interface VotesRepository {
     val reconnect: StateFlow<List<ReconnectEntry>>
     val dropped: StateFlow<List<DroppedNotice>>
     val problems: StateFlow<List<ProblemsNotice>>
-    val availability: StateFlow<VotesAvailability>
     val load: StateFlow<ListLoad>
 
     /** What the app itself knows of each vote, by [VoteSummary.key]. */
@@ -316,7 +312,6 @@ class VotesManager(
     private val reconnectFlow = MutableStateFlow<List<ReconnectEntry>>(emptyList())
     private val droppedFlow = MutableStateFlow<List<DroppedNotice>>(emptyList())
     private val problemsFlow = MutableStateFlow<List<ProblemsNotice>>(emptyList())
-    private val availabilityFlow = MutableStateFlow(VotesAvailability.UNKNOWN)
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
     private val hintsFlow = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
     private val windowNotClosedFlow = MutableStateFlow<WindowNotClosed?>(null)
@@ -359,7 +354,6 @@ class VotesManager(
     override val reconnect: StateFlow<List<ReconnectEntry>> = reconnectFlow.asStateFlow()
     override val dropped: StateFlow<List<DroppedNotice>> = droppedFlow.asStateFlow()
     override val problems: StateFlow<List<ProblemsNotice>> = problemsFlow.asStateFlow()
-    override val availability: StateFlow<VotesAvailability> = availabilityFlow.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     override val hints: StateFlow<Map<String, VoteHint>> = hintsFlow.asStateFlow()
     override val windowNotClosed: StateFlow<WindowNotClosed?> = windowNotClosedFlow.asStateFlow()
@@ -371,7 +365,6 @@ class VotesManager(
             generation++
             queued = false
             loadState.value = ListLoad.NOT_LOADED
-            availabilityFlow.value = VotesAvailability.UNKNOWN
             votesFlow.value = emptyList()
             reconnectFlow.value = emptyList()
             droppedFlow.value = emptyList()
@@ -395,19 +388,25 @@ class VotesManager(
     }
 
     override fun refreshQuietly() {
-        if (queued || availabilityFlow.value == VotesAvailability.UNSUPPORTED) return
+        if (queued) return
         queued = true
         scope.launch { runCatching { read(fromQueue = true) } }
     }
 
-    override suspend fun refresh() = read(fromQueue = false)
+    override suspend fun refresh() {
+        read(fromQueue = false)
+    }
 
+    /**
+     * Reads `vote.list` and applies it. Returns whether it was applied: false when a lock or a hold ([clear]) came while it
+     * was out, which voids it (nothing of it is written). Every vault the app talks to has votes (the app requires the vault's
+     * current release), so `unsupported_type` is a failure like any other: thrown, the list FAILED, and the next read asks again.
+     */
     @Suppress("CyclomaticComplexMethod", "LongMethod")
-    private suspend fun read(fromQueue: Boolean) {
-        reads.withLock {
+    private suspend fun read(fromQueue: Boolean): Boolean {
+        return reads.withLock {
             if (fromQueue) queued = false
-            // A vault without the feature is asked again only after the next unlock (§10.19.8).
-            if (availabilityFlow.value == VotesAvailability.UNSUPPORTED) return@withLock
+            // Taken before anything is asked of the vault: a clear() from here on voids the answer.
             val gen = synchronized(lock) { generation }
             val epoch = storeEpochNow()
             val before = loadState.value
@@ -425,10 +424,10 @@ class VotesManager(
                     after = page.next
                     pages++
                 } while (after != null && pages < MAX_PAGES)
-                val head = first ?: return@withLock
+                val head = checkNotNull(first)
                 val shown = all.distinctBy { it.key }
                 synchronized(lock) {
-                    if (gen != generation) return@withLock
+                    if (gen != generation) return@withLock false
                     votesFlow.value = shown
                     reconnectFlow.value = head.reconnect
                     droppedFlow.value = head.dropped
@@ -436,7 +435,6 @@ class VotesManager(
                     listVersion = head.listVersion
                     listSha256 = head.listSha256
                     pendingAck.removeAll(acks.toSet())
-                    availabilityFlow.value = VotesAvailability.AVAILABLE
                     loadState.value = ListLoad.LOADED
                     hintsFlow.value = hintsFor(shown, hintsFlow.value)
                 }
@@ -445,6 +443,7 @@ class VotesManager(
                     forgetAttempts(epoch) { a -> shown.none { it.key == a.key && !finalCheck(it.check?.state) } }
                     forgetRecheckStamps(epoch, shown.mapTo(HashSet()) { it.key })
                 }
+                true
             } catch (e: CancellationException) {
                 synchronized(lock) { if (gen == generation) cutOff(before) }
                 throw e
@@ -453,14 +452,7 @@ class VotesManager(
                 val cut = !currentCoroutineContext().isActive
                 synchronized(lock) {
                     if (gen == generation) {
-                        if (cut) {
-                            cutOff(before)
-                        } else if (e.kind == FailureKind.NOT_SUPPORTED) {
-                            availabilityFlow.value = VotesAvailability.UNSUPPORTED
-                            loadState.value = ListLoad.LOADED
-                        } else {
-                            loadState.value = ListLoad.FAILED
-                        }
+                        if (cut) cutOff(before) else loadState.value = ListLoad.FAILED
                     }
                 }
                 throw e
@@ -640,8 +632,8 @@ class VotesManager(
     suspend fun syncOnce() {
         if (!site.configured) return
         syncs.withLock {
-            read(fromQueue = false)
-            if (availabilityFlow.value != VotesAvailability.AVAILABLE) return@withLock
+            // A list read voided by a lock or a hold: nothing more of this run (the next unlock starts the sync again).
+            if (!read(fromQueue = false)) return@withLock
             var first: VaultFailure? = null
             suspend fun stage(block: suspend () -> Unit) {
                 try {
