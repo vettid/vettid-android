@@ -134,7 +134,8 @@ data class UnlockUiState(
      * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
      * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
      * or `transfer_incomplete` refusal included) and by a new release check. Also set when this phone has no usable
-     * `user_guid` (`no_user_guid`, decided here before anything is sent), which no update will add.
+     * `user_guid` (`no_user_guid`, decided here before anything is sent), which no update will add: a new release
+     * check clears it too, and the next try sets it again.
      */
     val keysGone: Boolean = false,
     /**
@@ -509,8 +510,10 @@ class UnlockViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
                 is UnlockAttempt.Failed -> {
-                    // No user_guid: the recover-or-erase notice says it all ([keysGone]); no failure text of its own.
-                    val message = if (r.code == UnlockAttempt.CODE_NO_USER_GUID) null else unlockFailedMessage(r, s.keptTransfer)
+                    // No user_guid: the recover-or-erase notice says it all ([keysGone]), so no failure text of its own; but
+                    // while a kept check waits that notice is not shown, and the failure is said instead.
+                    val noticeShown = r.code == UnlockAttempt.CODE_NO_USER_GUID && !s.keptCheckWaiting
+                    val message = if (noticeShown) null else unlockFailedMessage(r, s.keptTransfer)
                     state.update { it.copy(busy = false, pin = "", message = message) }
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)

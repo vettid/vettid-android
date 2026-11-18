@@ -72,6 +72,20 @@ class UnlockKeysGoneTest {
         assertTrue(vm.uiState.value.eraseConfirm)
     }
 
+    /** While a kept check waits, the recover-or-erase notice is not shown, so the failure itself is said. */
+    @Test
+    fun aPhoneWithoutAUserGuidIsToldWhileAKeptCheckWaits() = runTest {
+        vault.transferCheckWaiting.value = true
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.eraseOffered)
+        assertTrue(vm.uiState.value.message != null)
+    }
+
     /** The offer goes with any other answer of the vault, and stays through a network failure. */
     @Test
     fun aPhoneWithoutTheKeysKeepsTheOfferUntilTheVaultAnswersOtherwise() = runTest {
