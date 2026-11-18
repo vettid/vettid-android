@@ -3776,9 +3776,6 @@ class VaultDevice private constructor(
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)
         internal val EMPTY = JsonObject(emptyMap())
-        private const val USER_GUID_MAX = 128
-        private const val PRINTABLE_MIN = 0x21
-        private const val PRINTABLE_MAX = 0x7e
 
         /** The unlock result of §11.7.1 (0.27.0): the release does not accept the signer recorded for this key. */
         const val CODE_SIGNER_REFUSED = "signer_refused"
@@ -3794,11 +3791,10 @@ class VaultDevice private constructor(
         }
 
         /**
-         * A `user_guid` this phone may use (VAULT-MESSAGING §6.7.1, §11.4): 1–128 printable ASCII characters (0x21–0x7E),
-         * so that it fits the unlock's signing string. The one check for a transfer's answer and for every stored value
-         * read back (a record written by an older app build, or damaged): any other value is no `user_guid` (fail closed).
+         * A `user_guid` this phone may use (VAULT-MESSAGING §6.7.1, §11.4): [com.vettid.core.altchan.UserGuids.valid], the
+         * one check for every `user_guid` that enters the app and every stored value read back (fail closed).
          */
-        fun validUserGuid(g: String): Boolean = g.length in 1..USER_GUID_MAX && g.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX }
+        fun validUserGuid(g: String): Boolean = com.vettid.core.altchan.UserGuids.valid(g)
 
         /**
          * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that
