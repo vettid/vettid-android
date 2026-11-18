@@ -33,10 +33,10 @@ internal class FinishMoveRunner(
     private val finishingFlow = MutableStateFlow(false)
     val finishing: StateFlow<Boolean> = finishingFlow.asStateFlow()
 
-    private val failureFlow = MutableStateFlow<FailureKind?>(null)
+    private val failureFlow = MutableStateFlow<MoveFailure?>(null)
 
     /** Why the last run did not open the vault; null after a success, [clearFailure] or before any run. */
-    val failure: StateFlow<FailureKind?> = failureFlow.asStateFlow()
+    val failure: StateFlow<MoveFailure?> = failureFlow.asStateFlow()
 
     fun clearFailure() {
         failureFlow.value = null
@@ -75,9 +75,9 @@ internal class FinishMoveRunner(
             // Recorded for the unlock screen, then rethrown. A cancellation comes only from the manager's own scope ending
             // (the process): nothing is left to tell then.
             when (e) {
-                is VaultFailure -> failureFlow.value = e.kind
+                is VaultFailure -> failureFlow.value = MoveFailure(e.kind, e.code)
                 is CancellationException -> Unit
-                else -> failureFlow.value = FailureKind.OTHER
+                else -> failureFlow.value = MoveFailure(FailureKind.OTHER)
             }
             throw e
         } finally {

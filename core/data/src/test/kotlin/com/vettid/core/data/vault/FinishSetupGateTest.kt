@@ -22,11 +22,16 @@ class FinishSetupGateTest {
     @Test
     fun theFailureOfAMoveThatDidNotFinish() {
         assertNull(FinishSetupGate.failureOf(UnlockAttempt.Success))
-        assertEquals(FailureKind.BAD_PIN, FinishSetupGate.failureOf(UnlockAttempt.BadPin(0)))
-        assertEquals(FailureKind.BACKOFF, FinishSetupGate.failureOf(UnlockAttempt.Backoff(30)))
+        assertEquals(MoveFailure(FailureKind.BAD_PIN), FinishSetupGate.failureOf(UnlockAttempt.BadPin(0)))
+        assertEquals(MoveFailure(FailureKind.BACKOFF), FinishSetupGate.failureOf(UnlockAttempt.Backoff(30)))
         assertEquals(
-            FailureKind.TRANSFER_INCOMPLETE,
+            MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete"),
             FinishSetupGate.failureOf(UnlockAttempt.Failed(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete")),
+        )
+        // The unlock guard's own refusal keeps its code, so the unlock screen can tell it apart.
+        assertEquals(
+            MoveFailure(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID),
+            FinishSetupGate.failureOf(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)),
         )
     }
 }

@@ -45,6 +45,11 @@ data class FinishMoveUiState(
     val done: Boolean = false,
     val failure: FailureKind? = null,
     /**
+     * The unlock found no usable user_guid on this phone (`no_user_guid`): it can never open the vault, so the
+     * recover-or-erase text of the unlock screen, not "does not support this yet".
+     */
+    val noUserGuid: Boolean = false,
+    /**
      * (VAULT-MESSAGING 0.45.0 §11.14.9 step 2) A PIN or password change is being decided, or the PIN is uncertain: no
      * lock and unlock with a PIN typed here until it is (the gate's text); null when the move can be finished.
      */
@@ -53,7 +58,8 @@ data class FinishMoveUiState(
     /** The PIN field can be used: not held, not running, not done. */
     val pinAllowed: Boolean get() = held == null && !busy && !done
 
-    override fun toString(): String = "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, held=$held)"
+    override fun toString(): String =
+        "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, noUserGuid=$noUserGuid, held=$held)"
 }
 
 /**
@@ -88,7 +94,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
     }
 
-    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null) }
+    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null, noUserGuid = false) }
 
     fun finish() {
         val s = state.value
@@ -98,17 +104,18 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         // Handed over: the keypad empties, so that a PIN refused as typed before a change is typed again.
         set { it.copy(busy = true, failure = null, pin = "") }
         viewModelScope.launch {
+            var noGuid = false
             val failure = try {
                 when (val r = vault.finishMove(pin, taken)) {
                     UnlockAttempt.Success -> null
-                    is UnlockAttempt.Failed -> r.kind
+                    is UnlockAttempt.Failed -> r.kind.also { noGuid = isNoUserGuid(r) }
                     is UnlockAttempt.BadPin -> FailureKind.BAD_PIN
                     else -> FailureKind.OTHER
                 }
             } catch (e: VaultFailure) {
                 e.kind
             }
-            set { it.copy(busy = false, done = failure == null, failure = failure) }
+            set { it.copy(busy = false, done = failure == null, failure = failure, noUserGuid = noGuid) }
         }
     }
 
@@ -149,11 +156,20 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             )
         }
         state.failure?.let {
-            NoticeCard(
-                kind = NoticeKind.WARNING,
-                title = stringResource(R.string.onboarding_finish_move_title),
-                body = failureText(it.messageRes()),
-            )
+            if (state.noUserGuid) {
+                NoticeCard(
+                    kind = NoticeKind.URGENT,
+                    title = stringResource(R.string.unlock_stuck_title),
+                    body = stringResource(R.string.unlock_stuck_body),
+                    modifier = Modifier.testTag("finish_move_no_user_guid"),
+                )
+            } else {
+                NoticeCard(
+                    kind = NoticeKind.WARNING,
+                    title = stringResource(R.string.onboarding_finish_move_title),
+                    body = failureText(it.messageRes()),
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
             TextButton(onClick = onDone, enabled = !state.busy, modifier = Modifier.testTag("finish_move_later")) {
