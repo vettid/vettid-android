@@ -133,7 +133,8 @@ data class UnlockUiState(
      * This phone no longer holds the vault's keys (`device_secret`): erase-or-recover is offered, "Recover your vault"
      * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
      * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
-     * or `transfer_incomplete` refusal included) and by a new release check.
+     * or `transfer_incomplete` refusal included) and by a new release check. Also set when this phone has no usable
+     * `user_guid` (`no_user_guid`, decided here before anything is sent), which no update will add.
      */
     val keysGone: Boolean = false,
     /**
@@ -508,7 +509,9 @@ class UnlockViewModel @Inject constructor(
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
                 is UnlockAttempt.Failed -> {
-                    state.update { it.copy(busy = false, pin = "", message = unlockFailedMessage(r, s.keptTransfer)) }
+                    // No user_guid: the recover-or-erase notice says it all ([keysGone]); no failure text of its own.
+                    val message = if (r.code == UnlockAttempt.CODE_NO_USER_GUID) null else unlockFailedMessage(r, s.keptTransfer)
+                    state.update { it.copy(busy = false, pin = "", message = message) }
                     // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
                     if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
                 }
@@ -532,6 +535,9 @@ class UnlockViewModel @Inject constructor(
      */
     private fun keysGoneAfter(r: UnlockAttempt, before: Boolean): Boolean = when {
         r is UnlockAttempt.Failed && r.kind == FailureKind.DEVICE_SECRET -> true
+        // No usable user_guid (a move an older build completed without one, or a damaged record): nothing will ever add it,
+        // so this phone cannot unlock; the same recover-or-erase notice (owner decision a, 2026-11-18).
+        r is UnlockAttempt.Failed && r.code == UnlockAttempt.CODE_NO_USER_GUID -> true
         r is UnlockAttempt.Failed && r.kind in TRANSIENT_FAILURES -> before
         else -> false
     }

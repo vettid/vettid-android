@@ -50,6 +50,28 @@ class UnlockKeysGoneTest {
         assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
     }
 
+    /**
+     * A phone with no usable user_guid (a move an older build completed without one) can never unlock: the same
+     * recover-or-erase notice, no failure text of its own (owner decision a, 2026-11-18).
+     */
+    @Test
+    fun aPhoneWithoutAUserGuidGetsTheRecoverOrEraseNotice() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        repeat(2) {
+            vm.setPin("40281795")
+            vm.submit()
+            advanceUntilIdle()
+            assertTrue(vm.uiState.value.keysGone)
+            assertTrue(vm.uiState.value.eraseOffered)
+            assertEquals(null, vm.uiState.value.message)
+        }
+        vm.askErase()
+        assertTrue(vm.uiState.value.eraseConfirm)
+    }
+
     /** The offer goes with any other answer of the vault, and stays through a network failure. */
     @Test
     fun aPhoneWithoutTheKeysKeepsTheOfferUntilTheVaultAnswersOtherwise() = runTest {

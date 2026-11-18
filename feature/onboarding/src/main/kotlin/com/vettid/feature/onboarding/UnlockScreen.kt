@@ -389,7 +389,6 @@ fun UnlockContent(
                                 openedThenLocked(m.kind, m.code) && m.code == MoveRepository.CODE_LOCK_PENDING ->
                                     stringResource(R.string.unlock_lock_pending)
                                 openedThenLocked(m.kind, m.code) -> stringResource(R.string.unlock_not_opened)
-                                m.code == UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
                                 // ANDROID-PLAN 0.1.54 point 6: still routed to release N after the retries.
                                 m.kind == FailureKind.ROUTE_PENDING ->
                                     stringResource(R.string.release_update_route_pending, state.move?.toNumber?.toInt() ?: 0)
