@@ -1,5 +1,7 @@
 package com.vettid.feature.onboarding
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -30,9 +32,16 @@ class UnlockStuckTest {
     private val asked = mutableListOf<String>()
 
     /** Records which action the screen asked for. */
-    private val actions = Proxy.newProxyInstance(UnlockActions::class.java.classLoader, arrayOf(UnlockActions::class.java)) { _, m, _ ->
-        asked += m.name
-        null
+    private val actions = Proxy.newProxyInstance(UnlockActions::class.java.classLoader, arrayOf(UnlockActions::class.java)) { p, m, args ->
+        when (m.name) {
+            // A recomposition compares the actions.
+            "equals" -> p === args?.firstOrNull()
+            "hashCode" -> System.identityHashCode(p)
+            else -> {
+                asked += m.name
+                null
+            }
+        }
     } as UnlockActions
 
     private val release = ReleaseView(3, "aa".repeat(48), "active", null, "")
@@ -160,5 +169,29 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_recover_only").assertExists()
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
         rule.onNodeWithTag("erase_confirm").assertDoesNotExist()
+    }
+
+    /**
+     * No usable user_guid: with the notice shown its words are not repeated; while a kept check waits (no notice, no
+     * erase) the notice's words alone, with no Recover or Erase.
+     */
+    @Test
+    fun aPhoneWithoutAUserGuidIsToldOnceAndOnlyErasesWithTheNotice() {
+        var state by androidx.compose.runtime.mutableStateOf(keysGone.copy(message = UnlockMessage.NoUserGuid))
+        rule.setContent { UnlockContent(state, actions) }
+        rule.onNodeWithTag("erase_phone").assertExists()
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        state = state.copy(keptTransfer = true, keptCheckWaiting = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithText("This phone cannot open your vault").assertExists()
+        rule.onNodeWithText(
+            "This phone no longer holds your vault's keys. Before you erase VettID here, check on your account site that " +
+                "your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose " +
+                "\"I lost my phone: recover my vault\".",
+        ).assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+        rule.onNodeWithTag("move_back_failed").assertDoesNotExist()
     }
 }

@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
+import com.vettid.core.vault.TransferWithoutUserGuidException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -22,6 +23,12 @@ import java.time.Instant
 internal interface SettleDevice {
     val transferInPending: TransferInState?
     val deviceId: String?
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) The handler dropped the transfer for a `device.paired` without a valid `user_guid`
+     * ([com.vettid.core.vault.VaultDevice.droppedNoUserGuid]): the vault moved, so the settlement ends as that failure.
+     */
+    val droppedNoUserGuid: Boolean
 
     /** Whether the device's own collection is running (it long-polls already). */
     val collecting: Boolean
@@ -128,6 +135,9 @@ internal suspend fun settleTransfer(
     val ended = !paired && !run.dropped && (run.mailboxGone || !sessionIsCurrent())
     // A mailbox that is gone leaves nothing to wait for: the dead handshake goes, so that a new code or a recovery is possible.
     if (run.mailboxGone && !paired) run.started?.let { d.abandonTransfer(onlyStartedAt = it) }
+    // (§6.7.1) The handler dropped this transfer for its user_guid, also between the window's last look and our drop
+    // (whose abandon then found nothing): never "dropped, nothing changed", since the vault moved.
+    if (!paired && d.droppedNoUserGuid) throw TransferWithoutUserGuidException()
     val undecided = !paired && !run.dropped && !run.mailboxGone
     if (undecided && sessionIsCurrent()) lookForRejection(d)
     return outcome(d, ended)

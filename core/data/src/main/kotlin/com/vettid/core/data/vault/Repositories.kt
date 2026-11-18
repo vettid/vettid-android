@@ -572,17 +572,24 @@ interface MoveRepository {
      * [FailureKind.NO_RESPONSE] with [CODE_TRANSFER_DROPPED] at the 11-minute deadline, after collecting for the settlement
      * window (the relay's advertised visibility timeout + the 25 s long-poll cap + 5 s, about 90 s;
      * A6 audit N1, VAULT-MESSAGING 0.56.2 §11.14.10 rule 5 erratum, owner decision a,
-     * 2026-11-05; RELAY-PROTOCOL §6.3). True when the vault gave this phone the member's
-     * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
-     * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
+     * 2026-11-05; RELAY-PROTOCOL §6.3). The vault's `device.paired` must carry the member's `user_guid`
+     * (VAULT-MESSAGING §6.7.1), which this phone's unlocks need: without a valid one the transfer failed and was
+     * dropped on this phone, [FailureKind.RETRY] with [CODE_TRANSFER_SESSION_ENDED].
      */
-    suspend fun awaitTransferIn(): Boolean
+    suspend fun awaitTransferIn()
 
     /**
      * (A6 audit N1) The transfer to this phone that waits for the old phone's approval (after a restart, or after the
      * screen was left), or null. Its wait goes on from when its `hs.init` went out.
      */
     suspend fun transferInWaiting(): TransferInWaiting? = null
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) True once when the last transfer to this phone was dropped for a `device.paired` without a
+     * valid `user_guid` and the member was not told (the process ended first): the screen then says the move stopped
+     * ([CODE_TRANSFER_SESSION_ENDED]'s screen). Reading it clears it; so does a new scan.
+     */
+    suspend fun takeTransferStopped(): Boolean = false
 
     /**
      * Drops a transfer this phone started and has not completed. (A6 audit N1) Only on the member's confirmed cancel:
@@ -693,7 +700,8 @@ interface MoveRepository {
          * (VAULT-MESSAGING 0.85.2 §11.14.10 rule 5, ANDROID-PLAN 0.1.121 (vettid.org #537))
          * [awaitTransferIn]'s settlement window was cut short because the session went away
          * (a wipe, a forget, a sign-out, a dead mailbox), with [FailureKind.RETRY]: the transfer was not dropped by it;
-         * the screen offers a new code or a recovery.
+         * the screen offers a new code or a recovery. Also a transfer whose `device.paired` had no valid `user_guid`
+         * (VAULT-MESSAGING §6.7.1): dropped on this phone, though the vault may have moved to it (a recovery).
          */
         const val CODE_TRANSFER_SESSION_ENDED = "transfer_session_ended"
 

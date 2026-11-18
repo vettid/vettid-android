@@ -35,7 +35,14 @@ class TransferSettlementTest {
 
     private class FakeDevice(var pending: TransferInState?, private val scope: TestScope) : SettleDevice {
         override val transferInPending get() = pending
+        override var droppedNoUserGuid = false
         override var deviceId: String? = null
+
+        /** The handler drops the transfer for a device.paired without a valid user_guid: at this time in a collect. */
+        var noGuidAtMs: Long? = null
+
+        /** The same, but between the window's last look and our drop: the drop then finds nothing to drop. */
+        var noGuidBeforeDrop = false
         override var collecting = false
         override var collectorCuts = 0L
         override var collectorLastSendAgeMs: Long? = null
@@ -67,6 +74,7 @@ class TransferSettlementTest {
             waits += wait
             if (mailboxGone) throw RelayException(404, RelayException.MAILBOX_UNKNOWN, "gone")
             delay(wait.toMillis())
+            if (noGuidAtMs?.let { scope.testScheduler.currentTime >= it } == true) handlerDropsForNoGuid()
             val p = pairedAtMs
             val lease = leaseEndsAtMs
             val free = lease != null && collectorCuts > 0 && scope.testScheduler.currentTime >= lease
@@ -76,7 +84,14 @@ class TransferSettlementTest {
             }
         }
 
+        private fun handlerDropsForNoGuid() {
+            pending = null
+            droppedNoUserGuid = true
+        }
+
         override suspend fun abandonTransfer(onlyStartedAt: Instant) {
+            // The handler held the device's lock first (it handled the device.paired after the window's last look).
+            if (noGuidBeforeDrop) handlerDropsForNoGuid()
             abandoned += onlyStartedAt
             if (pending?.startedAt == onlyStartedAt && deviceId == null) pending = null
         }
@@ -294,5 +309,26 @@ class TransferSettlementTest {
         testScheduler.runCurrent()
         assertTrue("the failure with nobody waiting cancelled nothing", job.isActive)
         job.cancel()
+    }
+
+    /**
+     * (VAULT-MESSAGING §6.7.1) The handler drops the transfer for a device.paired without a valid user_guid: the vault
+     * moved, so the settlement never ends as "dropped, nothing changed" (TIMED_OUT), whether the drop came during the
+     * window or between its last look and the settlement's own drop (which then finds nothing to drop).
+     */
+    @Test
+    fun aTransferDroppedForItsUserGuidEndsAsThatFailureNotAsDropped() = runTest {
+        val during = FakeDevice(shown, this).apply { noGuidAtMs = 10_000 }
+        val r1 = runCatching { settle(during) }
+        assertTrue("during the window: ${r1.getOrNull()}", r1.exceptionOrNull() is com.vettid.core.vault.TransferWithoutUserGuidException)
+        val race = FakeDevice(shown, this).apply { noGuidBeforeDrop = true }
+        val r2 = runCatching { settle(race) }
+        assertTrue(
+            "between the last look and the drop: ${r2.getOrNull()}",
+            r2.exceptionOrNull() is com.vettid.core.vault.TransferWithoutUserGuidException,
+        )
+        assertEquals("our drop ran, and found nothing", listOf(at), race.abandoned)
+        // A plain drop is still a drop.
+        assertEquals(Settled.Dropped, settle(FakeDevice(shown, this)))
     }
 }
