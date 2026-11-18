@@ -4,6 +4,7 @@ import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.CollectorCut
 import com.vettid.core.vault.TransferInState
 import com.vettid.core.vault.TransferWithoutUserGuidException
+import com.vettid.core.vault.VaultDevice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
@@ -48,9 +49,9 @@ internal object TransferInResume {
         DROP,
 
         /**
-         * (VAULT-MESSAGING §6.7.1) Paired, but stored without the member's `user_guid` by an older app build (this one never
-         * applies such a `device.paired`): never completed, and nothing is taken over. The phone fails closed at the unlock
-         * (`no_user_guid`, [UnlockAttempt.CODE_NO_USER_GUID]).
+         * (VAULT-MESSAGING §6.7.1) Paired, but stored without a valid `user_guid` ([completingGuid]: an older app build's
+         * record, or a damaged one; this build never applies such a `device.paired`): never completed, and nothing is taken
+         * over. The phone fails closed at the unlock (`no_user_guid`, [UnlockAttempt.CODE_NO_USER_GUID]).
          */
         NO_USER_GUID,
     }
@@ -154,9 +155,39 @@ internal object TransferInResume {
         val holdMarginMs: Long = HOLD_MARGIN_MS,
     )
 
+    /**
+     * (VAULT-MESSAGING §6.7.1, §11.4) The member's `user_guid` a paired transfer completes with: its stored value when it
+     * passes [VaultDevice.validUserGuid], else null (an older app build's record, or a damaged one): never completed.
+     */
+    fun completingGuid(t: TransferInState?): String? =
+        t?.takeIf { it.paired }?.userGuid?.takeIf { VaultDevice.validUserGuid(it) }
+
+    /**
+     * (§11.4) The stored `user_guid` this phone may unlock with, and a transfer completed in the background is taken as
+     * complete with: only one that passes [VaultDevice.validUserGuid]; else null (fail closed: `no_user_guid`).
+     */
+    fun usableGuid(stored: String): String? = stored.takeIf { VaultDevice.validUserGuid(it) }
+
+    /** What the app makes of the transfer on the device after an unlock, while it holds no credential ([withoutCredential]). */
+    sealed interface NoCredential {
+        /** A paired transfer with a valid `user_guid`: completed (the take-over), FINISHING. */
+        data class Complete(val userGuid: String) : NoCredential
+
+        /** A paired transfer without one ([completingGuid]): never completed; the unlock screen, whose guard refuses. */
+        data object Locked : NoCredential
+
+        /** No paired transfer: the credential is created. */
+        data object NeedsCredential : NoCredential
+    }
+
+    fun withoutCredential(t: TransferInState?): NoCredential = when {
+        t?.paired != true -> NoCredential.NeedsCredential
+        else -> completingGuid(t)?.let { NoCredential.Complete(it) } ?: NoCredential.Locked
+    }
+
     fun decide(t: TransferInState?, deviceId: String?, now: Instant): Action = when {
         t == null -> Action.NONE
-        t.paired && deviceId != null -> if (t.userGuid == null) Action.NO_USER_GUID else Action.COMPLETE
+        t.paired && deviceId != null -> if (completingGuid(t) == null) Action.NO_USER_GUID else Action.COMPLETE
         t.sas == null -> Action.DROP
         now.isBefore(t.startedAt.plus(TransferInWait.WAIT)) -> Action.WAIT
         else -> Action.DEADLINE
@@ -619,7 +650,7 @@ internal object TransferInResume {
             Approved(await(TransferInWait.left(started, now())))
         } catch (_: TimeoutCancellationException) {
             // A paired transfer without the member's user_guid (stored by an older app build) is a failed transfer.
-            atDeadline()?.let { Approved(it.userGuid ?: throw TransferWithoutUserGuidException()) }
+            atDeadline()?.let { Approved(completingGuid(it) ?: throw TransferWithoutUserGuidException()) }
         }
     }
 

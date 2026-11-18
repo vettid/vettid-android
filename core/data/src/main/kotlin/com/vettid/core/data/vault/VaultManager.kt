@@ -2097,7 +2097,7 @@ class VaultManager(
         val pendingIn = d.transferInPending
         when (TransferInResume.decide(pendingIn, d.deviceId, Instant.now())) {
             TransferInResume.Action.COMPLETE -> {
-                completeTransferIn(s, record.recordGeneration, checkNotNull(pendingIn?.userGuid))
+                completeTransferIn(s, record.recordGeneration, checkNotNull(TransferInResume.completingGuid(pendingIn)))
                 return@guard AppPhase.Setup(SetupStage.FINISHING)
             }
             // §6.7.1: paired without the member's user_guid (stored by an older app build): never completed, nothing taken
@@ -2153,14 +2153,16 @@ class VaultManager(
         if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
         if (s.device.credentialVersion == null) {
             // (A6 audit N1) A transfer the vault paired takes the credential over; it never creates one (`exists`).
-            s.device.transferInPending?.takeIf { it.paired }?.let { t ->
-                // §6.7.1: never completed without the member's user_guid (a record of an older app build): the unlock
-                // screen, whose guard refuses (`no_user_guid`).
-                val guid = t.userGuid ?: return AppPhase.Locked
-                completeTransferIn(s, record.recordGeneration, guid)
-                return AppPhase.Setup(SetupStage.FINISHING)
+            // §6.7.1: never completed without a valid user_guid (a record of an older app build, or a damaged one): the
+            // unlock screen, whose guard refuses (`no_user_guid`).
+            return when (val step = TransferInResume.withoutCredential(s.device.transferInPending)) {
+                is TransferInResume.NoCredential.Complete -> {
+                    completeTransferIn(s, record.recordGeneration, step.userGuid)
+                    AppPhase.Setup(SetupStage.FINISHING)
+                }
+                TransferInResume.NoCredential.Locked -> AppPhase.Locked
+                TransferInResume.NoCredential.NeedsCredential -> AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
             }
-            return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
         }
         scope.launch { runCatching { refreshAlarm(s) } }
         // §11.11.9: a start-over requested on the portal shows after every unlock.
@@ -2643,9 +2645,11 @@ class VaultManager(
     ): StepOutcome {
         ownerCheck.beginUnlock() // a count kept for an earlier attempt is not carried into this one (ANDROID-PLAN 0.1.96)
         ownerCheck.unlockStarting() // (0.84.0) nor the relay notice and its spent re-read, whatever lock came before
-        // §11.4 needs the member's user_guid. Fail closed without it: a damaged record, or a transfer an older app build
-        // completed without one (this build fails such a transfer, VAULT-MESSAGING §6.7.1).
-        if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
+        // §11.4 needs the member's user_guid, 1-128 printable ASCII. Fail closed without a valid one: a damaged record, or a
+        // transfer an older app build completed without one (this build fails such a transfer, VAULT-MESSAGING §6.7.1).
+        if (TransferInResume.usableGuid(local.userGuid) == null) {
+            return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
+        }
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was
         // typed: any other unlock (the release update's) sends nothing.
         if (!UnlockEpoch.allowed(pinChangeUndecided(), twoStepScreen)) {
@@ -4849,7 +4853,7 @@ class VaultManager(
             // Completed in the background (the settlement started at the start applied it and took the credential over):
             // the same result as a normal completion, not a timeout. Never without the member's user_guid (a transfer an
             // older app build completed without one): a failed transfer here, and the unlock's guard refuses later.
-            val guid = local.userGuid.ifEmpty { throw TransferWithoutUserGuidException() }
+            val guid = TransferInResume.usableGuid(local.userGuid) ?: throw TransferWithoutUserGuidException()
             return@guard completeTransferIn(s, rec, guid).also { publishFinishing(gen) }
         }
         // (VAULT-MESSAGING 0.56.2 §11.14.10 rule 5) One deadline, from the start the device stored just before the hs.init
@@ -4928,6 +4932,7 @@ class VaultManager(
     /** The device as the settlement needs it. */
     private class DeviceSettle(private val d: VaultDevice) : SettleDevice {
         override val transferInPending get() = d.transferInPending
+        override val droppedNoUserGuid get() = d.droppedNoUserGuid
         override val deviceId get() = d.deviceId
         override val collecting get() = d.collecting
         override val collectorCuts get() = d.collectorCuts

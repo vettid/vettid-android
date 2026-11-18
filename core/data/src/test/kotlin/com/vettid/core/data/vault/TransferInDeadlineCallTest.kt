@@ -77,7 +77,7 @@ class TransferInDeadlineCallTest {
         val done = "return@guard completeTransferIn(s, rec, guid)"
         assertTrue("completed in the background: the completed result", wait.any { it.startsWith(done) })
         // Never without the member's user_guid (VAULT-MESSAGING §6.7.1): a failed transfer.
-        val noGuid = "val guid = local.userGuid.ifEmpty { throw TransferWithoutUserGuidException() }"
+        val noGuid = "val guid = TransferInResume.usableGuid(local.userGuid) ?: throw TransferWithoutUserGuidException()"
         assertTrue("completed without a user_guid: failed", wait.any { it == noGuid })
         assertTrue("a transfer with nothing to wait for is not waited for", body("override suspend fun awaitTransferIn()")
             .any { it.contains("MoveRepository.CODE_TRANSFER_SESSION_ENDED") })
@@ -101,9 +101,12 @@ class TransferInDeadlineCallTest {
         assertTrue("a session that went away is no drop", dl.any { it.contains(gone) })
         assertTrue(dl.any { it.contains("d.start(scope)") })
         val after = body("private suspend fun afterUnlocked(")
-        val take = after.indexOfFirst { it.startsWith("s.device.transferInPending?.takeIf { it.paired }") }
-        val create = after.indexOfFirst { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" }
+        // A paired transfer is taken over, never created (TransferInResume.withoutCredential, tested on its own).
+        val take = after.indexOfFirst { it.contains("TransferInResume.withoutCredential(s.device.transferInPending)") }
+        val needs = "TransferInResume.NoCredential.NeedsCredential -> AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)"
+        val create = after.indexOfFirst { it == needs }
         assertTrue("a paired transfer is taken over before NEEDS_CREDENTIAL", take in 0 until create)
+        assertTrue(after.none { it == "return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)" })
     }
 
     /**
@@ -115,10 +118,12 @@ class TransferInDeadlineCallTest {
     @Test
     fun aPhoneWithoutAUserGuidFailsClosed() {
         val unlock = body("private suspend fun unlockStepHeld(")
-        val guard = "if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, " +
-            "UnlockAttempt.CODE_NO_USER_GUID))"
-        val at = unlock.indexOf(guard)
+        val at = unlock.indexOf("if (TransferInResume.usableGuid(local.userGuid) == null) {")
         assertTrue("the unlock's guard is kept", at >= 0)
+        assertEquals(
+            "return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))",
+            unlock[at + 1],
+        )
         val opens = unlock.indexOf("): StepOutcome {")
         assertEquals(
             "only the owner check's counters come before it",
@@ -129,11 +134,15 @@ class TransferInDeadlineCallTest {
         assertEquals("no_user_guid", UnlockAttempt.CODE_NO_USER_GUID)
         val ev = body("private suspend fun evaluate()")
         assertTrue(ev.any { it == "TransferInResume.Action.NO_USER_GUID -> Unit" })
-        assertTrue(ev.any { it == "completeTransferIn(s, record.recordGeneration, checkNotNull(pendingIn?.userGuid))" })
+        val completes = "completeTransferIn(s, record.recordGeneration, checkNotNull(TransferInResume.completingGuid(pendingIn)))"
+        assertTrue(ev.any { it == completes })
         val after = body("private suspend fun afterUnlocked(")
-        val locked = after.indexOf("val guid = t.userGuid ?: return AppPhase.Locked")
-        assertTrue("never completed without a user_guid", locked >= 0)
-        assertEquals(locked + 1, after.indexOfFirst { it.startsWith("completeTransferIn(") })
+        assertTrue(after.any { it == "return when (val step = TransferInResume.withoutCredential(s.device.transferInPending)) {" })
+        assertTrue(after.any { it == "completeTransferIn(s, record.recordGeneration, step.userGuid)" })
+        assertTrue("never completed without a user_guid", after.any { it == "TransferInResume.NoCredential.Locked -> AppPhase.Locked" })
+        assertEquals("completed in one place", 1, after.count { it.startsWith("completeTransferIn(") })
+        // The settlement reads the device's own mark (a drop for the user_guid ends as that failure, never as "dropped").
+        assertTrue(code.any { it == "override val droppedNoUserGuid get() = d.droppedNoUserGuid" })
         val complete = body("private suspend fun completeTransferIn(")
         assertTrue(complete.first().contains("guid: String)"))
         assertFalse(complete.any { it.contains("guid != null") || it.contains("String?") })

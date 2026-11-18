@@ -2591,7 +2591,14 @@ class VaultDeviceTest {
         assertNull(guid("""{"transfer":true,"user_guid":"a b"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":"a\nb"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":"é"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"a\u0007b"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"\u007f"}"""))
         assertNull(guid("""{"transfer":true,"user_guid":7}"""))
+        // The same check for every stored value read back (validUserGuid).
+        for (bad in listOf("", "a".repeat(129), "a b", "é", "a\u0007b", "a\nb", "\u007f", "a\tb", "\uD83D\uDE00")) {
+            assertFalse(bad.map { it.code }.toString(), VaultDevice.validUserGuid(bad))
+        }
+        for (ok in listOf("u1", "a".repeat(128), "!~", "8f14e45f-ceea-467f-a0e6-1e1e2c2b5a3d")) assertTrue(ok, VaultDevice.validUserGuid(ok))
     }
 
     /**
@@ -2700,13 +2707,20 @@ class VaultDeviceTest {
             d.handle(v.transferPaired(d))
             d.stop()
             val saved = String(store.load()!!)
-            assertTrue("\"userGuid\":\"member-0017\"" in saved)
-            store.save(saved.replace(",\"userGuid\":\"member-0017\"", "").toByteArray())
-            val old = VaultDevice.load(config(store), secrets)!!
-            assertTrue(old.transferInPending!!.paired)
-            assertNull(old.transferInPending!!.userGuid)
-            assertTrue(runCatching { old.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is TransferWithoutUserGuidException)
-            assertEquals("dev-2", old.deviceId)
+            val field = ",\"userGuid\":\"member-0017\""
+            assertTrue(field in saved)
+            // None (an older app build's record), or a stored value that is no user_guid (a damaged record).
+            val stored = listOf("") + listOf("", "a".repeat(129), "a b", "é", "a\u0007b", "a\nb", "\u007f").map {
+                ",\"userGuid\":" + kotlinx.serialization.json.JsonPrimitive(it)
+            }
+            for (bad in stored) {
+                store.save(saved.replace(field, bad).toByteArray())
+                val old = VaultDevice.load(config(store), secrets)!!
+                assertTrue(bad, old.transferInPending!!.paired)
+                assertTrue(bad, runCatching { old.awaitTransfer(java.time.Duration.ofMillis(50)) }.exceptionOrNull() is TransferWithoutUserGuidException)
+                assertEquals(bad, "dev-2", old.deviceId)
+                old.stop()
+            }
         }
     }
 

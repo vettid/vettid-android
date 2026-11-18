@@ -1531,16 +1531,19 @@ class VaultDevice private constructor(
     suspend fun awaitTransfer(timeout: Duration): String {
         // (A6 audit N1) Applied by the handler already (a restart, or after the screen stopped waiting): nothing to wait for.
         lock.withLock { st.transferIn?.takeIf { it.paired && st.deviceId != null } }
-            ?.let { return it.userGuid ?: throw TransferWithoutUserGuidException() }
+            ?.let { return it.userGuid?.takeIf { g -> validUserGuid(g) } ?: throw TransferWithoutUserGuidException() }
         // A transfer already dropped for its user_guid ends the wait at once (its mark, before the inbox is searched).
         return awaitPaired(timeout, transfer = true) ?: throw TransferWithoutUserGuidException()
     }
 
     /**
      * The last transfer to this phone was dropped for a `device.paired` without a valid `user_guid` ([dropNoUserGuid]);
-     * cleared when a new transfer starts. Memory only: after a restart that transfer is simply gone.
+     * cleared when a new transfer starts. Memory only: after a restart that transfer is simply gone. Read by the
+     * settlement, whose own drop may find the transfer already dropped by the handler.
      */
-    @Volatile private var droppedNoUserGuid = false
+    @Volatile
+    var droppedNoUserGuid = false
+        private set
 
     /**
      * Drops a transfer this device started and has not completed: on the member's confirmed cancel, when its `hs.init`
@@ -3787,9 +3790,15 @@ class VaultDevice private constructor(
          */
         internal fun transferUserGuid(o: JsonObject): String? {
             if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return null
-            val g = VaultJson.str(o, "user_guid") ?: return null
-            return g.takeIf { it.length in 1..USER_GUID_MAX && it.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX } }
+            return VaultJson.str(o, "user_guid")?.takeIf(::validUserGuid)
         }
+
+        /**
+         * A `user_guid` this phone may use (VAULT-MESSAGING §6.7.1, §11.4): 1–128 printable ASCII characters (0x21–0x7E),
+         * so that it fits the unlock's signing string. The one check for a transfer's answer and for every stored value
+         * read back (a record written by an older app build, or damaged): any other value is no `user_guid` (fail closed).
+         */
+        fun validUserGuid(g: String): Boolean = g.length in 1..USER_GUID_MAX && g.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX }
 
         /**
          * (A6 audit N2) The only types the outbox keeps: messages that are not requests the member waits for, and that
