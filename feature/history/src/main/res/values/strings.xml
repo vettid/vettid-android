@@ -3,7 +3,6 @@
     <string name="history_title">History</string>
     <string name="history_search">Search by name or event</string>
     <string name="history_search_clear">Clear search</string>
-    <string name="history_search_local">Your vault does not search its history yet: this phone searches the entries it loads, by event and connection name.</string>
     <string name="history_searching_older">Searching older entries…</string>
     <string name="history_chain_broken">Your vault\'s history does not match what this phone saw before</string>
     <string name="history_empty_title">No history yet</string>
@@ -103,8 +102,6 @@
     <string name="history_export_alarm_title">Export is not available</string>
     <string name="history_export_alarm">Export is not available while a credential alarm is open.</string>
     <string name="history_export_alarm_open">Open the alarm</string>
-    <string name="history_export_old_vault_title">Export is not available yet</string>
-    <string name="history_export_old_vault">Export needs a newer vault release. It will be offered once your vault is updated.</string>
     <string name="history_export_pin_title">Enter your vault PIN</string>
     <string name="history_export_pin_body">Your vault PIN confirms the export. Your vault records it in your history.</string>
     <string name="history_export_pin_label">Vault PIN</string>

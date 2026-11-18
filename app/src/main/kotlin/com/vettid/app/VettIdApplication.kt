@@ -76,7 +76,7 @@ class VettIdApplication : DistributionApplication() {
 
     /**
      * Injected so that it exists from the start of the process: it is what listens for an incoming call (every build
-     * has calls since 2026-11-14; nothing of calls shows until the vault says it has them).
+     * has calls since 2026-11-14; they show while the vault is open).
      */
     @Inject
     lateinit var calls: CallAccess

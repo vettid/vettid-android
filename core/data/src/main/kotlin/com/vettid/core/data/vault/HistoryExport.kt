@@ -64,8 +64,8 @@ fun AuditFilter.exportFilters(): AuditExportFilters = AuditExportFilters(
 
 /**
  * The member's History export (VAULT-MESSAGING 0.22.0 §10.9, ANDROID-PLAN 0.1.17). Failures are [VaultFailure]s:
- * `credential_frozen` / `rotation_required` while a clone alarm is open (the preview too), `unsupported_type` from a
- * vault before 0.22.0, `not_found` when nothing matches, `bad_pin`, `backoff` with its `retry_after`.
+ * `credential_frozen` / `rotation_required` while a clone alarm is open (the preview too), `not_found` when nothing
+ * matches, `bad_pin`, `backoff` with its `retry_after`, `bad_request` for a request the vault refuses.
  */
 interface HistoryExportRepository {
     /** The dry run: what [filter] matches, without the PIN. */
@@ -117,10 +117,9 @@ internal class VaultAuditExportOps(private val api: VaultApi) : AuditExportOps {
 }
 
 /**
- * [HistoryExportRepository] over [AuditExportOps] and [AuditOps]. The paging reads `audit.list` directly, never
- * with [HistoryManager]'s fallback for an older vault's search: a vault that answered `audit.export` searches, and
- * an export must hold only what its filters match. Entries newer than `upto_seq`, repeated or out of order are
- * dropped: the file holds only what the member confirmed (§10.9, "What the PIN is for").
+ * [HistoryExportRepository] over [AuditExportOps] and [AuditOps]. The paging reads `audit.list` directly with the
+ * export's filters, so the file holds only what they match. Entries newer than `upto_seq`, repeated or out of order
+ * are dropped: the file holds only what the member confirmed (§10.9, "What the PIN is for").
  */
 class HistoryExportManager(
     private val ops: suspend () -> AuditExportOps,

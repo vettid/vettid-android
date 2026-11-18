@@ -27,7 +27,7 @@ data class PlacedCall(
     val formTwo: Boolean = false,
 )
 
-/** The vault refused `call.start` with [code] (`busy`, `not_found`, `owner_check_required`, `unsupported_type`, …). */
+/** The vault refused `call.start` with [code] (`busy`, `not_found`, `owner_check_required`, …). */
 class CallRefusedException(val code: String, cause: Throwable? = null) : IOException("call refused: $code", cause)
 
 /**

@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 
+/** Whether an offer may ring now: it rings, it is refused (counted), or this phone holds it back (not counted). */
+internal enum class RingDecision { RING, REFUSE, HOLD_BACK }
+
 /**
  * [CallSignalling] on the vault. **This is where a call's checks are asked for**: [CallMachine] trusts what comes
  * out of [events], so nothing reaches it that has not been through [CallGateway.incoming] or [CallGateway.accept]
@@ -57,14 +60,14 @@ internal class VaultCallSignalling(
      * from before the unlock is complete, so an offer can arrive in the moments before the app shows the open
      * vault: it rings only once it does, never over the unlock screen.
      */
-    private val mayRing: suspend () -> Boolean = { true },
+    private val mayRing: suspend () -> RingDecision = { RingDecision.RING },
     /**
      * (C2) The connection's identity key as this device's vault gives it (`connection.get`), for a form 2 start: the
      * callee this device names in `m2`, fixed for the call (VAULT-MESSAGING 0.88.16). Null for no such connection.
      */
     private val peerKey: suspend (connectionId: String) -> ByteArray? = { null },
-    /** (C2) Whether the vault is C2, as the `call.list` probe found it. */
-    private val vaultIsC2: () -> Boolean = { false },
+    /** (C2) Whether to call in form 2 and answer with keep-alives: the vault is C2, or not yet known to be older. */
+    private val vaultIsC2: () -> Boolean = { true },
 ) : CallSignalling {
     override val formTwo: Boolean get() = vaultIsC2()
 
@@ -133,10 +136,17 @@ internal class VaultCallSignalling(
     }
 
     /** Rule 1. */
+    @Suppress("ReturnCount", "ThrowsCount") // one way each: refused (counted), held back (not counted), rung
     private suspend fun offer(e: CallEvent.Offer): SignalEvent.Offer? {
         val call = try {
-            // No connection named, or the vault not open on this phone: no ring.
-            val connectionId = e.connectionId?.takeIf { mayRing() } ?: throw CallMessageException("not an offer to ring for")
+            // No connection named, or the vault not open on this phone: no ring, counted as refused. Held back by the
+            // owner check: no ring and not counted (nothing was wrong with the offer).
+            val connectionId = e.connectionId ?: throw CallMessageException("not an offer to ring for")
+            when (mayRing()) {
+                RingDecision.RING -> Unit
+                RingDecision.HOLD_BACK -> return null
+                RingDecision.REFUSE -> throw CallMessageException("not an offer to ring for")
+            }
             gateway.incoming(e.message, identity(connectionId), suites)
         } catch (x: CancellationException) {
             throw x
@@ -260,7 +270,7 @@ internal class VaultCallSignalling(
         // The suite was fixed when the offer was checked; an engine that cannot do it must not answer.
         if (call.negotiated.chosen !in suites) throw CallSecurityException("the engine cannot do the negotiated suite")
         return try {
-            // An offer in form 2 proves the vault C2 for this call, whatever the probe has found yet.
+            // An offer in form 2 proves the vault C2 for this call, whatever the `call.list` read has found yet.
             handOver(gateway.answer(call, sdp, keepalive = formTwo || call.formTwo))
         } catch (e: CallMessageException) {
             throw CallSecurityException("call.answer", e)
