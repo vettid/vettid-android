@@ -11,8 +11,9 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 interface WalletAccess {
     /**
-     * Whether the drawer's Wallet entry is shown: while the vault is open, unless it answered `wallet.list` with `not_supported`. A
-     * read that failed is no reason to hide it: the list shows the failure and Try again.
+     * Whether the drawer's Wallet entry is shown: while the vault is open for the wallets (unlocked, the daily check neither due nor
+     * held, no release update required), in a build that has the wallet. A read that failed is no reason to hide it: the list shows
+     * the failure and Try again.
      */
     val shown: StateFlow<Boolean>
 

@@ -7,7 +7,6 @@ import androidx.navigation.toRoute
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.wallet.ChainServerSettings
-import com.vettid.core.wallet.WalletAvailability
 import com.vettid.core.wallet.WalletsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -56,14 +55,14 @@ class WalletDetailsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(wallets.wallets, wallets.availability, wallets.flagsChanged) { list, availability, _ ->
-                list.firstOrNull { it.id == walletId } to availability
-            }.mapLatest { (w, availability) ->
+            combine(wallets.wallets, wallets.listed, wallets.flagsChanged) { list, listed, _ ->
+                list.firstOrNull { it.id == walletId } to listed
+            }.mapLatest { (w, listed) ->
                 val network = w?.let { wallets.networkOf(it) }
-                Triple(w, availability, network to network?.let { host(it) })
-            }.collect { (w, availability, networkAndHost) ->
+                Triple(w, listed, network to network?.let { host(it) })
+            }.collect { (w, listed, networkAndHost) ->
                 if (w == null) {
-                    if (seen || availability != WalletAvailability.UNKNOWN) mutable.value = mutable.value.copy(closed = true)
+                    if (seen || listed) mutable.value = mutable.value.copy(closed = true)
                     return@collect
                 }
                 seen = true

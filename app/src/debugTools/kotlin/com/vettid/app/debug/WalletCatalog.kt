@@ -217,7 +217,7 @@ internal object WalletCatalog {
 
     private val sendReview = Review(
         address = TEST_PAYEE, payeeSats = 40_000, changeSats = 58_800, feeSats = 1_200, vsize = 200, totalOutSats = 41_200,
-        toFeeSats = 0, sendAll = false, leftBehind = 0, hasCap = true,
+        toFeeSats = 0, sendAll = false, leftBehind = 0,
     )
 
     private fun sendReviewing(r: Review = sendReview, password: String = "") =
@@ -300,9 +300,9 @@ internal object WalletCatalog {
         "wallet.detail_privacy_note" to { Detail(noLookup.copy(lookup = null, noteNeeded = true)) },
         "wallet.detail_not_backed_up" to { Detail(detail.copy(backedUp = false)) },
         "wallet.detail_caps_pending" to { Detail(detail.copy(capsPending = true)) },
-        "wallet.detail_reset" to { Detail(detail.copy(capsPending = true, settingsUnreadable = true, capsSupported = true)) },
+        "wallet.detail_reset" to { Detail(detail.copy(capsPending = true, settingsUnreadable = true)) },
         "wallet.detail_reset_confirm" to {
-            Detail(detail.copy(capsPending = true, settingsUnreadable = true, capsSupported = true, resetAsk = true))
+            Detail(detail.copy(capsPending = true, settingsUnreadable = true, resetAsk = true))
         },
         "wallet.receive_reset" to {
             Receive(ReceiveUiState(loading = false, network = Network.TESTNET4, problem = ReceiveProblem.SETTINGS_UNREADABLE))
@@ -313,7 +313,6 @@ internal object WalletCatalog {
         "wallet.limits" to { Limits(limits) },
         "wallet.limits_none" to { Limits(limits.copy(perTx = null, perPeriod = null, spent = 0)) },
         "wallet.limits_one" to { Limits(limits.copy(perTx = null, spent = 0)) },
-        "wallet.limits_unsupported" to { Limits(limits.copy(supported = false)) },
         "wallet.limits_lower" to {
             Limits(limits.copy(step = LimitsStep.LOWER, form = CapsEditForm(perTx = "400000")))
         },
@@ -371,7 +370,6 @@ internal object WalletCatalog {
         "wallet.send_review_wrong_password" to { Send(sendReviewing().copy(error = FailureKind.BAD_PASSWORD)) },
         "wallet.send_review_limit" to { Send(sendReviewing(sendReview.limited(LimitLine(41_200, 1_208_800)))) },
         "wallet.send_review_dust" to { Send(sendReviewing(sendReview.dusty(200))) },
-        "wallet.send_review_no_caps" to { Send(sendReviewing(sendReview.noCaps())) },
         "wallet.send_review_cap" to { Send(sendReviewing(sendReview.refused(CapText(CapReason.PER_TX, 30_000, null, null)))) },
         "wallet.send_sent" to { Send(sendDone(SendOutcome.Sent(ConfirmTime.HOUR))) },
         "wallet.send_broadcast_failed" to {
@@ -472,14 +470,12 @@ internal object WalletCatalog {
         },
     )
 
-    private fun Review.rebuilt(capRefusal: CapText? = this.capRefusal, limit: LimitLine? = this.limit, toFee: Long = toFeeSats, cap: Boolean = hasCap) =
-        Review(address, payeeSats, changeSats, feeSats, vsize, totalOutSats, toFee, sendAll, leftBehind, cap, capRefusal, limit)
+    private fun Review.rebuilt(capRefusal: CapText? = this.capRefusal, limit: LimitLine? = this.limit, toFee: Long = toFeeSats) =
+        Review(address, payeeSats, changeSats, feeSats, vsize, totalOutSats, toFee, sendAll, leftBehind, capRefusal, limit)
 
     private fun Review.limited(l: LimitLine) = rebuilt(limit = l)
 
     private fun Review.dusty(sats: Long) = rebuilt(toFee = sats)
-
-    private fun Review.noCaps() = rebuilt(cap = false)
 
     private fun Review.refused(c: CapText) = rebuilt(capRefusal = c)
 }

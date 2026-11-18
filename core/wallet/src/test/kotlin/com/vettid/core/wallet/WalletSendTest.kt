@@ -183,9 +183,24 @@ class WalletSendTest {
         val at = Instant.parse("2026-11-01T10:00:00Z")
         ops.cap = SpendCap(false, "per_period", 5_000, at)
         assertEquals(SpendCap(false, "per_period", 5_000, at), ready(m, w).cap)
-        // A vault without limits gives none, and the screen says nothing about limits.
-        ops.cap = null
-        assertNull(ready(m, w).cap)
+    }
+
+    /**
+     * Rule 3: the vault always returns `cap` (`{ok: true}` for a wallet without limits). An inspect answer without it does not read:
+     * the prepare fails, nothing is prepared, unlocked or signed. It is never a payment "without limits".
+     */
+    @Test
+    fun anInspectWithoutItsCapFailsAndNothingIsSigned() = runBlocking {
+        val (m, w) = opened()
+        ops.inspectWithoutCap = true
+        val e = runCatching { m.prepareSend(w.id, request()) }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.OTHER, e.kind)
+        assertEquals(WalletsManager.UNREADABLE, e.code)
+        assertTrue(ops.calls.contains("inspect"))
+        assertTrue(ops.signs.isEmpty())
+        // The same answer with its `cap` reads, and the payment is prepared.
+        ops.inspectWithoutCap = false
+        assertTrue(m.prepareSend(w.id, request()) is PrepareResult.Ready)
     }
 
     @Test
@@ -820,10 +835,16 @@ class WalletSendTest {
         val summary = ready(m, w).vault.toJson()
         fun cap(body: String) = WalletWire.inspection(
             VaultJson.parseObject((summary.dropLast(1) + ""","cap":""" + body + "}").encodeToByteArray()),
-        ).cap!!
+        ).cap
         assertEquals(500L, cap("""{"ok":false,"reason":"per_tx","limit_sats":500}""").limitSats)
         assertEquals(700L, cap("""{"ok":false,"reason":"per_tx","limit":700}""").limitSats)
         assertNull(cap("""{"ok":true}""").limitSats)
+        // Without `cap`, or with one that is not an object, the answer does not read.
+        for (bad in listOf(summary, summary.dropLast(1) + ""","cap":null}""", summary.dropLast(1) + ""","cap":true}""")) {
+            val e = runCatching { WalletWire.inspection(VaultJson.parseObject(bad.encodeToByteArray())) }.exceptionOrNull()
+            assertEquals("wallet answer: cap", e?.message)
+            assertTrue(e is WalletWireException)
+        }
     }
 
     // --- the rest ---

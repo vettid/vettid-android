@@ -6,10 +6,15 @@ import com.vettid.core.chain.ChainSettingsFile
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
-import com.vettid.core.wallet.WalletAvailability
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.vault.VaultOpException
 import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import com.vettid.core.wallet.WalletWipe
+import com.vettid.core.wallet.WalletsManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -38,13 +43,29 @@ class WalletWiringTest {
         assertEquals(9, WalletModule.sessionOf(AppPhase.Unlocked, null, 9, false))
     }
 
+    /**
+     * The drawer's entry is the manager's open state and nothing else (Rule 3: no answer of the vault hides it); a list that cannot be
+     * read keeps it, and the list shows the failure with Try again.
+     */
     @Test
-    fun theDrawerEntryIsShownWhileOpenUnlessTheVaultHasNoWallets() {
-        // A read that failed at the unlock (still UNKNOWN) keeps the entry: the list shows the failure and Try again.
-        assertTrue(WalletModule.shownOf(true, WalletAvailability.UNKNOWN))
-        assertTrue(WalletModule.shownOf(true, WalletAvailability.AVAILABLE))
-        assertFalse(WalletModule.shownOf(true, WalletAvailability.UNSUPPORTED))
-        assertFalse(WalletModule.shownOf(false, WalletAvailability.AVAILABLE))
+    fun theDrawerEntryIsShownWhileTheWalletsAreOpen() = runBlocking {
+        val flags = WalletFlags(object : WalletFlagsFile {
+            override fun load(): ByteArray? = null
+
+            override fun save(bytes: ByteArray) = Unit
+        }) { 0L }
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+        // Every request is answered `unsupported_type`, as an older vault would.
+        val m = WalletsManager(scope, { throw VaultOpException("wallet.list", "unsupported_type") }, { error("no chain") }, flags, { true })
+        val access = WalletModule.walletAccess(m, scope)
+        assertFalse(access.shown.value)
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
+        // The failure leaves the entry shown: the list says it with Try again.
+        assertTrue(access.shown.value)
+        assertFalse(m.listed.value)
+        m.clear()
+        assertFalse(access.shown.value)
+        scope.cancel()
     }
 
     @Test

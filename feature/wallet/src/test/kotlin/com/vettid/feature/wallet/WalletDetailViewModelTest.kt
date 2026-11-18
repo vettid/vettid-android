@@ -5,6 +5,7 @@ import com.vettid.core.chain.ChainError
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.wallet.ChainOpen
 import com.vettid.core.wallet.ChainSource
 import com.vettid.core.wallet.LookupResult
@@ -144,12 +145,19 @@ class WalletDetailViewModelTest {
         assertEquals(1, opened)
     }
 
+    /**
+     * Rule 3: `unsupported_type` is a failure like any other. A list that cannot be read closes nothing (the wallet may be there);
+     * once a list reads without the wallet, the screen leaves.
+     */
     @Test
-    fun aVaultWithoutWalletsClosesTheScreen() = runTest {
+    fun aFailedListKeepsTheScreenAndAListWithoutTheWalletClosesIt() = runTest {
         ops.unsupported = true
         val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
-        runCatching { m.open() }
+        assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
+        assertFalse(vm.state.value.closed)
+        ops.unsupported = false
+        m.refresh()
         eventually { vm.state.value.closed }
     }
 

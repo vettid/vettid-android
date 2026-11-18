@@ -553,64 +553,92 @@ class WalletCapsTest {
         assertEquals(24, m.revealPhrase(id, "pw".toCharArray(), "123456".toCharArray()).wordCount)
     }
 
-    // A vault before release 26: no `caps` on its wallets
+    // Rule 3: `caps` is always there; an answer without it fails closed
 
+    /** A list whose wallets come without `caps` does not read: a failure with Try again, and nothing is shown as "no limit". */
     @Test
-    fun aListedWalletWithoutCapsMeansTheLimitsAreNotOffered() = runBlocking {
+    fun aListWithoutCapsIsAFailureAndShowsNothing() = runBlocking {
         val m = manager()
-        m.open()
-        assertTrue("no wallets yet: asked as usual", m.capsOffered)
-        val old = WalletFixtures.wallet(id = "01OLD00000000000000000000A", caps = null)
-        ops.wallets[old.id] = old
+        ops.wallets["01OLD"] = WalletFixtures.wallet(id = "01OLD00000000000000000000A")
+        ops.noCaps = true
+        val e = runCatching { m.open() }.exceptionOrNull() as VaultFailure
+        assertEquals(FailureKind.OTHER, e.kind)
+        assertEquals(WalletsManager.UNREADABLE, e.code)
+        assertTrue(m.wallets.value.isEmpty())
+        assertFalse(m.listed.value)
+        // A refresh (Try again) is the same failure, never an exception of another kind.
+        assertEquals(WalletsManager.UNREADABLE, (runCatching { m.refresh() }.exceptionOrNull() as VaultFailure).code)
+        // Once the answer reads, the wallet is shown.
+        ops.noCaps = false
         m.refresh()
-        assertFalse(m.wallets.value.single().capsSupported)
-        assertFalse(m.capsOffered)
-        // With caps present, even an empty object, it is offered.
-        ops.wallets.clear()
-        ops.wallets["01NEW"] = WalletFixtures.wallet(id = "01NEW00000000000000000000A", caps = "{}")
-        m.refresh()
-        assertTrue(m.wallets.value.single().capsSupported)
-        assertTrue(m.capsOffered)
+        assertEquals(1, m.wallets.value.size)
     }
 
+    /** A list read once with `caps` and then without it keeps what was shown (a failure changes nothing). */
     @Test
-    fun aCreateAnswerWithoutCapsKeepsNothingPendingAndSendsNoSet() = runBlocking {
+    fun aLaterListWithoutCapsLeavesTheShownWalletsAsTheyWere() = runBlocking {
+        val m = manager()
+        val w = WalletFixtures.wallet(caps = """{"per_tx_sats":1000,"period_seconds":86400,"spent_sats":0}""").also { ops.wallets[it.id] = it }
+        m.open()
         ops.noCaps = true
+        assertEquals(WalletsManager.UNREADABLE, (runCatching { m.refresh() }.exceptionOrNull() as VaultFailure).code)
+        assertEquals(1_000L, m.wallets.value.single { it.id == w.id }.perTxSats)
+    }
+
+    /**
+     * A create answered without `caps` fails: no phrase is shown, nothing is pending or held, no limit is set, and the wallet is not
+     * shown (the vault has it; the next list that reads shows it).
+     */
+    @Test
+    fun aCreateAnswerWithoutCapsFailsAndKeepsNothing() = runBlocking {
         val m = manager()
         m.open()
-        val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray(), caps)
-        assertTrue(c.capsUnsupported)
-        assertFalse(c.capsNotSaved)
+        ops.noCaps = true
+        val e = runCatching { m.create("Savings", Network.TESTNET4, "pw".toCharArray(), caps) }.exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.UNREADABLE, e.code)
+        assertTrue(m.wallets.value.isEmpty())
         assertTrue(m.capsPending.value.isEmpty())
         assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
-        // Receive is not gated, the check goes on, and no set is ever sent.
-        assertTrue(m.receiveAddress(c.wallet.id) is ReceiveResult.Address)
-        m.settleCaps(c.wallet.id)
+        assertTrue("no phrase was asked for", ops.calls.none { it == "reveal" })
         assertTrue(ops.calls.none { it.startsWith("caps.") })
-        // Nothing chosen: nothing to say.
-        assertFalse(m.create("Spending", Network.TESTNET4, "pw".toCharArray()).capsUnsupported)
     }
 
+    /** An import answered without `caps` fails the same way: nothing is pending and no limit is set. */
     @Test
-    fun anImportAnswerWithoutCapsKeepsNothingPendingAndSendsNoSet() = runBlocking {
-        ops.noCaps = true
+    fun anImportAnswerWithoutCapsFailsAndKeepsNothing() = runBlocking {
         val m = manager()
         m.open()
-        val r = m.import("Old", Network.TESTNET4, "pw".toCharArray(), "a b c".toCharArray(), null, caps)
-        assertTrue(r.capsUnsupported)
-        assertNull(r.capsFailure)
+        ops.noCaps = true
+        val e = runCatching { m.import("Old", Network.TESTNET4, "pw".toCharArray(), "a b c".toCharArray(), null, caps) }
+            .exceptionOrNull() as VaultFailure
+        assertEquals(WalletsManager.UNREADABLE, e.code)
+        assertTrue(m.wallets.value.isEmpty())
         assertTrue(m.capsPending.value.isEmpty())
         assertTrue(ops.calls.none { it.startsWith("caps.") })
-        assertTrue(m.receiveAddress(r.wallet.id) is ReceiveResult.Address)
     }
 
+    /** `wallet.get` (the read after an address is issued) answered without `caps` is a failure like any other: the wallet stays as it was. */
+    @Test
+    fun aWalletReadAgainWithoutCapsStaysAsItWas() = runBlocking {
+        val m = manager()
+        val w = WalletFixtures.wallet(caps = """{"per_tx_sats":1000,"period_seconds":86400,"spent_sats":0}""").also { ops.wallets[it.id] = it }
+        m.open()
+        ops.noCaps = true
+        val gets = ops.gets
+        m.newAddress(w.id)
+        assertEquals("the wallet was read again", gets + 1, ops.gets)
+        assertEquals(1_000L, m.wallets.value.single().perTxSats)
+        assertTrue(m.wallets.value.single().capped)
+    }
+
+    /** With `caps` in the answer, even an empty object, the limits chosen are kept and pending as before. */
     @Test
     fun withCapsInTheAnswerTheLimitsAreKeptAndSetAsBefore() = runBlocking {
         val m = manager()
         m.open()
         val c = m.create("Savings", Network.TESTNET4, "pw".toCharArray(), caps)
-        assertFalse(c.capsUnsupported)
         assertEquals(setOf(c.wallet.id), m.capsPending.value)
+        assertFalse(c.wallet.capped)
     }
 
     // A file that decrypts but does not parse is kept too

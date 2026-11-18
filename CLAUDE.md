@@ -604,6 +604,15 @@ The A2 exit test:
   `wallet.chain_server_bad_url`, `wallet.chain_server_not_https`, `wallet.chain_server_credentials`, `wallet.chain_server_query`,
   `wallet.chain_server_failed`, `wallet.chain_server_wrong_network`, `wallet.chain_server_not_written`, `wallet.details`
   (`WalletCatalog.kt`).
+  **No older vault (Rule 3):** the app requires the vault's current release, so the wallet has no availability flag and no
+  "unsupported" path. The drawer entry is `WalletsManager.isOpen` alone (the vault open for the wallets, in a build that has the
+  wallet); `unsupported_type` is a failure like any other (the list's Try again), never a latch. `WalletsManager.listed` (a list read
+  or a wallet made here since the open, false at every `clear()`) is what the screens use to tell a wallet that is gone from one not
+  read yet. **Spending limits fail closed:** `<wallet>.caps` (§10.18 "Spend caps", "Defaults": always present in a vault that
+  implements caps) and `wallet.psbt.inspect`'s `cap` (always returned) are required: an answer without them is a `WalletWireException`,
+  which `WalletsManager.walletRead` turns into `VaultFailure(OTHER, unreadable_result)` for `wallet.list`, `wallet.get`,
+  `wallet.create` and `wallet.psbt.inspect`: the list shows the failure with Try again, a create or import shows its failure (nothing kept, no phrase shown),
+  and a send stops before anything is signed; a wallet without `caps` is never "no limit". The limits step is always asked at creation and import.
   W1d (spending limits at creation, import; VAULT-MESSAGING §10.18 0.56.0): `WalletApi.kt` adds `walletCapsSet` (a normal op, a null
   member absent), `walletCapsRaise` (a credential operation, sealed `{pin, password, item_id, payload_sha256}`; the hash is
   `WalletCapsBinding`, tested against the §16 vector, a mismatch is a stop-and-report item), `wallet.create{item}` (`WalletImport`) and
@@ -622,7 +631,7 @@ The A2 exit test:
   `wallet.import`, `wallet.import_words`, `wallet.import_unknown_word`, `wallet.import_invalid`, `wallet.import_advanced`,
   `wallet.import_bad_passphrase`, `wallet.import_limits`, `wallet.import_password`, `wallet.import_exists`,
   `wallet.import_done_caps_failed`, `wallet.receive_caps_pending`, `wallet.detail_caps_pending`.
-  W1d-2 (Spending limits screen): wallet ⋯ → **Spending limits** (`SpendingLimitsRoute` in `:core:data`, shown only when `capsSupported`;
+  W1d-2 (Spending limits screen): wallet ⋯ → **Spending limits** (`SpendingLimitsRoute` in `:core:data`, enabled once the wallet is read;
   `SpendingLimitsViewModel`, `CapsEdit` pure rules): the two limits in sats or "No limit", "Used in the last 24 hours" from
   `caps.spent_sats` (`VaultWallet.spentSats`; the plan says "last hour" on staging, the owner kept "24 hours" there too), **Lower a
   limit** (only lower, or a limit where there was none; `wallet.caps.set`, confirm, no password) and **Raise or remove a limit**
@@ -632,9 +641,9 @@ The A2 exit test:
   `FeedTarget.WalletLimits` for `wallet.cap_refused|caps_lowered|caps_raised` (a notification opens the screen while the Wallet entry
   is shown). **Reset wallet settings on this phone** (`WalletsManager.resetSettings`, `WalletFlags.reset`: the one sanctioned overwrite
   of an unreadable `wallet-flags.bin`, offered only while it is unreadable, behind a `ConfirmDialog`, nothing sent to the vault; the
-  local flags are forgotten, so wallets show "Not backed up"): an uncapped wallet of a vault with `caps` is then asked "Set a spending
+  local flags are forgotten, so wallets show "Not backed up"): an uncapped wallet is then asked "Set a spending
   limit?" before Receive (`ask_caps` (the wallets the vault held at the reset; `ask_next` fills it from the first list read if none was loaded), `answered_caps` in the flags, decided per wallet at Receive, `ReceiveResult.LimitsAsk`, `answerLimits`; limits pending in this session are carried into the fresh file); a limit goes through the pending path.
-  Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_unsupported`, `wallet.limits_lower`,
+  Catalog adds `wallet.limits`, `wallet.limits_none`, `wallet.limits_one`, `wallet.limits_lower`,
   `wallet.limits_lower_bad`, `wallet.limits_lower_confirm`, `wallet.limits_raise`, `wallet.limits_raise_confirm`,
   `wallet.limits_remove`, `wallet.limits_bad_pin`, `wallet.limits_backoff`, `wallet.limits_conflict`, `wallet.detail_reset`,
   `wallet.detail_reset_confirm`, `wallet.receive_reset`, `wallet.receive_limits_ask`. The review of a send is W2-2 (below).
@@ -676,7 +685,7 @@ The A2 exit test:
   when the unit changes), Send all, Slow, Normal, Fast from `FeeEstimates`/`FeeTargets` or Custom (1 to 1,000 sat/vB), above twice Fast a
   `ConfirmDialog` ("This fee is much higher than needed right now. Pay it anyway?"), "Include unconfirmed coins" off. Review shows
   **the vault's summary** (`Review` built from `PreparedSend.vault`: payee, change, fee in sats and sat/vB from its `vsize`, total
-  leaving = `sending_sats + fee_sats`), the dust remainder that went to the fee, and, only when the inspect returned a `cap` and the wallet
+  leaving = `sending_sats + fee_sats`), the dust remainder that went to the fee, and, only when the wallet
   has `per_period_sats`, "Counts toward your limit for the last 24 hours: {outflow}. Left after this: {left}" (from `spent_sats`);
   a `cap` with `ok: false` shows the `cap_exceeded` text and no password field. `PrepareResult.Different` is the plan's "Your vault saw a
   different payment…". **Self-send** (review note 6): `PrepareResult.SelfSend`, detected in `prepareSend` **before** the build and the
@@ -763,7 +772,7 @@ The A2 exit test:
   `wallet.send_no_estimates`, `wallet.send_not_enough`, `wallet.send_not_enough_confirmed`, `wallet.send_fee_ten_percent`, `wallet.send_review_fee_ten_percent`, `wallet.send_link_refused`, `wallet.send_recent_waiting`, `wallet.send_recent_checking`, `wallet.send_recent_confirmed`, `wallet.send_recent_gone`, `wallet.send_recent_unreadable`, `wallet.send_note_needed`, `wallet.send_self_send`, `wallet.send_different`, `wallet.send_server_failed`,
   `wallet.send_not_backed_up`, `wallet.send_caps_pending`, `wallet.send_caps_duplicate`, `wallet.send_settings_unreadable`,
   `wallet.send_sign_unsettled`, `wallet.send_review`, `wallet.send_review_password`, `wallet.send_review_wrong_password`,
-  `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_no_caps`, `wallet.send_review_cap`, `wallet.send_sent`,
+  `wallet.send_review_limit`, `wallet.send_review_dust`, `wallet.send_review_cap`, `wallet.send_sent`,
   `wallet.send_broadcast_failed`, `wallet.send_broadcast_checking`, `wallet.send_broadcast_unknown`, `wallet.send_broadcast_not_there`,
   `wallet.send_cap_per_tx`, `wallet.send_cap_per_period`, `wallet.send_cap_per_period_none`, `wallet.send_invalid_fee_rate`,
   `wallet.send_invalid_output_amount`, `wallet.send_invalid_technical`, `wallet.send_invalid_wrong_seed`, `wallet.send_invalid_other`,

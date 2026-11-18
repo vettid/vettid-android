@@ -243,31 +243,24 @@ class BackupLimitsViewModelTest {
         assertFalse(LimitsForm(true, "424242", "7").toString().contains("424242"))
     }
 
-    // A vault before release 26
+    // Rule 3: the limits step is always asked; a create answer without `caps` fails closed
 
     @Test
-    fun aListedWalletWithoutCapsSkipsTheLimitsStepAndNothingIsPendingOrGated() = runTest {
-        ops.wallets["01OLD00000000000000000000A"] = ops.wallet("01OLD00000000000000000000A").copy(capsSupported = false)
+    fun theLimitsStepIsAlwaysAskedAndBackFromThePasswordReturnsToIt() = runTest {
         val vm = vm()
         vm.setName("Savings")
         vm.toLimits()
+        assertEquals(BackupStep.LIMITS, vm.state.value.step)
+        vm.toPassword()
         assertEquals(BackupStep.CREATE, vm.state.value.step)
-        assertFalse(vm.state.value.limitsAsked)
-        // Back goes to the name, not to a step that was never shown.
+        vm.previous()
+        assertEquals(BackupStep.LIMITS, vm.state.value.step)
         vm.previous()
         assertEquals(BackupStep.FORM, vm.state.value.step)
-        vm.toLimits()
-        vm.setPassword("pw")
-        vm.create()
-        vm.checkAll()
-        assertTrue(vm.state.value.backedUp)
-        assertTrue(ops.calls.none { it.startsWith("caps.") })
-        assertTrue(wallets.capsPending.value.isEmpty())
-        assertFalse(vm.state.value.capsUnsupported)
     }
 
     @Test
-    fun aCreateAnswerWithoutCapsDropsTheChosenLimitAndSaysSo() = runTest {
+    fun aCreateAnswerWithoutCapsIsAFailureAndKeepsNothing() = runTest {
         ops.noCaps = true
         val vm = vm()
         vm.toCreate {
@@ -276,17 +269,14 @@ class BackupLimitsViewModelTest {
         }
         vm.setPassword("pw")
         vm.create()
-        eventually { vm.state.value.step == BackupStep.PHRASE }
-        assertTrue(vm.state.value.capsUnsupported)
+        eventually { !vm.state.value.busy }
+        assertEquals(BackupStep.CREATE, vm.state.value.step)
+        assertEquals(FailureKind.OTHER, vm.state.value.error)
+        assertEquals(WalletsManager.UNREADABLE, vm.state.value.errorCode)
+        assertNull(vm.state.value.words)
         assertTrue(wallets.capsPending.value.isEmpty())
         assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
-        vm.startCheck()
-        for (at in vm.state.value.asked) vm.answer(ops.words[at])
-        eventually { vm.state.value.step == BackupStep.DONE && !vm.state.value.busy }
-        assertTrue(vm.state.value.backedUp)
-        assertTrue(vm.state.value.capsUnsupported)
-        assertFalse(vm.state.value.capsFailed)
-        assertTrue(ops.calls.none { it.startsWith("caps.") })
+        assertTrue(ops.calls.none { it.startsWith("caps.") || it.startsWith("reveal") })
     }
 
     @Test

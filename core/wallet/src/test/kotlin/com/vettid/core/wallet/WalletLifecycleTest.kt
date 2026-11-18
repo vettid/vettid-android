@@ -47,11 +47,11 @@ class WalletLifecycleTest {
         m.follow(open, MutableSharedFlow())
         open.value = 1
         eventually("read when open") { m.wallets.value.size == 1 }
-        assertEquals(WalletAvailability.AVAILABLE, m.availability.value)
+        assertTrue(m.listed.value)
         // Locked or held.
         open.value = null
         eventually("forgotten when closed") { m.wallets.value.isEmpty() }
-        assertEquals(WalletAvailability.UNKNOWN, m.availability.value)
+        assertFalse(m.listed.value)
         scope.cancel()
     }
 
@@ -61,7 +61,7 @@ class WalletLifecycleTest {
         val events = MutableSharedFlow<Pair<String, JsonObject>>()
         val m = manager()
         m.follow(open, events)
-        eventually("first read") { m.availability.value == WalletAvailability.AVAILABLE }
+        eventually("first read") { m.listed.value }
         val w = WalletFixtures.wallet()
         ops.wallets[w.id] = w
         events.emit("sync.event" to syncEvent("wallet.changed", w.id))

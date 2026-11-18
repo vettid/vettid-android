@@ -136,7 +136,7 @@ class WalletDetailScreensTest {
     }
 
     @Test
-    fun theMenuHasTheFourItemsAndNotTheW1dOnes() {
+    fun theMenuHasItsFiveItemsAndNoPhraseItem() {
         val got = mutableListOf<String>()
         show(
             detail(),
@@ -149,7 +149,8 @@ class WalletDetailScreensTest {
         )
         rule.onNodeWithTag("wallet_menu").performClick()
         rule.onNodeWithText("Show recovery phrase").assertDoesNotExist()
-        rule.onNodeWithText("Spending limits").assertDoesNotExist()
+        // Spending limits is always there (Rule 3: every vault has them).
+        rule.onNodeWithTag("wallet_menu_limits").assertExists()
         rule.onNodeWithTag("wallet_menu_details").performClick()
         rule.onNodeWithTag("wallet_menu").performClick()
         rule.onNodeWithTag("wallet_menu_chain_server").performClick()

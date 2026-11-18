@@ -375,7 +375,7 @@ private fun Problem(text: String, tag: String, ways: List<Pair<String, () -> Uni
     }
 }
 
-/** ⋯: Receiving address type, Spending limits (when the vault enforces them), Chain server, Details, Delete wallet. */
+/** ⋯: Receiving address type, Spending limits, Chain server, Details, Delete wallet. */
 @Composable
 private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions) {
     var open by remember { mutableStateOf(false) }
@@ -389,11 +389,9 @@ private fun WalletMenu(state: WalletDetailUiState, actions: WalletDetailActions)
                 open = false
                 typeDialog = true
             }
-            if (state.capsSupported) {
-                MenuItem(R.string.wallet_menu_limits, "wallet_menu_limits", enabled = state.loaded) {
-                    open = false
-                    actions.onLimits()
-                }
+            MenuItem(R.string.wallet_menu_limits, "wallet_menu_limits", enabled = state.loaded) {
+                open = false
+                actions.onLimits()
             }
             MenuItem(R.string.wallet_menu_chain_server, "wallet_menu_chain_server", enabled = state.network != null) {
                 open = false

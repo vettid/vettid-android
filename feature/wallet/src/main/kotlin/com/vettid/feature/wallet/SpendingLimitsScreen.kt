@@ -79,15 +79,15 @@ private fun satsOrNone(sats: Long?): String =
 
 @Composable
 private fun Overview(state: SpendingLimitsUiState, actions: SpendingLimitsActions, modifier: Modifier) {
-    val canChange = state.loaded && state.supported && state.idle
+    val canChange = state.loaded && state.idle
     FormScaffold(
         title = stringResource(R.string.wallet_menu_limits),
-        primaryLabel = if (state.supported) stringResource(R.string.wallet_limits_lower_button) else null,
+        primaryLabel = stringResource(R.string.wallet_limits_lower_button),
         onPrimary = actions.onLower,
         primaryEnabled = canChange,
         // Nothing to raise or remove while there is no limit.
         secondaryLabel = stringResource(R.string.wallet_limits_raise_button)
-            .takeIf { state.supported && (state.perTx != null || state.perPeriod != null) },
+            .takeIf { state.perTx != null || state.perPeriod != null },
         onSecondary = { if (canChange) actions.onRaise() },
         onBack = actions.onBack,
         modifier = modifier.testTag("wallet_limits"),
@@ -96,8 +96,6 @@ private fun Overview(state: SpendingLimitsUiState, actions: SpendingLimitsAction
             !state.loaded -> Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            !state.supported ->
-                Text(stringResource(R.string.wallet_caps_unsupported), modifier = Modifier.testTag("wallet_limits_unsupported"))
             else -> Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 LimitValue(R.string.wallet_limit_per_tx, state.perTx, "limits_now_tx")
                 LimitValue(R.string.wallet_limit_per_period, state.perPeriod, "limits_now_period")

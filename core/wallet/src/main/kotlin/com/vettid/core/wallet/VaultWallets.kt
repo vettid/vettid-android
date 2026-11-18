@@ -43,15 +43,10 @@ data class VaultWallet(
     val tags: List<String>,
     /** The wallet has a spending limit (`caps` with a per-payment or per-period value): showing its phrase needs the PIN (W1d). */
     val capped: Boolean = false,
-    /** `caps.per_tx_sats` (0.56.0): the most one payment may take out; null for no limit, or a vault without caps. */
+    /** `caps.per_tx_sats` (0.56.0): the most one payment may take out; null for no limit. */
     val perTxSats: Long? = null,
     /** `caps.per_period_sats`: the most in the rolling period (24 hours; an hour on staging); null for no limit. */
     val perPeriodSats: Long? = null,
-    /**
-     * The vault knows spending limits: the wallet object carries a `caps` object, even an empty one (VAULT-MESSAGING §10.18, 0.56.0;
-     * release 26). A vault before that has none, and cannot enforce a limit.
-     */
-    val capsSupported: Boolean = true,
     /** `caps.spent_sats` (0.56.0): what the wallet's signed transactions took out within the period; null when the vault says none. */
     val spentSats: Long? = null,
     /** `caps.period_seconds`: the period's length (86,400; 3,600 on staging); null when the vault says none. */
@@ -98,6 +93,9 @@ internal object WalletWire {
     @Suppress("ThrowsCount") // one per field: the message names which
     fun wallet(e: JsonElement): VaultWallet {
         val o = e as? JsonObject ?: throw WalletWireException("wallet")
+        // `<wallet>.caps` is always there, an empty object when the wallet has no limit (VAULT-MESSAGING §10.18 "Spend caps",
+        // "Defaults"). A wallet without it is an answer that does not read, never a wallet without limits: nothing is shown or spent.
+        val caps = o["caps"] as? JsonObject ?: throw WalletWireException("caps")
         return VaultWallet(
             id = o.str("wallet_id"),
             version = o.long("version"),
@@ -109,12 +107,11 @@ internal object WalletWire {
             tags = (o["tags"] as? JsonArray)?.map { t ->
                 (t as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw WalletWireException("tags")
             } ?: emptyList(),
-            capped = (o["caps"] as? JsonObject)?.let { c -> CAP_KEYS.any { k -> c.isNumber(k) } } == true,
-            perTxSats = (o["caps"] as? JsonObject)?.number("per_tx_sats"),
-            perPeriodSats = (o["caps"] as? JsonObject)?.number("per_period_sats"),
-            capsSupported = o["caps"] is JsonObject,
-            spentSats = (o["caps"] as? JsonObject)?.number("spent_sats"),
-            periodSeconds = (o["caps"] as? JsonObject)?.number("period_seconds"),
+            capped = CAP_KEYS.any { k -> caps.isNumber(k) },
+            perTxSats = caps.number("per_tx_sats"),
+            perPeriodSats = caps.number("per_period_sats"),
+            spentSats = caps.number("spent_sats"),
+            periodSeconds = caps.number("period_seconds"),
         )
     }
 
@@ -150,7 +147,10 @@ internal object WalletWire {
         next = o["next"]?.takeUnless { it is JsonNull }?.let { o.index("next") },
     )
 
-    /** `wallet.psbt.inspect`'s answer: the summary (strictly read) and the optional `cap`. */
+    /**
+     * `wallet.psbt.inspect`'s answer: the summary (strictly read) and the `cap`, which the vault always returns (`{ok: true}` for a
+     * wallet without limits; VAULT-MESSAGING §10.18 "Spend caps"): an answer without it does not read, and nothing is signed.
+     */
     @Suppress("SwallowedException") // the field name is the message; the parser's text could carry the vault's data
     fun inspection(o: JsonObject): PsbtInspection {
         val summary = try {
@@ -158,7 +158,7 @@ internal object WalletWire {
         } catch (e: IllegalArgumentException) {
             throw WalletWireException("summary")
         }
-        val cap = (o["cap"] as? JsonObject)?.let { c ->
+        val cap = (o["cap"] as? JsonObject ?: throw WalletWireException("cap")).let { c ->
             SpendCap(
                 ok = c.bool("ok"),
                 reason = (c["reason"] as? JsonPrimitive)?.takeIf { it.isString }?.content,
