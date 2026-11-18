@@ -225,6 +225,72 @@ class ShareDecidedTest {
         }
     }
 
+    /**
+     * §10.12: none pending is `bad_request` (decided on another device, or withdrawn with the event missed). The question
+     * is kept and the error thrown, and the lists are read again in the background so a stale question clears; another
+     * refusal (a `limit`) reads nothing.
+     */
+    @Test
+    fun aBadRequestReadsTheListsAgainAndOnlyItDoes() = runTest {
+        val m = manager()
+        var rereads = 0
+        m.staleShareReread = { rereads++ }
+        m.refresh(entry("r1", "i1"))
+        runCurrent()
+        runCatching { m.decideShareWith("r1", emptyList(), listOf("i1"), send = { throw VaultFailure(FailureKind.LIMIT, "limit") }) }
+        runCurrent()
+        assertEquals("a limit reads nothing", 0, rereads)
+        try {
+            m.decideShareWith("r1", emptyList(), listOf("i1"), send = { throw VaultFailure(FailureKind.OTHER, "bad_request") })
+            error("bad_request must be thrown")
+        } catch (e: VaultFailure) {
+            assertEquals("bad_request", e.code)
+        }
+        assertEquals(listOf("i1"), m.items("r1"))
+        runCurrent()
+        assertEquals("the lists are read again", 1, rereads)
+        // The question stays until a list says otherwise; one that no longer lists it clears it.
+        assertEquals(listOf("i1"), m.items("r1"))
+        val empty = read()
+        m.refreshApprovalsFrom(now) { empty }
+        runCurrent()
+        assertNull(m.share("r1"))
+    }
+
+    /** The re-read itself is `refreshApprovals`: it asks for the vault (here on the IO dispatcher, so waited for in real time). */
+    @Test
+    fun theRereadAsksForTheVault() = runTest {
+        val asked = CompletableDeferred<Unit>()
+        val m = SocialManager(
+            backgroundScope,
+            api = { asked.complete(Unit); throw VaultFailure(FailureKind.OTHER) },
+            credential = credential,
+            obsoleteStore = InMemoryDeviceStateStore(),
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+        )
+        m.refresh(entry("r1", "i1"))
+        runCurrent()
+        runCatching { m.decideShareWith("r1", emptyList(), listOf("i1"), send = { throw VaultFailure(FailureKind.OTHER, "bad_request") }) }
+        runCurrent()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { asked.await() } }
+        assertEquals(listOf("i1"), m.items("r1"))
+    }
+
+    /**
+     * An answer that names neither list (`{}`): what was sent is taken as decided, included and declined alike, so both
+     * leave the rule and the subject's other rule too (a decision reaches every rule of the subject).
+     */
+    @Test
+    fun anAnswerWithoutListsTakesWhatWasSent() = runTest {
+        val m = manager()
+        m.refresh(entry("r1", "i1"), entry("r1", "i2"), entry("r1", "i3"), entry("r2", "i1"), entry("r2", "i2"), entry("r2", "i4"))
+        runCurrent()
+        m.decideShareWith("r1", listOf("i1"), listOf("i2"), send = { o("{}") })
+        runCurrent()
+        assertEquals(listOf("i3"), m.items("r1"))
+        assertEquals(listOf("i4"), m.items("r2"))
+    }
+
     @Test
     fun aDecisionMadeHereLeavesTheSubjectsOtherRule() = runTest {
         val m = manager()

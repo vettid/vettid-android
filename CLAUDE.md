@@ -410,7 +410,7 @@ The A2 exit test:
   (`FeedOnlyAsks`, `SocialManager.setFeedItems` from `VaultManager`): after a restart the feed item's `ref` / `device_id` / `at` make an entry
   only while no `pending.list` was merged since the unlock (`listReadFlow`; the list is authoritative once read for sessions and approvals, not for
   pairings, which the vault does not list yet (0.83.0): their entries stay until their 10 minutes, and VAULT-MESSAGING 0.70.0 is why
-  decision 14a is now the fallback until a list is merged: before the first read and after a failed one, `unsupported_type` being a failure like any other since the app requires the vault's current release), not once archived or deleted (read stays), not after a close event or a
+  decision 14a is now the fallback until a list is merged since the unlock (a failed read, `unsupported_type` included, leaves it so)), not once archived or deleted (read stays), not after a close event or a
   decision here, and only 10 minutes (session, pairing) or 5 minutes (held) from `at`. A feed-only approval is Deny-only with "… asked for
   something this phone can no longer show. Deny it, or let it expire."; a feed-only session request names the device from `device.list`
   (`DeviceAsks.named`) and is Allow/Deny with 1 hour preselected, Deny-only when the device is not listed (or the list not read). A

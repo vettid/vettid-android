@@ -2121,6 +2121,10 @@ class SocialManager internal constructor(
         send = { vaultGuard { api().shareDecide(ruleId, include, decline) } },
     )
 
+    /** The re-read after a `share.decide` answered `bad_request` (a test replaces it); a failure is left for the screens. */
+    @Volatile
+    internal var staleShareReread: suspend () -> Unit = { runCatching { refreshApprovals() } }
+
     internal suspend fun decideShareWith(
         ruleId: String,
         include: List<String>,
@@ -2131,7 +2135,15 @@ class SocialManager internal constructor(
         // The subject, before the decision takes the rule's question out of the list and the events.
         val subject = subjectOfRule(ruleId)
         var answer: JsonObject? = null
-        decideRun("share:$ruleId", whole = false) { answer = send() }
+        try {
+            decideRun("share:$ruleId", whole = false) { answer = send() }
+        } catch (e: VaultFailure) {
+            // §10.12: none of the items pending is `bad_request` (another device decided, or they were withdrawn and the
+            // event was missed). The question stays until the list says otherwise; the lists are read again in the
+            // background so a stale one clears.
+            if (e.kind == FailureKind.OTHER && e.code == "bad_request") scope.launch { staleShareReread() }
+            throw e
+        }
         // The vault's answer says what the decision changed (it also reaches the subject's other rules); only an answer
         // without either list falls back to what was sent.
         val told = answer?.takeIf { "included" in it || "declined" in it }
