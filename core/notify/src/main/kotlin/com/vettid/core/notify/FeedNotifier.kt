@@ -96,8 +96,9 @@ interface NotifySource {
     fun names(): FeedNames
 
     /**
-     * Reads the votes list afresh (review 1, M3): true when the read went through, so that [names]' `votesGaveUp` is the
-     * vault's state after the item arrived. A source without votes has nothing to read.
+     * Reads the votes list afresh (review 1, M3): true only when the read went through and was applied (not voided by a lock
+     * or hold while it was out), so that [names]' `votesGaveUp` is the vault's state after the item arrived. A source
+     * without votes has nothing to read.
      */
     suspend fun refreshVotes(): Boolean = true
 

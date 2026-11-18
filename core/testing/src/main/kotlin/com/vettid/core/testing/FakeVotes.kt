@@ -11,7 +11,6 @@ import com.vettid.core.data.votes.ResultsOutcome
 import com.vettid.core.data.votes.VoteDetail
 import com.vettid.core.data.votes.VoteHint
 import com.vettid.core.data.votes.VoteSummary
-import com.vettid.core.data.votes.VotesAvailability
 import com.vettid.core.data.votes.VotesRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -36,7 +35,6 @@ class FakeVotes : VotesRepository {
     override val reconnect = MutableStateFlow<List<ReconnectEntry>>(emptyList())
     override val dropped = MutableStateFlow<List<DroppedNotice>>(emptyList())
     override val problems = MutableStateFlow<List<ProblemsNotice>>(emptyList())
-    override val availability = MutableStateFlow(VotesAvailability.AVAILABLE)
     override val load = MutableStateFlow(ListLoad.LOADED)
     override val hints = MutableStateFlow<Map<String, VoteHint>>(emptyMap())
     override val windowNotClosed = MutableStateFlow<com.vettid.core.data.votes.WindowNotClosed?>(null)
@@ -54,9 +52,13 @@ class FakeVotes : VotesRepository {
     /** Runs when [refresh] is asked, before it answers (the vault's list changing meanwhile). */
     var onRefresh: () -> Unit = {}
 
-    override suspend fun refresh() {
+    /** What [refresh] answers: false as for a read a lock voided. */
+    var refreshApplied = true
+
+    override suspend fun refresh(): Boolean {
         call("refresh")
         onRefresh()
+        return refreshApplied
     }
 
     override fun refreshQuietly() {

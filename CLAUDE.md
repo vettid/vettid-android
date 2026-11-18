@@ -137,8 +137,8 @@ The A2 exit test:
   it) above the code. Messages never lists a service (`MessagesViewModel`, `NewMessageViewModel`; a service conversation has no composer or
   call, `ConversationUiState.noComposer`); Connections has a "Services" section below the people (`ConnectionsUiState.services`, starred
   first, `ConnectionRow(serviceLabel)`); Approvals (`Approval.connectionService`), History and Notifications rows append "Service". A service's
-  detail has the label, the names as "Name given by the service", the fingerprint, "What this service can ask" (the `_votes` line where
-  `VotesAvailability.AVAILABLE`), asks, History and remove, and none of message, Call, sharing in either direction, authentication.
+  detail has the label, the names as "Name given by the service", the fingerprint, "What this service can ask" (always the `_votes` line:
+  every vault the app talks to has votes), asks, History and remove, and none of message, Call, sharing in either direction, authentication.
   `forbidden` to an authentication request or a message is `FailureKind.SERVICE_FORBIDDEN` ("Services can't do that."), shown once; the
   state remembers it (`authRefused`, `serviceRefused`) and the action is gone. `service_no_calls` and `services_empty` are unused.
   Screens: `connections.services`, `connections.service_detail`, `invite.request_service`.
@@ -432,12 +432,26 @@ The A2 exit test:
 
 - Votes (ANDROID-PLAN 0.1.102 to 0.1.108 §4 "Votes", item 5.1; VAULT-MESSAGING 0.81.3 §10.19; `:feature:votes`, `VotesManager` /
   `VotesRepository` in `:core:data` `votes/`, `VoteApi.kt` in `:core:vault`, `VaultManager.votes`): the drawer entry after Approvals
-  (shown only when the vault answers `vote.list` and holds a vote or a `reconnect` connection; its badge counts open votes not yet
-  voted on), the list, a vote (the service's words as plain text, the choices as sent, the fixed disclosure, the confirm sheet, the
+  (shown only when the vault's `vote.list` holds a vote or a `reconnect` connection, so never an empty screen; `VoteRules.entry`; its
+  badge counts open votes not yet voted on), the list, a vote (the service's words as plain text, the choices as sent, the fixed disclosure, the confirm sheet, the
   unlock window prompt when the window is closed, the states in words, the results only after the vault's check, **Save the proof**,
   **Release** with the vault PIN, "Is this your vote?"), "Votes from <name>" and "Connect again to vote" on connections, the feed
   items and History titles. A vote is identified by the pair (`connection_id`, `proposal_id`) everywhere (`VoteKeys`); memory only,
-  cleared at lock and hold with the devices list (`PhaseSteps.VOTES`). `VoteRules` (pure) maps what the vault decided to a chip and
+  cleared at lock and hold with the devices list (`PhaseSteps.VOTES`). **Every vault the app talks to has votes** (Rule 3: the
+  app requires the vault's current release, and a vault behind sees only the update screen), so there is no availability flag:
+  `unsupported_type` from `vote.list` is a failure like any other (the list FAILED, asked again by the next read). A list answered
+  after a lock or hold is voided by `VotesManager`'s `generation`, taken before the vault is asked (with "loading" set under the
+  same lock), and `refresh()` says whether the read was applied (the notifier's `refreshVotes` is true only then). **Every site read and send is gated**:
+  no sync runs and a `check_due` event starts no check while `sendsGated` (the release gate's check or pause, the owner check due
+  or held; wired from `VaultManager` as for presence and location). A sync whose list read was voided fetches and sends nothing;
+  after it, every read from votes.vettid.org (`siteGet` / `siteGetCounted`: the service lists, `index.json`, each document of
+  each proposal, the results and rows.json) and every call to the vault (the `vote.site.sync` calls, the blob upload and its
+  retry, `vote.get` and `vote.results.submit` of a due check) first looks again at that generation, at `syncRun` (bumped by
+  `stopSync`: a lock or hold, and the pause) and at `sendsGated` (`runLive`); a run that is over stops there (`RunOver`, a
+  cancellation; a results check it ends is void). A due check a `check_due` event starts follows the same rule from the event's
+  generation and run. The member's Check again, the recheck on open, the screen's site check and the give-up diagnosis follow
+  the generation taken at their start (a lock or hold), the diagnosis writing no hint after one. Only a request already in
+  flight when the lock or pause comes finishes (the site client's read is blocking). `VoteRules` (pure) maps what the vault decided to a chip and
   to notes (`VoteNote`); every text of the plan's table is in `feature/votes/.../strings.xml` and `VoteTextsTest` holds the approved
   ones word for word (a changed text is the owner's to approve; the strings under "Proposed" there are not yet approved). The
   vote screen is `FLAG_SECURE`; the proof is written only where the member's "Save to…" points, only on their action, never to a
