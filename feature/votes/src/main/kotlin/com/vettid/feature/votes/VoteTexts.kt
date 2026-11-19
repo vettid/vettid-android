@@ -9,9 +9,13 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.votes.RejectedWhy
 import com.vettid.core.data.votes.VoteChip
+import com.vettid.core.data.votes.VoteChoice
+import com.vettid.core.data.votes.VoteDecision
 import com.vettid.core.data.votes.VoteNote
+import com.vettid.core.data.votes.VoteOutcome
 import com.vettid.core.data.votes.VoteWire
 
 /**
@@ -102,6 +106,57 @@ internal object VoteTexts {
      */
     fun choiceLabel(r: Resources, id: String?, label: String?): String? =
         if (id == VoteWire.ABSTAIN) r.getString(R.string.vote_choice_abstain) else label
+
+    /**
+     * How the vote is decided, in the owner's words (approved 2026-11-18, as the iPhone app): the rule and, for a majority or a
+     * threshold, what it is of; a threshold of 1/1 says "all". Null for a decision without a base where it needs one (the
+     * parser lets none through), so no wrong rule is ever shown.
+     */
+    fun rule(r: Resources, d: VoteDecision): String? = when (val rule = d.rule) {
+        VoteDecision.Rule.Plurality -> r.getString(R.string.vote_rule_plurality)
+        VoteDecision.Rule.Majority -> d.base?.let { r.getString(RuleWords.of(it).majority) }
+        is VoteDecision.Rule.Threshold -> d.base?.let { base ->
+            val words = RuleWords.of(base)
+            if (rule.num == rule.den) r.getString(words.all) else r.getString(words.atLeast, "${rule.num}/${rule.den}")
+        }
+    }
+
+    /** A base's three lines: a majority of it, all of it, and at least a fraction of it. */
+    private class RuleWords(@StringRes val majority: Int, @StringRes val all: Int, @StringRes val atLeast: Int) {
+        companion object {
+            fun of(base: VoteDecision.Base) = when (base) {
+                VoteDecision.Base.CAST -> RuleWords(
+                    R.string.vote_rule_majority_cast,
+                    R.string.vote_rule_all_cast,
+                    R.string.vote_rule_threshold_cast,
+                )
+                VoteDecision.Base.VOTED -> RuleWords(
+                    R.string.vote_rule_majority_voted,
+                    R.string.vote_rule_all_voted,
+                    R.string.vote_rule_threshold_voted,
+                )
+                VoteDecision.Base.ELIG -> RuleWords(
+                    R.string.vote_rule_majority_elig,
+                    R.string.vote_rule_all_elig,
+                    R.string.vote_rule_threshold_elig,
+                )
+            }
+        }
+    }
+
+    /**
+     * The outcome's line, shown first in Results: the decided choice by its label as shown with the choices (its id when its
+     * label shows nothing; isolated). Null for `decided` naming a choice that is not one of the vote's real choices (abstain
+     * never is), so no wrong line shows.
+     */
+    fun outcome(r: Resources, o: VoteOutcome, choices: List<VoteChoice>): String? = when (o.status) {
+        VoteOutcome.Status.DECIDED -> choices.firstOrNull { it.id == o.choice && it.id != VoteWire.ABSTAIN }?.let { c ->
+            r.getString(R.string.vote_outcome_decided, AccountNames.isolateOrNull(c.label) ?: c.id)
+        }
+        VoteOutcome.Status.NOT_DECIDED -> r.getString(R.string.vote_outcome_not_decided)
+        VoteOutcome.Status.TIED -> r.getString(R.string.vote_outcome_tied)
+        VoteOutcome.Status.NO_QUORUM -> r.getString(R.string.vote_outcome_no_quorum)
+    }
 
     /**
      * A note's text. [service] is the service's name (isolated), [time] the time `vote_not_open` names. A note whose text

@@ -403,6 +403,10 @@ private fun ProposalBody(d: VoteDetail, service: String, closes: String?, state:
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+        // How the vote is decided, from the vault's own vote.get, under the quorum line (BALLOT-PROTOCOL 0.14.0 §3.5).
+        d.decision?.let { VoteTexts.rule(rememberResources(), it) }?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vote_rule"))
+        }
         d.binding?.let {
             val text = stringResource(if (it) R.string.vote_binding_yes else R.string.vote_binding_no)
             Text(text, style = MaterialTheme.typography.bodyMedium)
@@ -539,6 +543,11 @@ private fun Results(d: VoteDetail, service: String, resources: android.content.r
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.semantics { heading() },
         )
+        // The outcome first (BALLOT-PROTOCOL 0.14.0 §7.1), as the vault recomputed it; shown only with the numbers, so it hides
+        // with them. The unhandled messages stay at the end of the same block.
+        d.outcome?.let { VoteTexts.outcome(resources, it, d.choices) }?.let {
+            Text(it, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.testTag("vote_outcome"))
+        }
         for (c in d.choices) {
             val n = tally[c.id] ?: continue
             Text(

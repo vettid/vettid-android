@@ -20,6 +20,21 @@
     <string name="vote_chip_missed">You didn\'t vote</string>
     <string name="vote_written_by">Written by %1$s</string>
     <string name="vote_quorum_line">Quorum, as the service states it: %1$s</string>
+    <!-- How a vote is decided and its outcome (BALLOT-PROTOCOL 0.14.0 §3.5, §7.1): approved by the owner 2026-11-18, the same words as the iPhone app. -->
+    <string name="vote_rule_majority_cast">Decided by more than half of the votes, not counting abstentions.</string>
+    <string name="vote_rule_majority_voted">Decided by more than half of all ballots. Abstaining counts against.</string>
+    <string name="vote_rule_majority_elig">Decided by more than half of all eligible members. Not voting counts against.</string>
+    <string name="vote_rule_threshold_cast">Decided by at least %1$s of the votes, not counting abstentions.</string>
+    <string name="vote_rule_threshold_voted">Decided by at least %1$s of all ballots. Abstaining counts against.</string>
+    <string name="vote_rule_threshold_elig">Decided by at least %1$s of all eligible members. Not voting counts against.</string>
+    <string name="vote_rule_all_cast">Decided only if all the votes, not counting abstentions, are for one choice.</string>
+    <string name="vote_rule_all_voted">Decided only if all ballots are for one choice. Abstaining counts against.</string>
+    <string name="vote_rule_all_elig">Decided only if all eligible members vote for one choice. Not voting counts against.</string>
+    <string name="vote_rule_plurality">Decided by the most votes. A tie at the top decides nothing.</string>
+    <string name="vote_outcome_decided">Decided: %1$s</string>
+    <string name="vote_outcome_not_decided">Not decided: no choice met the rule.</string>
+    <string name="vote_outcome_tied">Tied: no choice decided.</string>
+    <string name="vote_outcome_no_quorum">No quorum: too few members voted.</string>
     <string name="vote_binding_yes">The service says this vote is binding.</string>
     <string name="vote_binding_no">The service says this vote is not binding.</string>
     <string name="vote_extended">The closing time was extended to %1$s.</string>
