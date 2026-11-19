@@ -418,6 +418,16 @@ fun UnlockContent(
                     stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
                     stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
                     modifier = Modifier.testTag("unlock_no_user_guid"),
+                    // After a failed release check: "Recover your vault" next to "Try again" (no erase until a check answers).
+                    actions = if (state.recoverBesideRetry) {
+                        {
+                            TextButton(onClick = onOpenAccountSite, modifier = Modifier.testTag("recover_vault")) {
+                                Text(stringResource(R.string.unlock_recover))
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 )
             }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)

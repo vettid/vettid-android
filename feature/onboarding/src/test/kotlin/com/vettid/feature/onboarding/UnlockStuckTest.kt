@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -138,6 +139,73 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_no_user_guid").assertExists()
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
         rule.onNodeWithText("Try again").assertExists()
+    }
+
+    /**
+     * (Owner decision a, 2026-11-19) After a failed check, "Recover your vault" beside the words, next to "Try again": a check
+     * that never succeeds still leaves a way forward. Still no erase.
+     */
+    @Test
+    fun afterAFailedCheckRecoverIsOfferedNextToTryAgain() {
+        val s = UnlockUiState(loading = false, preflightError = FailureKind.RELEASE_UNKNOWN, keysGone = true, noUserGuid = true)
+        assertTrue(s.recoverBesideRetry)
+        var recovered = 0
+        rule.setContent { UnlockContent(s, actions, onOpenAccountSite = { recovered++ }) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithText("Try again").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
+        assertEquals(1, recovered)
+        assertEquals(emptyList<String>(), asked)
+    }
+
+    /** After a check that answered, the recover-or-erase notice as before: recover once, with erase, not beside the words. */
+    @Test
+    fun anAnsweredCheckOffersRecoverAndEraseOnce() {
+        val s = ok.copy(keysGone = true, noUserGuid = true)
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertExists()
+    }
+
+    /** An ended release or a rollback with no user_guid: the recover-only notice alone (one Recover, no erase). */
+    @Test
+    fun recoverOnlyWithNoUserGuidIsUnchanged() {
+        for ((name, r) in recoverOnly) {
+            val s = r.copy(noUserGuid = true, keysGone = true)
+            assertFalse(name, s.recoverBesideRetry)
+            assertFalse(name, s.eraseOffered)
+        }
+        rule.setContent { UnlockContent(recoverOnly.getValue("release ended").copy(noUserGuid = true, keysGone = true), actions) }
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+    }
+
+    /** A kept check waiting after a failed check: the words alone (owner decision a, 2026-11-18), no Recover either. */
+    @Test
+    fun aKeptCheckWaitingKeepsTheWordsAloneAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, keptCheckWaiting = true,
+        )
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+    }
+
+    /** The words after a check that answered (no erase offered: the keys are there): no Recover beside them, no Try again. */
+    @Test
+    fun noRecoverBesideTheWordsWithoutAFailedCheck() {
+        val s = ok.copy(noUserGuid = true)
+        assertTrue(s.stuckWordsOnly)
+        assertFalse(s.recoverBesideRetry)
+        // The decision is for a phone whose reading says it has no usable user_guid, not for an unlock's answer alone.
+        val answered = UnlockUiState(loading = false, preflightError = FailureKind.NETWORK, message = UnlockMessage.NoUserGuid)
+        assertTrue(answered.stuckWordsOnly)
+        assertFalse(answered.recoverBesideRetry)
     }
 
     @Test
