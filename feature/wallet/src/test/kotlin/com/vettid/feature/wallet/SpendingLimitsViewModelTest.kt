@@ -74,8 +74,8 @@ class SpendingLimitsViewModelTest {
         vm.confirmSet()
         eventually { vm.state.value.step == LimitsStep.OVERVIEW && !vm.state.value.busy }
         assertEquals(listOf("caps.set:400000:null"), sent("caps."))
-        assertEquals(400_000L, vm.state.value.perTx)
-        assertEquals(2_000_000L, vm.state.value.perPeriod)
+        // The limits come through the wallets' collector, which may follow the action's own state.
+        eventually { vm.state.value.perTx == 400_000L && vm.state.value.perPeriod == 2_000_000L }
         assertNull(vm.state.value.error)
     }
 
@@ -130,7 +130,8 @@ class SpendingLimitsViewModelTest {
         eventually { vm.state.value.step == LimitsStep.OVERVIEW && !vm.state.value.busy }
         assertEquals(listOf("caps.raise:600000:2000000"), sent("caps."))
         assertTrue(ops.handedSecrets.allWipedAndSome())
-        assertEquals(600_000L, vm.state.value.perTx)
+        // The limits come through the wallets' collector, which may follow the action's own state.
+        eventually { vm.state.value.perTx == 600_000L }
     }
 
     /** (#248 review) The question is fixed when it opens: limits that moved before the confirm send nothing, as a conflict. */
@@ -351,8 +352,8 @@ class SpendingLimitsViewModelTest {
         eventually { vm.state.value.errorCode == WalletsManager.CAPS_SETTLED }
         assertTrue(sent("caps.raise").isEmpty())
         assertEquals(LimitsStep.OVERVIEW, vm.state.value.step)
-        assertEquals(1_000_000L, vm.state.value.perPeriod)
-        assertFalse(vm.state.value.capsPending)
+        // The limits come through the wallets' collector, which may follow the action's own state.
+        eventually { vm.state.value.perPeriod == 1_000_000L && !vm.state.value.capsPending }
     }
 
     @Test
