@@ -25,13 +25,13 @@ class FinishMoveFreshTest {
 
     private val vault = FakeVault(AppPhase.Unlocked)
 
-    /** Finishes the pending move here, as the manager does: the flag turns false before the answer is seen. */
-    private suspend fun kotlinx.coroutines.test.TestScope.finishHere(vm: FinishMoveViewModel) {
+    /** Finishes the pending move here, as the manager does: the flag turns false during the unlock, before its answer. */
+    private fun kotlinx.coroutines.test.TestScope.finishHere(vm: FinishMoveViewModel) {
+        vault.duringUnlock = { vault.finishMovePending.value = false }
         vm.setPin("40281795")
         vm.finish()
         advanceUntilIdle()
-        vault.finishMovePending.value = false
-        advanceUntilIdle()
+        vault.duringUnlock = null
         assertTrue(vm.uiState.value.done)
     }
 
@@ -93,5 +93,23 @@ class FinishMoveFreshTest {
         assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
         vm.opened()
         assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
+    }
+
+    /** The second move's PIN goes with a reading of its own, taken when its form opens: never the first move's. */
+    @Test
+    fun aSecondMovesPinGoesWithAFreshReading() = runTest {
+        vault.pinGeneration = 5
+        vault.finishMovePending.value = true
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        finishHere(vm)
+        vault.pinGeneration = 6 // a change in between
+        vault.finishMovePending.value = true
+        advanceUntilIdle()
+        vm.opened()
+        vm.setPin("13579246")
+        vm.finish()
+        advanceUntilIdle()
+        assertEquals(6, vault.finishMoveTaken.last())
     }
 }

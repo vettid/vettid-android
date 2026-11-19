@@ -108,8 +108,8 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     }
 
     /**
-     * The PIN form for a move not tried yet; nothing changes while one is running. The user_guid's reading stays ([opened]
-     * reads it again), with its failure.
+     * The PIN form for a move not tried yet. The user_guid's reading stays ([opened] reads it again), with its failure. A
+     * running move is left alone (defensive: its state is the fresh one already).
      */
     private fun freshMove() = set {
         if (it.busy) it else it.copy(pin = "", done = false, failure = if (it.noUserGuid) it.failure else null)
@@ -124,7 +124,8 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
      */
     fun opened() {
         // A move still pending was not finished here: "done" is a finished move's, so this one starts afresh (the flag turns
-        // false before a finished move's answer, so a reopening after one keeps its "done").
+        // false before a finished move's answer, so a reopening after one keeps its "done"). A backstop for "done" only: the
+        // new move's own transition ([init]) is what clears an earlier move's failure.
         if (state.value.done && vault.finishMovePending.value) freshMove()
         val noGuid = !vault.userGuidUsable
         set {

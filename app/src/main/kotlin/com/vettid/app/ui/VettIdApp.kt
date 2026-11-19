@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -278,7 +279,7 @@ private fun MoveNotices(
     val moveNotDone by viewModel.moveNotDone.collectAsStateWithLifecycle()
     val movedAway by viewModel.movedAway.collectAsStateWithLifecycle()
     val deleted by viewModel.deletedNotice.collectAsStateWithLifecycle()
-    var finishMoveOpen by rememberSaveable { mutableStateOf(false) }
+    var finishMoveOpen by rememberFinishMoveOpen(finishMove)
     val askFinishMove = finishMove && unlocked
     if (askFinishMove) {
         InfoBanner(
@@ -406,3 +407,15 @@ internal fun changeDecidedTitle(c: ChangeCheck): Int =
 
 /** Whether a banner sits at the top of the screen (the status bar's padding goes to the first). */
 private fun anyTopBanner(paused: Boolean, prefsReset: Boolean) = paused || prefsReset
+
+/**
+ * Whether the open app's "Finish the move" dialog was opened from its banner. It closes by itself once no move is pending (a
+ * move finished there turns the flag false before its answer, which hides the dialog without its Continue), so a later move
+ * in the same process never opens the dialog without a tap on the banner, nor does a restore saved after the finished one.
+ */
+@Composable
+internal fun rememberFinishMoveOpen(pending: Boolean): MutableState<Boolean> {
+    val open = rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(pending) { if (!pending) open.value = false }
+    return open
+}
