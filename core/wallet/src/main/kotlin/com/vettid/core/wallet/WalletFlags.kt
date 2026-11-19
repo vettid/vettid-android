@@ -33,8 +33,7 @@ interface WalletFlagsFile {
  * vault learns them only from that request).
  * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
- * The file is read and written on [io]: [Dispatchers.IO] in the app. View-model tests pass `Dispatchers.Unconfined`, so no work
- * on another thread outlives a test and touches the next one's Main dispatcher while it is being set.
+ * The file is read and written on [io]: [Dispatchers.IO] in the app; tests may pass their own.
  */
 @Suppress("TooManyFunctions")
 class WalletFlags(

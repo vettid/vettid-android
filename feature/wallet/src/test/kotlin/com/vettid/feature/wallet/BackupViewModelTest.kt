@@ -2,13 +2,9 @@ package com.vettid.feature.wallet
 
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.chain.Network
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -27,15 +23,6 @@ class BackupViewModelTest {
 
     private val ops = FakeWallets()
     private val flagsFile = MemoryFlags()
-
-    /** The vault calls run on the IO dispatcher: wait for them in real time. */
-    private suspend fun eventually(cond: () -> Boolean) {
-        withContext(Dispatchers.Default) {
-            withTimeout(EVENTUALLY_MS) {
-                while (!cond()) delay(10)
-            }
-        }
-    }
 
     private suspend fun TestScope.vm(saved: SavedStateHandle = SavedStateHandle()): BackupViewModel {
         val m = manager(backgroundScope, ops, testFlags(flagsFile))

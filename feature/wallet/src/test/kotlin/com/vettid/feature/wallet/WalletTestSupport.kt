@@ -230,7 +230,7 @@ internal class MemoryFlags : WalletFlagsFile {
 /**
  * The wallet flags as the view models' tests use them: the file is read and written on the calling thread, never on
  * `Dispatchers.IO`. Work that finished there after its test would come back through the view model's Main dispatcher while
- * the next test's [MainDispatcherRule] sets it, and that test fails ("Dispatchers.Main is used concurrently with setting it").
+ * [MainDispatcherRule] sets or resets it, and a test fails ("Dispatchers.Main is used concurrently with setting it").
  */
 internal fun testFlags(file: WalletFlagsFile = MemoryFlags()) = WalletFlags(file, kotlinx.coroutines.Dispatchers.Unconfined)
 
