@@ -6074,6 +6074,9 @@ class VaultDeviceTest {
         }
     }
 
+    /** How long a test waits after seeing a deposit for the device to note the send ([VaultDevice.beginOpening]). */
+    private val sentNotedMs = 300L
+
     /** An answer (or, with [re] null, an event) from the vault stamped [ts], with inner id [id]. */
     private fun FakeVault.sealAt(type: String, ts: Instant, re: String? = null, id: String = Ulid.new()): RelayMessage =
         msg(keyring.current()!!.seal(Inner(id = id, type = type, ts = ts, re = re, status = re?.let { Inner.STATUS_OK }, body = "{}".toByteArray())))
@@ -6109,6 +6112,7 @@ class VaultDeviceTest {
             elapsed = 2_000
             val fresh = async(Dispatchers.IO) { d.request("vault.status") }
             val req = v.open(nextDeposit().second)
+            Thread.sleep(sentNotedMs) // the send is noted once its deposit returned
             elapsed = 4_000
             val answerId = Ulid.new()
             d.handle(v.sealAt("vault.status", vaultAt, re = req.id, id = answerId))
@@ -6124,9 +6128,11 @@ class VaultDeviceTest {
     }
 
     /**
-     * (Rule 3) A cached answer to a re-send that comes late carries the first send's `ts`: the mark is taken from the first
-     * send, so the delay does not move it back. A request made by [VaultDevice.requestOnce] or [VaultDevice.requestWithId]
-     * (a credential operation, its id fresh) counts as well; a kept change re-sent ([VaultDevice.sendKept]) never does.
+     * (Rule 3) The mark is taken from the request's first send, and only from an answer that comes within a few seconds of
+     * it: a late one (a lost first copy answered on a re-send, or a slow network) could carry a `ts` that much later, so it
+     * gives no mark and the opening waits for the next. A request made by [VaultDevice.requestOnce] or
+     * [VaultDevice.requestWithId] (a credential operation, its id fresh) counts as well; a kept change re-sent
+     * ([VaultDevice.sendKept]) never does.
      */
     @Test
     fun theMarkIsFromTheFirstSendAndEveryFreshRequestCounts() = runBlocking<Unit> {
@@ -6144,14 +6150,24 @@ class VaultDeviceTest {
             kept.await()
             d.dropKept(k)
             assertTrue("a kept change: $told", told.isEmpty())
-            // requestOnce, sent 1 s after the opening; its answer arrives 60 s later.
+            // requestOnce, sent 1 s after the opening; its answer arrives 60 s later: too late to be used.
             elapsed = 11_000
-            val once = async(Dispatchers.IO) { d.requestOnce("vault.status") }
+            val once = async(Dispatchers.IO) { d.requestOnce("vault.status", timeout = java.time.Duration.ofSeconds(5)) }
             val req = v.open(nextDeposit().second)
+            Thread.sleep(sentNotedMs)
             elapsed = 71_000
             d.handle(v.sealAt("vault.status", at, re = req.id))
             once.await()
-            assertEquals(listOf(at.minusMillis(1_000)), told.toList())
+            assertTrue("a late answer: $told", told.isEmpty())
+            // The next one, answered 2 s after its send (72 s after the opening).
+            elapsed = 72_000
+            val again = async(Dispatchers.IO) { d.requestOnce("vault.status") }
+            val req2 = v.open(nextDeposit().second)
+            Thread.sleep(sentNotedMs)
+            elapsed = 74_000
+            d.handle(v.sealAt("vault.status", at.plusSeconds(73), re = req2.id))
+            again.await()
+            assertEquals(listOf(at.plusSeconds(73).minusMillis(62_000)), told.toList())
             // requestWithId, in the next opening.
             told.clear()
             elapsed = 100_000

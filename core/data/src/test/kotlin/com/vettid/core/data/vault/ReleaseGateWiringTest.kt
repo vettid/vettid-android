@@ -41,6 +41,8 @@ class ReleaseGateWiringTest {
         // The opening's mark: the phone's clock, until the first answer of this opening (never a vault time learnt before it)
         // puts it on the vault's clock, the clock of the messages' `ts` it is compared with (ANDROID-PLAN 0.1.134).
         val open = block("private val phaseFlow = PhaseHolder(")
+        open.has("onOpen = { continued ->")
+        open.has("if (!continued || !feed.openingContinues()) {")
         open.has("val opening = feed.vaultOpened(Instant.now())")
         open.has("session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }")
         assertTrue("no vault time learnt before the opening", open.none { it.contains("vaultNow") })
@@ -192,6 +194,7 @@ class ReleaseGateWiringTest {
         block("override suspend fun collectForWake()").has("if (heldBack.wakeIfUnknown(phaseFlow.value)) refresh()")
         // An activity started: a push from then on did not start the process.
         assertEquals("heldBack.uiStarted()", block("override fun onForeground()")[1])
+        code.has("override fun onUiCreated() = heldBack.uiStarted()")
         code.has("replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },")
         block("private fun replayHeldBack(").has("events.forEach { e -> runCatching { feed.replay(e, wake) } }")
     }

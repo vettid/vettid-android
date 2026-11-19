@@ -1889,6 +1889,7 @@ class VaultDevice private constructor(
                     sendOnceLocked(id, type, body, exp)
                 }
             }
+            noteOpeningSent(id)
             return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
                 ?: throw VaultStateException("$type: no response", type)
         } finally {
@@ -2186,6 +2187,7 @@ class VaultDevice private constructor(
         if (innerId == null) noteOpeningRequest(id)
         try {
             firstRequest(id, type, body, null)
+            noteOpeningSent(id)
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
@@ -3398,6 +3400,7 @@ class VaultDevice private constructor(
         noteOpeningRequest(id) // its callers make the id fresh for each request ([newId])
         try {
             firstRequest(id, type, body, exp)
+            noteOpeningSent(id)
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
                 // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
@@ -3447,11 +3450,26 @@ class VaultDevice private constructor(
         }
     }
 
-    /** An answer to [re], past the dedupe, its request still waiting: the opening's first such one is told and ends it. */
+    /** The first send of a noted request was deposited: its time is taken from here, the later and closer bound. */
+    private fun noteOpeningSent(id: String) {
+        val at = cfg.elapsedMs()
+        synchronized(openingLock) { opening?.sentAt?.let { m -> if (id in m) m[id] = at } }
+    }
+
+    /**
+     * An answer to [re], past the dedupe, its request still waiting: the opening's first such one is told and ends it. One
+     * that comes more than [OPENING_ANSWER_MS] after its first send (a lost first copy answered on a re-send, a slow
+     * network) is not used, since the vault may have stamped it that much later: the opening waits for the next.
+     */
     private fun noteOpeningAnswer(re: String, ts: Instant) {
+        val arrived = cfg.elapsedMs()
         val (o, sent) = synchronized(openingLock) {
             val o = opening ?: return
             val sent = o.sentAt[re] ?: return
+            if (arrived - sent > OPENING_ANSWER_MS) {
+                o.sentAt.remove(re)
+                return
+            }
             opening = null
             o to sent
         }
@@ -3813,6 +3831,9 @@ class VaultDevice private constructor(
 
         /** At most this many requests of one opening are noted ([beginOpening]); the first answer usually comes long before. */
         private const val OPENING_IDS = 256
+
+        /** An answer arriving later than this after its request's first send gives no opening mark ([noteOpeningAnswer]). */
+        private const val OPENING_ANSWER_MS = 5_000L
         private const val ROUND_POLL_MS = 50L
 
         /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */

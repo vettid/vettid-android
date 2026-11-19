@@ -175,6 +175,28 @@ class FeedManager(
     private class HeldEvent(val m: VaultMessage, val wake: Boolean)
     private val heldArrivals = LinkedHashMap<String, FeedItem>()
 
+    /** (Rule 3) The last read that ended failed: the feed may be behind what the vault holds, though loaded. */
+    @Volatile
+    private var behind = false
+
+    /** (Rule 3) One catch-up was scheduled after a failed read (no loop): cleared by a read that succeeds. */
+    @Volatile
+    private var retried = false
+
+    /**
+     * (Rule 3) A read failed with something held: one catch-up after [RETRY_AFTER_MS], so what is held is not left waiting
+     * for the next trigger (or dropped by a lock) when none comes. Once per failure run: a second failure waits for a
+     * trigger, as before.
+     */
+    private fun retryOnce() {
+        if (retried || gated() || !synchronized(lock) { queuesBehind() }) return
+        retried = true
+        scope.launch {
+            kotlinx.coroutines.delay(RETRY_AFTER_MS)
+            if (synchronized(lock) { queuesBehind() }) catchUp()
+        }
+    }
+
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
     private val reads = Mutex()
@@ -242,7 +264,9 @@ class FeedManager(
             "feed.event" -> {
                 // Held while the release is checked (Rule 3). While the owner check holds the vault only the clone alarm's
                 // item arrives; it opens the alarm path elsewhere, it is not listed.
-                if (holds(m, wake = false) || gated()) return
+                // A live one that comes while the feed is not loaded (its full read under way, or failed) waits for the read
+                // and is judged then, as a held one: the opening's backlog drained meanwhile stays silent (0.1.134).
+                if (takenElsewhere(m, wake = false)) return
                 val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
                 onItem(item)
             }
@@ -280,6 +304,17 @@ class FeedManager(
      */
     fun openingMarked(at: Instant, forOpening: Int) {
         synchronized(lock) { if (markable && forOpening == opening) openedAt = at }
+    }
+
+    /**
+     * (Rule 3) The vault is open again on this phone and only a status read that could not be made came between (the
+     * phase's own rule): the same opening carries on, its moment kept, so what the vault sent meanwhile is judged against
+     * it, not against a new mark taken now. False when there was no opening to carry on (the caller then opens a new one).
+     */
+    fun openingContinues(): Boolean = synchronized(lock) {
+        if (opening == 0 || openedAt == null) return@synchronized false
+        markable = true
+        true
     }
 
     /** (Rule 3) The opening's moment as it is judged now (tests). */
@@ -386,6 +421,11 @@ class FeedManager(
      * the lock is let go would let one that comes then (the queues empty, nothing held) be notified before them.
      */
     fun releaseHeld() {
+        // After a read that failed the feed may be behind, though loaded: one catch-up first, the release at its end.
+        if (!gated() && readsRunning.get() == 0 && behind) {
+            catchUp()
+            return
+        }
         if (!gated() && (readsRunning.get() > 0 || loadState.value != ListLoad.LOADED)) {
             // After the feed's reads under way ([readEnded]), from a loaded feed: one that is not loaded is read first.
             if (readsRunning.get() == 0) catchUp()
@@ -397,8 +437,9 @@ class FeedManager(
     private fun releaseNow() {
         val gatedNow = gated()
         synchronized(lock) {
-            // Read again under the lock: a full read that began (or a clear) since the caller looked leaves the queues for
-            // that read's end ([readEnded]) to release.
+            // Read again here, as late as it can be: a full read that began (or a clear) since the caller looked leaves the
+            // queues for that read's end ([readEnded]) to release. `loadState` is written outside [lock], so a read starting
+            // after this look is not excluded; its end releases what comes after, against the feed it leaves.
             if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
@@ -487,7 +528,7 @@ class FeedManager(
          * waited only for it goes ahead as if it had never been reserved (it read nothing, so it left the feed as it was).
          */
         fun drop() {
-            if (ended.compareAndSet(false, true)) readEnded(ok = true)
+            if (ended.compareAndSet(false, true)) readEnded(ok = true, ran = false)
         }
     }
 
@@ -508,7 +549,12 @@ class FeedManager(
      * loop), also an incremental one that left the feed loaded but behind: the next event, catch-up (the return to the
      * foreground, the relay's reconnection, a push wake) or release ([releaseHeld]) does.
      */
-    private fun readEnded(ok: Boolean) {
+    private fun readEnded(ok: Boolean, ran: Boolean = true) {
+        // A reservation given back unrun read nothing: what the last read said of the feed stands.
+        if (ran) {
+            behind = !ok
+            if (ok) retried = false else retryOnce()
+        }
         if (readsRunning.decrementAndGet() > 0 || !ok) return
         val releasable = !held() && !gated() && loadState.value == ListLoad.LOADED
         if (releasable && synchronized(lock) { queuesBehind() }) releaseNow()
@@ -621,8 +667,9 @@ class FeedManager(
         val waits = synchronized(lock) {
             (checking || (!gatedNow && queuesBehind())).also { w ->
                 if (w) {
-                    heldArrivals.remove(item.itemId)
-                    heldArrivals[item.itemId] = item
+                    // A newer arrival of a held waiting-asks replay is still that replay (posted as a new arrival).
+                    val replay = heldArrivals.remove(item.itemId)?.replayed == true
+                    heldArrivals[item.itemId] = if (replay && !item.replayed) item.copy(replayed = true) else item
                     while (heldArrivals.size > ARRIVAL_BUFFER) heldArrivals.remove(heldArrivals.keys.first())
                 }
             }
@@ -806,6 +853,9 @@ class FeedManager(
     }
 
     companion object {
+        /** (Rule 3) How long after a failed read the one catch-up for what is held waits ([retryOnce]). */
+        const val RETRY_AFTER_MS = 5_000L
+
         private val BATCH_WINDOW: java.time.Duration = AskBatching.WINDOW
         private val BATCH_SKEW: java.time.Duration = java.time.Duration.ofMinutes(2)
         const val STATUS_ACTIVE = "active"

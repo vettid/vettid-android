@@ -221,15 +221,15 @@ class SocialManager internal constructor(
      */
     private val mergedLists = ArrayDeque<Pair<Long, List<Approval>>>()
 
+    /** How many merged lists are kept for [firstListedSince] (tests: none after a lock, the hold or a sign-out). */
+    internal val mergedListsKept: Int get() = synchronized(localLock) { mergedLists.size }
+
     /**
      * (ANDROID-PLAN 0.1.134, owner decision a of 2026-11-18, item 3) The asks as the **first** `pending.list` read begun
      * after [mark] and merged left them, not as a later read has them; null while none is kept ([pendingListedSince]
      * false, or the lists dropped since). Of a read kept no longer (more than [MERGED_KEPT] merged since), the oldest one
      * kept after [mark].
      */
-    /** How many merged lists are kept for [firstListedSince] (tests: none after a lock, the hold or a sign-out). */
-    internal val mergedListsKept: Int get() = synchronized(localLock) { mergedLists.size }
-
     internal fun firstListedSince(mark: Long): List<Approval>? = synchronized(localLock) {
         if (!pendingListedSince(mark)) return@synchronized null
         val after = maxOf(mark, pending.resetAt)

@@ -631,9 +631,13 @@ class VaultManager(
         // The feed's mark first: the mailbox's events the check holds from now on are judged against it (Rule 3). The
         // phone's clock now, until the first answer of this opening puts it on the vault's clock, the clock of their `ts`
         // (ANDROID-PLAN 0.1.134); never a vault time learnt before the opening (the mailbox's backlog).
-        onOpen = {
-            val opening = feed.vaultOpened(Instant.now())
-            session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }
+        // A status read that could not be made, between two open phases, closed nothing: the same opening goes on (its
+        // moment kept, and the events held back meanwhile judged against it).
+        onOpen = { continued ->
+            if (!continued || !feed.openingContinues()) {
+                val opening = feed.vaultOpened(Instant.now())
+                session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }
+            }
             releaseUpdate.vaultOpened()
         },
     )
@@ -2008,8 +2012,11 @@ class VaultManager(
      * again if it ended, the outbox is flushed, and a vault past its owner-check deadline is re-read, so that the
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
+    override fun onUiCreated() = heldBack.uiStarted()
+
     override fun onForeground() {
-        // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process.
+        // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
+        // activity's creation, [onUiCreated]).
         heldBack.uiStarted()
         // ANDROID-PLAN 0.1.54: a vault being deleted is only read again (its status), nothing else runs.
         if (phaseFlow.deleting) {

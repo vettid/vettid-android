@@ -16,7 +16,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -462,6 +464,166 @@ class FeedManagerTest {
         assertTrue(arrived.last().replayed)
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134; the live path) After the check, while the opening's full read is still under way, a live event
+     * of the mailbox's backlog waits for the read and is judged then: silent. One sent since the opening notifies.
+     */
+    @Test
+    fun aLiveBacklogEventDuringTheOpeningsReadStaysSilent() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.vaultOpened(now)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        listOf(item("old", 1), item("new", 2)).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("old", 1), item("new", 2)), 2)
+        m.open() // the check is over (no hold); the opening's read, held at its list
+        settle { true }
+        m.onEvent(event(item("old", 1), ts = now.minus(1, ChronoUnit.DAYS))) // backlog, live
+        m.onEvent(event(item("new", 2), ts = now.plusSeconds(5))) // since the opening, live
+        settle { true }
+        assertTrue("nothing before the read: $arrived", arrived.isEmpty())
+        gate.complete(Unit)
+        settle { arrived.isNotEmpty() }
+        settle { true }
+        assertEquals(listOf("new"), arrived.map { it.itemId })
+    }
+
+    /** The same after a full read that failed: the backlog waits for the next read, which the event starts, and stays silent. */
+    @Test
+    fun aLiveBacklogEventAfterAFailedReadWaitsForTheNextOne() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.vaultOpened(now)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.failLists = 1
+        m.open()
+        settle { m.load.value == ListLoad.FAILED }
+        ops.known["old"] = item("old", 1)
+        ops.pages += FeedPage(listOf(item("old", 1)), 1)
+        m.onEvent(event(item("old", 1), ts = now.minus(1, ChronoUnit.DAYS)))
+        settle { m.load.value == ListLoad.LOADED }
+        settle { true }
+        assertTrue("backlog: silent: $arrived", arrived.isEmpty())
+    }
+
+    /**
+     * (Rule 3) A read that failed leaves the feed behind: the next release reads first (an item read elsewhere meanwhile
+     * does not notify), and when nothing comes, one catch-up after a while releases what is held.
+     */
+    @Test
+    fun afterAFailedReadTheReleaseCatchesUpFirst() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i1", 1))) // covered, sent since the opening: would notify
+        checking = false
+        ops.failLists = 1
+        m.catchUp() // fails: behind
+        // Without moving the clock, so that the one scheduled catch-up does not run first.
+        val settledNow = { done: () -> Boolean ->
+            repeat(SETTLE_TRIES) {
+                runCurrent()
+                if (done()) return@repeat
+                Thread.sleep(SETTLE_MS)
+            }
+        }
+        settledNow { ops.failLists == 0 && synchronized(ops) { ops.lists.size } >= 2 }
+        // i1 was read on another device meanwhile; a live event comes.
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "read")), 3)
+        m.onEvent(event(item("i4", 4)))
+        settledNow { m.seq >= 3L }
+        runCurrent()
+        assertTrue(m.seq >= 3L)
+        assertFalse("read elsewhere: $arrived", arrived.any { it.itemId == "i1" })
+    }
+
+    /** (Rule 3) A failed read with something held: one catch-up later releases it, with no other trigger. */
+    @Test
+    fun aFailedReadIsTriedOnceMoreForWhatIsHeld() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        checking = false
+        ops.failLists = 1
+        m.catchUp()
+        settle { ops.failLists == 0 }
+        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
+        advanceTimeBy(FeedManager.RETRY_AFTER_MS + 100)
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) A status read that could not be made, between two open phases, closed nothing: the opening
+     * carries on with its moment, so an event the vault sent during the blip (after the opening, before "now") notifies.
+     */
+    @Test
+    fun anOpeningCarriesOnAcrossAStatusReadThatFailed() = runTest {
+        val ops = Ops()
+        var checking = true
+        val opened = now.minusSeconds(600)
+        val m = manager(ops, held = { checking })
+        val n = m.vaultOpened(opened)
+        m.openingMarked(opened, n)
+        m.clear() // Unreachable: the clears of a lock
+        assertTrue(m.openingContinues())
+        assertEquals(opened, m.openingMark)
+        m.vaultOpened(now) // what a new opening would have done, for contrast below
+        val fresh = manager(Ops())
+        assertFalse("no opening to carry on", fresh.openingContinues())
+        // Back in the carried-on opening: an event of the blip, covered by the read, notifies.
+        val m2 = manager(ops, held = { checking })
+        val n2 = m2.vaultOpened(opened)
+        m2.openingMarked(opened, n2)
+        m2.clear()
+        assertTrue(m2.openingContinues())
+        ops.known["b"] = item("b", 1)
+        ops.pages += FeedPage(listOf(item("b", 1)), 1)
+        m2.refresh()
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m2.arrivals.collect { arrived += it } }
+        m2.replay(event(item("b", 1), ts = now.minusSeconds(60)), wake = false)
+        checking = false
+        m2.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("b"), arrived.map { it.itemId })
+    }
+
+    /**
+     * A held waiting-asks replay that a newer arrival of the same item replaces in the held arrivals (a catch-up during the
+     * check) is still a replay when released: posted as a new arrival.
+     */
+    @Test
+    fun aHeldReplayReplacedByACatchUpsArrivalStaysAReplay() = runTest {
+        val ops = Ops()
+        var checking = true
+        val ask = item("a1", 1, kind = WaitingAsks.SIGN_IN)
+        val m = opened(ops, ask, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        val approval = com.vettid.core.data.social.Approval.Authentication("ra1", "c1", null, now.minusSeconds(60), now.plusSeconds(300))
+        assertTrue(m.replayWaitingAsks(token, listOf(approval), now))
+        ops.pages += FeedPage(listOf(ask.copy(seq = 2)), 2)
+        m.catchUp() // its arrival replaces the held replay
+        settle { m.seq == 2L }
+        assertTrue(arrived.isEmpty())
+        checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(2L, arrived.single().seq)
+        assertTrue("still a replay", arrived.single().replayed)
+    }
+
     /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
     @Test
     fun aMarkForAnEarlierOpeningIsIgnored() = runTest {
@@ -662,8 +824,8 @@ class FeedManagerTest {
     }
 
     /**
-     * (Rule 3) A read that fails after the check does not leave the feed stalled: the next event starts a read, and what was
-     * held and the event come after it.
+     * (Rule 3) A read that fails after the check does not leave the feed stalled: the next event starts a read (before the
+     * one catch-up a failed read schedules), and what was held and the event come after it.
      */
     @Test
     fun aFailedReadAfterTheCheckDoesNotStallTheFeed() = runTest {
@@ -677,8 +839,13 @@ class FeedManagerTest {
         ops.failLists = 1
         m.open() // fails
         m.releaseHeld()
-        settle { m.load.value == ListLoad.FAILED }
-        settle { true }
+        // Without moving the clock: the scheduled catch-up must not run before the event below.
+        repeat(SETTLE_TRIES) {
+            runCurrent()
+            if (m.load.value == ListLoad.FAILED) return@repeat
+            Thread.sleep(SETTLE_MS)
+        }
+        assertEquals(ListLoad.FAILED, m.load.value)
         assertTrue(arrived.isEmpty())
         // A live event: a read starts, then what was held and the event come.
         ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2), item("i3", 3)), 3)
