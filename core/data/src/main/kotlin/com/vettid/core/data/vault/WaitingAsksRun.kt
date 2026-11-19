@@ -43,15 +43,18 @@ internal class WaitingAsksRun(
 
     /** [tryOnce] when the run is not paused. */
     private suspend fun tryOpen(): Boolean? {
-        if (!open()) return false
+        if (!open()) return ended()
         if (!feedLoaded()) attempt(readFeed)
         if (open() && !listed()) attempt(readList)
         return when {
-            !open() -> false // a read that ended with the session counts for nothing
+            !open() -> ended() // a read that ended with the session counts for nothing
             listed() && replay() -> true
             else -> null
         }
     }
+
+    /** Not open: given up, unless the run is paused meanwhile (a status read that could not be made), which waits. */
+    private fun ended(): Boolean? = if (paused()) null else false
 
     /** One read; a failure is only a reason to try again later (a cancellation ends the run). */
     @Suppress("TooGenericExceptionCaught")

@@ -54,7 +54,7 @@ class ReleaseGateWiringTest {
         val clear = block("clearReleaseCheck = {")
         clear.has("phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }")
         clear.has("releasePause.reset()")
-        clear.has("openingSteps.dropReplayOnClose(p)")
+        clear.has("openingSteps.dropReplayOnClose(p, openingAtPhase)")
     }
 
     @Test
@@ -206,7 +206,8 @@ class ReleaseGateWiringTest {
     @Test
     fun aBlipKeepsWhatIsHeldAndTheLiftIsMarked() {
         // Soft for Unreachable, nothing for a close reached after a newer opening (OpeningStepsTest drives both).
-        code.has("clearFeed = { p -> openingSteps.clearFeed(p) },")
+        code.has("clearFeed = { p -> openingSteps.clearFeed(p, openingAtPhase) },")
+        code.has("openingAtPhase = feed.openingNumber")
         // The lift is marked by the owner check before its value is published, with an opening current.
         block("OwnerCheckManager(").has("onLift = { at ->")
         code.has("val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }")
@@ -227,11 +228,12 @@ class ReleaseGateWiringTest {
         // A due state the clock alone began counts (pauseLifted), and a held one too.
         code.has("val checkEnded = lifted || !now && wasHeld")
         // The held waiting-asks replay is kept across Unreachable, dropped by a close (OpeningStepsTest).
-        code.has("openingSteps.dropReplayOnClose(p)")
+        code.has("openingSteps.dropReplayOnClose(p, openingAtPhase)")
         // A pass learnt during Unreachable is kept for the continued opening, not launched.
         code.has("} else if (replayFor != null && unreachable) {")
         code.has("WaitingAsksReplay.due(before, v, at, unlocked = phaseFlow.value == AppPhase.Unlocked || unreachable)")
-        code.has("when (openingSteps.placePassReplay(due)) {")
+        code.has("when (openingSteps.placePassReplay(due, openingAtPass)) {")
+        code.has("val openingAtPass = feed.openingNumber")
         code.has("OpeningSteps.PassReplay.LAUNCH -> launchAfterHoldPassed(replayFor, listMark, replayToken)")
         code.has("OpeningSteps.PassReplay.DROP -> feed.endReplayWindow(replayToken)")
         // Every lift with the vault open reads the feed in full, also one with no replay and no hold.

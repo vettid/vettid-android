@@ -1213,6 +1213,8 @@ class VaultManager(
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             var previous: AppPhase = AppPhase.Starting
+            // The feed's opening when this collector received the phase: a late clear never touches a newer one.
+            var openingAtPhase = 0
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
                 replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },
@@ -1223,7 +1225,7 @@ class VaultManager(
                 // A status read that could not be made is no close: what the release check holds is kept for the opening
                 // that may continue (ANDROID-PLAN 0.1.134); any other phase drops everything.
                 // Soft for Unreachable; nothing for a close reached after a newer opening ([OpeningSteps.clearFeed]).
-                clearFeed = { p -> openingSteps.clearFeed(p) },
+                clearFeed = { p -> openingSteps.clearFeed(p, openingAtPhase) },
                 clearDevices = { devices.clear() },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
@@ -1234,7 +1236,7 @@ class VaultManager(
                     releasePause.reset()
                     // A status read that could not be made closes nothing: a waiting-asks replay held over a pause is kept
                     // for the opening that may continue (ANDROID-PLAN 0.1.134 "Held"); a close drops it.
-                    openingSteps.dropReplayOnClose(p)
+                    openingSteps.dropReplayOnClose(p, openingAtPhase)
                 },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
@@ -1250,6 +1252,7 @@ class VaultManager(
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
                 previous = it
+                openingAtPhase = feed.openingNumber
                 phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
@@ -1298,6 +1301,7 @@ class VaultManager(
                 // A pass learnt while a status read fails (another device's): kept for the opening if it continues
                 // ([HeldAskReplay], run by its owed reads); a close or a new opening drops it.
                 val unreachable = phaseFlow.value is AppPhase.Unreachable
+                val openingAtPass = feed.openingNumber
                 val replayGen = record.generation.takeIf {
                     WaitingAsksReplay.due(before, v, at, unlocked = phaseFlow.value == AppPhase.Unlocked || unreachable)
                 }
@@ -1344,7 +1348,7 @@ class VaultManager(
                     // Not open now: the continued opening runs it ([releasePause] owed reads), after its own reads.
                     steps.step {
                         val due = HeldAskReplay.Due(replayFor, listMark, replayToken)
-                        when (openingSteps.placePassReplay(due)) {
+                        when (openingSteps.placePassReplay(due, openingAtPass)) {
                             OpeningSteps.PassReplay.HELD -> Unit
                             OpeningSteps.PassReplay.LAUNCH -> launchAfterHoldPassed(replayFor, listMark, replayToken)
                             OpeningSteps.PassReplay.DROP -> feed.endReplayWindow(replayToken) // closed since: nothing is read

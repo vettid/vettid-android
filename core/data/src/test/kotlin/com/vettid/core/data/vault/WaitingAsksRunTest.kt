@@ -199,4 +199,25 @@ class WaitingAsksRunTest {
         assertEquals(1, f.replays)
         assertEquals(0, f.ended)
     }
+
+    /** A blip that comes during a try (the session not open, the run paused) waits for the opening rather than give up. */
+    @Test
+    fun aBlipDuringATryWaits() = runTest {
+        val f = Fake()
+        f.duringListRead = {
+            f.open = false
+            f.paused = true
+        }
+        val run = async { f.run().run() }
+        advanceTimeBy(WaitingAsksRun.WAITS[0] + 1)
+        runCurrent()
+        assertEquals("not given up", 0, f.ended)
+        f.duringListRead = {}
+        f.open = true
+        f.paused = false
+        advanceTimeBy(WaitingAsksRun.WAITS.last() + 1)
+        runCurrent()
+        assertTrue(run.await())
+        assertEquals(1, f.replays)
+    }
 }

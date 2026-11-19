@@ -25,37 +25,45 @@ internal class OpeningSteps(
     }
 
     /**
-     * The phase collector's feed clear for [p]: a soft one for Unreachable, which closes nothing; any other clears all. Neither
-     * when an opening was published before the collector reached [p] (a lock and an unlock, or a blip and its return, faster
-     * than it): that opening already emptied the feed's list and reset what it keeps for itself ([FeedManager.vaultOpened]),
-     * or continued the one the blip kept, and its read is under way.
+     * The phase collector's feed clear for [p], which it received in the feed's opening [openingSeen]: a soft one for
+     * Unreachable, which closes nothing; any other clears all. Neither when the vault is open now (the blip's opening
+     * continued) or a newer opening was published since (a lock and an unlock, or more, faster than the collector, whatever
+     * the phase now): that opening already emptied the feed's list and reset what it keeps for itself
+     * ([FeedManager.vaultOpened]), or continued the one the blip kept, and its read is under way.
      */
-    fun clearFeed(p: AppPhase) {
-        phase().unlessOpen { if (p is AppPhase.Unreachable) feed.clear(keepHeld = true) else feed.clear() }
+    fun clearFeed(p: AppPhase, openingSeen: Int) = stillThatOpening(openingSeen) {
+        if (p is AppPhase.Unreachable) feed.clear(keepHeld = true) else feed.clear()
     }
 
     /**
      * The release check's clear for [p]: a waiting-asks replay kept for the opening goes with a close, not with Unreachable,
-     * and not with a close reached after a newer opening was published (that opening dropped the old one in [onOpen], and
+     * and not with a close reached once open again or in a newer opening (that opening dropped the old one in [onOpen], and
      * what it holds now is its own).
      */
-    fun dropReplayOnClose(p: AppPhase) {
-        if (p !is AppPhase.Unreachable) phase().unlessOpen { heldAskReplay.drop() }
+    fun dropReplayOnClose(p: AppPhase, openingSeen: Int) {
+        if (p !is AppPhase.Unreachable) stillThatOpening(openingSeen) { heldAskReplay.drop() }
+    }
+
+    /** [block] under the phase holder's lock, while the vault is not open and the feed's opening is still [openingSeen]. */
+    private fun stillThatOpening(openingSeen: Int, block: () -> Unit) = phase().decide { p ->
+        if (p != AppPhase.Unlocked && feed.openingNumber == openingSeen) block()
     }
 
     /** Where a passed check's waiting-asks replay goes ([placePassReplay]). */
     enum class PassReplay { HELD, LAUNCH, DROP }
 
     /**
-     * A check that passed while a status read fails (another device's): its replay is kept for the opening if it continues,
-     * whose owed reads run it; a close or a new opening drops it. Decided on the phase now, under the phase holder's lock:
-     * still Unreachable, kept ([PassReplay.HELD]); open again since the caller looked, launched now ([PassReplay.LAUNCH]);
-     * closed since, dropped, its window ended by the caller ([PassReplay.DROP]): nothing is read with the vault closed.
+     * A check that passed while a status read fails (another device's), learnt in the feed's opening [opening]: its replay is
+     * kept for that opening if it continues, whose owed reads run it; a close or a new opening drops it. Decided on the phase
+     * now, under the phase holder's lock: still Unreachable in that opening, kept ([PassReplay.HELD]); that opening continued
+     * since the caller looked, launched now ([PassReplay.LAUNCH]); closed since, or a new opening (never a replay at an
+     * unlock), dropped, its window ended by the caller ([PassReplay.DROP]): nothing is read with the vault closed.
      */
-    fun placePassReplay(due: HeldAskReplay.Due): PassReplay = phase().decide { p ->
+    fun placePassReplay(due: HeldAskReplay.Due, opening: Int): PassReplay = phase().decide { p ->
+        val same = feed.openingNumber == opening
         when {
-            p is AppPhase.Unreachable -> PassReplay.HELD.also { heldAskReplay.hold(due) }
-            p == AppPhase.Unlocked -> PassReplay.LAUNCH
+            same && p is AppPhase.Unreachable -> PassReplay.HELD.also { heldAskReplay.hold(due) }
+            same && p == AppPhase.Unlocked -> PassReplay.LAUNCH
             else -> PassReplay.DROP
         }
     }

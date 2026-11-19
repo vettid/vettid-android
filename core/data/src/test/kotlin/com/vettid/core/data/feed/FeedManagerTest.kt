@@ -1069,6 +1069,8 @@ class FeedManagerTest {
         m.refresh() // a read all the same (one already asked for)
         advanceUntilIdle()
         assertEquals("nothing while not open", emptyList<String>(), arrived)
+        assertFalse("nothing applied while not open", m.loaded)
+        assertEquals(emptyList<FeedItem>(), m.items.value)
         open = true
         ops.pages += FeedPage(listOf(i1, g2), 2)
         m.refresh() // the continued opening's read
@@ -1124,6 +1126,48 @@ class FeedManagerTest {
         assertTrue(m.replayOwns(token))
         open = true
         assertTrue(m.replayWaitingAsks(token, emptyList(), now))
+    }
+
+    /** The return read while the owner check is due or held notifies nothing, and drops what the blip kept. */
+    @Test
+    fun aReturnReadWhileTheCheckIsDueNotifiesNothing() = runTest {
+        val ops = Ops()
+        var due = false
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, gated = { due }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // the blip
+        due = true // another device's pass not known yet: still due here
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the return read
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+        due = false
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the lift's read
+        advanceUntilIdle()
+        assertEquals("dropped, not notified later", emptyList<String>(), arrived)
+    }
+
+    /** A blip the phase collector never cleared for (it reached it after the return): the opening's cursor is kept then. */
+    @Test
+    fun aBlipWithNoSoftClearIsKeptWhenTheOpeningContinues() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues()) // the return, with no soft clear before it
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(item("i1", 1), g2), 2)
+        m.refresh()
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
     }
 
     /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
