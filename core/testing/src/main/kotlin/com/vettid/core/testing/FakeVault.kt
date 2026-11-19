@@ -433,6 +433,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun unlock(pin: String, cancelRecovery: Boolean): UnlockAttempt {
         call("unlock")
+        // As the manager's guard: no usable user_guid, nothing is sent.
+        if (!userGuidUsable) return UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
         lastPin = pin
         lastCancelRecovery = cancelRecovery
         duringUnlock?.invoke()

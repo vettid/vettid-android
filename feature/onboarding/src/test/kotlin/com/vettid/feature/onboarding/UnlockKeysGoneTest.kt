@@ -111,15 +111,18 @@ class UnlockKeysGoneTest {
     fun aPhoneWithoutAUserGuidIsToldWhileAKeptCheckWaits() = runTest {
         vault.transferKeptSince.value = java.time.Instant.parse("2026-11-01T00:00:00Z")
         vault.transferCheckWaiting.value = true
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        vault.userGuidUsable = false
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertTrue(vm.uiState.value.keptTransfer)
+        // Told at once, with no PIN asked for: the words alone, no erase (owner decisions a, 2026-11-18 and 2026-11-19).
+        assertFalse(vm.uiState.value.eraseOffered)
+        assertTrue(vm.uiState.value.stuckWordsOnly)
+        assertFalse(vm.uiState.value.pinAllowed)
         vm.setPin("40281795")
         vm.submit()
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.eraseOffered)
-        assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
+        assertTrue("nothing sent", vault.calls.none { it == "unlock" })
     }
 
     /** Inside the 7 days (kept, no check waiting): the notice with its erase, and not "the move back failed" beside it. */

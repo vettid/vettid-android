@@ -40,6 +40,24 @@ class UnlockReturnTest {
         assertTrue(vault.calls.none { it.startsWith("returnToPreviousRelease") })
     }
 
+    /** No usable user_guid: no way back is offered either (it would ask for a PIN that can never open the vault). */
+    @Test
+    fun noReturnWithoutAUsableUserGuid() = runTest {
+        vault.userGuidUsable = false
+        vault.moveUnconfirmed.value = failed
+        val vm = vm()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.returnOffered)
+        vm.setPin("40281795")
+        vm.askReturn()
+        assertFalse(vm.uiState.value.returnConfirm)
+        vm.confirmReturn()
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vault.calls.none { it.startsWith("returnToPreviousRelease") || it == "unlock" })
+        assertFalse(vm.uiState.value.returnPinAllowed)
+    }
+
     @Test
     fun returnConfirmedWithThePinTypedSendsItOnlyToTheWayBack() = runTest {
         vault.moveUnconfirmed.value = failed

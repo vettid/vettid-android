@@ -93,6 +93,10 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     }
 
     init {
+        // No usable user_guid: said at once, with no PIN to type (owner decision a, 2026-11-19, as the unlock screen).
+        if (!vault.userGuidUsable) {
+            state.update { it.copy(noUserGuid = true, failure = FailureKind.NOT_SUPPORTED) }
+        }
         keypad.follow(state.value.pinAllowed)
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
     }

@@ -28,7 +28,7 @@ class FinishMoveHoldTest {
     /** After `no_user_guid` the PIN field takes nothing and the move is not tried again: no PIN can open the vault here. */
     @Test
     fun noSecondTryWithoutAUsableUserGuid() = runTest {
-        vault.userGuidUsable = false
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
         val vm = FinishMoveViewModel(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
@@ -43,6 +43,20 @@ class FinishMoveHoldTest {
         vm.finish()
         advanceUntilIdle()
         assertEquals("not tried again", 1, vault.finishMoveTaken.size)
+    }
+
+    /** Known at once from the user_guid check: the words, no PIN, nothing sent (as the unlock screen). */
+    @Test
+    fun noUserGuidIsKnownWhenTheMoveOpens() = runTest {
+        vault.userGuidUsable = false
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        assertFalse(vm.uiState.value.pinAllowed)
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vault.finishMoveTaken.isEmpty())
         assertFalse(vault.calls.any { it == "lock" || it == "unlock" })
     }
 

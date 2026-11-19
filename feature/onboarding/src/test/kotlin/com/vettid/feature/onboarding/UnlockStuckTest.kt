@@ -98,9 +98,29 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_stuck").assertExists()
         rule.onNodeWithTag("recover_vault").assertExists()
         rule.onNodeWithTag("erase_phone").assertExists()
-        rule.onNodeWithTag("unlock_pin").assertIsNotEnabled()
+        // No PIN block and no "Unlock" button at all.
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
+        rule.onNodeWithText("Unlock").assertDoesNotExist()
         // With a user_guid the PIN is asked for as before.
         assertTrue(ok.pinAllowed)
+    }
+
+    /** A kept check waits: the words alone, no actions (no erase, no PIN). */
+    @Test
+    fun noUserGuidWhileAKeptCheckWaitsShowsTheWordsAlone() {
+        val s = ok.copy(keysGone = true, noUserGuid = true, keptCheckWaiting = true)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
+    }
+
+    /** Nothing to erase before the release check answered: it may yet say an erase would not help. */
+    @Test
+    fun noEraseWhileTheReleaseIsChecked() {
+        val s = ok.copy(keysGone = true, noUserGuid = true, loading = true)
+        assertFalse(s.eraseOffered)
+        assertFalse(s.stuckNoticeShown)
     }
 
     @Test

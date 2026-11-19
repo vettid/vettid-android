@@ -150,8 +150,8 @@ data class UnlockUiState(
      * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
      * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
      * or `transfer_incomplete` refusal included) and by a new release check. Also set when this phone has no usable
-     * `user_guid` (`no_user_guid`, decided here before anything is sent), which no update will add: a new release
-     * check clears it too, and the next try sets it again.
+     * `user_guid`, which no update will add: read when the screen opens and at every new release check
+     * ([noUserGuid], owner decision a, 2026-11-19), and by an unlock answered `no_user_guid`.
      */
     val keysGone: Boolean = false,
     /**
@@ -221,7 +221,7 @@ data class UnlockUiState(
     val returnAsked: Boolean = false,
 ) {
     /** (0.1.54 point 3) "Return to release N" is offered: the marker has `failed`. */
-    val returnOffered: Boolean get() = move?.failed == true
+    val returnOffered: Boolean get() = move?.failed == true && !noUserGuid
 
     /** The PIN for the way back may be typed: offered, and nothing running or waiting. */
     val returnPinAllowed: Boolean get() = returnOffered && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy && !erasing
@@ -244,10 +244,18 @@ data class UnlockUiState(
      * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
      * never on a [recoverOnly] screen, which wins over both.
      */
-    val eraseOffered: Boolean get() = !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+    val eraseOffered: Boolean get() = !loading && !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
 
     /** The recover-or-erase notice of a phone without the vault's keys is on the screen (the screen's own choice). */
-    val stuckNoticeShown: Boolean get() = !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+    val stuckNoticeShown: Boolean get() = !loading && !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+
+    /**
+     * The recover-or-erase words alone, with no actions: this phone has no usable user_guid but the notice with its
+     * actions is not shown (a kept check waits, owner decision a, 2026-11-18), or an unlock answered `no_user_guid`
+     * there. Not beside an ended release or a rollback, nor beside the move card of the same failure.
+     */
+    val stuckWordsOnly: Boolean
+        get() = (noUserGuid || message == UnlockMessage.NoUserGuid) && !loading && !eraseOffered && !recoverOnly && !moveNoUserGuid
 
     /** The last "Finish the move" was refused for want of a usable user_guid ([isNoUserGuid]). */
     val moveNoUserGuid: Boolean get() = moveFailure?.let { isNoUserGuid(it.kind, it.code) } == true

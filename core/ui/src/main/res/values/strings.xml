@@ -97,7 +97,7 @@
     <!-- The same words as connections_detail_key, for Approvals. -->
     <string name="core_ui_vault_key_fingerprint">Vault key fingerprint</string>
     <string name="services_empty" tools:ignore="UnusedResources">No services yet</string>
-    <!-- Moved from :feature:onboarding, words unchanged (the recover-or-erase notice of a phone with no usable user_guid):
+    <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). Moved from :feature:onboarding, words unchanged (the recover-or-erase notice of a phone with no usable user_guid):
          the unlock screen, Finish the move, the release update, and "Lock and unlock now" in Settings and the open app's banner. -->
     <string name="unlock_stuck_title">This phone cannot open your vault</string>
     <string name="unlock_stuck_body">This phone no longer holds your vault\'s keys. Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>

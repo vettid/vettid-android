@@ -129,6 +129,7 @@ class RootViewModelTest {
         advanceUntilIdle()
         assertTrue(vm.lockRefusedNoUserGuid.value)
         assertFalse("nothing locked", "lock" in vault.calls)
+        assertEquals("the change's result stays", 0, vault.changeCheckAcknowledged)
         assertEquals(AppPhase.Unlocked, vault.phase.value)
         vm.acknowledgeLockRefused()
         assertFalse(vm.lockRefusedNoUserGuid.value)
