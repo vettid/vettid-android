@@ -77,9 +77,9 @@ class ReleaseGateWiringTest {
             "fun featuresGated(): Boolean = featuresGated(ownerCheck.ownerCheck.value?.gated(Instant.now()) == true, " +
                 "releaseUpdate.paused.value)",
         )
-        block("val feed = FeedManager(").has("gated = { featuresGated() },")
-        block("val feed = FeedManager(").has("held = { releaseUpdate.checking.value },")
-        block("val feed = FeedManager(").has("ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },")
+        block("val feed: FeedManager = FeedManager(").has("gated = { featuresGated() },")
+        block("val feed: FeedManager = FeedManager(").has("held = { releaseUpdate.checking.value },")
+        block("val feed: FeedManager = FeedManager(").has("ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },")
         // What sends waits for the release check too.
         code.has("private fun sendsGated(): Boolean = sendsGated(featuresGated(), releaseUpdate.checking.value)")
         block("val presence = PresenceManager(").has("closed = { phaseFlow.value != AppPhase.Unlocked || sendsGated() },")
@@ -197,6 +197,12 @@ class ReleaseGateWiringTest {
         code.has("override fun onUiCreated() = heldBack.uiStarted()")
         code.has("replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },")
         block("private fun replayHeldBack(").has("events.forEach { e -> runCatching { feed.replay(e, wake) } }")
+    }
+
+    /** Nothing of the feed is kept while the vault is not open on this phone; a hold, which keeps it open, keeps nothing out. */
+    @Test
+    fun theFeedKeepsNothingOutsideAnOpenVault() {
+        block("val feed: FeedManager = FeedManager(").has("vaultOpen = { phaseFlow.value == AppPhase.Unlocked },")
     }
 
     @Test

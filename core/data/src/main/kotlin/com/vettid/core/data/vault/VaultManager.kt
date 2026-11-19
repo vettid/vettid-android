@@ -996,7 +996,7 @@ class VaultManager(
      * The vault's feed (ANDROID-PLAN 0.1.23, VAULT-MESSAGING §10.9): the Notifications screen and the bell. Read
      * while the vault is open and not held; in memory only.
      */
-    val feed = FeedManager(
+    val feed: FeedManager = FeedManager(
         scope,
         ops = { VaultFeedOps(openApi()) },
         gated = { featuresGated() },
@@ -1004,6 +1004,8 @@ class VaultManager(
         held = { releaseUpdate.checking.value },
         // Nothing waits for that end while the owner check is due or held (owner decision 2026-11-18).
         ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
+        // Nothing of the feed is kept while the vault is not open on this phone (a hold keeps it open).
+        vaultOpen = { phaseFlow.value == AppPhase.Unlocked },
     )
 
     /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */

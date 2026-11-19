@@ -133,6 +133,11 @@ class FeedManager(
      * 2026-11-18, as the iPhone app).
      */
     private val ownerGated: () -> Boolean = { false },
+    /**
+     * The vault is open on this phone (the phase, not the feed's state: a hold or the release gate's pause clears the feed
+     * while it stays open). A held-back or live event that comes while it is not is kept nowhere ([waitsForTheRead]).
+     */
+    private val vaultOpen: () -> Boolean = { true },
 ) : FeedRepository {
     private val lock = Any()
     private var byId: Map<String, FeedItem> = emptyMap()
@@ -184,12 +189,16 @@ class FeedManager(
     private var retried = false
 
     /**
-     * (Rule 3) A read failed with something held: one catch-up after [RETRY_AFTER_MS], so what is held is not left waiting
+     * (Rule 3) An incremental read failed with something held (the feed loaded but behind): one catch-up after
+     * [RETRY_AFTER_MS], so what is held is not left waiting
      * for the next trigger (or dropped by a lock) when none comes. Once per failure run: a second failure waits for a
      * trigger, as before.
      */
     private fun retryOnce() {
-        if (retried || gated() || !synchronized(lock) { queuesBehind() }) return
+        // Only for a read that left the feed loaded but behind (an incremental one): one that leaves it not loaded starts no
+        // read of its own; the next event starts one (ANDROID-PLAN 0.1.134).
+        if (retried || gated() || loadState.value != ListLoad.LOADED) return
+        if (!synchronized(lock) { queuesBehind() }) return
         retried = true
         scope.launch {
             kotlinx.coroutines.delay(RETRY_AFTER_MS)
@@ -246,6 +255,8 @@ class FeedManager(
         synchronized(lock) {
             arrivedSince = null
             notifiedSeq.clear()
+            behind = false
+            retried = false
             markable = false // an answer the device tells after a lock belongs to no opening of this feed
             generation++
             byId = emptyMap()
@@ -347,13 +358,14 @@ class FeedManager(
      * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused, while the feed is not loaded (its full read under
      * way, or failed): it cannot be told from the opening's backlog yet, so it waits in [heldEvents] and is judged when the
      * read ends ([readEnded], [releaseNow]); a feed with no read under way is read first ([releaseIfOver]). True when it
-     * waits, or when it is dropped: one that comes after a [clear] (a lock while it was on its way) is kept nowhere and
-     * starts no read, since nothing is kept outside an open vault.
+     * waits, or when it is dropped: one that comes while the vault is not open on this phone ([vaultOpen]: a lock while it
+     * was on its way) is kept nowhere and starts no read, since nothing is kept outside an open vault. After a hold or the
+     * release gate's pause (which clear the feed while the vault stays open) it waits for the read as at any time.
      */
     private fun waitsForTheRead(m: VaultMessage): Boolean {
         var dropped = false
         val waits = synchronized(lock) {
-            dropped = !markable && loadState.value != ListLoad.LOADED
+            dropped = !vaultOpen() && loadState.value != ListLoad.LOADED
             (!dropped && loadState.value != ListLoad.LOADED).also { w ->
                 if (w) {
                     heldEvents.addLast(HeldEvent(m, wake = false))

@@ -79,7 +79,8 @@ class FeedManagerTest {
         gated: () -> Boolean = { false },
         held: () -> Boolean = { false },
         ownerGated: () -> Boolean = { false },
-    ) = FeedManager(this, ops = { ops }, gated = gated, now = { now }, held = held, ownerGated = ownerGated)
+        vaultOpen: () -> Boolean = { true },
+    ) = FeedManager(this, ops = { ops }, gated = gated, now = { now }, held = held, ownerGated = ownerGated, vaultOpen = vaultOpen)
 
     /** Loads [items] as the open read's one page. */
     private suspend fun TestScope.opened(
@@ -425,9 +426,16 @@ class FeedManagerTest {
     @Test
     fun aHeldBackEventAfterALockIsDropped() = runTest {
         val ops = Ops()
-        val m = opened(ops, item("b1", 1))
+        var open = true
+        ops.known["b1"] = item("b1", 1)
+        ops.pages += FeedPage(listOf(item("b1", 1)), 1)
+        val m = manager(ops, vaultOpen = { open }).also {
+            it.vaultOpened(now)
+            it.refresh()
+        }
         val arrived = mutableListOf<FeedItem>()
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        open = false
         m.clear() // the lock
         val reads = ops.lists.size
         m.replay(event(item("b1", 1)), wake = false)
@@ -438,6 +446,7 @@ class FeedManagerTest {
         }
         assertEquals("no read while locked", reads, synchronized(ops) { ops.lists.size })
         // The next opening: its read releases nothing of it.
+        open = true
         m.vaultOpened(now)
         m.refresh()
         settle { true }
@@ -543,6 +552,28 @@ class FeedManagerTest {
         assertFalse("read elsewhere: $arrived", arrived.any { it.itemId == "i1" })
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) A full read that fails and leaves the feed not loaded starts no read of its own, also with
+     * something held: the next event starts one.
+     */
+    @Test
+    fun aFailedFullReadStartsNoReadOfItsOwn() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = manager(ops, held = { checking })
+        m.vaultOpened(now)
+        m.onEvent(event(item("i1", 1))) // held
+        checking = false
+        ops.failLists = 1
+        m.open()
+        settle { m.load.value == ListLoad.FAILED }
+        val reads = synchronized(ops) { ops.lists.size }
+        advanceTimeBy(FeedManager.RETRY_AFTER_MS * 3)
+        settle { true }
+        assertEquals("no read of its own", reads, synchronized(ops) { ops.lists.size })
+        assertEquals(ListLoad.FAILED, m.load.value)
+    }
+
     /** (Rule 3) A failed read with something held: one catch-up later releases it, with no other trigger. */
     @Test
     fun aFailedReadIsTriedOnceMoreForWhatIsHeld() = runTest {
@@ -622,6 +653,43 @@ class FeedManagerTest {
         settle { arrived.isNotEmpty() }
         assertEquals(2L, arrived.single().seq)
         assertTrue("still a replay", arrived.single().replayed)
+    }
+
+    /**
+     * After a hold (its clears empty the feed, the vault stays open), a live event that comes while the hold's full read is
+     * under way waits for it and notifies; after that read failed, the event starts a read and notifies (it never stalls).
+     */
+    @Test
+    fun afterAHoldALiveEventWaitsForTheReadAndNotifies() = runTest {
+        for (fails in listOf(false, true)) {
+            val ops = Ops()
+            val m = opened(ops, item("i1", 1))
+            val arrived = mutableListOf<FeedItem>()
+            val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+            m.clear() // the hold
+            ops.known["i2"] = item("i2", 2)
+            if (fails) {
+                ops.failLists = 1
+                m.open()
+                settle { m.load.value == ListLoad.FAILED }
+                ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2)), 2)
+                m.onEvent(event(item("i2", 2)))
+            } else {
+                val gate = CompletableDeferred<Unit>()
+                ops.gate = gate
+                ops.pages += FeedPage(listOf(item("i1", 1)), 1)
+                m.open() // the hold's full read, held at its list
+                settle { true }
+                m.onEvent(event(item("i2", 2)))
+                settle { true }
+                assertTrue(arrived.isEmpty())
+                ops.gate = null
+                gate.complete(Unit)
+            }
+            settle { arrived.isNotEmpty() }
+            assertEquals("fails $fails", listOf("i2"), arrived.map { it.itemId })
+            job.cancel()
+        }
     }
 
     /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
