@@ -264,9 +264,10 @@ fun UnlockContent(
             // The no-user_guid card is not shown beside the recover-or-erase notice, which says the same, nor beside the
             // recover-only notice of an ended release or a rollback, which offers no erase and is the way forward there.
             state.moveFailure?.takeUnless { state.moveNoUserGuid && (state.stuckNoticeShown || state.recoverOnly) }?.let { f ->
-                // Release R (§11.14.10): "Finish the move" locked the vault, and its unlock did not open it. No usable
-                // user_guid on this phone: the recover-or-erase notice's words, with no erase here (that comes after the
-                // next PIN, with its confirmation), never "does not support this yet".
+                // Release R (§11.14.10): "Finish the move" did not open the vault: it locked it and its unlock failed, or,
+                // with no usable user_guid on this phone, it locked nothing and sent nothing. Then the recover-or-erase
+                // notice's words, with no erase here (that comes after the next PIN, with its confirmation), never "does
+                // not support this yet".
                 val noGuid = isNoUserGuid(f.kind, f.code)
                 NoticeCard(
                     if (noGuid) NoticeKind.URGENT else NoticeKind.WARNING,

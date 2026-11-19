@@ -12,7 +12,8 @@ import kotlinx.coroutines.launch
 
 /**
  * "Finish the move" (release R, VAULT-MESSAGING §11.14.10 step 4): `vault.lock`, then `vault.unlock` with this phone's
- * own secret. **Once asked for, it completes**, as the member's lock does ([LockSequence]): it runs in [scope], the
+ * own secret; on a phone without a usable user_guid neither (`no_user_guid` at once, the hold not
+ * taken). **Once asked for, it completes**, as the member's lock does ([LockSequence]): it runs in [scope], the
  * vault manager's process-long scope, so a screen that goes away (the hold's bound sends the root to the unlock screen
  * and clears the screen that asked) only stops waiting; the unlock goes on, opens the vault and publishes its phase, or
  * its failure lands in [failure] for the unlock screen.
@@ -64,6 +65,15 @@ internal class FinishMoveRunner(
 
     @Suppress("TooGenericExceptionCaught") // any failure is recorded for the unlock screen, then rethrown
     private suspend fun body(pin: String, taken: Int?): UnlockAttempt {
+        if (!guidUsable()) {
+            // Checked before the lock (and before the hold, which nothing would need): a phone that can never open the
+            // vault again must not lock it (the member's open session would end for nothing, and other devices would see
+            // the lock).
+            val r = UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+            failureFlow.value = FinishSetupGate.failureOf(r)
+            onOutcome(r)
+            return r
+        }
         failureFlow.value = null
         finishingFlow.value = true
         val bound = scope.launch {
@@ -71,14 +81,6 @@ internal class FinishMoveRunner(
             finishingFlow.value = false
         }
         try {
-            if (!guidUsable()) {
-                // Checked before the lock: a phone that can never open the vault again must not lock it (the member's open
-                // session would end for nothing, and other devices would see the lock).
-                val r = UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
-                failureFlow.value = FinishSetupGate.failureOf(r)
-                onOutcome(r)
-                return r
-            }
             lock()
             val r = unlock(pin, taken)
             failureFlow.value = FinishSetupGate.failureOf(r)
