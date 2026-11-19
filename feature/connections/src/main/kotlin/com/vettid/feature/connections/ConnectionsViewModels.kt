@@ -434,7 +434,9 @@ data class AcceptUiState(
  * has, the safety code appears here (`connection.request.outgoing`) and the
  * member compares it with the inviter's screen and approves or declines their
  * own side. The connection is made once both have approved. A vault already
- * connected to the inviter says so (`exists`).
+ * connected to the inviter says so (`exists`); its own earlier request to the
+ * inviter still waiting is followed instead (as vettid-ios #297), also when the
+ * lists show it only after "already connected" was shown.
  */
 @HiltViewModel
 class AcceptViewModel @Inject constructor(
@@ -460,49 +462,64 @@ class AcceptViewModel @Inject constructor(
         }
         viewModelScope.launch {
             val sources = combine(approvals.approvals, repo.connections, approvals.requestEnds) { a, c, e -> Triple(a, c, e) }
-            sources.collect { (list, cs, ends) ->
-                val s = state.value
-                val id = s.connectionId ?: return@collect
-                if (s.step !in FOLLOWED) return@collect
-                val active = cs.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }
-                val req = list.filterIsInstance<Approval.OutgoingRequest>().firstOrNull { it.connectionId == id }
-                val end = ends[id]
-                if (end == RequestEnd.PEER_DECLINED && req == null && active == null) {
-                    // The inviter declined (0.10.5): told here, once (the notice is dismissed).
-                    state.update { it.copy(step = AcceptStep.ENDED, end = end) }
-                    runCatching { approvals.dismissPeerDecline(id) }
-                    return@collect
-                }
-                state.update {
-                    when {
-                        active != null -> it.copy(
-                            step = AcceptStep.CONNECTED,
-                            connectionName = active.displayName.ifBlank { null },
-                            connectedService = active.service,
-                        )
-                        end != null && req == null -> it.copy(step = AcceptStep.ENDED, end = end)
-                        req == null -> it
-                        else -> it.copy(
-                            service = it.service || req.service,
-                            // An invalid `ik` clears it, as in Approvals: no fallback to an earlier or the list's fingerprint.
-                            keyFingerprint = if (req.peerIkInvalid) {
-                                null
-                            } else {
-                                req.peerFingerprint ?: cs.firstOrNull { c -> c.id == id }?.keyFingerprint ?: it.keyFingerprint
-                            },
-                            sas = req.sas ?: it.sas,
-                            name = it.name ?: req.name,
-                            remote = req.remote,
-                            step = when (req.state) {
-                                RequestState.WAITING -> AcceptStep.WAITING
-                                RequestState.PENDING -> if (it.step == AcceptStep.APPROVED) AcceptStep.APPROVED else AcceptStep.COMPARE
-                                RequestState.APPROVED -> AcceptStep.APPROVED
-                            },
-                        )
-                    }
-                }
-            }
+            sources.collect { (list, cs, ends) -> follow(list, cs, ends) }
         }
+    }
+
+    /** The request this screen follows ([FOLLOWED] steps), as the lists have it now: the code, the approvals, the end. */
+    private fun follow(list: List<Approval>, cs: List<ConnectionInfo>, ends: Map<String, RequestEnd>) {
+        val s = state.value
+        val id = s.connectionId ?: return
+        val active = cs.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }
+        val req = list.filterIsInstance<Approval.OutgoingRequest>().firstOrNull { it.connectionId == id }
+        // "Already connected" for an id with no active connection, then this member's own request to it shows in the lists
+        // (read after the answer, or late): it is followed from here, as a new request would be.
+        if (s.step == AcceptStep.EXISTS && active == null && req != null) {
+            state.update { it.copy(step = AcceptStep.WAITING) }
+        } else if (s.step !in FOLLOWED) {
+            return
+        }
+        val end = ends[id]
+        if (end == RequestEnd.PEER_DECLINED && req == null && active == null) {
+            // The inviter declined (0.10.5): told here, once (the notice is dismissed).
+            state.update { it.copy(step = AcceptStep.ENDED, end = end) }
+            viewModelScope.launch { runCatching { approvals.dismissPeerDecline(id) } }
+        } else {
+            state.update { followed(it, active, req, end, cs.firstOrNull { c -> c.id == id }) }
+        }
+    }
+
+    /** [s] after the lists' view of its request: connected, ended, or the request's code and approvals. */
+    private fun followed(
+        s: AcceptUiState,
+        active: ConnectionInfo?,
+        req: Approval.OutgoingRequest?,
+        end: RequestEnd?,
+        listed: ConnectionInfo?,
+    ): AcceptUiState = when {
+        active != null -> s.copy(
+            step = AcceptStep.CONNECTED,
+            connectionName = active.displayName.ifBlank { null },
+            connectedService = active.service,
+        )
+        end != null && req == null -> s.copy(step = AcceptStep.ENDED, end = end)
+        req == null -> s
+        else -> s.copy(
+            service = s.service || req.service,
+            // An invalid `ik` clears it, as in Approvals: no fallback to an earlier or the list's fingerprint.
+            keyFingerprint = if (req.peerIkInvalid) null else req.peerFingerprint ?: listed?.keyFingerprint ?: s.keyFingerprint,
+            sas = req.sas ?: s.sas,
+            name = s.name ?: req.name,
+            remote = req.remote,
+            step = requestStep(req.state, s.step),
+        )
+    }
+
+    /** The step a request's state shows: an approval made here stays shown as approved while the request is pending. */
+    private fun requestStep(r: RequestState, now: AcceptStep): AcceptStep = when (r) {
+        RequestState.WAITING -> AcceptStep.WAITING
+        RequestState.PENDING -> if (now == AcceptStep.APPROVED) AcceptStep.APPROVED else AcceptStep.COMPARE
+        RequestState.APPROVED -> AcceptStep.APPROVED
     }
 
     fun setInput(v: String) = state.update { it.copy(input = v, typed = true, error = null) }
@@ -514,6 +531,7 @@ class AcceptViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val r = repo.acceptInvite(text)
+                if (r.exists && followsOwnRequest(r.connectionId)) return@launch
                 if (r.exists) {
                     val c = repo.connections.value.firstOrNull { it.id == r.connectionId }
                     state.update {
@@ -528,6 +546,25 @@ class AcceptViewModel @Inject constructor(
                 state.update { it.copy(step = AcceptStep.INPUT, error = e.kind, errorCode = e.shownCode) }
             }
         }
+    }
+
+    /**
+     * `exists` answers a request that is not a connection yet too (§6.4: "already connected, or has asked to connect"). With no
+     * active connection, the requests are read again; this member's own request to the inviter still waiting is then
+     * followed as a new one would be (the code, then both approvals), never shown as a connection that is already there.
+     * True when it is.
+     */
+    private suspend fun followsOwnRequest(id: String): Boolean {
+        val connected = { repo.connections.value.any { it.id == id && it.state == ConnectionState.ACTIVE } }
+        if (connected()) return false
+        runCatching { approvals.refreshRequests() }
+        val list = approvals.approvals.value
+        val follows = list.any { it is Approval.OutgoingRequest && it.connectionId == id } && !connected()
+        if (follows) {
+            state.update { it.copy(step = AcceptStep.WAITING, connectionId = id) }
+            follow(list, repo.connections.value, approvals.requestEnds.value)
+        }
+        return follows
     }
 
     /** This member's approval of their side, after comparing the codes. */
