@@ -447,9 +447,16 @@ internal class PhaseHolder(
     /**
      * (Rule 3, the release gate) Told of every opening under this holder's lock, after [opens] moved and before the phase is
      * published: whoever reads the open phase reads the gate's check with it, so the shell never shows a frame before.
+     * `continued` is true when the vault was open on this phone and only a status read that could not be made came between
+     * (Unlocked, then [AppPhase.Unreachable] only, then Unlocked): nothing closed it, so it is the same opening
+     * (ANDROID-PLAN 0.1.134: the opening's moment carries on; the Unreachable phase's clears still emptied what the feed
+     * had noted of it, so the no-repeat rule starts again).
      */
-    private val onOpen: () -> Unit = {},
+    private val onOpen: (continued: Boolean) -> Unit = {},
 ) {
+    /** The vault was open before the [AppPhase.Unreachable] run now published: no other phase came between. Under this. */
+    private var openBeforeUnreachable = false
+
     private val flow = MutableStateFlow(initial)
     private var held: AppPhase.Deleting? = null
 
@@ -479,7 +486,11 @@ internal class PhaseHolder(
         val was = flow.value
         if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) {
             opensFlow.value += 1
-            onOpen()
+            onOpen(was is AppPhase.Unreachable && openBeforeUnreachable)
+        }
+        openBeforeUnreachable = when (v) {
+            is AppPhase.Unreachable -> was is AppPhase.Unlocked || was is AppPhase.Unreachable && openBeforeUnreachable
+            else -> false
         }
         flow.value = v
         val ends = when (v) {

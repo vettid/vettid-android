@@ -631,10 +631,16 @@ class VaultManager(
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
     private val phaseFlow = PhaseHolder(
         AppPhase.Starting,
-        // The feed's mark first: the mailbox's events the check holds from now on are judged against it (Rule 3), on the
-        // vault's clock, the clock of their `ts` (the phone's only before any message from the vault in this process).
-        onOpen = {
-            feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())
+        // The feed's mark first: the mailbox's events the check holds from now on are judged against it (Rule 3). The
+        // phone's clock now, until the first answer of this opening puts it on the vault's clock, the clock of their `ts`
+        // (ANDROID-PLAN 0.1.134); never a vault time learnt before the opening (the mailbox's backlog).
+        // A status read that could not be made, between two open phases, closed nothing: the same opening goes on (its
+        // moment kept, and the events held back meanwhile judged against it).
+        onOpen = { continued ->
+            if (!continued || !feed.openingContinues()) {
+                val opening = feed.vaultOpened(Instant.now())
+                session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }
+            }
             releaseUpdate.vaultOpened()
         },
     )
@@ -994,7 +1000,7 @@ class VaultManager(
      * The vault's feed (ANDROID-PLAN 0.1.23, VAULT-MESSAGING §10.9): the Notifications screen and the bell. Read
      * while the vault is open and not held; in memory only.
      */
-    val feed = FeedManager(
+    val feed: FeedManager = FeedManager(
         scope,
         ops = { VaultFeedOps(openApi()) },
         gated = { featuresGated() },
@@ -1002,6 +1008,8 @@ class VaultManager(
         held = { releaseUpdate.checking.value },
         // Nothing waits for that end while the owner check is due or held (owner decision 2026-11-18).
         ownerGated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
+        // Nothing of the feed is kept while the vault is not open on this phone (a hold keeps it open).
+        vaultOpen = { phaseFlow.value == AppPhase.Unlocked },
     )
 
     /** Asks known only from their feed item (ANDROID-PLAN 0.1.116 AA5) follow the feed in memory. */
@@ -1168,7 +1176,7 @@ class VaultManager(
             // A `tag.changed` held back meanwhile: the tags are read again by whoever shows them.
             sharing.invalidateTags()
             // A passed check's waiting asks, kept while paused: notified now, after the lists are read.
-            heldAskReplay.take()?.let { d -> scope.launch { afterHoldPassed(d.gen, d.listMark, d.token) } }
+            heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }
         },
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
@@ -1196,7 +1204,7 @@ class VaultManager(
             var previous: AppPhase = AppPhase.Starting
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
             val phaseSteps = PhaseSteps.of(
-                replay = { p -> replayHeldBack(heldBack.release(p)) },
+                replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },
                 forgetOpenVault = { social.forgetOpenVault() },
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
@@ -1295,7 +1303,7 @@ class VaultManager(
                 val replayFor = replayGen?.takeIf { windowOpen }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
-                    steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
+                    steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
                     // Rule 3: the votes' work sends, so it waits for the release check too; the lists wait while the gate pauses
                     // them. Both start when it ends or lifts ([ReleasePauseSteps]).
                     if (!releaseUpdate.required.value) steps.step { votes.startSync() } // the votes the hold dropped, and the site
@@ -1306,7 +1314,7 @@ class VaultManager(
                     if (!releaseUpdate.paused.value) steps.step { social.refreshAllQuietly() }
                 } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
-                    steps.step { scope.launch { afterHoldPassed(replayFor, listMark, replayToken) } }
+                    steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
                 }
                 // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
                 if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
@@ -1359,14 +1367,16 @@ class VaultManager(
      * The vault is open: the `feed.event`s kept while that was not known arrive now, after the names their
      * notifications show are read (the connections and the asks), as the on-phone service has them.
      */
-    private fun replayHeldBack(events: List<VaultMessage>) {
+    private fun replayHeldBack(events: List<VaultMessage>, wake: Boolean) {
         if (events.isEmpty()) return
         replaying.incrementAndGet()
         scope.launch {
             try {
                 runCatching { social.refresh() }
                 runCatching { social.refreshApprovals() }
-                events.forEach { e -> runCatching { feed.replay(e) } }
+                // What a push wake was for notifies whatever its time; the events of a start no push caused are judged as
+                // the opening's backlog would be (ANDROID-PLAN 0.1.134 "A push wake").
+                events.forEach { e -> runCatching { feed.replay(e, wake) } }
             } finally {
                 replaying.decrementAndGet()
             }
@@ -2008,7 +2018,12 @@ class VaultManager(
      * again if it ended, the outbox is flushed, and a vault past its owner-check deadline is re-read, so that the
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
+    override fun onUiCreated() = heldBack.uiStarted()
+
     override fun onForeground() {
+        // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
+        // activity's creation, [onUiCreated]).
+        heldBack.uiStarted()
         // ANDROID-PLAN 0.1.54: a vault being deleted is only read again (its status), nothing else runs.
         if (phaseFlow.deleting) {
             scope.launch { deletionWatch.check() }
@@ -3459,14 +3474,25 @@ class VaultManager(
      * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
      * Not at an unlock: only here.
      */
-    private suspend fun afterHoldPassed(gen: Int?, listMark: Long, token: Int) {
+    /**
+     * [afterHoldPassed], launched with its feed read counted among the feed's reads from now ([FeedManager.reserveRefresh]):
+     * a release of what the release check held, asked for before the launched read starts (the lift's sends), waits for it.
+     * The place is given back however the launch ends.
+     */
+    private fun launchAfterHoldPassed(gen: Int?, listMark: Long, token: Int) {
+        val read = feed.reserveRefresh()
+        scope.launch { afterHoldPassed(gen, listMark, token, read) }.invokeOnCompletion { read.drop() }
+    }
+
+    private suspend fun afterHoldPassed(gen: Int?, listMark: Long, token: Int, read: FeedManager.ReservedRead) {
         // Rule 3: nothing is read while the release gate pauses it (the lists, the feed among them, are read when it lifts);
         // the replay waits for the lift with its window open, and runs after the lift's reads.
         if (releaseUpdate.paused.value) {
+            read.drop()
             if (gen != null) heldAskReplay.hold(HeldAskReplay.Due(gen, listMark, token))
             return
         }
-        runCatching { feed.refresh() }
+        runCatching { read.run() }
         // Nothing for a held or due state not ended by a check passed with the vault open (gen null: an unlock's own
         // check, a status read). The first `pending.list` read begun after the check and merged counts, with the feed
         // loaded; both are tried again until they are had, a lock (and so an unlock) or a new hold ([WaitingAsksRun]).
@@ -3478,7 +3504,8 @@ class VaultManager(
             readFeed = { feed.refresh() },
             listed = { social.pendingListedSince(listMark) },
             readList = { social.refreshApprovals() },
-            replay = { feed.replayWaitingAsks(token, social.listedNow(), java.time.Instant.now()) },
+            // Against the first `pending.list` merged after the check, not the latest (owner decision a, #13774 item 3).
+            replay = { social.firstListedSince(listMark)?.let { feed.replayWaitingAsks(token, it, java.time.Instant.now()) } ?: false },
             end = { feed.endReplayWindow(token) },
         ).run()
     }
@@ -5467,7 +5494,9 @@ class VaultManager(
     override suspend fun collectForWake(): Boolean {
         waking.incrementAndGet()
         try {
-            if (HeldBackEvents.unknown(phaseFlow.value)) refresh()
+            // A push that comes while this process does not know the vault's state (it started the process): what is held
+            // back until it is known is what the push was for (ANDROID-PLAN 0.1.134 "A push wake").
+            if (heldBack.wakeIfUnknown(phaseFlow.value)) refresh()
             val p = phaseFlow.value
             if (HeldBackEvents.unknown(p)) return false // not reachable now: the caller continues when there is a network
             if (p != AppPhase.Unlocked && p != AppPhase.Locked) return true // no vault on this phone

@@ -130,6 +130,7 @@ class VettIdApplication : DistributionApplication() {
         registerActivityLifecycleCallbacks(
             Foreground(
                 { onForeground() },
+                { account.onUiCreated() },
                 {
                     ownerCheck.setForeground(it)
                     location.setInFront(it)
@@ -208,6 +209,8 @@ class VettIdApplication : DistributionApplication() {
     /** Calls [onForeground] when the first activity starts after none was started. */
     private class Foreground(
         private val onForeground: () -> Unit,
+        /** An activity is being created (before its start): the member, not a push, has the app open. */
+        private val onCreating: () -> Unit,
         /** The process is in front or not, as ProcessLifecycleOwner says it: 700 ms after the last stop, so rotation is no exit. */
         private val inFront: (Boolean) -> Unit,
     ) : ActivityLifecycleCallbacks {
@@ -231,6 +234,8 @@ class VettIdApplication : DistributionApplication() {
         private companion object {
             const val BACKGROUND_DELAY_MS = 700L
         }
+
+        override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) = onCreating()
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
 

@@ -116,6 +116,40 @@ class PushTest {
 
     // --- a process a wake started: feed events before the phase is known ---
 
+    /**
+     * (ANDROID-PLAN 0.1.134 "A push wake") Held-back events are a push wake's only when a push came while the phase was not
+     * known (it started the process); an ordinary start's are not. The mark goes once the phase is known.
+     */
+    @Test
+    fun heldBackEventsAreAWakesOnlyWhenAPushCameWhileThePhaseWasUnknown() {
+        val ev = msg("feed.event", """{"item_id":"i1"}""")
+        val plain = HeldBackEvents()
+        assertTrue(plain.hold(ev, AppPhase.Starting))
+        val start = plain.releaseHeld(AppPhase.Unlocked)
+        assertEquals(1, start.events.size)
+        assertFalse("an ordinary start", start.wake)
+        val pushed = HeldBackEvents()
+        assertFalse("the phase known: not a wake's", pushed.wakeIfUnknown(AppPhase.Unlocked))
+        assertTrue(pushed.wakeIfUnknown(AppPhase.Starting))
+        assertTrue(pushed.hold(ev, AppPhase.Starting))
+        assertTrue(pushed.releaseHeld(AppPhase.Unlocked).wake)
+        assertTrue(pushed.hold(ev, AppPhase.Starting))
+        assertFalse("once", pushed.releaseHeld(AppPhase.Unlocked).wake)
+        // The member opened the app first (an activity started), then a push came while the status read was out: an ordinary
+        // start, its held-back events the backlog's.
+        val opened = HeldBackEvents()
+        opened.uiStarted()
+        assertTrue(opened.hold(ev, AppPhase.Starting))
+        assertTrue("still collected for the wake", opened.wakeIfUnknown(AppPhase.Starting))
+        assertFalse(opened.releaseHeld(AppPhase.Unlocked).wake)
+        // A push that started the process, then the member opened it: still the push's.
+        val woke = HeldBackEvents()
+        assertTrue(woke.wakeIfUnknown(AppPhase.Starting))
+        woke.uiStarted()
+        assertTrue(woke.hold(ev, AppPhase.Starting))
+        assertTrue(woke.releaseHeld(AppPhase.Unlocked).wake)
+    }
+
     @Test
     fun feedEventsWaitUntilTheVaultIsKnownToBeOpen() {
         val held = HeldBackEvents()
