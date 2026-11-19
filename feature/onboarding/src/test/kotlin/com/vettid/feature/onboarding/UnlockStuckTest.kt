@@ -14,10 +14,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.MoveFailure
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
+import com.vettid.core.data.vault.UnlockAttempt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -222,6 +222,21 @@ class UnlockStuckTest {
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
         rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
         assertEquals(1, recovered)
+    }
+
+    /** A move card of another failure beside the words: Recover on the words' card only, never on that move card. */
+    @Test
+    fun aMoveCardOfAnotherFailureGetsNoRecover() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true,
+            moveFailure = MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete"),
+        )
+        assertTrue(s.stuckWordsOnly)
+        assertTrue(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNode(hasTestTag("recover_vault") and hasAnyAncestor(hasTestTag("unlock_no_user_guid"))).assertExists()
+        rule.onNode(hasTestTag("recover_vault") and hasAnyAncestor(hasTestTag("unlock_move_failure"))).assertDoesNotExist()
     }
 
     /** An unlock not recognised earlier, then a failed check with no usable user_guid: its notice shows no erase. */
