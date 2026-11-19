@@ -133,6 +133,7 @@ class VettIdApplication : DistributionApplication() {
                 { account.onUiCreated() },
                 {
                     ownerCheck.setForeground(it)
+                    if (!it) account.onUiStopped() // a push from now on is what starts the work, not the member
                     location.setInFront(it)
                 },
             ),

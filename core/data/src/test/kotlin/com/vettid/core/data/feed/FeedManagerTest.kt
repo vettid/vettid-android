@@ -725,6 +725,185 @@ class FeedManagerTest {
         }
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) A status read that could not be made during the release check: its clears keep what the check
+     * holds (keepHeld), so when the opening continues, the held events notify at the check's end; a real close drops them.
+     */
+    @Test
+    fun aBlipDuringTheCheckKeepsWhatItHolds() = runTest {
+        for (close in listOf(false, true)) {
+            val ops = Ops()
+            var checking = true
+            val m = opened(ops, item("i1", 1), held = { checking })
+            val arrived = mutableListOf<FeedItem>()
+            val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+            m.onEvent(event(item("i2", 2))) // held by the check
+            m.clear(keepHeld = true) // Unreachable
+            if (close) m.clear() // then a lock
+            assertTrue(m.openingContinues() || close)
+            ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2)), 2)
+            m.refresh()
+            checking = false
+            m.releaseHeld()
+            settle { true }
+            assertEquals("close $close", if (close) emptyList() else listOf("i2"), arrived.map { it.itemId })
+            job.cancel()
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134, "nothing missed while due or held notifies later") After the hold's lift, an event the vault sent
+     * during the hold (left on the relay, collected now) is applied but notifies nothing; one sent after the lift notifies.
+     */
+    @Test
+    fun anEventFromTheHoldCollectedAfterTheLiftIsSilent() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("i1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.ownerCheckLifted(now)
+        m.onEvent(event(item("h2", 2), ts = now.minusSeconds(120))) // sent during the hold
+        settle { true }
+        assertEquals(2L, m.seq)
+        assertTrue("applied, silent: $arrived", arrived.isEmpty())
+        m.onEvent(event(item("n3", 3), ts = now.plusSeconds(5))) // after the lift
+        settle { true }
+        assertEquals(listOf("n3"), arrived.map { it.itemId })
+        // A new opening forgets the lift.
+        m.vaultOpened(now.minusSeconds(600))
+        m.onEvent(event(item("o4", 4), ts = now.minusSeconds(120)))
+        settle { true }
+        assertEquals(listOf("n3", "o4"), arrived.map { it.itemId })
+    }
+
+    /** The clone alarm notifies "also while held": its event from the hold, collected after the lift, still notifies. */
+    @Test
+    fun theCloneAlarmFromTheHoldStillNotifiesAfterTheLift() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("i1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.ownerCheckLifted(now)
+        m.onEvent(event(item("a2", 2, kind = "credential.alarm", priority = "urgent"), ts = now.minusSeconds(120)))
+        settle { true }
+        assertEquals(listOf("a2"), arrived.map { it.itemId })
+    }
+
+    /** The replay path is judged against the lift too: a push wake's event of the hold, covered by the read, is silent. */
+    @Test
+    fun aReplayedEventFromTheHoldIsSilent() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("h1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.ownerCheckLifted(now)
+        m.replay(event(item("h1", 1), ts = now.minusSeconds(120)), wake = true)
+        settle { true }
+        assertTrue(arrived.isEmpty())
+    }
+
+    /**
+     * A catch-up after the lift is never judged by an item's own `at`: a batch's later ask (a new `seq`, the batch's old
+     * `at`) notifies. What changed during the hold is covered by the full read every lift starts (VaultManager).
+     */
+    @Test
+    fun aBatchsLaterAskAfterTheLiftNotifiesThoughItsItemIsOld() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("i1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.ownerCheckLifted(now.minusSeconds(60))
+        // seq 2, made 5 minutes ago (before the lift), changed now by a later ask.
+        ops.pages += FeedPage(listOf(item("batch", 2, minutesAgo = 5)), 2)
+        m.catchUp()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("batch"), arrived.map { it.itemId })
+    }
+
+    /**
+     * Unreachable keeps the replay's window as well as the queues, and nothing is released while the vault is not open; a
+     * new opening (a close conflated away) starts empty.
+     */
+    @Test
+    fun whileUnreachableNothingIsReleasedAndANewOpeningStartsEmpty() = runTest {
+        val ops = Ops()
+        var open = true
+        var checking = true
+        ops.known["i1"] = item("i1", 1)
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1)
+        val m = manager(ops, held = { checking }, vaultOpen = { open }).also {
+            it.vaultOpened(now)
+            it.refresh()
+        }
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        m.onEvent(event(item("i2", 2))) // held by the check
+        open = false
+        m.clear(keepHeld = true) // Unreachable
+        assertTrue("the replay's window is kept", m.replayOwns(token))
+        checking = false // the check's end ran with the close's clears
+        ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2)), 2)
+        m.refresh()
+        m.releaseHeld()
+        settle { true }
+        assertTrue("nothing released while not open: $arrived", arrived.isEmpty())
+        // A new opening (not a continued one): what was kept is gone.
+        open = true
+        m.vaultOpened(now)
+        m.releaseHeld()
+        settle { true }
+        assertTrue(arrived.isEmpty())
+    }
+
+    /**
+     * A release asked for while the vault is not open (Unreachable) takes nothing out of the kept queues: when the opening
+     * continues, the held event still notifies at the check's end.
+     */
+    @Test
+    fun aReleaseWhileUnreachableKeepsTheQueuesForTheContinuedOpening() = runTest {
+        val ops = Ops()
+        var open = true
+        var checking = true
+        ops.known["i1"] = item("i1", 1)
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1)
+        val m = manager(ops, held = { checking }, vaultOpen = { open }).also {
+            it.vaultOpened(now)
+            it.refresh()
+        }
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2)))
+        open = false
+        m.clear(keepHeld = true)
+        checking = false
+        ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2)), 2)
+        m.refresh()
+        m.releaseHeld() // while not open
+        settle { true }
+        // The opening continues; its check runs again and ends.
+        open = true
+        checking = true
+        assertTrue(m.openingContinues())
+        ops.pages += FeedPage(listOf(item("i1", 1), item("i2", 2)), 2)
+        m.refresh()
+        checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /** A replay window kept across Unreachable belongs to that opening: a new opening closes it. */
+    @Test
+    fun aNewOpeningClosesAKeptReplayWindow() = runTest {
+        val m = opened(Ops())
+        val token = m.startReplayWindow()
+        m.clear(keepHeld = true)
+        assertTrue(m.replayOwns(token))
+        m.vaultOpened(now)
+        assertFalse(m.replayOwns(token))
+    }
+
     /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
     @Test
     fun aMarkForAnEarlierOpeningIsIgnored() = runTest {

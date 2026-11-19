@@ -155,18 +155,21 @@ class FeedManager(
      */
     private var openedAt: Instant? = null
 
+    /** The owner check's hold or due state last ended here, on the vault's clock ([ownerCheckLifted]). Under [lock]. */
+    private var liftedAt: Instant? = null
+
     /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
     private var opening = 0
 
     /**
-     * (Rule 3) The feed's opening is current: from [vaultOpened] until a [clear] (a lock, the hold, a wipe). It takes its
+     * (Rule 3) The feed's opening is current: from [vaultOpened] until a hard [clear] (a lock, the hold, a wipe). It takes its
      * mark only then, and only then does a held-back event wait for the read ([waitsForTheRead]). Under [lock].
      */
     private var markable = false
 
     /**
      * (ANDROID-PLAN 0.1.134) The `seq` each item last notified at during this opening: no second alert for the same or an
-     * older change. Emptied at each opening and by [clear]. Under [lock].
+     * older change. Emptied at each opening and by a hard [clear]. Under [lock].
      */
     private val notifiedSeq = HashMap<String, Long>()
 
@@ -250,20 +253,28 @@ class FeedManager(
         }
     }
 
-    /** Forgets everything: the vault locked, was held or wiped. */
-    fun clear() {
+    /**
+     * Forgets everything: the vault locked, was held or wiped. With [keepHeld] (a status read that could not be made, which
+     * closes nothing, ANDROID-PLAN 0.1.134), the lists go as at a lock, but what this opening keeps for itself stays: what the
+     * release check holds, what it notified, its mark and the hold's lift. If the opening continues they carry on; any close
+     * that follows (a lock, a sign-out, a wipe) clears it all.
+     */
+    fun clear(keepHeld: Boolean = false) {
         synchronized(lock) {
-            arrivedSince = null
-            notifiedSeq.clear()
             behind = false
             retried = false
-            markable = false // an answer the device tells after a lock belongs to no opening of this feed
+            if (!keepHeld) {
+                arrivedSince = null
+                notifiedSeq.clear()
+                markable = false // an answer the device tells after a lock belongs to no opening of this feed
+                liftedAt = null
+                heldEvents.clear()
+                heldArrivals.clear()
+            }
             generation++
             byId = emptyMap()
             cursor = 0
             catchUpQueued = false
-            heldEvents.clear()
-            heldArrivals.clear()
             publish()
         }
         loadState.value = ListLoad.NOT_LOADED
@@ -279,7 +290,7 @@ class FeedManager(
                 // and is judged then, as a held one: the opening's backlog drained meanwhile stays silent (0.1.134).
                 if (takenElsewhere(m, wake = false)) return
                 val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
-                onItem(item)
+                onItem(item, notify = !fromTheHold(m, item))
             }
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
                 SYNC_UPDATED, SYNC_DELETED -> if (!gated()) catchUp()
@@ -304,6 +315,11 @@ class FeedManager(
     fun vaultOpened(phoneNow: Instant): Int = synchronized(lock) {
         openedAt = phoneNow
         notifiedSeq.clear()
+        liftedAt = null
+        arrivedSince = null // a replay window kept across Unreachable belongs to the opening before
+        // A new opening holds nothing of an earlier one (a soft clear kept it only for an opening that continues).
+        heldEvents.clear()
+        heldArrivals.clear()
         markable = true
         ++opening
     }
@@ -328,6 +344,26 @@ class FeedManager(
         true
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134, "nothing missed while due or held notifies later") The owner check's hold or due state ended at
+     * [at], on the vault's clock: an event the vault sent before then (left on the relay during the hold, collected after
+     * it) is applied but notifies nothing. Kept until the next opening or a close. What the vault changed during the hold is
+     * covered by the full read every lift starts (a full read notifies nothing), so later catch-ups bring only what changed
+     * after it: an item is never judged by its own `at`, which a batch's later ask keeps.
+     */
+    fun ownerCheckLifted(at: Instant) {
+        synchronized(lock) { liftedAt = at }
+    }
+
+    /**
+     * The event was sent while the owner check was due or held ([ownerCheckLifted]), and its kind does not notify then (the
+     * clone alarm does, "also while held": [NOTIFIES_WHILE_HELD]).
+     */
+    private fun fromTheHold(m: VaultMessage, item: FeedItem): Boolean =
+        item.kind !in NOTIFIES_WHILE_HELD && sentInTheHold(m.ts)
+
+    private fun sentInTheHold(at: Instant): Boolean = synchronized(lock) { liftedAt }?.let { at.isBefore(it) } ?: false
+
     /** (Rule 3) The opening's moment as it is judged now (tests). */
     val openingMark: Instant? get() = synchronized(lock) { openedAt }
 
@@ -344,9 +380,10 @@ class FeedManager(
         val (covered, listed) = synchronized(lock) {
             (loadState.value == ListLoad.LOADED && item.seq <= cursor) to byId[item.itemId]
         }
+        val mayNotify = notify && !fromTheHold(m, item)
         if (!covered) {
-            onItem(item, notify)
-        } else if (notify && isNewsSinceTheOpening(m, wake) && listed?.status == STATUS_ACTIVE) {
+            onItem(item, mayNotify)
+        } else if (mayNotify && isNewsSinceTheOpening(m, wake) && listed?.status == STATUS_ACTIVE) {
             emitArrival(listed)
         }
     }
@@ -438,20 +475,23 @@ class FeedManager(
      * the lock is let go would let one that comes then (the queues empty, nothing held) be notified before them.
      */
     fun releaseHeld() {
-        // After a read that failed the feed may be behind, though loaded: one catch-up first, the release at its end.
-        if (!gated() && readsRunning.get() == 0 && behind) {
-            catchUp()
-            return
-        }
-        if (!gated() && (readsRunning.get() > 0 || loadState.value != ListLoad.LOADED)) {
+        when {
+            // Not while the vault is not open on this phone (a status read that could not be made keeps the queues for the
+            // opening that may continue; a close drops them). [releaseNow] looks again.
+            !vaultOpen() -> Unit
+            // After a read that failed the feed may be behind, though loaded: one catch-up first, the release at its end.
+            !gated() && readsRunning.get() == 0 && behind -> catchUp()
             // After the feed's reads under way ([readEnded]), from a loaded feed: one that is not loaded is read first.
-            if (readsRunning.get() == 0) catchUp()
-            return
+            !gated() && (readsRunning.get() > 0 || loadState.value != ListLoad.LOADED) -> if (readsRunning.get() == 0) catchUp()
+            else -> releaseNow()
         }
-        releaseNow()
     }
 
     private fun releaseNow() {
+        if (vaultOpen()) releaseNowOpen()
+    }
+
+    private fun releaseNowOpen() {
         val gatedNow = gated()
         synchronized(lock) {
             // Read again here, as late as it can be: a full read that began (or a clear) since the caller looked leaves the
@@ -573,7 +613,7 @@ class FeedManager(
             if (ok) retried = false else retryOnce()
         }
         if (readsRunning.decrementAndGet() > 0 || !ok) return
-        val releasable = !held() && !gated() && loadState.value == ListLoad.LOADED
+        val releasable = vaultOpen() && !held() && !gated() && loadState.value == ListLoad.LOADED
         if (releasable && synchronized(lock) { queuesBehind() }) releaseNow()
     }
 
@@ -870,6 +910,9 @@ class FeedManager(
     }
 
     companion object {
+        /** Kinds that notify while the owner check holds the vault (Notification modes: the clone alarm, "also while held"). */
+        val NOTIFIES_WHILE_HELD = setOf("credential.alarm")
+
         /** (Rule 3) How long after a failed read the one catch-up for what is held waits ([retryOnce]). */
         const val RETRY_AFTER_MS = 5_000L
 

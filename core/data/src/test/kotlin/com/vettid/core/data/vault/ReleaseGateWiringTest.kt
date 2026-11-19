@@ -54,7 +54,7 @@ class ReleaseGateWiringTest {
         val clear = block("clearReleaseCheck = {")
         clear.has("phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }")
         clear.has("releasePause.reset()")
-        clear.has("heldAskReplay.drop()")
+        clear.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
     }
 
     @Test
@@ -200,6 +200,30 @@ class ReleaseGateWiringTest {
     }
 
     /** Nothing of the feed is kept while the vault is not open on this phone; a hold, which keeps it open, keeps nothing out. */
+    /**
+     * (ANDROID-PLAN 0.1.134) A status read that could not be made keeps what the release check holds for a continued opening;
+     * the hold's or due state's end marks the lift before any read; the push flag follows the activities.
+     */
+    @Test
+    fun aBlipKeepsWhatIsHeldAndTheLiftIsMarked() {
+        code.has("clearFeed = { p -> feed.clear(keepHeld = p is AppPhase.Unreachable) },")
+        code.has("steps.step { session?.device?.vaultNowIfKnown()?.let { feed.ownerCheckLifted(it) } }")
+        // A due state the clock alone began counts (pauseLifted), and a held one too.
+        code.has("val checkEnded = lifted || !now && wasHeld")
+        // The held waiting-asks replay is kept across Unreachable, dropped by a close.
+        code.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
+        // Every lift with the vault open reads the feed in full, also one with no replay and no hold.
+        code.has("} else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {")
+        code.has("steps.step { launchAfterHoldPassed(null, listMark, replayToken) }")
+        // A run waits through Unreachable; a new opening drops a replay kept across it.
+        code.has("paused = { phaseFlow.value is AppPhase.Unreachable && record.generation == gen && feed.replayOwns(token) },")
+        assertTrue(block("private val phaseFlow = PhaseHolder(").any { it == "heldAskReplay.drop()" })
+        val lift = code.indexOfFirst { it.contains("feed.ownerCheckLifted(") }
+        val launch = code.indexOfFirst { it.contains("launchAfterHoldPassed(replayFor") }
+        assertTrue("marked before the hold's read is launched", lift in 0 until launch)
+        code.has("override fun onUiStopped() = heldBack.uiStopped()")
+    }
+
     @Test
     fun theFeedKeepsNothingOutsideAnOpenVault() {
         block("val feed: FeedManager = FeedManager(").has("vaultOpen = { phaseFlow.value == AppPhase.Unlocked },")

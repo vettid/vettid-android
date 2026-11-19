@@ -638,6 +638,8 @@ class VaultManager(
         // moment kept, and the events held back meanwhile judged against it).
         onOpen = { continued ->
             if (!continued || !feed.openingContinues()) {
+                // A new opening: a waiting-asks replay kept across Unreachable belongs to the one before.
+                heldAskReplay.drop()
                 val opening = feed.vaultOpened(Instant.now())
                 session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }
             }
@@ -1209,16 +1211,20 @@ class VaultManager(
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
-                clearFeed = { feed.clear() },
+                // A status read that could not be made is no close: what the release check holds is kept for the opening
+                // that may continue (ANDROID-PLAN 0.1.134); any other phase drops everything.
+                clearFeed = { p -> feed.clear(keepHeld = p is AppPhase.Unreachable) },
                 clearDevices = { devices.clear() },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },
                 // Rule 3: the release check and its retries end with the lock, unless an opening was published since.
-                clearReleaseCheck = {
+                clearReleaseCheck = { p ->
                     phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }
                     releasePause.reset()
-                    heldAskReplay.drop()
+                    // A status read that could not be made closes nothing: a waiting-asks replay held over a pause is kept
+                    // for the opening that may continue (ANDROID-PLAN 0.1.134 "Held"); a close drops it.
+                    if (p !is AppPhase.Unreachable) heldAskReplay.drop()
                 },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
@@ -1301,6 +1307,16 @@ class VaultManager(
                     windowOpen = true
                 }
                 val replayFor = replayGen?.takeIf { windowOpen }
+                // (ANDROID-PLAN 0.1.134) The hold or the due state ended with the vault open: what the vault sent before now
+                // (left on the relay meanwhile, collected from here on) notifies nothing. On the vault's clock: the check's
+                // own answer just set it. Before any read is launched.
+                // A due state the clock alone began counts too ([pauseLifted] looks at the previous value again now), and a
+                // held value is gated, so this covers the hold's end. Marked only once the vault's clock is known in this
+                // process: the phone's clock, if ahead, would silence real news after the lift.
+                val checkEnded = lifted || !now && wasHeld
+                if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {
+                    steps.step { session?.device?.vaultNowIfKnown()?.let { feed.ownerCheckLifted(it) } }
+                }
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
                     steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
@@ -1315,6 +1331,10 @@ class VaultManager(
                 } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
                     steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
+                } else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {
+                    // (ANDROID-PLAN 0.1.134) Every lift reads the feed in full, which notifies nothing: what changed while due
+                    // is covered by it, so a later catch-up brings only what changed after (never judged by an item's `at`).
+                    steps.step { launchAfterHoldPassed(null, listMark, replayToken) }
                 }
                 // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
                 if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
@@ -2019,6 +2039,8 @@ class VaultManager(
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
     override fun onUiCreated() = heldBack.uiStarted()
+
+    override fun onUiStopped() = heldBack.uiStopped()
 
     override fun onForeground() {
         // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
@@ -3491,6 +3513,8 @@ class VaultManager(
         WaitingAsksRun(
             // Also ended when a later replay replaced this one (it reads for both).
             open = { sameOpenSession(gen) && feed.replayOwns(token) },
+            // A status read that could not be made, the opening the same: wait for it rather than give up (ANDROID-PLAN 0.1.134).
+            paused = { phaseFlow.value is AppPhase.Unreachable && record.generation == gen && feed.replayOwns(token) },
             feedLoaded = { feed.loaded },
             readFeed = { feed.refresh() },
             listed = { social.pendingListedSince(listMark) },

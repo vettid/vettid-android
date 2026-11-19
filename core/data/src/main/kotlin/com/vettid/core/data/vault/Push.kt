@@ -196,7 +196,11 @@ class HeldBackEvents {
     /** A push wake came while the phase was not known ([wakeIfUnknown]): what is handed back is what it was for. */
     private var wake = false
 
-    /** An activity of this app started in this process ([uiStarted]): a push from then on did not start the process. */
+    /**
+     * An activity of this app is started now ([uiStarted], until [uiStopped]): a push meanwhile did not start the process. It
+     * follows the activities, not latched: a cached process the member once opened and left is woken by a push as one it
+     * started (ANDROID-PLAN 0.1.134 "A push wake").
+     */
     private var ui = false
 
     /** What [releaseHeld] hands back: the events, and whether a push wake started this process ([wakeIfUnknown]). */
@@ -219,6 +223,12 @@ class HeldBackEvents {
     @Synchronized
     fun uiStarted() {
         ui = true
+    }
+
+    /** No activity of this app is started any more (the app left the front): a push from now on may start what it collects. */
+    @Synchronized
+    fun uiStopped() {
+        ui = false
     }
 
     /** Whether [m] was kept: a `feed.event` while [phase] is not known yet. */
