@@ -6104,20 +6104,64 @@ class VaultDeviceTest {
             d.handle(v.sealAt("vault.status", vaultAt.minusSeconds(80), re = old.id))
             retry.await()
             assertTrue("nothing told yet: $told", told.isEmpty())
-            // The first answer to a request first sent now, arriving 3 s after the opening on the monotonic clock.
+            // The first answer to a request first sent 1 s after the opening, arriving 3 s after it: the vault stamped it in
+            // between, and the later bound (its first send) is taken.
+            elapsed = 2_000
             val fresh = async(Dispatchers.IO) { d.request("vault.status") }
             val req = v.open(nextDeposit().second)
             elapsed = 4_000
             val answerId = Ulid.new()
             d.handle(v.sealAt("vault.status", vaultAt, re = req.id, id = answerId))
             fresh.await()
-            assertEquals(listOf(vaultAt.minusMillis(3_000)), told.toList())
+            assertEquals(listOf(vaultAt.minusMillis(1_000)), told.toList())
             // Once: the same answer delivered again, and the next answer of the opening, tell nothing more.
             d.handle(v.sealAt("vault.status", vaultAt.plusSeconds(5), re = req.id, id = answerId))
             val next = async(Dispatchers.IO) { d.request("vault.status") }
             d.handle(v.sealAt("vault.status", vaultAt.plusSeconds(10), re = v.open(nextDeposit().second).id))
             next.await()
             assertEquals(1, told.size)
+        }
+    }
+
+    /**
+     * (Rule 3) A cached answer to a re-send that comes late carries the first send's `ts`: the mark is taken from the first
+     * send, so the delay does not move it back. A request made by [VaultDevice.requestOnce] or [VaultDevice.requestWithId]
+     * (a credential operation, its id fresh) counts as well; a kept change re-sent ([VaultDevice.sendKept]) never does.
+     */
+    @Test
+    fun theMarkIsFromTheFirstSendAndEveryFreshRequestCounts() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val at = Instant.now().plusSeconds(30).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val told = java.util.concurrent.CopyOnWriteArrayList<Instant>()
+            elapsed = 10_000
+            // A kept change: its answer never marks.
+            val k = KeptChange("pin.change", d.newId(), buildJsonObject { put("x", 1) }, d.vaultNow().plusSeconds(600), 1)
+            d.beginOpening { told += it }
+            val kept = async(Dispatchers.IO) { d.sendKept(k, 1, java.time.Duration.ofSeconds(5)) }
+            assertEquals(k.innerId, v.open(nextDeposit().second).id)
+            d.handle(v.sealAt("pin.change", at.minusSeconds(5), re = k.innerId))
+            kept.await()
+            d.dropKept(k)
+            assertTrue("a kept change: $told", told.isEmpty())
+            // requestOnce, sent 1 s after the opening; its answer arrives 60 s later.
+            elapsed = 11_000
+            val once = async(Dispatchers.IO) { d.requestOnce("vault.status") }
+            val req = v.open(nextDeposit().second)
+            elapsed = 71_000
+            d.handle(v.sealAt("vault.status", at, re = req.id))
+            once.await()
+            assertEquals(listOf(at.minusMillis(1_000)), told.toList())
+            // requestWithId, in the next opening.
+            told.clear()
+            elapsed = 100_000
+            d.beginOpening { told += it }
+            val id = d.newId()
+            val withId = async(Dispatchers.IO) { d.requestWithId(id, "credential.version", buildJsonObject { }) }
+            assertEquals(id, v.open(nextDeposit().second).id)
+            d.handle(v.sealAt("credential.version", at.plusSeconds(100), re = id))
+            withId.await()
+            assertEquals(listOf(at.plusSeconds(100)), told.toList())
         }
     }
 

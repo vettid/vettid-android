@@ -131,7 +131,7 @@ class FeedManagerTest {
         m.onEvent(event(item("i2", 2)))
         // The check failed: the feed is paused, the push wake's held-back event waits all the same.
         paused = true
-        m.replay(event(item("i3", 3)))
+        m.replay(event(item("i3", 3)), wake = true)
         // A live one while the failed check pauses the feed waits too.
         m.onEvent(event(item("i4", 4)))
         settle { true }
@@ -190,7 +190,7 @@ class FeedManagerTest {
         m.onEvent(event(item("i2", 2))) // held: the owner check is fine
         ownerHeld = true
         m.onEvent(event(item("i3", 3)))
-        m.replay(event(item("i4", 4)))
+        m.replay(event(item("i4", 4)), wake = true)
         settle { true }
         assertTrue(arrived.isEmpty())
         // The check passes and the release check ends: the gate lifts and what was held is released.
@@ -320,7 +320,7 @@ class FeedManagerTest {
         val before = now.minusSeconds(60)
         m.onEvent(event(item("i1", 1), ts = before)) // backlog, covered by the open read
         m.onEvent(event(item("i2", 2))) // sent since the opening, covered
-        m.replay(event(item("i3", 3), ts = before)) // a push wake's, covered
+        m.replay(event(item("i3", 3), ts = before), wake = true) // a push wake's, covered
         settle { true }
         assertTrue(arrived.isEmpty())
         checking = false
@@ -359,6 +359,81 @@ class FeedManagerTest {
             assertEquals("phone ${skewMinutes}min", listOf("new"), arrived.map { it.itemId })
             job.cancel()
         }
+    }
+
+    /** After a clear (a lock, the hold), a mark the device tells belongs to no opening: ignored until the next opening. */
+    @Test
+    fun aMarkAfterAClearIsIgnored() = runTest {
+        val m = manager(Ops())
+        val opening = m.vaultOpened(now)
+        m.clear()
+        m.openingMarked(now.minusSeconds(50), opening)
+        assertEquals(now, m.openingMark)
+        val next = m.vaultOpened(now.plusSeconds(10))
+        m.openingMarked(now.plusSeconds(5), next)
+        assertEquals(now.plusSeconds(5), m.openingMark)
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused that comes while the feed's full read is still under
+     * way (the release check already over) waits for the read and is judged then: a day-old backlog stays silent.
+     */
+    @Test
+    fun anOrdinaryStartsHeldBackEventWaitsForTheFullRead() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        m.vaultOpened(now)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.known["b1"] = item("b1", 1)
+        ops.pages += FeedPage(listOf(item("b1", 1)), 1)
+        m.open() // the opening's read, held at its list
+        settle { true }
+        m.replay(event(item("b1", 1), ts = now.minus(1, ChronoUnit.DAYS)), wake = false)
+        settle { true }
+        assertTrue("not applied as a live one: $arrived", arrived.isEmpty())
+        gate.complete(Unit)
+        settle { m.load.value == ListLoad.LOADED }
+        settle { true }
+        assertTrue("backlog: silent", arrived.isEmpty())
+        // A push wake's is what the push was for, so it is judged at once: not held for the read.
+        val ops2 = Ops()
+        val m2 = manager(ops2)
+        m2.vaultOpened(now)
+        val arrived2 = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m2.arrivals.collect { arrived2 += it } }
+        val gate2 = CompletableDeferred<Unit>()
+        ops2.gate = gate2
+        ops2.known["b1"] = item("b1", 1)
+        ops2.pages += FeedPage(listOf(item("b1", 1)), 1)
+        m2.open()
+        settle { true }
+        m2.replay(event(item("b1", 1), ts = now.minus(1, ChronoUnit.DAYS)), wake = true)
+        gate2.complete(Unit)
+        settle { arrived2.isNotEmpty() }
+        assertEquals(listOf("b1"), arrived2.map { it.itemId })
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.132, 0.1.134) The waiting-asks replay is the replay rule's own second alert: an ask notified live
+     * earlier in the same opening (no clear between, as when a due state known only from the clock ends) is replayed.
+     */
+    @Test
+    fun aWaitingAsksReplayIsNotHeldBackByTheNoRepeatRule() = runTest {
+        val ops = Ops()
+        val ask = item("a1", 1, kind = WaitingAsks.SIGN_IN)
+        val m = opened(ops)
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        ops.known["a1"] = ask
+        m.onEvent(event(ask))
+        settle { arrived.size == 1 }
+        val token = m.startReplayWindow()
+        assertTrue(m.replayWaitingAsks(token, listOf(com.vettid.core.data.social.Approval.Authentication("ra1", "c1", null, now.minusSeconds(60), now.plusSeconds(300))), now))
+        assertEquals(2, arrived.size)
+        assertTrue(arrived.last().replayed)
     }
 
     /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
@@ -414,8 +489,8 @@ class FeedManagerTest {
         settle { true }
         assertEquals(listOf(2L), arrived.map { it.seq })
         // The same change again (a push wake's copy, covered now), and an older one: no second alert.
-        m.replay(event(item("i1", 2)))
-        m.replay(event(item("i1", 1)))
+        m.replay(event(item("i1", 2)), wake = true)
+        m.replay(event(item("i1", 1)), wake = true)
         settle { true }
         assertEquals(listOf(2L), arrived.map { it.seq })
         m.onEvent(event(item("i1", 3)))
@@ -423,7 +498,7 @@ class FeedManagerTest {
         assertEquals(listOf(2L, 3L), arrived.map { it.seq })
         // The next opening: the same change may notify again.
         m.vaultOpened(now)
-        m.replay(event(item("i1", 3)))
+        m.replay(event(item("i1", 3)), wake = true)
         settle { true }
         assertEquals(listOf(2L, 3L, 3L), arrived.map { it.seq })
     }
@@ -835,12 +910,12 @@ class FeedManagerTest {
         val m = opened(ops, item("i1", 1, status = "read"), item("i2", 2))
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
-        m.replay(event(item("i2", 2)))
+        m.replay(event(item("i2", 2)), wake = true)
         assertEquals(listOf("i2"), arrived.map { it.itemId })
         // Read meanwhile on another device (the list has it as read): nothing arrives.
-        m.replay(event(item("i1", 1)))
+        m.replay(event(item("i1", 1)), wake = true)
         // Deleted meanwhile: not in the list, nothing arrives.
-        m.replay(event(item("gone", 2)))
+        m.replay(event(item("gone", 2)), wake = true)
         assertEquals(1, arrived.size)
         assertEquals(1, ops.lists.size) // and no further read
         job.cancel()
@@ -853,7 +928,7 @@ class FeedManagerTest {
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
         ops.pages += FeedPage(listOf(item("i7", 7)), 7)
-        m.replay(event(item("i7", 7)))
+        m.replay(event(item("i7", 7)), wake = true)
         assertEquals(listOf("i7"), arrived.map { it.itemId })
         settle { m.load.value == ListLoad.LOADED }
         assertEquals("the full read that follows brings no second arrival", 1, arrived.size)
@@ -866,7 +941,7 @@ class FeedManagerTest {
         val m = manager(ops, gated = { true })
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
-        m.replay(event(item("i7", 7)))
+        m.replay(event(item("i7", 7)), wake = true)
         advanceUntilIdle()
         assertTrue(arrived.isEmpty())
         assertTrue(ops.lists.isEmpty())
@@ -895,7 +970,7 @@ class FeedManagerTest {
         assertEquals(setOf("i2", "i5"), m.items.value.map { it.itemId }.toSet())
         assertEquals(2, m.badge.value.unread)
         // A held-back one does not arrive either.
-        m.replay(event(item("i6", 6, kind = "vault.pin_changed")))
+        m.replay(event(item("i6", 6, kind = "vault.pin_changed")), wake = true)
         assertEquals(listOf("i5"), arrived.map { it.itemId })
         job.cancel()
     }

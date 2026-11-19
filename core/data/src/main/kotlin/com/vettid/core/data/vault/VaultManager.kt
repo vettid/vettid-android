@@ -2009,6 +2009,8 @@ class VaultManager(
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
     override fun onForeground() {
+        // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process.
+        heldBack.uiStarted()
         // ANDROID-PLAN 0.1.54: a vault being deleted is only read again (its status), nothing else runs.
         if (phaseFlow.deleting) {
             scope.launch { deletionWatch.check() }

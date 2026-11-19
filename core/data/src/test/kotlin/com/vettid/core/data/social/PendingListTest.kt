@@ -115,9 +115,10 @@ class PendingListTest {
         runCurrent()
         assertEquals(listOf("auth:r1", "auth:r2"), m.listedNow().map { it.key }.sorted())
         assertEquals(listOf("auth:r1"), m.firstListedSince(mark)!!.map { it.key })
-        // A hold drops it: only a read begun after the hold counts again.
+        // A hold drops it, the lists kept with it (memory only): only a read begun after the hold counts again.
         m.forgetPending()
         assertEquals(null, m.firstListedSince(mark))
+        assertEquals(0, m.mergedListsKept)
         m.refreshPendingFrom { page(at(30), ask("authenticate", auth("r3"))) }
         assertEquals(listOf("auth:r3"), m.firstListedSince(mark)!!.map { it.key })
     }

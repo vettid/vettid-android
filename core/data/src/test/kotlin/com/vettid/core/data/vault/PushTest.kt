@@ -135,6 +135,19 @@ class PushTest {
         assertTrue(pushed.releaseHeld(AppPhase.Unlocked).wake)
         assertTrue(pushed.hold(ev, AppPhase.Starting))
         assertFalse("once", pushed.releaseHeld(AppPhase.Unlocked).wake)
+        // The member opened the app first (an activity started), then a push came while the status read was out: an ordinary
+        // start, its held-back events the backlog's.
+        val opened = HeldBackEvents()
+        opened.uiStarted()
+        assertTrue(opened.hold(ev, AppPhase.Starting))
+        assertTrue("still collected for the wake", opened.wakeIfUnknown(AppPhase.Starting))
+        assertFalse(opened.releaseHeld(AppPhase.Unlocked).wake)
+        // A push that started the process, then the member opened it: still the push's.
+        val woke = HeldBackEvents()
+        assertTrue(woke.wakeIfUnknown(AppPhase.Starting))
+        woke.uiStarted()
+        assertTrue(woke.hold(ev, AppPhase.Starting))
+        assertTrue(woke.releaseHeld(AppPhase.Unlocked).wake)
     }
 
     @Test

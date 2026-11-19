@@ -3414,9 +3414,12 @@ class VaultDevice private constructor(
 
     // --- (Rule 3, ANDROID-PLAN 0.1.134 Notification modes 7) the opening's moment on the vault's clock ---
 
-    /** An opening of the vault being marked: when it began on the monotonic clock, its requests, and who is told. */
+    /**
+     * An opening of the vault being marked: when it began on the monotonic clock, its requests (each with when it was first
+     * sent, on the same clock), and who is told.
+     */
     private class Opening(val atMs: Long, val tell: (Instant) -> Unit) {
-        val ids = HashSet<String>()
+        val sentAt = HashMap<String, Long>()
     }
 
     private val openingLock = Any()
@@ -3424,10 +3427,13 @@ class VaultDevice private constructor(
 
     /**
      * The vault opened on this phone now: the first answer to a request this device first sends from now on, while that
-     * request still waits for it, gives the opening's moment on the vault's clock (its `ts`, less the time on the monotonic
-     * clock from now to its arrival), told once to [tell]. No other message counts: not an event, not an answer to a
-     * request sent before (by this process or an earlier one), a retry under an id the request already had, a kept change
-     * re-sent ([sendKept]), a copy delivered again or an answer that came after its request stopped waiting. A later call
+     * request still waits for it, gives the opening's moment on the vault's clock, told once to [tell]. The vault stamped
+     * its `ts` between the request's first send and the answer's arrival; the moment is taken at the later bound, its `ts`
+     * less the monotonic time from now to that first send (fail-silent: a cached answer to a re-send that comes late,
+     * with the first send's `ts`, does not move it back). No other message counts: not an event, not an answer to a
+     * request sent before (by this process or an earlier one; the unlock's own answer comes before the opening, so the
+     * first answer after it is the one), a retry under an id the request already had, a kept change re-sent
+     * ([sendKept]), a copy delivered again or an answer that came after its request stopped waiting. A later call
      * replaces it, and the earlier opening is never told.
      */
     fun beginOpening(tell: (Instant) -> Unit) {
@@ -3437,20 +3443,19 @@ class VaultDevice private constructor(
     private fun noteOpeningRequest(id: String) {
         synchronized(openingLock) {
             val o = opening ?: return
-            if (o.ids.size < OPENING_IDS) o.ids.add(id)
+            if (o.sentAt.size < OPENING_IDS) o.sentAt.putIfAbsent(id, cfg.elapsedMs())
         }
     }
 
     /** An answer to [re], past the dedupe, its request still waiting: the opening's first such one is told and ends it. */
     private fun noteOpeningAnswer(re: String, ts: Instant) {
-        val arrived = cfg.elapsedMs()
-        val o = synchronized(openingLock) {
+        val (o, sent) = synchronized(openingLock) {
             val o = opening ?: return
-            if (re !in o.ids) return
+            val sent = o.sentAt[re] ?: return
             opening = null
-            o
+            o to sent
         }
-        o.tell(ts.minusMillis((arrived - o.atMs).coerceAtLeast(0)))
+        o.tell(ts.minusMillis((sent - o.atMs).coerceAtLeast(0)))
     }
 
     // --- the vault's clock, and a change request kept for resending (VAULT-MESSAGING 0.44.0 §11.14.9) ---
@@ -3805,6 +3810,7 @@ class VaultDevice private constructor(
             setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+
         /** At most this many requests of one opening are noted ([beginOpening]); the first answer usually comes long before. */
         private const val OPENING_IDS = 256
         private const val ROUND_POLL_MS = 50L

@@ -196,19 +196,29 @@ class HeldBackEvents {
     /** A push wake came while the phase was not known ([wakeIfUnknown]): what is handed back is what it was for. */
     private var wake = false
 
+    /** An activity of this app started in this process ([uiStarted]): a push from then on did not start the process. */
+    private var ui = false
+
     /** What [releaseHeld] hands back: the events, and whether a push wake started this process ([wakeIfUnknown]). */
     class Released(val events: List<VaultMessage>, val wake: Boolean)
 
     /**
-     * A push wake is being handled: true when [phase] is not known yet, and then what is held back until it is counts as
-     * what the push was for (ANDROID-PLAN 0.1.134 "A push wake"). An ordinary start (no push while the phase was unknown)
-     * leaves it false, and its held-back events follow the backlog rule.
+     * A push wake is being handled: true when [phase] is not known yet. If no activity of this app has started in this
+     * process ([uiStarted]), the push started it, and what is held back until the phase is known counts as what the push
+     * was for (ANDROID-PLAN 0.1.134 "A push wake"). A start the member made (the app opened, then a push while the status
+     * read is out) and a process that was already running stay ordinary: their held-back events follow the backlog rule.
      */
     @Synchronized
     fun wakeIfUnknown(phase: AppPhase): Boolean {
         if (!unknown(phase)) return false
-        wake = true
+        if (!ui) wake = true
         return true
+    }
+
+    /** An activity of this app started (the first after none): from now on a push did not start this process. */
+    @Synchronized
+    fun uiStarted() {
+        ui = true
     }
 
     /** Whether [m] was kept: a `feed.event` while [phase] is not known yet. */

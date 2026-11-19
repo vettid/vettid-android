@@ -153,6 +153,9 @@ class FeedManager(
     /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
     private var opening = 0
 
+    /** (Rule 3) The current opening takes its mark: from [vaultOpened] until a [clear] (a lock, the hold, a wipe). Under [lock]. */
+    private var markable = false
+
     /**
      * (ANDROID-PLAN 0.1.134) The `seq` each item last notified at during this opening: no second alert for the same or an
      * older change. Emptied at each opening and by [clear]. Under [lock].
@@ -218,6 +221,7 @@ class FeedManager(
         synchronized(lock) {
             arrivedSince = null
             notifiedSeq.clear()
+            markable = false // an answer the device tells after a lock belongs to no opening of this feed
             generation++
             byId = emptyMap()
             cursor = 0
@@ -251,7 +255,7 @@ class FeedManager(
      * feed has it now (not at all once read, archived or deleted), and only if a push wake started the process ([wake]:
      * what the push was for) or the vault sent it since the opening; else it is the opening's backlog and stays silent.
      */
-    fun replay(m: VaultMessage, wake: Boolean = true) = replay(m, notified = emptyMap(), wake = wake)
+    fun replay(m: VaultMessage, wake: Boolean) = replay(m, notified = emptyMap(), wake = wake)
 
     /**
      * (Rule 3) The vault opened, called as the release check begins, with [phoneNow] the phone's clock then: a held
@@ -262,16 +266,17 @@ class FeedManager(
     fun vaultOpened(phoneNow: Instant): Int = synchronized(lock) {
         openedAt = phoneNow
         notifiedSeq.clear()
+        markable = true
         ++opening
     }
 
     /**
      * (Rule 3) The opening [forOpening] on the vault's clock, from the first answer of that opening
      * (`VaultDevice.beginOpening`): kept from now on as a fixed time for it, whatever happens to the device. Ignored for an
-     * earlier opening.
+     * earlier opening, and after a [clear] until the next opening.
      */
     fun openingMarked(at: Instant, forOpening: Int) {
-        synchronized(lock) { if (forOpening == opening) openedAt = at }
+        synchronized(lock) { if (markable && forOpening == opening) openedAt = at }
     }
 
     /** (Rule 3) The opening's moment as it is judged now (tests). */
@@ -283,7 +288,7 @@ class FeedManager(
      * from a push wake ([wake]) or the vault sent it since it opened ([openedAt]): the opening's backlog stays silent.
      */
     private fun replay(m: VaultMessage, notified: Map<String, Long>, wake: Boolean) {
-        if (m.type != "feed.event" || holds(m, wake) || gated()) return
+        if (m.type != "feed.event" || takenElsewhere(m, wake)) return
         val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
         val notify = notified[item.itemId]?.let { item.seq > it } ?: true
         // Whether the feed's read already covers the event, and the item as the list has it now (null: gone).
@@ -295,6 +300,28 @@ class FeedManager(
         } else if (notify && isNewsSinceTheOpening(m, wake) && listed?.status == STATUS_ACTIVE) {
             emitArrival(listed)
         }
+    }
+
+    /** [m] goes no further here: held for the release check, dropped while gated, or waiting for the feed's read. */
+    private fun takenElsewhere(m: VaultMessage, wake: Boolean): Boolean = holds(m, wake) || gated() || !wake && waitsForTheRead(m)
+
+    /**
+     * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused, while the feed is not loaded (its full read under
+     * way, or failed): it cannot be told from the opening's backlog yet, so it waits in [heldEvents] and is judged when the
+     * read ends ([readEnded], [releaseNow]); a feed with no read under way is read first ([releaseIfOver]). True when it
+     * waits.
+     */
+    private fun waitsForTheRead(m: VaultMessage): Boolean {
+        val waits = synchronized(lock) {
+            (loadState.value != ListLoad.LOADED).also { w ->
+                if (w) {
+                    heldEvents.addLast(HeldEvent(m, wake = false))
+                    while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+                }
+            }
+        }
+        if (waits) releaseIfOver()
+        return waits
     }
 
     /**

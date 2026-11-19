@@ -215,20 +215,25 @@ class SocialManager internal constructor(
      */
     internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
-    /** What each of the latest merged `pending.list` reads listed ([listedNow] just after its merge), by its ticket. */
+    /**
+     * What each of the latest merged `pending.list` reads listed ([listedNow] taken with its merge, under [localLock]), by
+     * its ticket. Memory only, emptied with the rest at a lock, the hold and a sign-out ([dropLocal]). Under [localLock].
+     */
     private val mergedLists = ArrayDeque<Pair<Long, List<Approval>>>()
 
     /**
      * (ANDROID-PLAN 0.1.134, owner decision a of 2026-11-18, item 3) The asks as the **first** `pending.list` read begun
-     * after [mark] and merged left them ([listedNow] just after that merge), not as a later read has them; null while
-     * [pendingListedSince] is false. Of a read kept no longer (more than [MERGED_KEPT] merged since), the oldest kept.
+     * after [mark] and merged left them, not as a later read has them; null while none is kept ([pendingListedSince]
+     * false, or the lists dropped since). Of a read kept no longer (more than [MERGED_KEPT] merged since), the oldest one
+     * kept after [mark].
      */
-    internal fun firstListedSince(mark: Long): List<Approval>? {
-        if (!pendingListedSince(mark)) return null
+    /** How many merged lists are kept for [firstListedSince] (tests: none after a lock, the hold or a sign-out). */
+    internal val mergedListsKept: Int get() = synchronized(localLock) { mergedLists.size }
+
+    internal fun firstListedSince(mark: Long): List<Approval>? = synchronized(localLock) {
+        if (!pendingListedSince(mark)) return@synchronized null
         val after = maxOf(mark, pending.resetAt)
-        return synchronized(mergedLists) {
-            mergedLists.filter { it.first > after }.minByOrNull { it.first }?.second
-        } ?: listedNow()
+        mergedLists.filter { it.first > after }.minByOrNull { it.first }?.second
     }
 
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
@@ -427,6 +432,7 @@ class SocialManager internal constructor(
      */
     private fun dropLocal(close: Boolean = false) = synchronized(localLock) {
         pending.reset()
+        mergedLists.clear()
         listReadFlow.value = false
         feedClosedFlow.value = FeedOnlyAsks.Closed()
         if (close) closed = true
@@ -1627,30 +1633,31 @@ class SocialManager internal constructor(
             PendingAsks.Entry(type, body, p.key, (p as? Approval.DeviceRequest)?.deviceId)
         }.distinctBy { it.key }
         var merged = false
-        edit { l ->
-            if (closed) return@edit l // a read that began after the lock merges nothing (see [closed])
-            val plan = pending.merge(ticket, ts, listed) ?: return@edit l
-            merged = true
-            listReadFlow.value = true
-            val at = now().toEpochMilli()
-            val (gone, kept) = l.events.partition { e ->
-                e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
+        // The merge and its snapshot under one hold of [localLock]: no other read's merge, and no clear, comes between.
+        synchronized(localLock) {
+            edit { l ->
+                if (closed) return@edit l // a read that began after the lock merges nothing (see [closed])
+                val plan = pending.merge(ticket, ts, listed) ?: return@edit l
+                merged = true
+                listReadFlow.value = true
+                val at = now().toEpochMilli()
+                val (gone, kept) = l.events.partition { e ->
+                    e.type in PendingAsks.LISTED_TYPES && keyOf(e).let { k -> k == null || !plan.keepEvent(k) }
+                }
+                val stillThere = kept.mapNotNull { keyOf(it) }.toSet()
+                val firstSeen = gone.mapNotNull { e -> keyOf(e)?.let { it to e.at } }.toMap()
+                l.copy(
+                    events = kept + plan.entries.filter { it.key !in stillThere }
+                        .map { StoredEvent(it.type, enc(it.body), firstSeen[it.key] ?: at) },
+                )
             }
-            val stillThere = kept.mapNotNull { keyOf(it) }.toSet()
-            val firstSeen = gone.mapNotNull { e -> keyOf(e)?.let { it to e.at } }.toMap()
-            l.copy(
-                events = kept + plan.entries.filter { it.key !in stillThere }
-                    .map { StoredEvent(it.type, enc(it.body), firstSeen[it.key] ?: at) },
-            )
-        }
-        // Only once [edit] has published the list: a replay that sees the stamp reads what it listed.
-        if (merged) {
-            synchronized(mergedLists) {
+            if (merged) {
                 mergedLists.addLast(ticket to listedNow())
                 while (mergedLists.size > MERGED_KEPT) mergedLists.removeFirst()
             }
-            pendingPublished.accumulateAndGet(ticket) { x, y -> maxOf(x, y) }
         }
+        // Only once [edit] has published the list: a replay that sees the stamp reads what it listed.
+        if (merged) pendingPublished.accumulateAndGet(ticket) { x, y -> maxOf(x, y) }
         return merged
     }
 

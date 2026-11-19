@@ -177,7 +177,8 @@ class ReleaseGateWiringTest {
         val launch = block("private fun launchAfterHoldPassed(")
         launch.has("val read = feed.reserveRefresh()")
         launch.has("scope.launch { afterHoldPassed(gen, listMark, token, read) }.invokeOnCompletion { read.drop() }")
-        assertTrue("reserved before the launch", launch.indexOf("val read = feed.reserveRefresh()") < launch.indexOfFirst { it.contains("scope.launch") })
+        val reserved = launch.indexOf("val read = feed.reserveRefresh()")
+        assertTrue("reserved before the launch", reserved < launch.indexOfFirst { it.contains("scope.launch") })
         assertEquals("no launch without the reservation", 1, code.count { it.contains("scope.launch { afterHoldPassed(") })
         val hold = block("private suspend fun afterHoldPassed(")
         hold.has("runCatching { read.run() }")
@@ -189,6 +190,8 @@ class ReleaseGateWiringTest {
     @Test
     fun onlyAPushStartedProcessesHeldBackEventsAreAWakes() {
         block("override suspend fun collectForWake()").has("if (heldBack.wakeIfUnknown(phaseFlow.value)) refresh()")
+        // An activity started: a push from then on did not start the process.
+        assertEquals("heldBack.uiStarted()", block("override fun onForeground()")[1])
         code.has("replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },")
         block("private fun replayHeldBack(").has("events.forEach { e -> runCatching { feed.replay(e, wake) } }")
     }
