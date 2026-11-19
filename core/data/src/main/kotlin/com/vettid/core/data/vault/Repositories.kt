@@ -348,6 +348,7 @@ interface VaultRepository {
 
     /**
      * (Release R, §11.14.10) "Finish the move": `vault.lock`, then `vault.unlock` with [pin] and this phone's own secret.
+     * Without a usable user_guid on this phone neither is sent: [UnlockAttempt.Failed] with `no_user_guid` at once.
      * While it runs, [finishingMove] is true: the phone counts as locked (as after any lock) but the screen that asked
      * stays, so that the member sees the move finish instead of the unlock screen and the notice of a lock in doubt
      * that the vault, still in the middle of the move, may not answer at once.

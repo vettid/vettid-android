@@ -623,7 +623,10 @@ class VaultManager(
      * app requires the vault's current release). Made before the phase: every opening starts its check
      * ([ReleaseUpdateManager.vaultOpened]) before the open phase is published.
      */
-    val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
+    val releaseUpdate = ReleaseUpdateManager(
+        scope, UpdateOps(),
+        userGuidUsable = { guidUsable() },
+    )
 
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
     private val phaseFlow = PhaseHolder(
@@ -768,6 +771,7 @@ class VaultManager(
     private val finishMoveRunner = FinishMoveRunner(
         scope,
         FINISH_MOVE_HOLD_MS,
+        guidUsable = { guidUsable() },
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
         unlock = { pin, taken -> unlockOnce(pin, false, holderApp = true, pinTaken = taken) },
@@ -2640,6 +2644,12 @@ class VaultManager(
         }
     }
 
+    /**
+     * (§11.4) Whether this phone holds a usable user_guid ([TransferInResume.usableGuid]). The one check the unlock's guard,
+     * "Finish the move" and the release update ask before they lock or send anything.
+     */
+    private fun guidUsable(): Boolean = TransferInResume.usableGuid(local.userGuid) != null
+
     @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList", "LongMethod") // one answer per §11.4 result code
     private suspend fun unlockStepHeld(
         pin: String,
@@ -2663,7 +2673,7 @@ class VaultManager(
         ownerCheck.unlockStarting() // (0.84.0) nor the relay notice and its spent re-read, whatever lock came before
         // §11.4 needs the member's user_guid, 1-128 printable ASCII. Fail closed without a valid one: a damaged record, or a
         // transfer an older app build completed without one (this build fails such a transfer, VAULT-MESSAGING §6.7.1).
-        if (TransferInResume.usableGuid(local.userGuid) == null) {
+        if (!guidUsable()) {
             return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
         }
         // (0.44.0, §11.14.9 step 5; H1) With a PIN change unresolved only the unlock screen's two steps know which PIN was

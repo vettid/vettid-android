@@ -343,6 +343,7 @@ private fun MoveNotices(
     }
     // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
     // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
+    // Without a usable user_guid nothing is sent and the vault stays open: the screen shows the failure itself.
     val finishing by viewModel.finishingMove.collectAsStateWithLifecycle()
     val finishVm: FinishMoveViewModel = hiltViewModel()
     val finishState by finishVm.uiState.collectAsStateWithLifecycle()
