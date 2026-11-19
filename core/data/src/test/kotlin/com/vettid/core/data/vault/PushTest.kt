@@ -142,6 +142,13 @@ class PushTest {
         assertTrue(opened.hold(ev, AppPhase.Starting))
         assertTrue("still collected for the wake", opened.wakeIfUnknown(AppPhase.Starting))
         assertFalse(opened.releaseHeld(AppPhase.Unlocked).wake)
+        // The member opened the app and left it (a cached process): a later push while the phase is unknown is the push's.
+        val left = HeldBackEvents()
+        left.uiStarted()
+        left.uiStopped()
+        assertTrue(left.wakeIfUnknown(AppPhase.Starting))
+        assertTrue(left.hold(ev, AppPhase.Starting))
+        assertTrue("not latched by an earlier visit", left.releaseHeld(AppPhase.Unlocked).wake)
         // A push that started the process, then the member opened it: still the push's.
         val woke = HeldBackEvents()
         assertTrue(woke.wakeIfUnknown(AppPhase.Starting))

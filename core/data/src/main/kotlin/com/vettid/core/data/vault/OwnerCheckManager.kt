@@ -101,6 +101,12 @@ class OwnerCheckManager(
     private val memberState: suspend () -> String? = { null },
     /** (ANDROID-PLAN 0.1.95) A read found the vault locked: the app moves to its locked screen, as for a `vault.locking`. */
     private val onFoundLocked: () -> Unit = {},
+    /**
+     * (ANDROID-PLAN 0.1.134) The due or held state ends with the value about to be published: told before it is, in the
+     * same step, so nothing that follows the value can come before. [at]: when the check passed, on the vault's clock
+     * (null: not known). A due state the clock alone began counts.
+     */
+    private val onLift: (at: Instant?) -> Unit = {},
 ) : OwnerCheckRepository {
     private val saved = restore()
     private val view = MutableStateFlow(saved?.toView())
@@ -634,6 +640,7 @@ class OwnerCheckManager(
                 // When it passed, on the vault's clock: its deadline less its interval as it runs on this vault (a staging time
                 // scale divides it; unknown without both).
                 Pass(
+                    here = true,
                     counts = !unlocksOwn,
                     at = r.intervalSeconds?.let { deadline?.minusSeconds(TimeScales.divide(it, lastTimeScale)) },
                 ),
@@ -859,9 +866,10 @@ class OwnerCheckManager(
 
     /**
      * A check passed: here or on another device, an unlock's own included. [counts]: with the vault open, not the check an
-     * unlock makes ([OwnerCheckView.passes]); [at]: when, on the vault's clock (null: not known).
+     * unlock makes ([OwnerCheckView.passes]); [at]: when, on the vault's clock (null: not known); [here]: this phone's own
+     * check, whose answer is the newest message from the vault (the lift is then the vault's clock as that answer set it).
      */
-    private class Pass(val counts: Boolean, val at: Instant?)
+    private class Pass(val counts: Boolean, val at: Instant?, val here: Boolean = false)
 
     /**
      * Every check passed, here or on another device (an unlock's own included): a `vault.status` read sent before the
@@ -890,6 +898,8 @@ class OwnerCheckManager(
         synchronized(setLock) {
             if (stale()) return false
             if (pass != null) notePass(pass)
+            val t = now()
+            if (view.value?.gated(t) == true && !v.gated(t)) runCatching { onLift(liftTime(v, pass)) }
             val passes = if (pass?.counts == true) passCount.incrementAndGet() else passCount.get()
             view.value = v.copy(passes = passes)
         }
@@ -904,6 +914,21 @@ class OwnerCheckManager(
         )
         runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
         return true
+    }
+
+    /**
+     * When the check that ends a due or held state passed, on the vault's clock: the pass's own time, else the value's
+     * deadline less its interval as it runs on this vault (the last pass the vault counts; a staging time scale divides
+     * it), never earlier than the latest pass known. Never [passedAt] alone: a pass known before the due state began is
+     * earlier than its end, and due-era news would notify. Null: not known.
+     */
+    private fun liftTime(v: OwnerCheckView, pass: Pass?): Instant? = when {
+        // This phone's own check: its answer just set the vault's clock, which [onLift] then falls back to.
+        pass?.here == true -> null
+        pass?.at != null -> pass.at
+        else -> v.deadline?.minusSeconds(TimeScales.divide(v.intervalSeconds, lastTimeScale))?.let { fromDeadline ->
+            passedAt?.let { maxOf(it, fromDeadline) } ?: fromDeadline
+        }
     }
 
     /** Under [setLock]: [pass] happened; [passedAt] only ever moves forward. */

@@ -488,6 +488,80 @@ class OwnerCheckManagerTest {
         assertEquals("the pass stands", passed, m.ownerCheck.value)
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) The lift is told before its value is published (the value seen then is still the gated one),
+     * once, at the pass's own time on the vault's clock: the end of a hold, and of a due state the clock alone began. A
+     * value that was not gated tells nothing.
+     */
+    @Test
+    fun theLiftIsToldBeforeItsValueAtThePassTime() = runTest {
+        val lifts = mutableListOf<Pair<Instant?, Boolean>>()
+        lateinit var m: OwnerCheckManager
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onLift = { at -> lifts += at to (m.ownerCheck.value?.gated(now) == true) },
+        )
+        m.refreshOwnerCheck()
+        assertTrue(lifts.isEmpty())
+        val passAt = now.minusSeconds(30)
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T12:00:00Z"}""", ts = passAt))
+        assertEquals(listOf<Pair<Instant?, Boolean>>(passAt to true), lifts)
+        // Not gated before: nothing.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-08T12:00:00Z"}""", ts = now))
+        assertEquals(1, lifts.size)
+        // A due state the clock alone began (the deadline passed, the value still OK), ended by a pass.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-06T11:30:00Z"}""", ts = now.minusSeconds(3600)))
+        assertEquals(1, lifts.size)
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T13:00:00Z"}""", ts = now.minusSeconds(5)))
+        assertEquals(now.minusSeconds(5) to true, lifts.last())
+        assertEquals(2, lifts.size)
+    }
+
+    /**
+     * A due state ended by a status read (a pass on another device whose event this phone did not see): the lift is the
+     * value's deadline less its interval (the last pass the vault counts), not an earlier pass this process knew.
+     */
+    @Test
+    fun aLiftLearntFromAStatusReadIsAtTheDeadlineLessTheInterval() = runTest {
+        val lifts = mutableListOf<Instant?>()
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T00:00:00Z", 86_400) }
+        val m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onLift = { at -> lifts += at },
+        )
+        m.refreshOwnerCheck()
+        // A pass known in this process, two days before.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T00:00:00Z"}""", ts = now.minusSeconds(172_800)))
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertTrue(lifts.isEmpty())
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T11:59:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertEquals(listOf<Instant?>(Instant.parse("2026-10-06T11:59:00Z")), lifts)
+        // Never earlier than a pass known: a deadline less its interval that falls before it gives that pass.
+        m.onEvent(event("sync.event", """{"kind":"owner_check","deadline":"2026-10-07T11:59:00Z"}""", ts = now.minusSeconds(30)))
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        ops.status = OwnerCheckStatus("ok", "2026-10-07T11:00:00Z", 86_400)
+        m.refreshOwnerCheck()
+        assertEquals(now.minusSeconds(30), lifts.last())
+    }
+
+    /** This phone's own check ends a held state: no time of its own is told (the vault's clock, set by its answer, is). */
+    @Test
+    fun aPassHereIsToldWithoutATimeOfItsOwn() = runTest {
+        val lifts = mutableListOf<Instant?>()
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onLift = { at -> lifts += at },
+        )
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertEquals(listOf<Instant?>(null), lifts)
+    }
+
     /** Only a held or due answer is dropped: an OK status sent before a pass and answered after it is taken. */
     @Test
     fun anOkStatusSentBeforeAPassIsTaken() = runTest {

@@ -449,8 +449,8 @@ internal class PhaseHolder(
      * published: whoever reads the open phase reads the gate's check with it, so the shell never shows a frame before.
      * `continued` is true when the vault was open on this phone and only a status read that could not be made came between
      * (Unlocked, then [AppPhase.Unreachable] only, then Unlocked): nothing closed it, so it is the same opening
-     * (ANDROID-PLAN 0.1.134: the opening's moment carries on; the Unreachable phase's clears still emptied what the feed
-     * had noted of it, so the no-repeat rule starts again).
+     * (ANDROID-PLAN 0.1.134: the opening's moment carries on, and what the feed noted of it is kept for it, since the
+     * feed's clear for Unreachable is a soft one).
      */
     private val onOpen: (continued: Boolean) -> Unit = {},
 ) {

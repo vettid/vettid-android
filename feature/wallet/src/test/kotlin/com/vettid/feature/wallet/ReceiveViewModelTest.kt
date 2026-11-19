@@ -2,7 +2,6 @@ package com.vettid.feature.wallet
 
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.vault.VaultFailure
-import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -27,7 +26,7 @@ class ReceiveViewModelTest {
     private val id = "01WALLET0000000000000000AA"
 
     private suspend fun TestScope.vm(backedUp: Boolean = true): ReceiveViewModel {
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         if (backedUp) flags.setBackedUp(id)
         val m = manager(backgroundScope, ops, flags)
         m.open()
@@ -102,7 +101,7 @@ class ReceiveViewModelTest {
     @Test
     fun theAddressComesOnceThePhraseIsChecked() = runTest {
         ops.wallet(id)
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         val m = manager(backgroundScope, ops, flags)
         m.open()
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
@@ -138,7 +137,7 @@ class ReceiveViewModelTest {
     @Test
     fun aNetworkTheBuildDoesNotOfferGivesNoAddress() = runTest {
         ops.wallet(id, network = "testnet")
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         flags.setBackedUp(id)
         flags.setTestnetLabel(id, com.vettid.core.chain.Network.TESTNET)
         val m = manager(backgroundScope, ops, flags)
@@ -179,7 +178,7 @@ class ReceiveViewModelTest {
     @Test
     fun theScreenLeavesWhenTheVaultCloses() = runTest {
         ops.wallet(id)
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile).also { it.setBackedUp(id) })
+        val m = manager(backgroundScope, ops, testFlags(flagsFile).also { it.setBackedUp(id) })
         m.open()
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.address != null }
@@ -192,7 +191,7 @@ class ReceiveViewModelTest {
     fun aPendingLimitHoldsReceiveBackUntilItIsSet() = runTest {
         ops.wallet(id)
         // The limit chosen at creation was never sent (a restart, a failed send): it is first in line, and fails again.
-        WalletFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(500_000, null))
+        testFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(500_000, null))
         ops.capsSetFails = "internal"
         val vm = vm()
         eventually { vm.state.value.problem == ReceiveProblem.CAPS_PENDING }
@@ -217,7 +216,7 @@ class ReceiveViewModelTest {
         eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
         assertFalse(vm.state.value.notBackedUp)
         flagsFile.failLoads = false
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         flagsFile.failLoads = true
         vm.load()
         eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE || vm.state.value.notBackedUp }

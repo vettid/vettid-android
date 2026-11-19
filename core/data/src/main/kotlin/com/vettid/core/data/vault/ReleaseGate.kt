@@ -64,6 +64,8 @@ internal class ReleasePauseSteps(
     private val gateChanged: (lifted: Boolean) -> Unit,
     private val reads: () -> Unit,
     private val sends: () -> Unit,
+    /** What an opening that continued owes, its own reads having run ([owedReads]). */
+    private val owed: () -> Unit = {},
 ) {
     /** A lift's reads, and the end of the check's sends, that came while the owner check was due or held. */
     private var readsWaiting = false
@@ -113,6 +115,24 @@ internal class ReleasePauseSteps(
         steps.finish()
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) An opening that continued owes what follows a lift's reads (a waiting-asks replay its pause
+     * kept): [owed] now, its own reads having run; when the owner check is due or held, the lift's reads when it lifts;
+     * while the gate pauses, when the pause lifts.
+     */
+    fun owedReads() {
+        if (paused() || !unlocked()) return
+        val run = synchronized(this) {
+            if (checkGated()) {
+                readsWaiting = true
+                false
+            } else {
+                true
+            }
+        }
+        if (run) owed()
+    }
+
     /** The vault locked: what waited for the owner check goes with it. */
     fun reset() = synchronized(this) {
         readsWaiting = false
@@ -160,6 +180,8 @@ internal class HeldAskReplay {
     fun hold(d: Due) = due.set(d)
 
     fun take(): Due? = due.getAndSet(null)
+
+    fun held(): Boolean = due.get() != null
 
     fun drop() = due.set(null)
 }

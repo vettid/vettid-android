@@ -857,6 +857,7 @@ class ReleaseGateTest {
             gateChanged = { log += "gate:$it" },
             reads = { log += "reads" },
             sends = { log += "sends" },
+            owed = { log += "owed" },
         )
     }
 
@@ -1026,6 +1027,32 @@ class ReleaseGateTest {
         s.pause.ownerCheckLifted()
         s.pause.ownerCheckLifted()
         assertEquals("once, when the hold lifts", listOf("gate:true", "reads", "sends"), s.log)
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) An opening that continued after Unreachable with a replay its pause kept: a check that passes at
+     * once moves no pause, so the opening asks for the reads itself. Run now; while the owner check is due, at its lift;
+     * while paused, by the pause's lift; nothing while the vault is not open.
+     */
+    @Test
+    fun aContinuedOpeningsOwedReadsRunOnceNothingHoldsThem() {
+        val s = Steps()
+        s.pause.owedReads()
+        assertEquals("its own reads ran: only what follows them", listOf("owed"), s.log)
+        s.log.clear()
+        s.checkGated = true
+        s.pause.owedReads()
+        assertEquals("waits for the owner check", emptyList<String>(), s.log)
+        s.checkGated = false
+        s.pause.ownerCheckLifted()
+        assertEquals(listOf("reads"), s.log)
+        s.log.clear()
+        s.paused = true
+        s.pause.owedReads()
+        s.open = false
+        s.paused = false
+        s.pause.owedReads()
+        assertEquals("nothing while paused or closed", emptyList<String>(), s.log)
     }
 
     /** The hold lifts while the gate still pauses the work: nothing waits, and the gate's own lift reads (as before). */

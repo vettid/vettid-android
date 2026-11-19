@@ -16,7 +16,6 @@ import com.vettid.core.wallet.HistoryAccess
 import com.vettid.core.wallet.TransactionsResult
 import com.vettid.core.wallet.TxDirection
 import com.vettid.core.wallet.TxStatus
-import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletPayee
 import com.vettid.core.wallet.WalletTx
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -81,7 +80,7 @@ class TransactionsViewModelsTest {
     )
 
     private suspend fun TestScope.opened(note: Boolean = true, chain: ChainSource = server.source()): com.vettid.core.wallet.WalletsManager {
-        val flags = WalletFlags(MemoryFlags())
+        val flags = testFlags()
         flags.setBackedUp(id)
         if (note) flags.setPrivacyNoteShown(id)
         return manager(backgroundScope, ops, flags, chain).also { it.open() }

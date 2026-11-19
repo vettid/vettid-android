@@ -94,7 +94,8 @@ internal class LockClearFailed(first: Throwable, again: Throwable) : IllegalStat
  */
 internal class PhaseSteps private constructor(
     private val replay: (AppPhase) -> Unit,
-    private val lockClears: List<Pair<String, () -> Unit>>,
+    /** Each lock clear is told the phase it clears for (the feed keeps what a continued opening needs across Unreachable). */
+    private val lockClears: List<Pair<String, (AppPhase) -> Unit>>,
     private val ownProfile: (AppPhase) -> Unit,
 ) {
     /** What a lock runs, by name, in order (the tests check VaultManager's list through [of]). */
@@ -105,7 +106,7 @@ internal class PhaseSteps private constructor(
         steps.step { replay(phase) }
         if (phase == AppPhase.Unlocked) steps.step { opened() }
         val locks = phase != AppPhase.Unlocked && phase != AppPhase.Starting
-        if (locks) clearInto(steps)
+        if (locks) clearInto(steps, phase)
         steps.step { ownProfile(phase) }
         val first = steps.takeFailure() ?: return
         val second = if (locks) clearAgain(phase) else null
@@ -115,13 +116,13 @@ internal class PhaseSteps private constructor(
     /** Once more: the clears and the own profile's step (the release ran; it holds nothing of the vault's). */
     private fun clearAgain(phase: AppPhase): Throwable? {
         val again = ClearSteps()
-        clearInto(again)
+        clearInto(again, phase)
         again.step { ownProfile(phase) }
         return again.takeFailure()
     }
 
-    private fun clearInto(steps: ClearSteps) {
-        for ((_, clear) in lockClears) steps.step { clear() }
+    private fun clearInto(steps: ClearSteps, phase: AppPhase) {
+        for ((_, clear) in lockClears) steps.step { clear(phase) }
     }
 
     companion object {
@@ -152,25 +153,27 @@ internal class PhaseSteps private constructor(
             clearAttachments: () -> Unit,
             clearItems: () -> Unit,
             clearSharing: () -> Unit,
-            clearFeed: () -> Unit,
+            /** Told the phase: [AppPhase.Unreachable] is no close, and the opening may continue (ANDROID-PLAN 0.1.134). */
+            clearFeed: (AppPhase) -> Unit,
             clearDevices: () -> Unit,
             clearVotes: () -> Unit,
             clearPresence: () -> Unit,
             clearLocation: () -> Unit,
-            clearReleaseCheck: () -> Unit,
+            /** Told the phase, as [clearFeed]. */
+            clearReleaseCheck: (AppPhase) -> Unit,
             ownProfile: (AppPhase) -> Unit,
         ) = PhaseSteps(
             replay,
             listOf(
-                SOCIAL to forgetOpenVault,
-                ATTACHMENTS to clearAttachments,
-                ITEMS to clearItems,
-                SHARING to clearSharing,
+                SOCIAL to { _ -> forgetOpenVault() },
+                ATTACHMENTS to { _ -> clearAttachments() },
+                ITEMS to { _ -> clearItems() },
+                SHARING to { _ -> clearSharing() },
                 FEED to clearFeed,
-                DEVICES to clearDevices,
-                VOTES to clearVotes,
-                PRESENCE to clearPresence,
-                LOCATION to clearLocation,
+                DEVICES to { _ -> clearDevices() },
+                VOTES to { _ -> clearVotes() },
+                PRESENCE to { _ -> clearPresence() },
+                LOCATION to { _ -> clearLocation() },
                 RELEASE_CHECK to clearReleaseCheck,
             ),
             ownProfile,
