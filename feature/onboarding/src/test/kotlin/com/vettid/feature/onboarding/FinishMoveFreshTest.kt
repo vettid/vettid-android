@@ -95,7 +95,10 @@ class FinishMoveFreshTest {
         assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
     }
 
-    /** The second move's PIN goes with a reading of its own, taken when its form opens: never the first move's. */
+    /**
+     * The second move's PIN goes with a reading of its own (taken again at the first digit typed), never the first move's. A
+     * guard against regressions in the keypad's reading across a reset.
+     */
     @Test
     fun aSecondMovesPinGoesWithAFreshReading() = runTest {
         vault.pinGeneration = 5
