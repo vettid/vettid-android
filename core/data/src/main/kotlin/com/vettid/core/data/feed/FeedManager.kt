@@ -680,8 +680,9 @@ class FeedManager(
                 Applied.Lifted -> return readAfter(full = true)
                 is Applied.Read -> a.arrived
             }
-            arrived.distinctBy { it.itemId }.forEach { emitArrival(byIdNow(it.itemId) ?: it) }
-            loadState.value = ListLoad.LOADED
+            // As the feed lists each one now (owner decision 2026-11-18): one it no longer lists (past retention, deleted)
+            // or no longer active is not notified.
+            arrived.distinctBy { it.itemId }.forEach { a -> byIdNow(a.itemId)?.takeIf { it.status == STATUS_ACTIVE }?.let(::emitArrival) }
         } catch (e: VaultFailure) {
             if (full && synchronized(lock) { gen == generation }) loadState.value = ListLoad.FAILED
             throw e
@@ -715,6 +716,9 @@ class FeedManager(
                     if (full) byId = emptyMap()
                     apply(changed)
                     cursor = maxOf(if (full) 0 else cursor, seq)
+                    // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
+                    // it leaves the list not loaded, never marked loaded over a cleared list.
+                    loadState.value = ListLoad.LOADED
                     Applied.Read(if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq })
                 }
             }
