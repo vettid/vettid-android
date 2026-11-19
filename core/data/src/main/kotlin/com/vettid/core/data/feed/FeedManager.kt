@@ -134,8 +134,8 @@ class FeedManager(
      */
     private val ownerGated: () -> Boolean = { false },
     /**
-     * The vault is open on this phone (the phase, not the feed's state: a hold or the release gate's pause clears the feed
-     * while it stays open). A held-back or live event that comes while it is not is kept nowhere ([waitsForTheRead]).
+     * The vault is open on this phone (the phase, not the feed's state: the owner check's hold clears the feed while it
+     * stays open). A held-back or live event that comes while it is not is kept nowhere ([waitsForTheRead]).
      */
     private val vaultOpen: () -> Boolean = { true },
 ) : FeedRepository {
@@ -359,8 +359,8 @@ class FeedManager(
      * way, or failed): it cannot be told from the opening's backlog yet, so it waits in [heldEvents] and is judged when the
      * read ends ([readEnded], [releaseNow]); a feed with no read under way is read first ([releaseIfOver]). True when it
      * waits, or when it is dropped: one that comes while the vault is not open on this phone ([vaultOpen]: a lock while it
-     * was on its way) is kept nowhere and starts no read, since nothing is kept outside an open vault. After a hold or the
-     * release gate's pause (which clear the feed while the vault stays open) it waits for the read as at any time.
+     * was on its way) is kept nowhere and starts no read, since nothing is kept outside an open vault. After the owner
+     * check's hold (which clears the feed while the vault stays open) it waits for the read as at any time.
      */
     private fun waitsForTheRead(m: VaultMessage): Boolean {
         var dropped = false
