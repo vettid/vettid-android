@@ -263,6 +263,16 @@ data class UnlockUiState(
     val stuckWordsOnly: Boolean
         get() = (noUserGuid || message == UnlockMessage.NoUserGuid) && !loading && !eraseOffered && !recoverOnly && !moveNoUserGuid
 
+    /**
+     * (Owner decision a, 2026-11-19) A phone with no usable user_guid after a release check that failed: "Recover your vault"
+     * beside the recover-or-erase words, whichever card carries them ([stuckWordsOnly], or the move card of a "Finish the
+     * move" refused for the same reason), next to "Try again", so a check that never succeeds still leaves a way forward. No
+     * erase: a failed check could not rule out an ended release or a rollback ([eraseReady]). Not on a [recoverOnly] screen
+     * (its own notice recovers), nor while a kept check waits (the words alone there, owner decision a, 2026-11-18).
+     */
+    val recoverBesideRetry: Boolean
+        get() = noUserGuid && preflightError != null && !loading && !recoverOnly && !keptCheckWaiting
+
     /** The last "Finish the move" was refused for want of a usable user_guid ([isNoUserGuid]). */
     val moveNoUserGuid: Boolean get() = moveFailure?.let { isNoUserGuid(it.kind, it.code) } == true
 

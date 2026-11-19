@@ -2,6 +2,8 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -12,8 +14,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.MoveFailure
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
+import com.vettid.core.data.vault.UnlockAttempt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -122,6 +126,8 @@ class UnlockStuckTest {
         assertFalse(s.eraseOffered)
         assertFalse(s.stuckNoticeShown)
         assertFalse(s.stuckWordsOnly)
+        // Nor Recover while a check runs after one that failed.
+        assertFalse(UnlockUiState(loading = true, preflightError = FailureKind.NETWORK, noUserGuid = true).recoverBesideRetry)
     }
 
     /**
@@ -138,6 +144,149 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_no_user_guid").assertExists()
         rule.onNodeWithTag("erase_phone").assertDoesNotExist()
         rule.onNodeWithText("Try again").assertExists()
+    }
+
+    /**
+     * (Owner decision a, 2026-11-19) After a failed check, "Recover your vault" beside the words, next to "Try again": a check
+     * that never succeeds still leaves a way forward. Still no erase.
+     */
+    @Test
+    fun afterAFailedCheckRecoverIsOfferedNextToTryAgain() {
+        val s = UnlockUiState(loading = false, preflightError = FailureKind.RELEASE_UNKNOWN, keysGone = true, noUserGuid = true)
+        assertTrue(s.recoverBesideRetry)
+        var recovered = 0
+        rule.setContent { UnlockContent(s, actions, onOpenAccountSite = { recovered++ }) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithText("Try again").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
+        assertEquals(1, recovered)
+        assertEquals(emptyList<String>(), asked)
+    }
+
+    /** After a check that answered, the recover-or-erase notice as before: recover once, with erase, not beside the words. */
+    @Test
+    fun anAnsweredCheckOffersRecoverAndEraseOnce() {
+        val s = ok.copy(keysGone = true, noUserGuid = true)
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertExists()
+    }
+
+    /** An ended release or a rollback with no user_guid: the recover-only notice alone (one Recover, no erase). */
+    @Test
+    fun recoverOnlyWithNoUserGuidIsUnchanged() {
+        for ((name, r) in recoverOnly) {
+            val s = r.copy(noUserGuid = true, keysGone = true)
+            assertFalse(name, s.recoverBesideRetry)
+            assertFalse(name, s.eraseOffered)
+        }
+        rule.setContent { UnlockContent(recoverOnly.getValue("release ended").copy(noUserGuid = true, keysGone = true), actions) }
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+    }
+
+    /** A kept check waiting after a failed check: the words alone (owner decision a, 2026-11-18), no Recover either. */
+    @Test
+    fun aKeptCheckWaitingKeepsTheWordsAloneAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, keptCheckWaiting = true,
+        )
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+    }
+
+    /**
+     * The words on the move card (the last "Finish the move" refused `no_user_guid`) after a failed check: Recover there, once,
+     * beside Continue, and no erase.
+     */
+    @Test
+    fun theMoveCardOffersRecoverAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true,
+            moveFailure = MoveFailure(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID),
+        )
+        assertTrue(s.moveNoUserGuid)
+        assertFalse("the move card carries the words", s.stuckWordsOnly)
+        assertTrue(s.recoverBesideRetry)
+        var recovered = 0
+        rule.setContent { UnlockContent(s, actions, onOpenAccountSite = { recovered++ }) }
+        rule.onNodeWithTag("unlock_move_failure").assertExists()
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
+        assertEquals(1, recovered)
+    }
+
+    /** A move card of another failure beside the words: Recover on the words' card only, never on that move card. */
+    @Test
+    fun aMoveCardOfAnotherFailureGetsNoRecover() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true,
+            moveFailure = MoveFailure(FailureKind.TRANSFER_INCOMPLETE, "transfer_incomplete"),
+        )
+        assertTrue(s.stuckWordsOnly)
+        assertTrue(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNode(hasTestTag("recover_vault") and hasAnyAncestor(hasTestTag("unlock_no_user_guid"))).assertExists()
+        rule.onNode(hasTestTag("recover_vault") and hasAnyAncestor(hasTestTag("unlock_move_failure"))).assertDoesNotExist()
+    }
+
+    /** An unlock not recognised earlier, then a failed check with no usable user_guid: its notice shows no erase. */
+    @Test
+    fun theNotRecognisedNoticeOffersNoEraseAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, notRecognised = true,
+        )
+        assertFalse(s.eraseOffered)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_not_recognised").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+    }
+
+    /** A state rollback with a failed check: recover-only, so no second Recover beside the words. */
+    @Test
+    fun aStateRollbackWithAFailedCheckIsRecoverOnly() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, stateRollback = true,
+        )
+        assertTrue(s.recoverOnly)
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+    }
+
+    /** The service paused: Try again waits for its countdown, and Recover can be used meanwhile. */
+    @Test
+    fun aPausedServiceLeavesRecoverUsableWhileTryAgainWaits() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.SERVICE_PAUSED, keysGone = true, noUserGuid = true, serviceWaitSeconds = 30,
+        )
+        assertTrue(s.recoverBesideRetry)
+        assertFalse(s.retryAllowed)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("recover_vault").assertIsEnabled()
+    }
+
+    /** The words after a check that answered (no erase offered: the keys are there): no Recover beside them, no Try again. */
+    @Test
+    fun noRecoverBesideTheWordsWithoutAFailedCheck() {
+        val s = ok.copy(noUserGuid = true)
+        assertTrue(s.stuckWordsOnly)
+        assertFalse(s.recoverBesideRetry)
+        // The decision is for a phone whose reading says it has no usable user_guid, not for an unlock's answer alone.
+        val answered = UnlockUiState(loading = false, preflightError = FailureKind.NETWORK, message = UnlockMessage.NoUserGuid)
+        assertTrue(answered.stuckWordsOnly)
+        assertFalse(answered.recoverBesideRetry)
     }
 
     @Test
