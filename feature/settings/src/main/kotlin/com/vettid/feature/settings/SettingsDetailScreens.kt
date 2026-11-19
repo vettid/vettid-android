@@ -429,6 +429,17 @@ fun ChangePinContent(
         onBack = onBack,
     ) {
         if (state.done) return@FormScaffold
+        if (state.noUserGuid) {
+            // "Lock and unlock now" refused: this phone can never open the vault again; the unlock screen's words.
+            NoticeCard(
+                NoticeKind.URGENT,
+                stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+                stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
+                Modifier.testTag("pin_no_user_guid"),
+                announce = LiveRegionMode.Polite,
+            )
+            Spacer(Modifier.height(Spacing.l))
+        }
         // VAULT-MESSAGING 0.44.0 §11.14.9: a change whose answer was lost is decided, not repeated.
         state.check?.let { c ->
             val text = when (c) {
@@ -452,7 +463,7 @@ fun ChangePinContent(
                     Modifier.testTag("pin_change_check"),
                     announce = LiveRegionMode.Polite,
                     // (0.45.0 step 3) No "Try again": the lock and two-step unlock settles the PIN without an attempt.
-                    actions = if (c is ChangeCheck.Ended) {
+                    actions = if (c is ChangeCheck.Ended && !state.noUserGuid) {
                         { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
                     } else {
                         null
@@ -502,7 +513,7 @@ fun ChangePinContent(
                 failureText(it.messageRes(), it.vaultCode(state.errorCode)),
                 Modifier.testTag("error"),
                 // (0.45.0 §11.14.9) An uncertain PIN or an unconfirmed new phone secret: settled by a lock and unlock.
-                actions = if (it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) {
+                actions = if ((it == FailureKind.RENEW_UNCONFIRMED || it == FailureKind.PIN_UNCERTAIN) && !state.noUserGuid) {
                     { TextButton(onClick = onLockAndUnlock) { Text(stringResource(R.string.settings_pin_lock_unlock)) } }
                 } else {
                     null

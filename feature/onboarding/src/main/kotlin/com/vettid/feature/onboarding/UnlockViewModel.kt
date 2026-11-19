@@ -150,10 +150,16 @@ data class UnlockUiState(
      * first. Screen state: kept while the member types (the failure's message goes) and through a failure that did not
      * reach the vault (a network failure, a pause, a busy service); cleared by any answer of the vault (an attestation
      * or `transfer_incomplete` refusal included) and by a new release check. Also set when this phone has no usable
-     * `user_guid` (`no_user_guid`, decided here before anything is sent), which no update will add: a new release
-     * check clears it too, and the next try sets it again.
+     * `user_guid`, which no update will add: read when the screen opens and at every new release check
+     * ([noUserGuid], owner decision a, 2026-11-19), and by an unlock answered `no_user_guid`.
      */
     val keysGone: Boolean = false,
+    /**
+     * This phone has no usable user_guid ([com.vettid.core.data.vault.VaultRepository.userGuidUsable], read when the screen
+     * loads, or an unlock answered `no_user_guid`): no PIN can ever open the vault here, so none is asked for, and the
+     * recover-or-erase notice ([keysGone]) shows at once (owner decision a, 2026-11-19).
+     */
+    val noUserGuid: Boolean = false,
     /**
      * The open app was sent here because the relay kept refusing this phone's messages to the vault
      * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
@@ -215,7 +221,7 @@ data class UnlockUiState(
     val returnAsked: Boolean = false,
 ) {
     /** (0.1.54 point 3) "Return to release N" is offered: the marker has `failed`. */
-    val returnOffered: Boolean get() = move?.failed == true
+    val returnOffered: Boolean get() = move?.failed == true && !noUserGuid
 
     /** The PIN for the way back may be typed: offered, and nothing running or waiting. */
     val returnPinAllowed: Boolean get() = returnOffered && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy && !erasing
@@ -238,10 +244,24 @@ data class UnlockUiState(
      * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
      * never on a [recoverOnly] screen, which wins over both.
      */
-    val eraseOffered: Boolean get() = !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+    val eraseOffered: Boolean get() = eraseReady && !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+
+    /**
+     * An erase may be offered: not while the release is checked, and for a phone with no usable user_guid only after a check
+     * that answered (a failed one could not rule out an ended release or a rollback, where erasing would not help).
+     */
+    private val eraseReady: Boolean get() = !loading && (!noUserGuid || preflight != null && preflightError == null)
 
     /** The recover-or-erase notice of a phone without the vault's keys is on the screen (the screen's own choice). */
-    val stuckNoticeShown: Boolean get() = !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+    val stuckNoticeShown: Boolean get() = eraseReady && !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+
+    /**
+     * The recover-or-erase words alone, with no actions: this phone has no usable user_guid but the notice with its
+     * actions is not shown (a kept check waits, owner decision a, 2026-11-18), or an unlock answered `no_user_guid`
+     * there. Not beside an ended release or a rollback, nor beside the move card of the same failure.
+     */
+    val stuckWordsOnly: Boolean
+        get() = (noUserGuid || message == UnlockMessage.NoUserGuid) && !loading && !eraseOffered && !recoverOnly && !moveNoUserGuid
 
     /** The last "Finish the move" was refused for want of a usable user_guid ([isNoUserGuid]). */
     val moveNoUserGuid: Boolean get() = moveFailure?.let { isNoUserGuid(it.kind, it.code) } == true
@@ -255,6 +275,7 @@ data class UnlockUiState(
             val p = preflight ?: return false
             // Never a PIN while the last check of the vault's software failed (an earlier check does not count).
             if (preflightError != null) return false
+            if (noUserGuid) return false
             return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy
         }
 
@@ -395,7 +416,11 @@ class UnlockViewModel @Inject constructor(
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
         // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
+        // A phone with no usable user_guid is told so at once: recover-or-erase, with no PIN to try first.
+        val noGuid = !vault.userGuidUsable
+        state.update {
+            it.copy(loading = true, preflightError = null, preflight = null, keysGone = noGuid, noUserGuid = noGuid, eraseConfirm = false)
+        }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
@@ -509,6 +534,7 @@ class UnlockViewModel @Inject constructor(
                     password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
                     keysGone = keysGoneAfter(r, it.keysGone),
+                    noUserGuid = it.noUserGuid || r is UnlockAttempt.Failed && isNoUserGuid(r),
                 )
             }
             when (r) {

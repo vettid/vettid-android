@@ -226,6 +226,29 @@ class SettingsViewModelsTest {
         assertEquals("59173048", vault.lastPin)
     }
 
+    /**
+     * "Lock and unlock now" on a phone with no usable user_guid: nothing is locked (the unlock could never open the vault
+     * again), the recover-or-erase words are said, and it is not sent again. With one, the lock is asked for.
+     */
+    @Test
+    fun lockAndUnlockLocksNothingWithoutAUsableUserGuid() = runTest {
+        vault.userGuidUsable = false
+        val vm = ChangePinViewModel(vault)
+        vm.lockAndUnlock()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        assertFalse("nothing locked", "lock" in vault.calls)
+        vm.lockAndUnlock()
+        advanceUntilIdle()
+        assertEquals("not asked again", 1, vault.calls.count { it == "lockToSettlePin" })
+        vault.userGuidUsable = true
+        val other = ChangePinViewModel(vault)
+        other.lockAndUnlock()
+        advanceUntilIdle()
+        assertFalse(other.uiState.value.noUserGuid)
+        assertTrue("lock" in vault.calls)
+    }
+
     @Test
     fun changePinNotSupportedIsReported() = runTest {
         vault.fail["changePin"] = FakeVault.failure(FailureKind.NOT_SUPPORTED, "unsupported_type")

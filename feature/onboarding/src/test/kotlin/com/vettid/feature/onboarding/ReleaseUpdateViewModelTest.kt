@@ -162,6 +162,25 @@ class ReleaseUpdateViewModelTest {
         assertEquals("", vm.uiState.value.pin)
     }
 
+    /** After `no_user_guid` no PIN is taken and nothing is retried: the vault can never open on this phone. */
+    @Test
+    fun noRetryWithoutAUsableUserGuid() = runTest {
+        val updates = FakeReleaseUpdates(offer)
+        val vm = ReleaseUpdateFlowViewModel(updates)
+        updates.progress.value = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NOT_SUPPORTED,
+            failureCode = com.vettid.core.data.vault.UnlockAttempt.CODE_NO_USER_GUID, vaultOpen = true,
+        )
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        vm.setPin("246813")
+        assertEquals("", vm.uiState.value.pin)
+        vm.retry()
+        assertTrue(updates.calls.isEmpty())
+        vm.finish()
+        assertEquals(listOf("finish"), updates.calls)
+    }
+
     @Test
     fun returningToTheOldReleaseAsksFirst() = runTest {
         val updates = FakeReleaseUpdates(offer)

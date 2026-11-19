@@ -130,6 +130,21 @@ class ReleaseRSettingsTest {
         rule.onNodeWithText(res.getString(R.string.settings_pin_password_too)).assertExists()
     }
 
+    /** "Lock and unlock now" refused for want of a usable user_guid: the recover-or-erase words, and no second offer. */
+    @Test
+    fun lockAndUnlockRefusedSaysWhyAndIsNotOfferedAgain() {
+        val offered = ChangePinUiState(error = com.vettid.core.data.vault.FailureKind.PIN_UNCERTAIN)
+        val state = androidx.compose.runtime.mutableStateOf(offered)
+        rule.setContent { ChangePinContent(state.value, {}, {}, {}, {}, {}) }
+        rule.onNodeWithText(res.getString(R.string.settings_pin_lock_unlock)).assertExists()
+        rule.onNodeWithTag("pin_no_user_guid").assertDoesNotExist()
+        state.value = offered.copy(noUserGuid = true)
+        rule.waitForIdle()
+        rule.onNodeWithTag("pin_no_user_guid").assertExists()
+        rule.onNodeWithText(res.getString(com.vettid.core.ui.R.string.unlock_stuck_title)).assertExists()
+        rule.onNodeWithText(res.getString(R.string.settings_pin_lock_unlock)).assertDoesNotExist()
+    }
+
     @Test
     fun nextOnTheConfirmFieldMovesFocusToThePassword() {
         rule.setContent { ChangePinContent(ChangePinUiState(withPassword = true), {}, {}, {}, {}, {}) }

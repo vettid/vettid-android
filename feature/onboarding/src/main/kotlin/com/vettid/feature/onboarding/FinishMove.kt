@@ -55,8 +55,11 @@ data class FinishMoveUiState(
      */
     val held: FailureKind? = null,
 ) {
-    /** The PIN field can be used: not held, not running, not done. */
-    val pinAllowed: Boolean get() = held == null && !busy && !done
+    /**
+     * The PIN field can be used: not held, not running, not done, and not after `no_user_guid` (no PIN can open the vault
+     * on this phone, so there is no PIN to type and no "Finish the move" to try again; "Later" stays).
+     */
+    val pinAllowed: Boolean get() = held == null && !busy && !done && !noUserGuid
 
     override fun toString(): String =
         "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, noUserGuid=$noUserGuid, held=$held)"
@@ -85,16 +88,38 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     private fun set(f: (FinishMoveUiState) -> FinishMoveUiState) {
         // Digits typed while held were typed before the hold's decision: they go with it.
         val wasEmpty = state.value.pin.isEmpty()
-        state.update { s -> f(s).let { n -> if (n.held != null && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
+        state.update { s -> f(s).let { n -> if (!n.pinAllowed && !n.busy && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
         keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
     init {
+        opened()
         keypad.follow(state.value.pinAllowed)
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
     }
 
-    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null, noUserGuid = false) }
+    /**
+     * The move's screen or dialog opens: whether this phone has a usable user_guid, read now (owner decision a, 2026-11-19, as
+     * the unlock screen). This view model can outlive a move (the open app's dialog is scoped to the activity), and a move
+     * stores the user_guid when it completes, so it is read at each opening, never once: a phone that has one is not told it
+     * cannot open its vault. The move's own `no_user_guid` refusal is this same check, so nothing else is kept: after a wipe
+     * and a move that stored one, the next opening offers the PIN again.
+     */
+    fun opened() {
+        val noGuid = !vault.userGuidUsable
+        set {
+            when {
+                noGuid -> it.copy(noUserGuid = true, failure = FailureKind.NOT_SUPPORTED)
+                it.noUserGuid -> it.copy(noUserGuid = false, failure = null)
+                else -> it
+            }
+        }
+    }
+
+    // Typing does not clear `noUserGuid`: no PIN can change it (the field is disabled then).
+    fun setPin(v: String) = set {
+        if (it.noUserGuid) it else it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null)
+    }
 
     fun finish() {
         val s = state.value
@@ -129,6 +154,8 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
 fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: () -> Unit, modifier: Modifier = Modifier) {
     // Nothing leaves the move while its lock and unlock run (the back key included): the outcome decides where it goes.
     BackHandler(enabled = state.busy) {}
+    // Whether this phone has a usable user_guid, as it is now (the view model may outlive a move that stored one).
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.opened() }
     Column(modifier.fillMaxWidth().padding(Spacing.gutter).testTag("finish_move"), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         Text(stringResource(R.string.onboarding_finish_move_title), style = MaterialTheme.typography.titleLarge)
         if (state.done) {
@@ -159,8 +186,8 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             if (state.noUserGuid) {
                 NoticeCard(
                     kind = NoticeKind.URGENT,
-                    title = stringResource(R.string.unlock_stuck_title),
-                    body = stringResource(R.string.unlock_stuck_body),
+                    title = stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+                    body = stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
                     modifier = Modifier.testTag("finish_move_no_user_guid"),
                 )
             } else {
