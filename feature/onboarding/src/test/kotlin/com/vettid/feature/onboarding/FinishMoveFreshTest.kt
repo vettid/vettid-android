@@ -115,4 +115,58 @@ class FinishMoveFreshTest {
         advanceUntilIdle()
         assertEquals(6, vault.finishMoveTaken.last())
     }
+
+    /** A new move's edge while a finish runs changes nothing of the run: it stays busy, and its answer is shown. */
+    @Test
+    fun aRunningMoveIsNotResetAndItsAnswerStays() = runTest {
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vault.unlockGate = kotlinx.coroutines.CompletableDeferred()
+        vault.unlockResults += UnlockAttempt.BadPin(0)
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.busy)
+        vault.finishMovePending.value = true // a new move's edge while the unlock is held
+        advanceUntilIdle()
+        assertTrue("still running", vm.uiState.value.busy)
+        vault.unlockGate?.complete(Unit)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.busy)
+        assertEquals("the run's answer", FailureKind.BAD_PIN, vm.uiState.value.failure)
+    }
+
+    /** A new move keeps the user_guid's reading and its failure: no PIN can open the vault here either way. */
+    @Test
+    fun aNewMoveKeepsTheNoUserGuidFailure() = runTest {
+        vault.userGuidUsable = false
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        vault.finishMovePending.value = true
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
+        assertFalse(vm.uiState.value.pinAllowed)
+    }
+
+    /** An earlier move's failure and typed digits are not carried into the next move. */
+    @Test
+    fun aNewMoveClearsAnEarlierMovesFailureAndDigits() = runTest {
+        vault.finishMovePending.value = true
+        vault.unlockResults += UnlockAttempt.BadPin(0)
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
+        vm.setPin("1357") // typed, then Later
+        vault.finishMovePending.value = false // a wipe ends that move
+        advanceUntilIdle()
+        vault.finishMovePending.value = true // a new move
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.failure)
+        assertEquals("", vm.uiState.value.pin)
+    }
 }
