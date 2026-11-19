@@ -584,12 +584,13 @@ class FeedManagerTest {
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
         m.onEvent(event(item("i2", 2)))
         checking = false
+        // The failing read throws before it takes a page: this one is for the retry, whenever it runs.
+        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
         ops.failLists = 1
         m.catchUp()
-        settle { ops.failLists == 0 }
-        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
         advanceTimeBy(FeedManager.RETRY_AFTER_MS + 100)
         settle { arrived.isNotEmpty() }
+        assertTrue("the retry read it", synchronized(ops) { ops.lists.size } >= 3)
         assertEquals(listOf("i2"), arrived.map { it.itemId })
     }
 
