@@ -438,6 +438,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         lastPin = pin
         lastCancelRecovery = cancelRecovery
         duringUnlock?.invoke()
+        unlockGate?.await()
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
         if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
         if (!(r is UnlockAttempt.Failed && r.kind in setOf(FailureKind.NETWORK, FailureKind.NO_RESPONSE))) {
@@ -503,6 +504,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     /** Runs inside [unlock], as the app's leaving and coming back would while the request is on its way. */
     var duringUnlock: (() -> Unit)? = null
+
+    /** When set, an unlock waits here (after [duringUnlock]) before it answers: a test holds it while something else happens. */
+    var unlockGate: CompletableDeferred<Unit>? = null
 
     private val foregroundFlow = MutableStateFlow(true)
     override val inFront: kotlinx.coroutines.flow.StateFlow<Boolean> get() = foregroundFlow

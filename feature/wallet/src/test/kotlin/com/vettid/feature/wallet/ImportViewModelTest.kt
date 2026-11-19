@@ -2,7 +2,6 @@ package com.vettid.feature.wallet
 
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -36,7 +35,7 @@ class ImportViewModelTest {
     private val badSum = "legal winner thank year wave sausage worth useful legal winner yellow thank"
 
     private suspend fun TestScope.vm(): ImportViewModel {
-        wallets = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        wallets = manager(backgroundScope, ops, testFlags(flagsFile))
         wallets.open()
         return ImportViewModel(wallets)
     }
@@ -165,7 +164,7 @@ class ImportViewModelTest {
         assertTrue(ops.handedSecrets.allWipedAndSome())
         assertEquals(listOf("create:Old wallet:testnet4:true", "import", "caps.set:500000:2000000"), ops.calls.filterNot { it == "list" })
         val id = vm.state.value.importedId!!
-        assertTrue(WalletFlags(flagsFile).backedUp(id))
+        assertTrue(testFlags(flagsFile).backedUp(id))
         assertTrue(wallets.capsPending.value.isEmpty())
         assertFalse(vm.state.value.capsFailed)
         // Nothing of the words is left in the state.

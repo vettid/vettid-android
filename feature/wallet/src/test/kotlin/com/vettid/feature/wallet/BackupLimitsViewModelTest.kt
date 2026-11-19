@@ -4,7 +4,6 @@ import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.wallet.WalletCaps
-import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -37,7 +36,7 @@ class BackupLimitsViewModelTest {
     private lateinit var wallets: WalletsManager
 
     private suspend fun TestScope.vm(saved: SavedStateHandle = SavedStateHandle()): BackupViewModel {
-        wallets = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        wallets = manager(backgroundScope, ops, testFlags(flagsFile))
         wallets.open()
         return BackupViewModel(saved, wallets, Random(7))
     }
@@ -275,7 +274,7 @@ class BackupLimitsViewModelTest {
         assertEquals(WalletsManager.UNREADABLE, vm.state.value.errorCode)
         assertNull(vm.state.value.words)
         assertTrue(wallets.capsPending.value.isEmpty())
-        assertTrue(WalletFlags(flagsFile).allPendingCaps()!!.isEmpty())
+        assertTrue(testFlags(flagsFile).allPendingCaps()!!.isEmpty())
         assertTrue(ops.calls.none { it.startsWith("caps.") || it.startsWith("reveal") })
     }
 
@@ -304,7 +303,7 @@ class BackupLimitsViewModelTest {
         val id = "01WALLET0000000000000000AA"
         ops.wallet(id)
         flagsFile.failLoads = true
-        wallets = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        wallets = manager(backgroundScope, ops, testFlags(flagsFile))
         wallets.open()
         assertTrue(WalletsManager.isPending(wallets.capsPending.value, id))
         flagsFile.failLoads = false
