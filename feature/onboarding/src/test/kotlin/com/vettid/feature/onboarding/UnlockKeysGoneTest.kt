@@ -57,17 +57,21 @@ class UnlockKeysGoneTest {
     @Test
     fun aPhoneWithoutAUserGuidGetsTheRecoverOrEraseNotice() = runTest {
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        repeat(2) {
-            vm.setPin("40281795")
-            vm.submit()
-            advanceUntilIdle()
-            assertTrue(vm.uiState.value.keysGone)
-            assertTrue(vm.uiState.value.eraseOffered)
-            assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
-        }
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.keysGone)
+        assertTrue(vm.uiState.value.eraseOffered)
+        assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
+        // No second try: no PIN can open the vault here (owner decision a, 2026-11-19).
+        assertFalse(vm.uiState.value.pinAllowed)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals("sent once", 1, vault.calls.count { it == "unlock" })
+        assertTrue(vm.uiState.value.eraseOffered)
         vm.confirmErase() // nothing without the dialog
         advanceUntilIdle()
         assertFalse("eraseThisPhone" in vault.calls)
@@ -79,6 +83,27 @@ class UnlockKeysGoneTest {
     }
 
     /**
+     * (Owner decision a, 2026-11-19) No usable user_guid on this phone: the screen opens on recover-or-erase, asks for no
+     * PIN and sends nothing; a PIN typed is not taken.
+     */
+    @Test
+    fun noUserGuidIsToldAtOnceAndNoPinIsAsked() = runTest {
+        vault.userGuidUsable = false
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertTrue(s.noUserGuid)
+        assertTrue(s.stuckNoticeShown)
+        assertTrue(s.eraseOffered)
+        assertFalse(s.pinAllowed)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse("nothing sent", vault.calls.any { it == "unlock" })
+        assertEquals(AppPhase.Locked, vault.phase.value)
+    }
+
+    /**
      * An old phone that approved a move and is waiting for the vault's word (the 7 days over): no erase offer, and the
      * failure is the no-user_guid message (the screen shows its words alone), never "the move back failed".
      */
@@ -86,15 +111,18 @@ class UnlockKeysGoneTest {
     fun aPhoneWithoutAUserGuidIsToldWhileAKeptCheckWaits() = runTest {
         vault.transferKeptSince.value = java.time.Instant.parse("2026-11-01T00:00:00Z")
         vault.transferCheckWaiting.value = true
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        vault.userGuidUsable = false
         val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertTrue(vm.uiState.value.keptTransfer)
+        // Told at once, with no PIN asked for: the words alone, no erase (owner decisions a, 2026-11-18 and 2026-11-19).
+        assertFalse(vm.uiState.value.eraseOffered)
+        assertTrue(vm.uiState.value.stuckWordsOnly)
+        assertFalse(vm.uiState.value.pinAllowed)
         vm.setPin("40281795")
         vm.submit()
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.eraseOffered)
-        assertEquals(UnlockMessage.NoUserGuid, vm.uiState.value.message)
+        assertTrue("nothing sent", vault.calls.none { it == "unlock" })
     }
 
     /** Inside the 7 days (kept, no check waiting): the notice with its erase, and not "the move back failed" beside it. */

@@ -3,6 +3,8 @@ package com.vettid.feature.onboarding
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -80,6 +82,26 @@ class ReleaseUpdateRequiredTest {
         rule.waitForIdle()
         rule.onNodeWithText("Not now").assertExists()
         rule.onNodeWithText("Continue").assertDoesNotExist()
+    }
+
+    /**
+     * The update failed for want of a usable user_guid, the vault still open (nothing was locked): the recover-or-erase
+     * words, the PIN field and "Try again" disabled (no PIN can open the vault on this phone), "Continue" still there.
+     */
+    @Test
+    fun aPhoneWithoutAUserGuidGetsNoTryAgain() {
+        val p = UpdateProgress(
+            UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NOT_SUPPORTED, failureCode = UnlockAttempt.CODE_NO_USER_GUID,
+            vaultOpen = true,
+        )
+        val state = ReleaseUpdateFlowUiState(progress = p, pin = "246813", required = true)
+        rule.setContent { ReleaseUpdateFlowContent(state, flowActions) }
+        rule.onNodeWithText("This phone no longer holds your vault", substring = true).assertExists()
+        rule.onNodeWithTag("release_update_pin").assertIsNotEnabled()
+        rule.onNodeWithText("Try again").assertIsNotEnabled()
+        rule.onNodeWithText("Continue").assertIsEnabled()
+        // Another failure of the same step keeps its PIN and "Try again".
+        assertTrue(state.copy(progress = p.copy(failure = FailureKind.NETWORK, failureCode = null)).retryAllowed)
     }
 
     @Test

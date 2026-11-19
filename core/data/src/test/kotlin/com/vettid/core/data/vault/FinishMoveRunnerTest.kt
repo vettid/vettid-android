@@ -50,7 +50,15 @@ class FinishMoveRunnerTest {
             unlock = { _, _ -> unlocked++; UnlockAttempt.Success },
             onOutcome = { outcomes += it },
         )
+        // The hold that keeps the move's screen never comes on, not even for a moment.
+        val seen = mutableListOf<Boolean>()
+        val watch = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
+            runner.finishing.collect { seen += it }
+        }
         val r = runner.run("975310")
+        advanceUntilIdle()
+        watch.cancel()
+        assertEquals("finishing never true", listOf(false), seen)
         assertEquals(0, locked)
         assertEquals(0, unlocked)
         assertEquals(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID), r)

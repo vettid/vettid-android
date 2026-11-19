@@ -1,5 +1,7 @@
 package com.vettid.feature.onboarding
 
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -26,6 +28,19 @@ class FinishMovePaneTest {
         rule.onNodeWithText("This phone cannot open your vault").assertExists()
         rule.onNodeWithText("does not support this yet", substring = true).assertDoesNotExist()
         rule.onNodeWithTag("finish_move_later").assertExists()
+        // No PIN to type and no "Finish the move" to try again; "Later" stays.
+        rule.onNodeWithTag("finish_move_pin").assertIsNotEnabled()
+        rule.onNodeWithTag("finish_move_go").assertIsNotEnabled()
+        rule.onNodeWithTag("finish_move_later").assertIsEnabled()
+    }
+
+    /** Another refusal keeps the PIN and the button. */
+    @Test
+    fun anotherRefusalCanBeTriedAgain() {
+        val vm = FinishMoveViewModel(FakeVault(AppPhase.Unlocked))
+        rule.setContent { FinishMovePane(FinishMoveUiState(pin = "975310", failure = FailureKind.NETWORK), vm, onDone = {}) }
+        rule.onNodeWithTag("finish_move_pin").assertIsEnabled()
+        rule.onNodeWithTag("finish_move_go").assertIsEnabled()
     }
 
     @Test

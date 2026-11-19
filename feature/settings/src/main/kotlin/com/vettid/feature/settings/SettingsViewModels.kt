@@ -380,6 +380,12 @@ data class ChangePinUiState(
      * [ChangeCheck.Unreachable]), or decided that it did not apply ([ChangeCheck.NotApplied]). The entries are kept.
      */
     val check: ChangeCheck? = null,
+    /**
+     * "Lock and unlock now" was refused: this phone has no usable user_guid, so the unlock after the lock could never open
+     * the vault ([com.vettid.core.data.vault.VaultRepository.lockToSettlePin]). Nothing was locked; the recover-or-erase
+     * words are shown and the action is not offered again.
+     */
+    val noUserGuid: Boolean = false,
 ) {
     /**
      * A change is being decided, or its check ended without a decision (L2: no new try that could spend an attempt with
@@ -464,9 +470,11 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
 
     /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
     fun lockAndUnlock() {
+        if (state.value.noUserGuid) return
         viewModelScope.launch {
             try {
-                vault.lock()
+                // Without a usable user_guid nothing is locked (the unlock could never open it again): said here.
+                if (!vault.lockToSettlePin()) state.update { it.copy(noUserGuid = true) }
             } catch (_: VaultFailure) {
                 // The lock is pending and retried by the vault manager; the unlock screen follows.
             }

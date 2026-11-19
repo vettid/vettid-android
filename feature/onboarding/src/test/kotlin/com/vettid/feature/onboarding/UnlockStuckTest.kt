@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -82,6 +83,61 @@ class UnlockStuckTest {
             assertFalse(name, s.recoverOnly)
             assertFalse(name, s.eraseOffered)
         }
+    }
+
+    /**
+     * (Owner decision a, 2026-11-19) A phone with no usable user_guid: recover-or-erase as soon as the screen opens, and no PIN
+     * asked for first (none can open the vault here).
+     */
+    @Test
+    fun noUserGuidOffersRecoverAndEraseWithNoPin() {
+        val s = ok.copy(keysGone = true, noUserGuid = true)
+        assertFalse(s.pinAllowed)
+        assertTrue(s.eraseOffered)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_stuck").assertExists()
+        rule.onNodeWithTag("recover_vault").assertExists()
+        rule.onNodeWithTag("erase_phone").assertExists()
+        // No PIN block and no "Unlock" button at all.
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
+        rule.onNodeWithText("Unlock").assertDoesNotExist()
+        // With a user_guid the PIN is asked for as before.
+        assertTrue(ok.pinAllowed)
+    }
+
+    /** A kept check waits: the words alone, no actions (no erase, no PIN). */
+    @Test
+    fun noUserGuidWhileAKeptCheckWaitsShowsTheWordsAlone() {
+        val s = ok.copy(keysGone = true, noUserGuid = true, keptCheckWaiting = true)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
+    }
+
+    /** Nothing to erase before the release check answered: it may yet say an erase would not help. No words either yet. */
+    @Test
+    fun noEraseWhileTheReleaseIsChecked() {
+        val s = ok.copy(keysGone = true, noUserGuid = true, loading = true)
+        assertFalse(s.eraseOffered)
+        assertFalse(s.stuckNoticeShown)
+        assertFalse(s.stuckWordsOnly)
+    }
+
+    /**
+     * A release check that failed (the network) could not rule out an ended release or a rollback: the words alone and
+     * "Try again", no erase.
+     */
+    @Test
+    fun afterAFailedCheckTheWordsAloneAndNoErase() {
+        val s = UnlockUiState(loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true)
+        assertFalse(s.eraseOffered)
+        assertFalse(s.stuckNoticeShown)
+        assertTrue(s.stuckWordsOnly)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithText("Try again").assertExists()
     }
 
     @Test

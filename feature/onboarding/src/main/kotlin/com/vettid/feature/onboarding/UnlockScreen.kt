@@ -91,7 +91,8 @@ fun UnlockContent(
             // ANDROID-PLAN 0.1.54: "Return" was confirmed without a PIN; the PIN typed now goes to the way back.
             state.returnAsked -> stringResource(R.string.release_update_return, state.move?.fromNumber?.toInt() ?: 0)
             state.preflightError != null && !blocked -> stringResource(R.string.unlock_retry)
-            blocked || state.recoveryPending -> null
+            // No usable user_guid: no PIN is asked for, so no "Unlock" (owner decision a, 2026-11-19).
+            blocked || state.recoveryPending || state.noUserGuid -> null
             else -> stringResource(R.string.unlock_submit)
         },
         onPrimary = if (state.preflightError != null && !state.returnAsked) actions::retryPreflight else actions::submit,
@@ -271,8 +272,8 @@ fun UnlockContent(
                 val noGuid = isNoUserGuid(f.kind, f.code)
                 NoticeCard(
                     if (noGuid) NoticeKind.URGENT else NoticeKind.WARNING,
-                    stringResource(if (noGuid) R.string.unlock_stuck_title else R.string.onboarding_finish_move_title),
-                    if (noGuid) stringResource(R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
+                    stringResource(if (noGuid) com.vettid.core.ui.R.string.unlock_stuck_title else R.string.onboarding_finish_move_title),
+                    if (noGuid) stringResource(com.vettid.core.ui.R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
                     modifier = Modifier.testTag("unlock_move_failure"),
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
@@ -325,7 +326,7 @@ fun UnlockContent(
             state.move?.takeIf { state.returnOffered }?.let { m -> MoveUnconfirmedNotice(m, enabled = !state.busy, actions::askReturn) }
             // Never a PIN field while the last check of the vault's software failed (the way back asks for its own PIN).
             val verified = p != null && state.preflightError == null
-            val unlockPin = !blocked && !state.recoveryPending && verified
+            val unlockPin = !blocked && !state.recoveryPending && verified && !state.noUserGuid
             if (unlockPin || state.returnAsked) {
                 // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
                 // the new one only after the vault showed that it holds the change.
@@ -382,14 +383,7 @@ fun UnlockContent(
                     // waiting) its words alone, with no actions (owner decision a, 2026-11-18). Not beside an ended release
                     // or a rollback, whose notice offers no erase.
                     // Not beside the move card of the same failure, which has the same words and its Continue.
-                    UnlockMessage.NoUserGuid -> if (!state.eraseOffered && !state.recoverOnly && !state.moveNoUserGuid) {
-                        NoticeCard(
-                            NoticeKind.URGENT,
-                            stringResource(R.string.unlock_stuck_title),
-                            stringResource(R.string.unlock_stuck_body),
-                            modifier = Modifier.testTag("unlock_no_user_guid"),
-                        )
-                    }
+                    UnlockMessage.NoUserGuid -> Unit // [UnlockUiState.stuckWordsOnly], below
                     is UnlockMessage.UpdateRefused -> NoticeCard(
                         NoticeKind.WARNING,
                         stringResource(R.string.unlock_title),
@@ -418,6 +412,14 @@ fun UnlockContent(
                     else -> Unit
                 }
             }
+            if (state.stuckWordsOnly) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+                    stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
+                    modifier = Modifier.testTag("unlock_no_user_guid"),
+                )
+            }
             if (state.signerRefused) SignerRefusedNotice(state.signerHelp, actions::showSignerHelp)
             // An ended release or a rollback wins: no erase there, whatever else the last answers said.
             when {
@@ -425,7 +427,7 @@ fun UnlockContent(
                 // §11.14.10 (owner decision 2026-10-23): waiting for the vault's answer, the notice above; no erase offer.
                 state.keptCheckWaiting -> Unit
                 state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
-                state.keysGone -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
+                state.stuckNoticeShown -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }
             // The release offer last: after the PIN and every result of the unlock (their explanations and the erase come
             // first), compact, the full notes one tap away (owner decision 2026-11-07, ANDROID-PLAN 0.1.122).
@@ -516,8 +518,8 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
 private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> Unit) {
     NoticeCard(
         NoticeKind.URGENT,
-        stringResource(R.string.unlock_stuck_title),
-        stringResource(R.string.unlock_stuck_body),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
         modifier = Modifier.testTag("unlock_stuck"),
         actions = {
             TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
@@ -547,7 +549,7 @@ private fun RecoverOnlyNotice(onRecover: () -> Unit, onContactSupport: () -> Boo
     var noMailApp by rememberSaveable { mutableStateOf(false) }
     NoticeCard(
         NoticeKind.URGENT,
-        stringResource(R.string.unlock_stuck_title),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
         stringResource(R.string.unlock_recover_only_body),
         modifier = Modifier.testTag("unlock_recover_only"),
         actions = {

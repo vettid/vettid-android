@@ -154,9 +154,7 @@
     <string name="unlock_not_recognised_title">Your vault did not recognize this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
     <string name="unlock_erase">Erase VettID from this phone</string>
-    <!-- Draft text for the owner (erase-or-recover on a screen that could not be left). -->
-    <string name="unlock_stuck_title">This phone cannot open your vault</string>
-    <string name="unlock_stuck_body">This phone no longer holds your vault\'s keys. Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
+    <!-- unlock_stuck_title and unlock_stuck_body are in :core:ui (Settings and the open app's banner show them too). -->
     <string name="unlock_recover_only_body">Erasing VettID from this phone would not help. Recover your vault from your account site, or contact VettID support at support@vettid.org.</string>
     <string name="unlock_contact_support">Contact support</string>
     <string name="unlock_recover">Recover your vault</string>
