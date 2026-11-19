@@ -9,7 +9,6 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.wallet.ChainOpen
 import com.vettid.core.wallet.ChainSource
 import com.vettid.core.wallet.LookupResult
-import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -41,7 +40,7 @@ class WalletDetailViewModelTest {
     }
 
     private suspend fun TestScope.vm(noteShown: Boolean = true): WalletDetailViewModel {
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         if (noteShown) flags.setPrivacyNoteShown(id)
         val m = manager(backgroundScope, ops, flags, chain)
         m.open()
@@ -62,7 +61,7 @@ class WalletDetailViewModelTest {
         eventually { vm.state.value.lookup != null }
         assertEquals(1, opened)
         assertFalse(vm.state.value.noteNeeded)
-        assertTrue(WalletFlags(flagsFile).privacyNoteShown(id))
+        assertTrue(testFlags(flagsFile).privacyNoteShown(id))
     }
 
     @Test
@@ -108,7 +107,8 @@ class WalletDetailViewModelTest {
         assertEquals(0, opened)
         vm.chooseTestNetwork(Network.TESTNET)
         eventually { vm.state.value.lookup == LookupResult.NetworkNotOffered }
-        assertEquals(Network.TESTNET, vm.state.value.network)
+        // The network comes through the flags' collector, which may follow the look-up's result.
+        eventually { vm.state.value.network == Network.TESTNET }
     }
 
     @Test
@@ -139,7 +139,7 @@ class WalletDetailViewModelTest {
         val vm = vm()
         eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
         // Receive asked the same question and the member answered there.
-        WalletFlags(flagsFile).setTestnetLabel(id, Network.TESTNET4)
+        testFlags(flagsFile).setTestnetLabel(id, Network.TESTNET4)
         vm.resumed()
         eventually { vm.state.value.lookup is LookupResult.NoServer }
         assertEquals(1, opened)
@@ -152,7 +152,7 @@ class WalletDetailViewModelTest {
     @Test
     fun aFailedListKeepsTheScreenAndAListWithoutTheWalletClosesIt() = runTest {
         ops.unsupported = true
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
+        val m = manager(backgroundScope, ops, testFlags(flagsFile), chain)
         assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         assertFalse(vm.state.value.closed)
@@ -168,7 +168,7 @@ class WalletDetailViewModelTest {
     fun tryAgainAfterAFailedFirstReadShowsTheWallet() = runTest {
         ops.wallet(id)
         ops.listFails = true
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile), chain)
+        val m = manager(backgroundScope, ops, testFlags(flagsFile), chain)
         assertTrue(runCatching { m.open() }.exceptionOrNull() is VaultFailure)
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         eventually { vm.state.value.listFailed != null }
@@ -228,7 +228,8 @@ class WalletDetailViewModelTest {
         vm.chooseTestNetwork(Network.TESTNET4)
         eventually { vm.state.value.lookup is LookupResult.NoServer }
         assertFalse(vm.state.value.askNetwork)
-        assertEquals(Network.TESTNET4, vm.state.value.network)
+        // The network comes through the flags' collector, which may follow the look-up's result.
+        eventually { vm.state.value.network == Network.TESTNET4 }
     }
 
     @Test
@@ -238,9 +239,9 @@ class WalletDetailViewModelTest {
         eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
         vm.chooseTestNetwork(Network.TESTNET4)
         eventually { vm.state.value.lookup is LookupResult.NoServer }
-        // Messages that say what was seen, so a failure names its cause (it failed once, and didn't reproduce in 20 runs).
+        // The network comes through the flags' collector, which may follow the look-up's result.
+        eventually { vm.state.value.network == Network.TESTNET4 }
         val s = vm.state.value
-        assertEquals("the network shown, with the look-up ${s.lookup} and askNetwork ${s.askNetwork}", Network.TESTNET4, s.network)
         assertEquals("chain opens: one after the answer, none for the question (lookup ${s.lookup})", 1, opened)
     }
 
@@ -331,7 +332,7 @@ class WalletDetailViewModelTest {
     @Test
     fun theScreenLeavesWhenTheVaultCloses() = runTest {
         ops.wallet(id)
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile).also { it.setPrivacyNoteShown(id) }, chain)
+        val m = manager(backgroundScope, ops, testFlags(flagsFile).also { it.setPrivacyNoteShown(id) }, chain)
         m.open()
         val vm = WalletDetailViewModel(SavedStateHandle(mapOf("walletId" to id)), m, settings)
         eventually { vm.state.value.loaded }
@@ -342,7 +343,7 @@ class WalletDetailViewModelTest {
     @Test
     fun aPendingLimitIsSaidAndSentFirstAndTryAgainSendsOnlyTheSet() = runTest {
         ops.wallet(id)
-        WalletFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(null, 2_000_000))
+        testFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(null, 2_000_000))
         ops.capsSetFails = "internal"
         val vm = vm()
         eventually { vm.state.value.loaded && vm.state.value.capsPending }
@@ -371,7 +372,7 @@ class WalletDetailViewModelTest {
     @Test
     fun setTheLimitNowOnAWalletHeldInThisSessionSendsOneSetAndLiftsTheNote() = runTest {
         val newId = "01NEW000000000000000000000"
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         flags.setPrivacyNoteShown(newId)
         val m = manager(backgroundScope, ops, flags, chain)
         m.open()

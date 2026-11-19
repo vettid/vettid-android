@@ -7,7 +7,6 @@ import android.app.Application
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.chain.Network
 import com.vettid.core.data.KeystoreFileStore
-import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletFlagsFile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -67,7 +66,7 @@ class WalletDataDirectoryScanTest {
             words = newWords
             passphrase = newPassphrase
         }
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         return ops to m
     }
@@ -114,7 +113,7 @@ class WalletDataDirectoryScanTest {
         for (at in asked) create.answer(" " + newWords[at].uppercase() + " ")
         eventually { create.state.value.step == BackupStep.DONE }
         val id = "01NEW000000000000000000000"
-        assertTrue(WalletFlags(flagsFile).backedUp(id))
+        assertTrue(testFlags(flagsFile).backedUp(id))
         scan("after create and check")
 
         // Reveal (back up later from a row) of a wallet with a spending limit: password and PIN.
@@ -152,7 +151,7 @@ class WalletDataDirectoryScanTest {
         // Send: the form, the review, the password, approve (the PSBT and the signed transaction are the core test's).
         val sendId = "01WALLET0000000000000000AA"
         ops.wallet(sendId)
-        WalletFlags(flagsFile).apply {
+        testFlags(flagsFile).apply {
             setBackedUp(sendId)
             setPrivacyNoteShown(sendId)
         }

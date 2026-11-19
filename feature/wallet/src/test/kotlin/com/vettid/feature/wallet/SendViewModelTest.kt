@@ -20,7 +20,6 @@ import com.vettid.core.wallet.RecentSends
 import com.vettid.core.wallet.SendHold
 import com.vettid.core.wallet.SendResult
 import com.vettid.core.wallet.WalletCaps
-import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -54,7 +53,7 @@ class SendViewModelTest {
     private suspend fun TestScope.vm(backedUp: Boolean = true, network: String = "testnet4", noteShown: Boolean = true): SendViewModel {
         ops.wallet(id, network = network)
         ops.wallets[id] = editWallet(ops.wallets.getValue(id))
-        val flags = WalletFlags(flagsFile)
+        val flags = testFlags(flagsFile)
         if (backedUp) flags.setBackedUp(id)
         if (noteShown) flags.setPrivacyNoteShown(id)
         val m = manager(backgroundScope, ops, flags)
@@ -95,7 +94,7 @@ class SendViewModelTest {
 
     @Test
     fun aPendingLimitHoldsSendBack() = runTest {
-        WalletFlags(flagsFile).setPendingCaps(id, WalletCaps(500_000, null))
+        testFlags(flagsFile).setPendingCaps(id, WalletCaps(500_000, null))
         ops.capsSetFails = "internal"
         val vm = vm()
         eventually { vm.state.value.block == SendBlock.CAPS_PENDING }
@@ -171,7 +170,7 @@ class SendViewModelTest {
         val vm = vm(noteShown = false)
         eventually { vm.state.value.block == SendBlock.NOTE_NEEDED }
         // It was shown on the detail screen meanwhile: Try again re-checks and opens the form.
-        WalletFlags(flagsFile).setPrivacyNoteShown(id)
+        testFlags(flagsFile).setPrivacyNoteShown(id)
         vm.load()
         eventually { vm.state.value.block == null }
     }
@@ -513,7 +512,7 @@ class SendViewModelTest {
         val vm = vm(backedUp = false)
         eventually { vm.state.value.block == SendBlock.NOT_BACKED_UP }
         assertEquals(0, engine.recentAsked)
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         vm.load()
         eventually { vm.state.value.block == null && engine.recentAsked == 1 && !vm.state.value.recentChecking }
         // Try again once more (a block that was set by a prepare): the check runs again.
@@ -527,7 +526,7 @@ class SendViewModelTest {
         eventually { vm.state.value.block == SendBlock.NOTE_NEEDED }
         assertEquals(0, engine.recentAsked)
         // The note is shown on the detail screen: the manager's flags move and the screen re-reads its holds.
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         m.setPrivacyNoteShown(id)
         vm.load()
