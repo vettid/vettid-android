@@ -231,6 +231,40 @@ class ConnectionsViewModelsTest {
         assertEquals(AcceptStep.CONNECTED, vm.uiState.value.step)
     }
 
+    /**
+     * The re-read's list reaches the screen after it decided (the lists are combined on another dispatcher), or the request
+     * comes later: "already connected" first, then the request is followed once it shows.
+     */
+    @Test
+    fun anOwnRequestThatShowsLateIsStillFollowed() = runTest {
+        social.acceptResult = AcceptedConnection("c12", exists = true)
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
+        vm.setInput(link())
+        vm.accept()
+        advanceUntilIdle()
+        assertEquals(AcceptStep.EXISTS, vm.uiState.value.step)
+        social.approvals.value = listOf(outgoing("c12", "042817", RequestState.PENDING))
+        advanceUntilIdle()
+        assertEquals(AcceptStep.COMPARE, vm.uiState.value.step)
+        assertEquals("042817", vm.uiState.value.sas)
+    }
+
+    /** An active connection: "already connected" at once, with no re-read; another request of the inviter's changes nothing. */
+    @Test
+    fun anActiveConnectionIsAlreadyConnectedWithNoReRead() = runTest {
+        social.seed(listOf(FakeSocial.connection("c13", "Sam")))
+        social.acceptResult = AcceptedConnection("c13", exists = true)
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
+        vm.setInput(link())
+        vm.accept()
+        advanceUntilIdle()
+        assertEquals(AcceptStep.EXISTS, vm.uiState.value.step)
+        assertTrue("refreshRequests" !in social.calls)
+        social.approvals.value = listOf(outgoing("c13", "042817", RequestState.PENDING))
+        advanceUntilIdle()
+        assertEquals("an active connection stays connected", AcceptStep.EXISTS, vm.uiState.value.step)
+    }
+
     /** `exists` with no active connection and only another connection's request held: still "already connected". */
     @Test
     fun anExistsWithoutItsOwnRequestIsStillAlreadyConnected() = runTest {

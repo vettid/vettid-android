@@ -434,8 +434,9 @@ data class AcceptUiState(
  * has, the safety code appears here (`connection.request.outgoing`) and the
  * member compares it with the inviter's screen and approves or declines their
  * own side. The connection is made once both have approved. A vault already
- * connected to the inviter says so (`exists`); its own earlier request to the inviter still waiting is followed instead
- * (as vettid-ios #297).
+ * connected to the inviter says so (`exists`); its own earlier request to the
+ * inviter still waiting is followed instead (as vettid-ios #297), also when the
+ * lists show it only after "already connected" was shown.
  */
 @HiltViewModel
 class AcceptViewModel @Inject constructor(
@@ -468,10 +469,16 @@ class AcceptViewModel @Inject constructor(
     /** The request this screen follows ([FOLLOWED] steps), as the lists have it now: the code, the approvals, the end. */
     private fun follow(list: List<Approval>, cs: List<ConnectionInfo>, ends: Map<String, RequestEnd>) {
         val s = state.value
-        val id = s.connectionId
-        if (id == null || s.step !in FOLLOWED) return
+        val id = s.connectionId ?: return
         val active = cs.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }
         val req = list.filterIsInstance<Approval.OutgoingRequest>().firstOrNull { it.connectionId == id }
+        // "Already connected" for an id with no active connection, then this member's own request to it shows in the lists
+        // (read after the answer, or late): it is followed from here, as a new request would be.
+        if (s.step == AcceptStep.EXISTS && active == null && req != null) {
+            state.update { it.copy(step = AcceptStep.WAITING) }
+        } else if (s.step !in FOLLOWED) {
+            return
+        }
         val end = ends[id]
         if (end == RequestEnd.PEER_DECLINED && req == null && active == null) {
             // The inviter declined (0.10.5): told here, once (the notice is dismissed).
@@ -551,10 +558,11 @@ class AcceptViewModel @Inject constructor(
         val connected = { repo.connections.value.any { it.id == id && it.state == ConnectionState.ACTIVE } }
         if (connected()) return false
         runCatching { approvals.refreshRequests() }
-        val follows = approvals.approvals.value.any { it is Approval.OutgoingRequest && it.connectionId == id } && !connected()
+        val list = approvals.approvals.value
+        val follows = list.any { it is Approval.OutgoingRequest && it.connectionId == id } && !connected()
         if (follows) {
             state.update { it.copy(step = AcceptStep.WAITING, connectionId = id) }
-            follow(approvals.approvals.value, repo.connections.value, approvals.requestEnds.value)
+            follow(list, repo.connections.value, approvals.requestEnds.value)
         }
         return follows
     }
