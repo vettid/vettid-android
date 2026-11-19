@@ -31,8 +31,13 @@ internal class OpeningSteps(
      * the phase now): that opening already emptied the feed's list and reset what it keeps for itself
      * ([FeedManager.vaultOpened]), or continued the one the blip kept, and its read is under way.
      */
-    fun clearFeed(p: AppPhase, openingSeen: Int) = stillThatOpening(openingSeen) {
-        if (p is AppPhase.Unreachable) feed.clear(keepHeld = true) else feed.clear()
+    fun clearFeed(p: AppPhase, openingSeen: Int) = phase().decide { now ->
+        when {
+            now == AppPhase.Unlocked || newerBlip(now, openingSeen) -> Unit
+            // A close now (one the collector may never be told of, its value conflated): everything goes, whatever came between.
+            p is AppPhase.Unreachable && !closed(now) -> feed.clear(keepHeld = true)
+            else -> feed.clear()
+        }
     }
 
     /**
@@ -41,13 +46,16 @@ internal class OpeningSteps(
      * what it holds now is its own).
      */
     fun dropReplayOnClose(p: AppPhase, openingSeen: Int) {
-        if (p !is AppPhase.Unreachable) stillThatOpening(openingSeen) { heldAskReplay.drop() }
+        if (p !is AppPhase.Unreachable) {
+            phase().decide { now -> if (now != AppPhase.Unlocked && !newerBlip(now, openingSeen)) heldAskReplay.drop() }
+        }
     }
 
-    /** [block] under the phase holder's lock, while the vault is not open and the feed's opening is still [openingSeen]. */
-    private fun stillThatOpening(openingSeen: Int, block: () -> Unit) = phase().decide { p ->
-        if (p != AppPhase.Unlocked && feed.openingNumber == openingSeen) block()
-    }
+    /** A blip of an opening newer than [openingSeen]: a late step of the one before leaves it alone. Under the phase lock. */
+    private fun newerBlip(now: AppPhase, openingSeen: Int) = now is AppPhase.Unreachable && feed.openingNumber != openingSeen
+
+    /** The vault closed on this phone ([now]: a lock, a sign-out, a setup, a deletion): neither open nor a blip. */
+    private fun closed(now: AppPhase) = now != AppPhase.Unlocked && now !is AppPhase.Unreachable
 
     /** Where a passed check's waiting-asks replay goes ([placePassReplay]). */
     enum class PassReplay { HELD, LAUNCH, DROP }

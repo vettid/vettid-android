@@ -1170,6 +1170,44 @@ class FeedManagerTest {
         assertEquals(listOf("g2"), arrived)
     }
 
+    /** Two soft clears before the return keep the first's cursor: the return read notifies the blip's item. */
+    @Test
+    fun twoSoftClearsKeepTheFirst() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val g2 = item("g2", 2)
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), g2)) { m.clear(keepHeld = true) } // a second blip clear
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /**
+     * An item applied out of order while the hold silenced it (sent during the hold, never notified) stays silent through a
+     * blip: what the blip keeps is the highest seq the list held, not only its cursor.
+     */
+    @Test
+    fun aSilencedGapItemStaysSilentThroughABlip() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the lift's full read
+        m.refresh()
+        val g3 = item("g3", 3)
+        ops.known["g3"] = g3
+        ops.pages += FeedPage(emptyList(), 1) // the gap's catch-up finds nothing more
+        m.onEvent(event(g3, ts = now.minusSeconds(120))) // sent during the hold: applied, silent, out of order
+        settle { synchronized(ops) { ops.lists.size } >= 3 }
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+        assertEquals(1L, m.seq)
+        m.clear(keepHeld = true) // a blip
+        ops.pages += FeedPage(listOf(item("i1", 1), g3), 3)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals("still silent", emptyList<String>(), arrived)
+    }
+
     /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
     @Test
     fun aNewOpeningEmptiesTheList() = runTest {

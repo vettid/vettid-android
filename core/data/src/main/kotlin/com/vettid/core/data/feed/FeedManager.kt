@@ -186,8 +186,8 @@ class FeedManager(
     private val notifiedSeq = HashMap<String, Long>()
 
     /**
-     * (ANDROID-PLAN 0.1.134, as the iPhone app) What a status read that could not be made kept of the loaded list: its cursor
-     * alone (no item's content is kept while the vault is not open; every item it held is at or below it). The first full
+     * (ANDROID-PLAN 0.1.134, as the iPhone app) What a status read that could not be made kept of the loaded list: the highest
+     * `seq` it held ([keptNow]; no item's content is kept while the vault is not open). The first full
      * read of the opening that continues notifies what a catch-up from that cursor would have brought (an item sent during
      * the blip whose `feed.event` comes after the read is no longer silent), then it is dropped. Dropped by any other clear, a
      * new opening, a lift, and a read while the owner check is due or held (notified then, nothing would be). Under [lock].
@@ -288,7 +288,7 @@ class FeedManager(
             retried = false
             // Kept once, from a loaded list: a second soft clear before a read keeps the first. A list being read (not loaded)
             // keeps nothing: the blip's items then fall back to the full read's silence.
-            kept = if (!keepHeld) null else kept ?: cursor.takeIf { loadState.value == ListLoad.LOADED }
+            kept = if (!keepHeld) null else kept ?: keptNow()
             if (!keepHeld) {
                 arrivedSince = null
                 notifiedSeq.clear()
@@ -380,7 +380,7 @@ class FeedManager(
         markable = true // a hold's clear left it off; the same opening goes on
         // A blip whose soft clear did not run (the phase collector reached it only after the return): the list is still
         // loaded, and its cursor is what the blip would have kept.
-        if (kept == null && loadState.value == ListLoad.LOADED) kept = cursor
+        if (kept == null) kept = keptNow()
         true
     }
 
@@ -731,6 +731,13 @@ class FeedManager(
         // Not while the owner check is due or held: nothing would be notified then, and the lift's read is silent.
         return if (gated()) emptyList() else newUnread(changed.filter { it.seq > k }) { null }
     }
+
+    /**
+     * What a blip keeps of a loaded list (null when not loaded): the highest `seq` it holds, its cursor or an item applied out
+     * of order above it (one the hold silenced is never notified by the return read). Under [lock].
+     */
+    private fun keptNow(): Long? =
+        if (loadState.value != ListLoad.LOADED) null else maxOf(cursor, byId.values.maxOfOrNull { it.seq } ?: 0L)
 
     /** The feed's opening (moved by each new opening, [vaultOpened]; one that continues keeps it). */
     val openingNumber: Int get() = synchronized(lock) { opening }

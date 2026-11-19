@@ -1249,10 +1249,11 @@ class VaultManager(
             )
             // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
             phaseFlow.asStateFlow().collectSurviving("phase") {
+                // First: a lock and an unlock after this value was taken cannot make it look like a newer opening's.
+                openingAtPhase = feed.openingNumber
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
                 if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
                 previous = it
-                openingAtPhase = feed.openingNumber
                 phaseSteps.onPhase(it) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
@@ -1300,8 +1301,9 @@ class VaultManager(
                 // are notified once, judged on a pending.list merged after now. The window opens here, before any launch.
                 // A pass learnt while a status read fails (another device's): kept for the opening if it continues
                 // ([HeldAskReplay], run by its owed reads); a close or a new opening drops it.
-                val unreachable = phaseFlow.value is AppPhase.Unreachable
+                // The feed's opening first, then the phase: an opening between the two reads is never taken for this one.
                 val openingAtPass = feed.openingNumber
+                val unreachable = phaseFlow.value is AppPhase.Unreachable
                 val replayGen = record.generation.takeIf {
                     WaitingAsksReplay.due(before, v, at, unlocked = phaseFlow.value == AppPhase.Unlocked || unreachable)
                 }

@@ -140,6 +140,37 @@ class OpeningStepsTest {
         assertTrue("the new opening's list stays", w.feed.loaded)
     }
 
+    /**
+     * A lock, an unlock and a lock again, the second lock conflated away (the collector holds the first): its one late clear
+     * finds the vault closed and clears it all, the newer opening's list and replay included.
+     */
+    @Test
+    fun aConflatedSecondLockStillClears() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        val seen = w.publish(AppPhase.Locked)
+        w.publish(AppPhase.Unlocked) // a new opening
+        w.feed.refresh()
+        w.keepReplay()
+        w.publish(AppPhase.Locked) // the same value as the collector's: never delivered again
+        w.collect(AppPhase.Locked, seen)
+        assertFalse("cleared", w.feed.loaded)
+        assertFalse(w.feed.openingContinues())
+        assertFalse(w.held.held())
+    }
+
+    /** A blip whose late step finds the vault closed since: the clear of a close, not the blip's soft one. */
+    @Test
+    fun aLateBlipStepAfterACloseClearsItAll() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        w.feed.refresh()
+        val seen = w.publish(blip)
+        w.publish(AppPhase.Locked)
+        w.collect(blip, seen)
+        assertFalse("the opening ended", w.feed.openingContinues())
+    }
+
     /** A blip and the return of the same opening, both before the collector reaches the blip: its soft clear is skipped. */
     @Test
     fun aLateBlipClearOfAContinuedOpeningLeavesItAlone() = runTest {
