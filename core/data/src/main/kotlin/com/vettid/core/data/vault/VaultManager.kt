@@ -1150,7 +1150,9 @@ class VaultManager(
             // else the vault's clock now if known; never the phone's.
             onLift = { at ->
                 val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }
-                if (opening) feed.ownerCheckLifted(at ?: session?.device?.vaultNowIfKnown())
+                // Never later than the vault's clock now: a time past it would silence what comes after.
+                val vaultNow = session?.device?.vaultNowIfKnown()
+                if (opening) feed.ownerCheckLifted(listOfNotNull(at, vaultNow).minOrNull())
             },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
@@ -1297,7 +1299,7 @@ class VaultManager(
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
-                    steps.step { feed.clear() }
+                    steps.step { feed.clear(endsOpening = false) } // the vault stays open: the opening goes on
                     steps.step { devices.clear() }
                     steps.step { votes.clear() }
                     steps.step { presence.clear() } // held or due: no presence is asked or shown

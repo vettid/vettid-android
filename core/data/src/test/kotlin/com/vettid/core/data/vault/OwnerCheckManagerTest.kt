@@ -548,6 +548,20 @@ class OwnerCheckManagerTest {
         assertEquals(now.minusSeconds(30), lifts.last())
     }
 
+    /** This phone's own check ends a held state: no time of its own is told (the vault's clock, set by its answer, is). */
+    @Test
+    fun aPassHereIsToldWithoutATimeOfItsOwn() = runTest {
+        val lifts = mutableListOf<Instant?>()
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = OwnerCheckManager(
+            this, ops = { ops }, load = { null }, persist = {}, onPassed = {}, now = { now },
+            onLift = { at -> lifts += at },
+        )
+        m.refreshOwnerCheck()
+        assertEquals(OwnerCheckOutcome.Passed, m.check("975310", "pw", null))
+        assertEquals(listOf<Instant?>(null), lifts)
+    }
+
     /** Only a held or due answer is dropped: an OK status sent before a pass and answered after it is taken. */
     @Test
     fun anOkStatusSentBeforeAPassIsTaken() = runTest {

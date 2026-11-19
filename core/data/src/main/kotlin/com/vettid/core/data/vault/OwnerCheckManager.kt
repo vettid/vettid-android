@@ -640,6 +640,7 @@ class OwnerCheckManager(
                 // When it passed, on the vault's clock: its deadline less its interval as it runs on this vault (a staging time
                 // scale divides it; unknown without both).
                 Pass(
+                    here = true,
                     counts = !unlocksOwn,
                     at = r.intervalSeconds?.let { deadline?.minusSeconds(TimeScales.divide(it, lastTimeScale)) },
                 ),
@@ -865,9 +866,10 @@ class OwnerCheckManager(
 
     /**
      * A check passed: here or on another device, an unlock's own included. [counts]: with the vault open, not the check an
-     * unlock makes ([OwnerCheckView.passes]); [at]: when, on the vault's clock (null: not known).
+     * unlock makes ([OwnerCheckView.passes]); [at]: when, on the vault's clock (null: not known); [here]: this phone's own
+     * check, whose answer is the newest message from the vault (the lift is then the vault's clock as that answer set it).
      */
-    private class Pass(val counts: Boolean, val at: Instant?)
+    private class Pass(val counts: Boolean, val at: Instant?, val here: Boolean = false)
 
     /**
      * Every check passed, here or on another device (an unlock's own included): a `vault.status` read sent before the
@@ -920,10 +922,14 @@ class OwnerCheckManager(
      * it), never earlier than the latest pass known. Never [passedAt] alone: a pass known before the due state began is
      * earlier than its end, and due-era news would notify. Null: not known.
      */
-    private fun liftTime(v: OwnerCheckView, pass: Pass?): Instant? =
-        pass?.at ?: v.deadline?.minusSeconds(TimeScales.divide(v.intervalSeconds, lastTimeScale))?.let { fromDeadline ->
+    private fun liftTime(v: OwnerCheckView, pass: Pass?): Instant? = when {
+        // This phone's own check: its answer just set the vault's clock, which [onLift] then falls back to.
+        pass?.here == true -> null
+        pass?.at != null -> pass.at
+        else -> v.deadline?.minusSeconds(TimeScales.divide(v.intervalSeconds, lastTimeScale))?.let { fromDeadline ->
             passedAt?.let { maxOf(it, fromDeadline) } ?: fromDeadline
         }
+    }
 
     /** Under [setLock]: [pass] happened; [passedAt] only ever moves forward. */
     private fun notePass(pass: Pass) {

@@ -209,7 +209,10 @@ class ReleaseGateWiringTest {
         // The lift is marked by the owner check before its value is published, with an opening current.
         block("OwnerCheckManager(").has("onLift = { at ->")
         code.has("val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }")
-        code.has("if (opening) feed.ownerCheckLifted(at ?: session?.device?.vaultNowIfKnown())")
+        code.has("val vaultNow = session?.device?.vaultNowIfKnown()")
+        code.has("if (opening) feed.ownerCheckLifted(listOfNotNull(at, vaultNow).minOrNull())")
+        // The hold's clear keeps the opening (a blip after it continues it).
+        code.has("steps.step { feed.clear(endsOpening = false) }")
         // A lift the collector did not see as one still gets its full read.
         code.has("val feedOwed = phaseFlow.value == AppPhase.Unlocked && !releaseUpdate.paused.value && !feed.loaded")
         code.has("} else if (!gated && feedOwed) {")

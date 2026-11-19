@@ -174,6 +174,12 @@ class FeedManager(
     private var markable = false
 
     /**
+     * The opening was closed: a hard [clear] that ends it (a lock, a wipe, a deletion, an identity switch; not the owner
+     * check's hold, which keeps the vault open). Until the next [vaultOpened]. Under [lock].
+     */
+    private var openingEnded = false
+
+    /**
      * (ANDROID-PLAN 0.1.134) The `seq` each item last notified at during this opening: no second alert for the same or an
      * older change. Emptied at each opening and by a hard [clear]. Under [lock].
      */
@@ -265,8 +271,10 @@ class FeedManager(
      * release check holds, what it notified, its mark and the hold's lift. If the opening continues they carry on; any close
      * that follows (a lock, a sign-out, a wipe) clears it all.
      */
-    fun clear(keepHeld: Boolean = false) {
+    fun clear(keepHeld: Boolean = false, endsOpening: Boolean = true) {
         synchronized(lock) {
+            // The owner check's hold clears the feed but closes nothing: the opening goes on ([openingContinues]).
+            if (!keepHeld && endsOpening) openingEnded = true
             behind = false
             retried = false
             if (!keepHeld) {
@@ -327,6 +335,7 @@ class FeedManager(
         heldEvents.clear()
         heldArrivals.clear()
         markable = true
+        openingEnded = false
         ++opening
     }
 
@@ -344,7 +353,11 @@ class FeedManager(
      * phase's own rule): the same opening carries on, its moment kept, so what the vault sent meanwhile is judged against
      * it, not against a new mark taken now. False when there was no opening to carry on (the caller then opens a new one).
      */
-    fun openingContinues(): Boolean = synchronized(lock) { opening != 0 && openedAt != null && markable }
+    fun openingContinues(): Boolean = synchronized(lock) {
+        if (opening == 0 || openedAt == null || openingEnded) return@synchronized false
+        markable = true // a hold's clear left it off; the same opening goes on
+        true
+    }
 
     /**
      * (ANDROID-PLAN 0.1.134, "nothing missed while due or held notifies later") The owner check's hold or due state ended at
@@ -654,7 +667,7 @@ class FeedManager(
         /** A [clear] came since the read began: nothing applied. */
         data object Cleared : Applied
 
-        /** An incremental read across a lift ([ownerCheckLifted]): nothing applied; a full read instead. */
+        /** A read across a lift ([ownerCheckLifted]): nothing applied; a full read again. */
         data object Lifted : Applied
 
         class Read(val arrived: List<FeedItem>) : Applied
@@ -665,7 +678,8 @@ class FeedManager(
         synchronized(lock) {
             when {
                 gen != generation -> Applied.Cleared
-                !full && lifts != liftsAtStart -> Applied.Lifted
+                // A full read too: begun before the lift, its cursor may stand before changes of the due state.
+                lifts != liftsAtStart -> Applied.Lifted
                 else -> {
                     val before = if (full) emptyMap() else byId
                     if (full) byId = emptyMap()

@@ -1016,12 +1016,53 @@ class FeedManagerTest {
         assertFalse(m.replayOwns(token))
     }
 
-    /** A hard clear (a lock, the hold) ends the opening: a status read after it has no opening to carry on. */
+    /** A hard clear that closes (a lock, a wipe) ends the opening: a status read after it has no opening to carry on. */
     @Test
     fun aHardClearEndsTheOpening() = runTest {
         val m = opened(Ops())
         m.clear()
         assertFalse(m.openingContinues())
+    }
+
+    /**
+     * The owner check's hold clears the feed but closes nothing: after its pass (a replay window opened), a status read
+     * that could not be made keeps the same opening, and the replay's window with it.
+     */
+    @Test
+    fun aHoldsClearKeepsTheOpeningForABlipAfterThePass() = runTest {
+        val m = manager(Ops())
+        val n = m.vaultOpened(now)
+        m.clear(endsOpening = false) // the hold
+        val token = m.startReplayWindow() // its pass
+        m.clear(keepHeld = true) // Unreachable
+        assertTrue(m.openingContinues())
+        assertTrue(m.replayOwns(token))
+        // The continued opening takes its mark on the vault's clock, as before the hold.
+        m.openingMarked(now.minusSeconds(5), n)
+        assertEquals(now.minusSeconds(5), m.openingMark)
+        // And a lock after the hold ends it.
+        m.clear()
+        assertFalse(m.openingContinues())
+    }
+
+    /** A full read begun before the lift is read again in full: its cursor may stand before changes of the due state. */
+    @Test
+    fun aFullReadAcrossTheLiftIsReadAgain() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1)
+        ops.pages += FeedPage(listOf(item("i1", 1), item("d2", 2)), 2)
+        backgroundScope.launch { m.refresh() }
+        repeat(SETTLE_TRIES) { if (synchronized(ops) { ops.lists.size } < 2) { runCurrent(); Thread.sleep(SETTLE_MS) } }
+        m.ownerCheckLifted(now)
+        ops.gate = null
+        gate.complete(Unit)
+        repeat(SETTLE_TRIES) { if (m.seq != 2L) { runCurrent(); advanceUntilIdle(); Thread.sleep(SETTLE_MS) } }
+        assertEquals("lists ${synchronized(ops) { ops.lists.toList() }} load ${m.load.value}", 2L, m.seq)
+        assertEquals(listOf(0L, 0L, 0L), synchronized(ops) { ops.lists.toList() })
+        assertEquals(ListLoad.LOADED, m.load.value)
     }
 
     /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
