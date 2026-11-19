@@ -3450,7 +3450,7 @@ class VaultDevice private constructor(
         }
     }
 
-    /** The first send of a noted request was deposited: its time is taken from here, the later and closer bound. */
+    /** The first send of a noted request was deposited: its time is taken from here, the closer bound. */
     private fun noteOpeningSent(id: String) {
         val at = cfg.elapsedMs()
         synchronized(openingLock) { opening?.sentAt?.let { m -> if (id in m) m[id] = at } }

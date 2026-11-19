@@ -656,6 +656,38 @@ class FeedManagerTest {
     }
 
     /**
+     * A lock while a push wake's replay is still on its way (the release check still running): what it brings after the
+     * lock's clear is held nowhere, so nothing of it notifies at the next opening, whatever its `ts`.
+     */
+    @Test
+    fun aWakeReplayAfterALockIsNotKeptForTheNextOpening() = runTest {
+        val ops = Ops()
+        var open = true
+        var checking = true
+        ops.known["w1"] = item("w1", 1)
+        ops.pages += FeedPage(listOf(item("w1", 1)), 1)
+        val m = manager(ops, held = { checking }, vaultOpen = { open }).also {
+            it.vaultOpened(now)
+            it.refresh()
+        }
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        open = false
+        m.clear() // the lock
+        m.replay(event(item("w1", 1)), wake = true) // the replay, arriving after the clear
+        m.onEvent(event(item("w2", 2))) // and a live one
+        // The next opening, and its check's end.
+        open = true
+        m.vaultOpened(now)
+        ops.pages += FeedPage(listOf(item("w1", 1)), 1)
+        m.refresh()
+        checking = false
+        m.releaseHeld()
+        settle { true }
+        assertTrue("nothing held across the lock: $arrived", arrived.isEmpty())
+    }
+
+    /**
      * After a hold (its clears empty the feed, the vault stays open), a live event that comes while the hold's full read is
      * under way waits for it and notifies; after that read failed, the event starts a read and notifies (it never stalls).
      */

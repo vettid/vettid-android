@@ -351,8 +351,13 @@ class FeedManager(
         }
     }
 
-    /** [m] goes no further here: held for the release check, dropped while gated, or waiting for the feed's read. */
-    private fun takenElsewhere(m: VaultMessage, wake: Boolean): Boolean = holds(m, wake) || gated() || !wake && waitsForTheRead(m)
+    /**
+     * [m] goes no further here: dropped while the vault is not open on this phone (a lock drops everything held, so nothing
+     * that comes after its clear, a push wake's replay still on its way included, may be held for the next opening), held
+     * for the release check, dropped while gated, or waiting for the feed's read.
+     */
+    private fun takenElsewhere(m: VaultMessage, wake: Boolean): Boolean =
+        !vaultOpen() || holds(m, wake) || gated() || !wake && waitsForTheRead(m)
 
     /**
      * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused, while the feed is not loaded (its full read under
