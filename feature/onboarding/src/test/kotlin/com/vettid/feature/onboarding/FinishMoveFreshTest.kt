@@ -1,0 +1,97 @@
+package com.vettid.feature.onboarding
+
+import com.vettid.core.data.vault.AppPhase
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.UnlockAttempt
+import com.vettid.core.testing.FakeVault
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+
+/**
+ * The open app's "Finish the move" dialog keeps its view model across moves (it is scoped to the activity, and a wipe does not
+ * end the activity): a second move into this phone starts from the PIN form, never from the first one's "done".
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class FinishMoveFreshTest {
+    @get:Rule
+    val main = MainDispatcherRule()
+
+    private val vault = FakeVault(AppPhase.Unlocked)
+
+    /** Finishes the pending move here, as the manager does: the flag turns false before the answer is seen. */
+    private suspend fun kotlinx.coroutines.test.TestScope.finishHere(vm: FinishMoveViewModel) {
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        vault.finishMovePending.value = false
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+    }
+
+    @Test
+    fun aSecondMoveInTheSameProcessStartsFromThePinForm() = runTest {
+        vault.finishMovePending.value = true
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        finishHere(vm)
+        // An erase, then a second move into this phone (Later on its last screen): pending again.
+        vault.finishMovePending.value = true
+        advanceUntilIdle()
+        // The banner shows before the dialog opens: the form is fresh already.
+        assertFalse("fresh when the move begins", vm.uiState.value.done)
+        vm.opened()
+        val s = vm.uiState.value
+        assertFalse("not the first move's done", s.done)
+        assertTrue(s.pinAllowed)
+        assertNull(s.failure)
+        assertEquals("", s.pin)
+    }
+
+    /** The backstop in [FinishMoveViewModel.opened]: "done" with a move still pending is never shown. */
+    @Test
+    fun anOpeningWithAMovePendingIsNeverDone() = runTest {
+        vault.finishMovePending.value = true
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+        vm.opened() // the flag never turned false (a transition the collector did not see)
+        assertFalse(vm.uiState.value.done)
+        assertTrue(vm.uiState.value.pinAllowed)
+    }
+
+    /** A reopening after the move finished (a rotation, the dialog composed again) keeps its "done". */
+    @Test
+    fun aFinishedMoveStaysDoneWhenTheDialogOpensAgain() = runTest {
+        vault.finishMovePending.value = true
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        finishHere(vm)
+        vm.opened()
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /** A reopening of the same pending move keeps what it said (a wrong PIN): only a new move starts afresh. */
+    @Test
+    fun theSameMoveKeepsItsFailureWhenTheDialogOpensAgain() = runTest {
+        vault.finishMovePending.value = true
+        vault.unlockResults += UnlockAttempt.BadPin(0)
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
+        vm.opened()
+        assertEquals(FailureKind.BAD_PIN, vm.uiState.value.failure)
+    }
+}

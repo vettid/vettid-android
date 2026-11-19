@@ -96,6 +96,23 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         opened()
         keypad.follow(state.value.pinAllowed)
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
+        // A new move to finish (none pending before: the last one finished, or a wipe ended it) starts from the PIN form, not
+        // from what the last one left (done, a failure). The open app's dialog keeps this view model across moves.
+        viewModelScope.launch {
+            var before = vault.finishMovePending.value
+            vault.finishMovePending.collect { pending ->
+                if (pending && !before) freshMove()
+                before = pending
+            }
+        }
+    }
+
+    /**
+     * The PIN form for a move not tried yet; nothing changes while one is running. The user_guid's reading stays ([opened]
+     * reads it again), with its failure.
+     */
+    private fun freshMove() = set {
+        if (it.busy) it else it.copy(pin = "", done = false, failure = if (it.noUserGuid) it.failure else null)
     }
 
     /**
@@ -106,6 +123,9 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
      * and a move that stored one, the next opening offers the PIN again.
      */
     fun opened() {
+        // A move still pending was not finished here: "done" is a finished move's, so this one starts afresh (the flag turns
+        // false before a finished move's answer, so a reopening after one keeps its "done").
+        if (state.value.done && vault.finishMovePending.value) freshMove()
         val noGuid = !vault.userGuidUsable
         set {
             when {
