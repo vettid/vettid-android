@@ -115,12 +115,29 @@ class UnlockStuckTest {
         rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
     }
 
-    /** Nothing to erase before the release check answered: it may yet say an erase would not help. */
+    /** Nothing to erase before the release check answered: it may yet say an erase would not help. No words either yet. */
     @Test
     fun noEraseWhileTheReleaseIsChecked() {
         val s = ok.copy(keysGone = true, noUserGuid = true, loading = true)
         assertFalse(s.eraseOffered)
         assertFalse(s.stuckNoticeShown)
+        assertFalse(s.stuckWordsOnly)
+    }
+
+    /**
+     * A release check that failed (the network) could not rule out an ended release or a rollback: the words alone and
+     * "Try again", no erase.
+     */
+    @Test
+    fun afterAFailedCheckTheWordsAloneAndNoErase() {
+        val s = UnlockUiState(loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true)
+        assertFalse(s.eraseOffered)
+        assertFalse(s.stuckNoticeShown)
+        assertTrue(s.stuckWordsOnly)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_no_user_guid").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithText("Try again").assertExists()
     }
 
     @Test

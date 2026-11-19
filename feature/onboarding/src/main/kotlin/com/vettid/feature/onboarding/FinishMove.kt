@@ -92,13 +92,30 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
+    /** An unlock of this move answered `no_user_guid` (kept: no later reading clears it). */
+    private var refused = false
+
     init {
-        // No usable user_guid: said at once, with no PIN to type (owner decision a, 2026-11-19, as the unlock screen).
-        if (!vault.userGuidUsable) {
-            state.update { it.copy(noUserGuid = true, failure = FailureKind.NOT_SUPPORTED) }
-        }
+        opened()
         keypad.follow(state.value.pinAllowed)
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
+    }
+
+    /**
+     * The move's screen or dialog opens: whether this phone has a usable user_guid, read now (owner decision a, 2026-11-19, as
+     * the unlock screen). This view model can outlive a move (the open app's dialog is scoped to the activity), and a move
+     * stores the user_guid when it completes, so it is read at each opening, never once: a phone that has one is not told it
+     * cannot open its vault. A refusal of this move's unlock stays.
+     */
+    fun opened() {
+        val noGuid = refused || !vault.userGuidUsable
+        set {
+            when {
+                noGuid -> it.copy(noUserGuid = true, failure = FailureKind.NOT_SUPPORTED)
+                it.noUserGuid -> it.copy(noUserGuid = false, failure = null)
+                else -> it
+            }
+        }
     }
 
     // Typing does not clear `noUserGuid`: no PIN can change it (the field is disabled then).
@@ -125,6 +142,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
             } catch (e: VaultFailure) {
                 e.kind
             }
+            if (noGuid) refused = true
             set { it.copy(busy = false, done = failure == null, failure = failure, noUserGuid = noGuid) }
         }
     }
@@ -139,6 +157,8 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
 fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: () -> Unit, modifier: Modifier = Modifier) {
     // Nothing leaves the move while its lock and unlock run (the back key included): the outcome decides where it goes.
     BackHandler(enabled = state.busy) {}
+    // Whether this phone has a usable user_guid, as it is now (the view model may outlive a move that stored one).
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.opened() }
     Column(modifier.fillMaxWidth().padding(Spacing.gutter).testTag("finish_move"), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         Text(stringResource(R.string.onboarding_finish_move_title), style = MaterialTheme.typography.titleLarge)
         if (state.done) {

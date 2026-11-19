@@ -96,10 +96,16 @@ class RootViewModel @Inject constructor(
      * again) and [lockRefusedNoUserGuid] says why, once, until dismissed.
      */
     fun lockAndUnlockForPin() {
+        // Refused at once without a usable user_guid: the change's result stays (nothing settles), and nothing is locked.
+        if (!vault.userGuidUsable) {
+            noUserGuidFlow.value = true
+            return
+        }
+        vault.acknowledgeChangeCheck()
         viewModelScope.launch {
             try {
-                // The change's result stays until the lock is asked for (a refusal locks nothing, so nothing settles).
-                if (vault.lockToSettlePin()) vault.acknowledgeChangeCheck() else noUserGuidFlow.value = true
+                // The same check again where the lock is asked for (lockToSettlePin is the one place that locks).
+                if (!vault.lockToSettlePin()) noUserGuidFlow.value = true
             } catch (_: VaultFailure) {
                 accounts.refresh()
             }

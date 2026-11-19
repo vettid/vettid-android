@@ -137,6 +137,7 @@ class RootViewModelTest {
         vm.lockAndUnlockForPin()
         advanceUntilIdle()
         assertTrue("lock" in vault.calls)
+        assertEquals("acknowledged when the lock is asked for", 1, vault.changeCheckAcknowledged)
         assertFalse(vm.lockRefusedNoUserGuid.value)
     }
 

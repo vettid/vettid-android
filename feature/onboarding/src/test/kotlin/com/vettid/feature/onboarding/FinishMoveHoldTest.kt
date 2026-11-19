@@ -45,6 +45,31 @@ class FinishMoveHoldTest {
         assertEquals("not tried again", 1, vault.finishMoveTaken.size)
     }
 
+    /**
+     * The open app's view model outlives a move: a phone that had no user_guid when it was made and stores one with the move
+     * is not told it cannot open its vault when the dialog opens; a refusal of the move's own unlock stays.
+     */
+    @Test
+    fun theUserGuidIsReadEachTimeTheMoveOpens() = runTest {
+        vault.userGuidUsable = false
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        vault.userGuidUsable = true // the move stored one
+        vm.opened()
+        assertFalse(vm.uiState.value.noUserGuid)
+        assertNull(vm.uiState.value.failure)
+        assertTrue(vm.uiState.value.pinAllowed)
+        // A refusal of the move's own unlock is kept through later openings.
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        vm.opened()
+        assertTrue(vm.uiState.value.noUserGuid)
+    }
+
     /** Known at once from the user_guid check: the words, no PIN, nothing sent (as the unlock screen). */
     @Test
     fun noUserGuidIsKnownWhenTheMoveOpens() = runTest {

@@ -244,10 +244,16 @@ data class UnlockUiState(
      * "Erase VettID from this phone" is offered: an unlock the vault did not recognise, or this phone's keys are gone;
      * never on a [recoverOnly] screen, which wins over both.
      */
-    val eraseOffered: Boolean get() = !loading && !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+    val eraseOffered: Boolean get() = eraseReady && !recoverOnly && !keptCheckWaiting && (notRecognised || keysGone)
+
+    /**
+     * An erase may be offered: not while the release is checked, and for a phone with no usable user_guid only after a check
+     * that answered (a failed one could not rule out an ended release or a rollback, where erasing would not help).
+     */
+    private val eraseReady: Boolean get() = !loading && (!noUserGuid || preflight != null && preflightError == null)
 
     /** The recover-or-erase notice of a phone without the vault's keys is on the screen (the screen's own choice). */
-    val stuckNoticeShown: Boolean get() = !loading && !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
+    val stuckNoticeShown: Boolean get() = eraseReady && !recoverOnly && !keptCheckWaiting && !notRecognised && keysGone
 
     /**
      * The recover-or-erase words alone, with no actions: this phone has no usable user_guid but the notice with its

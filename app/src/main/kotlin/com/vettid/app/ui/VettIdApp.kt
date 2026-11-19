@@ -44,6 +44,7 @@ import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.shownInShell
 import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
+import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.feature.onboarding.AppLockScreen
 import com.vettid.feature.onboarding.FinishMovePane
 import com.vettid.feature.onboarding.FinishMoveViewModel
@@ -329,10 +330,12 @@ private fun MoveNotices(
     }
     // VAULT-MESSAGING 0.44.0 §11.14.9: the decision of a change whose answer was lost, wherever the member is.
     val changeDecided by viewModel.changeDecided.collectAsStateWithLifecycle()
+    val lockRefused by viewModel.lockRefusedNoUserGuid.collectAsStateWithLifecycle()
     changeDecided?.let { c ->
         // (0.45.0 step 3) Ended without a decision after a PIN change: no retry, but the lock and two-step unlock that
         // settles the PIN without spending an attempt.
-        val lockUnlock = c is ChangeCheck.Ended && c.kind == ChangeKind.PIN
+        // Not offered again while its refusal (no usable user_guid) is shown, as Settings does.
+        val lockUnlock = c is ChangeCheck.Ended && c.kind == ChangeKind.PIN && !lockRefused
         InfoBanner(
             stringResource(changeDecidedText(c)),
             Modifier.testTag("change_decided_banner"),
@@ -341,14 +344,15 @@ private fun MoveNotices(
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted,
         )
     }
-    // "Lock and unlock now" refused on a phone with no usable user_guid: nothing was locked; the unlock screen's words.
-    val lockRefused by viewModel.lockRefusedNoUserGuid.collectAsStateWithLifecycle()
+    // "Lock and unlock now" refused on a phone with no usable user_guid: nothing was locked; the unlock screen's words, title
+    // and body, in one urgent banner with OK (as the iPhone app, owner decision a on #14258).
     if (lockRefused) {
-        InfoBanner(
-            stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
-            Modifier.testTag("lock_refused_no_user_guid_banner"),
+        UrgentBanner(
+            stringResource(com.vettid.core.ui.R.string.unlock_stuck_title) + "\n" +
+                stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
             actionLabel = stringResource(R.string.root_preferences_reset_ok),
-            onAction = viewModel::acknowledgeLockRefused,
+            onClick = viewModel::acknowledgeLockRefused,
+            modifier = Modifier.testTag("lock_refused_no_user_guid_banner"),
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted &&
                 changeDecided == null,
         )
@@ -371,7 +375,7 @@ private fun MoveNotices(
             }
         }
     }
-    return askFinishMove || movedBack || moveNotDone || movedAway || deleted || changeDecided != null
+    return askFinishMove || movedBack || moveNotDone || movedAway || deleted || changeDecided != null || lockRefused
 }
 
 /** The decided change's notice (ANDROID-PLAN 0.1.45; the applied and ended texts are drafts for the owner). */
