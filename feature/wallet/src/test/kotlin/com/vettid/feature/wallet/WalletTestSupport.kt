@@ -252,7 +252,10 @@ internal fun manager(
 /** The chain server setting, without HTTP: whatever [server] says. */
 internal class FakeServerSettings(var server: com.vettid.core.chain.ChainServer = com.vettid.core.chain.ChainServer.NotSet) :
     com.vettid.core.wallet.ChainServerSettings {
-    override suspend fun server(network: Network) = server
+    /** A server of its own for some networks; [server] for the others. */
+    var perNetwork: Map<Network, com.vettid.core.chain.ChainServer> = emptyMap()
+
+    override suspend fun server(network: Network) = perNetwork[network] ?: server
 
     override suspend fun save(network: Network, text: String): com.vettid.core.chain.SaveResult = error("not here")
 
