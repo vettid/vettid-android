@@ -81,6 +81,8 @@ data class RecoveryOpenOutcome(
  * (VAULT-MESSAGING 0.15.0 §11.12: the app never signs in), and the account as the vault reports it (§11.13).
  * Every failure is a [VaultFailure].
  */
+// The account's whole surface for the app (its lifecycle hooks among them), one interface for the screens and the notifier.
+@Suppress("TooManyFunctions")
 interface AccountRepository {
     val phase: StateFlow<AppPhase>
 
@@ -108,6 +110,12 @@ interface AccountRepository {
 
     /** The app came back to the foreground: whatever stopped while it was in the background is checked again. */
     fun onForeground() {}
+
+    /**
+     * (ANDROID-PLAN 0.1.134 "A push wake") An activity of the app is being created (before its start): a push from now on
+     * did not start this process, the member did.
+     */
+    fun onUiCreated() {}
 
     /**
      * Redeems the portal's setup code with this phone's app key (§11.12.1) and returns the account's masked email

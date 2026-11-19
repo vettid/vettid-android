@@ -133,6 +133,11 @@ class FeedManager(
      * 2026-11-18, as the iPhone app).
      */
     private val ownerGated: () -> Boolean = { false },
+    /**
+     * The vault is open on this phone (the phase, not the feed's state: the owner check's hold clears the feed while it
+     * stays open). A held-back or live event that comes while it is not is kept nowhere ([waitsForTheRead]).
+     */
+    private val vaultOpen: () -> Boolean = { true },
 ) : FeedRepository {
     private val lock = Any()
     private var byId: Map<String, FeedItem> = emptyMap()
@@ -143,12 +148,27 @@ class FeedManager(
     private val heldEvents = ArrayDeque<HeldEvent>()
 
     /**
-     * (Rule 3) When the vault last opened, on the vault's clock ([vaultOpened]): a held event the feed's read covers
-     * notifies only if the vault sent it since. One sent before is the mailbox's backlog of what changed while this phone
-     * was away, which is never notified (ANDROID-PLAN §6.7). Null until the first opening.
+     * (Rule 3) When the vault last opened, on the vault's clock: a held event the feed's read covers notifies only if the
+     * vault sent it since. One sent before is the mailbox's backlog of what changed while this phone was away, which is
+     * never notified (ANDROID-PLAN §6.7). The phone's clock at the opening ([vaultOpened]) until the first answer of this
+     * opening fixes it ([openingMarked]); null until the first opening. Under [lock].
      */
-    @Volatile
     private var openedAt: Instant? = null
+
+    /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
+    private var opening = 0
+
+    /**
+     * (Rule 3) The feed's opening is current: from [vaultOpened] until a [clear] (a lock, the hold, a wipe). It takes its
+     * mark only then, and only then does a held-back event wait for the read ([waitsForTheRead]). Under [lock].
+     */
+    private var markable = false
+
+    /**
+     * (ANDROID-PLAN 0.1.134) The `seq` each item last notified at during this opening: no second alert for the same or an
+     * older change. Emptied at each opening and by [clear]. Under [lock].
+     */
+    private val notifiedSeq = HashMap<String, Long>()
 
     /**
      * (Rule 3) The feed's reads started or under way ([open], [catchUp], [refresh]): what was held is released only after
@@ -159,6 +179,32 @@ class FeedManager(
     /** A held `feed.event`, and whether it came from a push wake ([replay]: what the push was for, never backlog). */
     private class HeldEvent(val m: VaultMessage, val wake: Boolean)
     private val heldArrivals = LinkedHashMap<String, FeedItem>()
+
+    /** (Rule 3) The last read that ended failed: the feed may be behind what the vault holds, though loaded. */
+    @Volatile
+    private var behind = false
+
+    /** (Rule 3) One catch-up was scheduled after a failed read (no loop): cleared by a read that succeeds. */
+    @Volatile
+    private var retried = false
+
+    /**
+     * (Rule 3) An incremental read failed with something held (the feed loaded but behind): one catch-up after
+     * [RETRY_AFTER_MS], so what is held is not left waiting
+     * for the next trigger (or dropped by a lock) when none comes. Once per failure run: a second failure waits for a
+     * trigger, as before.
+     */
+    private fun retryOnce() {
+        // Only for a read that left the feed loaded but behind (an incremental one): one that leaves it not loaded starts no
+        // read of its own; the next event starts one (ANDROID-PLAN 0.1.134).
+        if (retried || gated() || loadState.value != ListLoad.LOADED) return
+        if (!synchronized(lock) { queuesBehind() }) return
+        retried = true
+        scope.launch {
+            kotlinx.coroutines.delay(RETRY_AFTER_MS)
+            if (synchronized(lock) { queuesBehind() }) catchUp()
+        }
+    }
 
     /** Bumped by [clear]: a read that started before it is not applied after it. */
     private var generation = 0
@@ -195,10 +241,11 @@ class FeedManager(
     fun open() {
         readsRunning.incrementAndGet() // counted before it starts, so a release asked for meanwhile waits for it
         scope.launch {
+            var ok = false
             try {
-                runCatching { reads.withLock { readAfter(full = true) } }
+                ok = runCatching { reads.withLock { readAfter(full = true) } }.isSuccess
             } finally {
-                readEnded()
+                readEnded(ok)
             }
         }
     }
@@ -207,6 +254,10 @@ class FeedManager(
     fun clear() {
         synchronized(lock) {
             arrivedSince = null
+            notifiedSeq.clear()
+            behind = false
+            retried = false
+            markable = false // an answer the device tells after a lock belongs to no opening of this feed
             generation++
             byId = emptyMap()
             cursor = 0
@@ -224,7 +275,9 @@ class FeedManager(
             "feed.event" -> {
                 // Held while the release is checked (Rule 3). While the owner check holds the vault only the clone alarm's
                 // item arrives; it opens the alarm path elsewhere, it is not listed.
-                if (holds(m, wake = false) || gated()) return
+                // A live one that comes while the feed is not loaded (its full read under way, or failed) waits for the read
+                // and is judged then, as a held one: the opening's backlog drained meanwhile stays silent (0.1.134).
+                if (takenElsewhere(m, wake = false)) return
                 val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
                 onItem(item)
             }
@@ -235,19 +288,48 @@ class FeedManager(
     }
 
     /**
-     * A `feed.event` that was held back while this phone did not know whether its vault was open (a process started
-     * by a push wake; `HeldBackEvents`), now that it is: an arrival like a live one. When the full read of the open
-     * already brought the item, it arrives as the feed has it now (not at all once read, archived or deleted).
+     * A `feed.event` that was held back while this phone did not know whether its vault was open (`HeldBackEvents`), now
+     * that it is: an arrival like a live one. When the full read of the open already brought the item, it arrives as the
+     * feed has it now (not at all once read, archived or deleted), and only if a push wake started the process ([wake]:
+     * what the push was for) or the vault sent it since the opening; else it is the opening's backlog and stays silent.
      */
-    fun replay(m: VaultMessage) = replay(m, notified = emptyMap(), wake = true)
+    fun replay(m: VaultMessage, wake: Boolean) = replay(m, notified = emptyMap(), wake = wake)
 
     /**
-     * (Rule 3) The vault opened at [at] (on the vault's clock, as its messages' `ts` are), called as the release check
-     * begins: a held `feed.event` the open read covers notifies only if the vault sent it at or after [at] ([replay]).
+     * (Rule 3) The vault opened, called as the release check begins, with [phoneNow] the phone's clock then: a held
+     * `feed.event` the open read covers notifies only if the vault sent it at or after the opening ([replay]). The opening
+     * is on the phone's clock until the first answer of this opening puts it on the vault's ([openingMarked]); never a
+     * vault time learnt before it (ANDROID-PLAN 0.1.134). Returns the opening's number, for [openingMarked].
      */
-    fun vaultOpened(at: Instant) {
-        openedAt = at
+    fun vaultOpened(phoneNow: Instant): Int = synchronized(lock) {
+        openedAt = phoneNow
+        notifiedSeq.clear()
+        markable = true
+        ++opening
     }
+
+    /**
+     * (Rule 3) The opening [forOpening] on the vault's clock, from the first answer of that opening
+     * (`VaultDevice.beginOpening`): kept from now on as a fixed time for it, whatever happens to the device. Ignored for an
+     * earlier opening, and after a [clear] until the next opening.
+     */
+    fun openingMarked(at: Instant, forOpening: Int) {
+        synchronized(lock) { if (markable && forOpening == opening) openedAt = at }
+    }
+
+    /**
+     * (Rule 3) The vault is open again on this phone and only a status read that could not be made came between (the
+     * phase's own rule): the same opening carries on, its moment kept, so what the vault sent meanwhile is judged against
+     * it, not against a new mark taken now. False when there was no opening to carry on (the caller then opens a new one).
+     */
+    fun openingContinues(): Boolean = synchronized(lock) {
+        if (opening == 0 || openedAt == null) return@synchronized false
+        markable = true
+        true
+    }
+
+    /** (Rule 3) The opening's moment as it is judged now (tests). */
+    val openingMark: Instant? get() = synchronized(lock) { openedAt }
 
     /**
      * [replay], except that an item [notified] (it just arrived from [releaseHeld], at that `seq`) is applied but not
@@ -255,7 +337,7 @@ class FeedManager(
      * from a push wake ([wake]) or the vault sent it since it opened ([openedAt]): the opening's backlog stays silent.
      */
     private fun replay(m: VaultMessage, notified: Map<String, Long>, wake: Boolean) {
-        if (m.type != "feed.event" || holds(m, wake) || gated()) return
+        if (m.type != "feed.event" || takenElsewhere(m, wake)) return
         val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
         val notify = notified[item.itemId]?.let { item.seq > it } ?: true
         // Whether the feed's read already covers the event, and the item as the list has it now (null: gone).
@@ -270,11 +352,42 @@ class FeedManager(
     }
 
     /**
+     * [m] goes no further here: dropped while the vault is not open on this phone (a lock drops everything held, so nothing
+     * that comes after its clear, a push wake's replay still on its way included, may be held for the next opening), held
+     * for the release check, dropped while gated, or waiting for the feed's read.
+     */
+    private fun takenElsewhere(m: VaultMessage, wake: Boolean): Boolean =
+        !vaultOpen() || holds(m, wake) || gated() || !wake && waitsForTheRead(m)
+
+    /**
+     * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused, while the feed is not loaded (its full read under
+     * way, or failed): it cannot be told from the opening's backlog yet, so it waits in [heldEvents] and is judged when the
+     * read ends ([readEnded], [releaseNow]); a feed with no read under way is read first ([releaseIfOver]). True when it
+     * waits, or when it is dropped: one that comes while the vault is not open on this phone ([vaultOpen]: a lock while it
+     * was on its way) is kept nowhere and starts no read, since nothing is kept outside an open vault. After the owner
+     * check's hold (which clears the feed while the vault stays open) it waits for the read as at any time.
+     */
+    private fun waitsForTheRead(m: VaultMessage): Boolean {
+        var dropped = false
+        val waits = synchronized(lock) {
+            dropped = !vaultOpen() && loadState.value != ListLoad.LOADED
+            (!dropped && loadState.value != ListLoad.LOADED).also { w ->
+                if (w) {
+                    heldEvents.addLast(HeldEvent(m, wake = false))
+                    while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+                }
+            }
+        }
+        if (waits) releaseIfOver()
+        return waits || dropped
+    }
+
+    /**
      * (Rule 3, ANDROID-PLAN §6.7) A covered event is news, not the opening's backlog: what a push wake was for, or sent
      * at or after the vault opened ([openedAt]); with no opening marked, backlog.
      */
     private fun isNewsSinceTheOpening(m: VaultMessage, wake: Boolean): Boolean =
-        wake || openedAt?.let { !m.ts.isBefore(it) } ?: false
+        wake || synchronized(lock) { openedAt }?.let { !m.ts.isBefore(it) } ?: false
 
     /**
      * (Rule 3) While the release is checked, [m] waits for [releaseHeld] (also while a failed check pauses the feed). Once
@@ -325,6 +438,11 @@ class FeedManager(
      * the lock is let go would let one that comes then (the queues empty, nothing held) be notified before them.
      */
     fun releaseHeld() {
+        // After a read that failed the feed may be behind, though loaded: one catch-up first, the release at its end.
+        if (!gated() && readsRunning.get() == 0 && behind) {
+            catchUp()
+            return
+        }
         if (!gated() && (readsRunning.get() > 0 || loadState.value != ListLoad.LOADED)) {
             // After the feed's reads under way ([readEnded]), from a loaded feed: one that is not loaded is read first.
             if (readsRunning.get() == 0) catchUp()
@@ -336,6 +454,10 @@ class FeedManager(
     private fun releaseNow() {
         val gatedNow = gated()
         synchronized(lock) {
+            // Read again here, as late as it can be: a full read that began (or a clear) since the caller looked leaves the
+            // queues for that read's end ([readEnded]) to release. `loadState` is written outside [lock], so a read starting
+            // after this look is not excluded; its end releases what comes after, against the feed it leaves.
+            if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
             heldEvents.clear()
@@ -347,7 +469,8 @@ class FeedManager(
                 // is not notified (owner decision 2026-11-18).
                 byId[a.itemId]?.takeIf { it.status == STATUS_ACTIVE }?.let {
                     notified[it.itemId] = it.seq
-                    emitArrival(it)
+                    // A held waiting-asks replay stays one ([FeedItem.replayed]): it is posted as a new arrival.
+                    emitArrival(if (a.replayed) it.copy(replayed = true) else it)
                 }
             }
             events.forEach { replay(it.m, notified, it.wake) }
@@ -379,35 +502,77 @@ class FeedManager(
         catchUpQueued = true
         readsRunning.incrementAndGet()
         scope.launch {
+            var ok = false
             try {
-                runCatching {
+                ok = runCatching {
                     reads.withLock {
                         catchUpQueued = false
                         if (loadState.value == ListLoad.LOADED) readAfter(full = false) else readAfter(full = true)
                     }
-                }
+                }.isSuccess
             } finally {
-                readEnded()
+                readEnded(ok)
             }
         }
     }
 
     override suspend fun refresh() {
         readsRunning.incrementAndGet()
+        runCounted()
+    }
+
+    /**
+     * (Rule 3) A full read ([refresh]) counted among the reads under way from now, before it runs: a release asked for
+     * between now and its start waits for it (the owner check's lift: the read of `afterHoldPassed` is launched, and the
+     * lift's sends release what was held). [ReservedRead.run] runs it; [ReservedRead.drop] gives the place back unrun. Each
+     * reservation ends exactly once.
+     */
+    fun reserveRefresh(): ReservedRead {
+        readsRunning.incrementAndGet()
+        return ReservedRead()
+    }
+
+    inner class ReservedRead internal constructor() {
+        private val ended = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** Runs the read reserved (at most once; a second call, or one after [drop], reads nothing). */
+        suspend fun run() {
+            if (ended.compareAndSet(false, true)) runCounted()
+        }
+
+        /**
+         * The read reserved will not run: its place is given back (nothing if it ran or was dropped), and a release that
+         * waited only for it goes ahead as if it had never been reserved (it read nothing, so it left the feed as it was).
+         */
+        fun drop() {
+            if (ended.compareAndSet(false, true)) readEnded(ok = true, ran = false)
+        }
+    }
+
+    /** A full read already counted in [readsRunning]. */
+    private suspend fun runCounted() {
+        var ok = false
         try {
             reads.withLock { readAfter(full = true) }
+            ok = true
         } finally {
-            readEnded()
+            readEnded(ok)
         }
     }
 
     /**
-     * (Rule 3) A read ended: when it was the last one under way and the feed is loaded, what was held comes now (if the
-     * check is over and nothing gates the feed). A read that failed releases nothing and starts no other (no loop): the
-     * next event or release starts one.
+     * (Rule 3) A read ended: when it was the last one under way, it succeeded and the feed is loaded, what was held comes
+     * now (if the check is over and nothing gates the feed). A read that failed releases nothing and starts no other (no
+     * loop), also an incremental one that left the feed loaded but behind: the next event, catch-up (the return to the
+     * foreground, the relay's reconnection, a push wake) or release ([releaseHeld]) does.
      */
-    private fun readEnded() {
-        if (readsRunning.decrementAndGet() > 0) return
+    private fun readEnded(ok: Boolean, ran: Boolean = true) {
+        // A reservation given back unrun read nothing: what the last read said of the feed stands.
+        if (ran) {
+            behind = !ok
+            if (ok) retried = false else retryOnce()
+        }
+        if (readsRunning.decrementAndGet() > 0 || !ok) return
         val releasable = !held() && !gated() && loadState.value == ListLoad.LOADED
         if (releasable && synchronized(lock) { queuesBehind() }) releaseNow()
     }
@@ -519,13 +684,32 @@ class FeedManager(
         val waits = synchronized(lock) {
             (checking || (!gatedNow && queuesBehind())).also { w ->
                 if (w) {
-                    heldArrivals.remove(item.itemId)
-                    heldArrivals[item.itemId] = item
+                    // A newer arrival of a held waiting-asks replay is still that replay (posted as a new arrival).
+                    val replay = heldArrivals.remove(item.itemId)?.replayed == true
+                    heldArrivals[item.itemId] = if (replay && !item.replayed) item.copy(replayed = true) else item
                     while (heldArrivals.size > ARRIVAL_BUFFER) heldArrivals.remove(heldArrivals.keys.first())
                 }
             }
         }
-        if (!waits) arrivalFlow.tryEmit(item) else releaseIfOver()
+        if (waits) {
+            releaseIfOver()
+        } else if (firstAlertAt(item)) {
+            arrivalFlow.tryEmit(item)
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) Not notified again during this opening for the same or an older change (`seq`); noted when it
+     * is. A waiting-asks replay ([FeedItem.replayed]) is the replay rule's own second alert (Notifications 7, 0.1.132),
+     * so it is not held back by this, only noted; a quiet re-post ([FeedItem.quietRepost]: a withdrawn ask's notification
+     * updated without sound) is no alert, and passes.
+     */
+    private fun firstAlertAt(item: FeedItem): Boolean = synchronized(lock) {
+        if (item.quietRepost) return@synchronized true
+        val last = notifiedSeq[item.itemId]
+        if (!item.replayed && last != null && item.seq <= last) return@synchronized false
+        notifiedSeq[item.itemId] = maxOf(item.seq, last ?: item.seq)
+        true
     }
 
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */
@@ -686,6 +870,9 @@ class FeedManager(
     }
 
     companion object {
+        /** (Rule 3) How long after a failed read the one catch-up for what is held waits ([retryOnce]). */
+        const val RETRY_AFTER_MS = 5_000L
+
         private val BATCH_WINDOW: java.time.Duration = AskBatching.WINDOW
         private val BATCH_SKEW: java.time.Duration = java.time.Duration.ofMinutes(2)
         const val STATUS_ACTIVE = "active"
