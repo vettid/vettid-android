@@ -143,12 +143,21 @@ class FeedManager(
     private val heldEvents = ArrayDeque<HeldEvent>()
 
     /**
-     * (Rule 3) When the vault last opened, on the vault's clock ([vaultOpened]): a held event the feed's read covers
-     * notifies only if the vault sent it since. One sent before is the mailbox's backlog of what changed while this phone
-     * was away, which is never notified (ANDROID-PLAN §6.7). Null until the first opening.
+     * (Rule 3) When the vault last opened, on the vault's clock: a held event the feed's read covers notifies only if the
+     * vault sent it since. One sent before is the mailbox's backlog of what changed while this phone was away, which is
+     * never notified (ANDROID-PLAN §6.7). The phone's clock at the opening ([vaultOpened]) until the first answer of this
+     * opening fixes it ([openingMarked]); null until the first opening. Under [lock].
      */
-    @Volatile
     private var openedAt: Instant? = null
+
+    /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
+    private var opening = 0
+
+    /**
+     * (ANDROID-PLAN 0.1.134) The `seq` each item last notified at during this opening: no second alert for the same or an
+     * older change. Emptied at each opening and by [clear]. Under [lock].
+     */
+    private val notifiedSeq = HashMap<String, Long>()
 
     /**
      * (Rule 3) The feed's reads started or under way ([open], [catchUp], [refresh]): what was held is released only after
@@ -195,10 +204,11 @@ class FeedManager(
     fun open() {
         readsRunning.incrementAndGet() // counted before it starts, so a release asked for meanwhile waits for it
         scope.launch {
+            var ok = false
             try {
-                runCatching { reads.withLock { readAfter(full = true) } }
+                ok = runCatching { reads.withLock { readAfter(full = true) } }.isSuccess
             } finally {
-                readEnded()
+                readEnded(ok)
             }
         }
     }
@@ -207,6 +217,7 @@ class FeedManager(
     fun clear() {
         synchronized(lock) {
             arrivedSince = null
+            notifiedSeq.clear()
             generation++
             byId = emptyMap()
             cursor = 0
@@ -235,19 +246,36 @@ class FeedManager(
     }
 
     /**
-     * A `feed.event` that was held back while this phone did not know whether its vault was open (a process started
-     * by a push wake; `HeldBackEvents`), now that it is: an arrival like a live one. When the full read of the open
-     * already brought the item, it arrives as the feed has it now (not at all once read, archived or deleted).
+     * A `feed.event` that was held back while this phone did not know whether its vault was open (`HeldBackEvents`), now
+     * that it is: an arrival like a live one. When the full read of the open already brought the item, it arrives as the
+     * feed has it now (not at all once read, archived or deleted), and only if a push wake started the process ([wake]:
+     * what the push was for) or the vault sent it since the opening; else it is the opening's backlog and stays silent.
      */
-    fun replay(m: VaultMessage) = replay(m, notified = emptyMap(), wake = true)
+    fun replay(m: VaultMessage, wake: Boolean = true) = replay(m, notified = emptyMap(), wake = wake)
 
     /**
-     * (Rule 3) The vault opened at [at] (on the vault's clock, as its messages' `ts` are), called as the release check
-     * begins: a held `feed.event` the open read covers notifies only if the vault sent it at or after [at] ([replay]).
+     * (Rule 3) The vault opened, called as the release check begins, with [phoneNow] the phone's clock then: a held
+     * `feed.event` the open read covers notifies only if the vault sent it at or after the opening ([replay]). The opening
+     * is on the phone's clock until the first answer of this opening puts it on the vault's ([openingMarked]); never a
+     * vault time learnt before it (ANDROID-PLAN 0.1.134). Returns the opening's number, for [openingMarked].
      */
-    fun vaultOpened(at: Instant) {
-        openedAt = at
+    fun vaultOpened(phoneNow: Instant): Int = synchronized(lock) {
+        openedAt = phoneNow
+        notifiedSeq.clear()
+        ++opening
     }
+
+    /**
+     * (Rule 3) The opening [forOpening] on the vault's clock, from the first answer of that opening
+     * (`VaultDevice.beginOpening`): kept from now on as a fixed time for it, whatever happens to the device. Ignored for an
+     * earlier opening.
+     */
+    fun openingMarked(at: Instant, forOpening: Int) {
+        synchronized(lock) { if (forOpening == opening) openedAt = at }
+    }
+
+    /** (Rule 3) The opening's moment as it is judged now (tests). */
+    val openingMark: Instant? get() = synchronized(lock) { openedAt }
 
     /**
      * [replay], except that an item [notified] (it just arrived from [releaseHeld], at that `seq`) is applied but not
@@ -274,7 +302,7 @@ class FeedManager(
      * at or after the vault opened ([openedAt]); with no opening marked, backlog.
      */
     private fun isNewsSinceTheOpening(m: VaultMessage, wake: Boolean): Boolean =
-        wake || openedAt?.let { !m.ts.isBefore(it) } ?: false
+        wake || synchronized(lock) { openedAt }?.let { !m.ts.isBefore(it) } ?: false
 
     /**
      * (Rule 3) While the release is checked, [m] waits for [releaseHeld] (also while a failed check pauses the feed). Once
@@ -336,6 +364,9 @@ class FeedManager(
     private fun releaseNow() {
         val gatedNow = gated()
         synchronized(lock) {
+            // Read again under the lock: a full read that began (or a clear) since the caller looked leaves the queues for
+            // that read's end ([readEnded]) to release.
+            if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
             heldEvents.clear()
@@ -347,7 +378,8 @@ class FeedManager(
                 // is not notified (owner decision 2026-11-18).
                 byId[a.itemId]?.takeIf { it.status == STATUS_ACTIVE }?.let {
                     notified[it.itemId] = it.seq
-                    emitArrival(it)
+                    // A held waiting-asks replay stays one ([FeedItem.replayed]): it is posted as a new arrival.
+                    emitArrival(if (a.replayed) it.copy(replayed = true) else it)
                 }
             }
             events.forEach { replay(it.m, notified, it.wake) }
@@ -379,35 +411,72 @@ class FeedManager(
         catchUpQueued = true
         readsRunning.incrementAndGet()
         scope.launch {
+            var ok = false
             try {
-                runCatching {
+                ok = runCatching {
                     reads.withLock {
                         catchUpQueued = false
                         if (loadState.value == ListLoad.LOADED) readAfter(full = false) else readAfter(full = true)
                     }
-                }
+                }.isSuccess
             } finally {
-                readEnded()
+                readEnded(ok)
             }
         }
     }
 
     override suspend fun refresh() {
         readsRunning.incrementAndGet()
+        runCounted()
+    }
+
+    /**
+     * (Rule 3) A full read ([refresh]) counted among the reads under way from now, before it runs: a release asked for
+     * between now and its start waits for it (the owner check's lift: the read of `afterHoldPassed` is launched, and the
+     * lift's sends release what was held). [ReservedRead.run] runs it; [ReservedRead.drop] gives the place back unrun. Each
+     * reservation ends exactly once.
+     */
+    fun reserveRefresh(): ReservedRead {
+        readsRunning.incrementAndGet()
+        return ReservedRead()
+    }
+
+    inner class ReservedRead internal constructor() {
+        private val ended = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        /** Runs the read reserved (at most once; a second call, or one after [drop], reads nothing). */
+        suspend fun run() {
+            if (ended.compareAndSet(false, true)) runCounted()
+        }
+
+        /**
+         * The read reserved will not run: its place is given back (nothing if it ran or was dropped), and a release that
+         * waited only for it goes ahead as if it had never been reserved (it read nothing, so it left the feed as it was).
+         */
+        fun drop() {
+            if (ended.compareAndSet(false, true)) readEnded(ok = true)
+        }
+    }
+
+    /** A full read already counted in [readsRunning]. */
+    private suspend fun runCounted() {
+        var ok = false
         try {
             reads.withLock { readAfter(full = true) }
+            ok = true
         } finally {
-            readEnded()
+            readEnded(ok)
         }
     }
 
     /**
-     * (Rule 3) A read ended: when it was the last one under way and the feed is loaded, what was held comes now (if the
-     * check is over and nothing gates the feed). A read that failed releases nothing and starts no other (no loop): the
-     * next event or release starts one.
+     * (Rule 3) A read ended: when it was the last one under way, it succeeded and the feed is loaded, what was held comes
+     * now (if the check is over and nothing gates the feed). A read that failed releases nothing and starts no other (no
+     * loop), also an incremental one that left the feed loaded but behind: the next event, catch-up (the return to the
+     * foreground, the relay's reconnection, a push wake) or release ([releaseHeld]) does.
      */
-    private fun readEnded() {
-        if (readsRunning.decrementAndGet() > 0) return
+    private fun readEnded(ok: Boolean) {
+        if (readsRunning.decrementAndGet() > 0 || !ok) return
         val releasable = !held() && !gated() && loadState.value == ListLoad.LOADED
         if (releasable && synchronized(lock) { queuesBehind() }) releaseNow()
     }
@@ -525,7 +594,25 @@ class FeedManager(
                 }
             }
         }
-        if (!waits) arrivalFlow.tryEmit(item) else releaseIfOver()
+        if (waits) {
+            releaseIfOver()
+        } else if (firstAlertAt(item)) {
+            arrivalFlow.tryEmit(item)
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) Not notified again during this opening for the same or an older change (`seq`); noted when it
+     * is. A waiting-asks replay ([FeedItem.replayed]) is the replay rule's own second alert (Notifications 7, 0.1.132),
+     * so it is not held back by this, only noted; a quiet re-post ([FeedItem.quietRepost]: a withdrawn ask's notification
+     * updated without sound) is no alert, and passes.
+     */
+    private fun firstAlertAt(item: FeedItem): Boolean = synchronized(lock) {
+        if (item.quietRepost) return@synchronized true
+        val last = notifiedSeq[item.itemId]
+        if (!item.replayed && last != null && item.seq <= last) return@synchronized false
+        notifiedSeq[item.itemId] = maxOf(item.seq, last ?: item.seq)
+        true
     }
 
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */

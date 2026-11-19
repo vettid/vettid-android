@@ -13,6 +13,7 @@ import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -327,6 +328,207 @@ class FeedManagerTest {
         settle { arrived.size >= 2 }
         settle { true }
         assertEquals(listOf("i2", "i3"), arrived.map { it.itemId })
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) The opening's moment is the phone's clock until the first answer of this opening puts it on the
+     * vault's ([FeedManager.openingMarked]); judged at release, it tells the backlog (sent before the opening, on the vault's
+     * clock) from what came since, with the phone's clock ahead of the vault's and behind it.
+     */
+    @Test
+    fun theOpeningIsOnTheVaultsClockFromItsFirstAnswer() = runTest {
+        for (skewMinutes in listOf(10L, -10L)) {
+            val ops = Ops()
+            var checking = true
+            val vaultOpen = now.minusSeconds(3_600)
+            listOf(item("old", 1), item("new", 2)).forEach { ops.known[it.itemId] = it }
+            ops.pages += FeedPage(listOf(item("old", 1), item("new", 2)), 2)
+            val m = manager(ops, held = { checking })
+            val opening = m.vaultOpened(vaultOpen.plusSeconds(skewMinutes * 60)) // the phone's clock at the opening
+            m.refresh()
+            val arrived = mutableListOf<FeedItem>()
+            val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+            m.onEvent(event(item("old", 1), ts = vaultOpen.minusSeconds(300))) // the mailbox's backlog
+            m.onEvent(event(item("new", 2), ts = vaultOpen.plusSeconds(60))) // sent since the opening
+            m.openingMarked(vaultOpen, opening) // the first answer of this opening
+            assertEquals(vaultOpen, m.openingMark)
+            checking = false
+            m.releaseHeld()
+            settle { arrived.isNotEmpty() }
+            settle { true }
+            assertEquals("phone ${skewMinutes}min", listOf("new"), arrived.map { it.itemId })
+            job.cancel()
+        }
+    }
+
+    /** A mark for an earlier opening is ignored; the one for this opening is kept as it was given. */
+    @Test
+    fun aMarkForAnEarlierOpeningIsIgnored() = runTest {
+        val m = manager(Ops())
+        val first = m.vaultOpened(now.minusSeconds(100))
+        val second = m.vaultOpened(now)
+        m.openingMarked(now.minusSeconds(50), first)
+        assertEquals("the phone's clock until this opening's answer", now, m.openingMark)
+        m.openingMarked(now.minusSeconds(5), second)
+        assertEquals(now.minusSeconds(5), m.openingMark)
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134 "A push wake") At a cold start with the vault open, the events held back until the vault was known
+     * open are a day-old backlog: silent when no push started the process, notified when one did (what it was for); a fresh
+     * event after the opening notifies either way.
+     */
+    @Test
+    fun aColdStartsHeldBackBacklogNotifiesOnlyForAPushWake() = runTest {
+        for (wake in listOf(false, true)) {
+            val ops = Ops()
+            var checking = true
+            val m = opened(ops, item("b1", 1), item("b2", 2), held = { checking })
+            val arrived = mutableListOf<FeedItem>()
+            val job = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+            val dayOld = now.minus(1, ChronoUnit.DAYS)
+            m.replay(event(item("b1", 1), ts = dayOld), wake)
+            m.replay(event(item("b2", 2), ts = dayOld), wake)
+            ops.pages += FeedPage(listOf(item("f3", 3)), 3)
+            m.onEvent(event(item("f3", 3))) // fresh, after the opening
+            checking = false
+            m.releaseHeld()
+            settle { arrived.any { it.itemId == "f3" } }
+            settle { true }
+            assertEquals("wake $wake", if (wake) listOf("b1", "b2", "f3") else listOf("f3"), arrived.map { it.itemId })
+            job.cancel()
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) An item notified at a change is not notified again during the same opening for the same or an
+     * older change (`seq`): a newer change is, and so is the same change in the next opening.
+     */
+    @Test
+    fun noSecondAlertWithinAnOpeningForTheSameOrAnOlderChange() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("i1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i1", 2)))
+        settle { true }
+        assertEquals(listOf(2L), arrived.map { it.seq })
+        // The same change again (a push wake's copy, covered now), and an older one: no second alert.
+        m.replay(event(item("i1", 2)))
+        m.replay(event(item("i1", 1)))
+        settle { true }
+        assertEquals(listOf(2L), arrived.map { it.seq })
+        m.onEvent(event(item("i1", 3)))
+        settle { true }
+        assertEquals(listOf(2L, 3L), arrived.map { it.seq })
+        // The next opening: the same change may notify again.
+        m.vaultOpened(now)
+        m.replay(event(item("i1", 3)))
+        settle { true }
+        assertEquals(listOf(2L, 3L, 3L), arrived.map { it.seq })
+    }
+
+    /**
+     * (Rule 3) A full read that begins between a release's look at the feed and the release itself (here, as the release asks
+     * whether the feed is gated) leaves what was held for that read's end: judged against the feed it leaves, an item read
+     * elsewhere meanwhile does not notify.
+     */
+    @Test
+    fun aReadBegunAsTheReleaseRunsKeepsTheQueueForItsEnd() = runTest {
+        val ops = Ops()
+        var checking = true
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler))
+        var armed = false
+        var calls = 0
+        lateinit var m: FeedManager
+        m = FeedManager(scope, ops = { ops }, gated = {
+            if (armed && ++calls == 2) {
+                // The release's own look at the gate: a full read begins now, held at its list.
+                ops.gate = CompletableDeferred()
+                ops.pages += FeedPage(listOf(item("i1", 2, status = "read")), 2)
+                m.open()
+            }
+            false
+        }, now = { now }, held = { checking })
+        ops.known["i1"] = item("i1", 1)
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1)
+        m.vaultOpened(now)
+        m.refresh()
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i1", 1))) // covered, sent since the opening
+        checking = false
+        armed = true
+        m.releaseHeld()
+        armed = false
+        settle { true }
+        assertTrue("released against the feed before the read: $arrived", arrived.isEmpty())
+        ops.gate!!.complete(Unit)
+        settle { m.seq == 2L }
+        settle { true }
+        assertTrue("read elsewhere: no alert", arrived.isEmpty())
+        scope.cancel()
+    }
+
+    /**
+     * (Rule 3) An incremental catch-up that fails leaves the feed loaded but behind: it releases nothing; the next read that
+     * succeeds does.
+     */
+    @Test
+    fun aFailedCatchUpReleasesNothing() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i2", 2))) // held: not yet read
+        checking = false
+        ops.failLists = 1
+        m.catchUp()
+        settle { ops.failLists == 0 }
+        settle { true }
+        assertEquals(ListLoad.LOADED, m.load.value)
+        assertTrue("nothing released by a failed read: $arrived", arrived.isEmpty())
+        ops.pages += FeedPage(listOf(item("i2", 2)), 2)
+        m.catchUp()
+        settle { arrived.isNotEmpty() }
+        settle { true }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /**
+     * (Rule 3) A full read reserved before it starts ([FeedManager.reserveRefresh]: the read of a passed check's lift, launched)
+     * holds a release asked for meanwhile until it has run; one dropped unrun gives its place back.
+     */
+    @Test
+    fun aReservedReadHoldsTheReleaseUntilItRuns() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), item("i2", 2), held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.onEvent(event(item("i1", 1)))
+        val read = m.reserveRefresh()
+        checking = false
+        m.releaseHeld() // the lift's sends, before the launched read starts
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "read"), item("i2", 2)), 3)
+        read.run()
+        settle { true }
+        assertTrue("read elsewhere meanwhile: no alert", arrived.isEmpty())
+        // Dropped unrun: the release goes ahead.
+        checking = true
+        m.onEvent(event(item("i2", 2)))
+        val unrun = m.reserveRefresh()
+        checking = false
+        m.releaseHeld()
+        settle { true }
+        assertTrue(arrived.isEmpty())
+        unrun.drop()
+        unrun.drop() // once only
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("i2"), arrived.map { it.itemId })
     }
 
     /**

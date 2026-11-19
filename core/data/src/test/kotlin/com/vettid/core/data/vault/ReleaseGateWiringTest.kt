@@ -38,8 +38,12 @@ class ReleaseGateWiringTest {
 
     @Test
     fun everyOpeningStartsTheCheckBeforeItShows() {
-        // The opening's mark on the vault's clock, the clock of the messages' `ts` it is compared with.
-        block("private val phaseFlow = PhaseHolder(").has("feed.vaultOpened(session?.device?.vaultNow() ?: Instant.now())")
+        // The opening's mark: the phone's clock, until the first answer of this opening (never a vault time learnt before it)
+        // puts it on the vault's clock, the clock of the messages' `ts` it is compared with (ANDROID-PLAN 0.1.134).
+        val open = block("private val phaseFlow = PhaseHolder(")
+        open.has("val opening = feed.vaultOpened(Instant.now())")
+        open.has("session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }")
+        assertTrue("no vault time learnt before the opening", open.none { it.contains("vaultNow") })
         block("private val phaseFlow = PhaseHolder(").has("releaseUpdate.vaultOpened()")
     }
 
@@ -151,13 +155,42 @@ class ReleaseGateWiringTest {
         code.has("if (gatedEnded) steps.step { releasePause.ownerCheckLifted() }")
         val hold = block("private suspend fun afterHoldPassed(")
         assertEquals("if (releaseUpdate.paused.value) {", hold[1])
-        // The waiting-asks replay is kept for the lift, its window open (never ended here).
-        assertEquals("if (gen != null) heldAskReplay.hold(HeldAskReplay.Due(gen, listMark, token))", hold[2])
-        assertEquals("return", hold[3])
+        // The reserved feed read gives its place back; the waiting-asks replay is kept for the lift, its window open (never
+        // ended here).
+        assertEquals("read.drop()", hold[2])
+        assertEquals("if (gen != null) heldAskReplay.hold(HeldAskReplay.Due(gen, listMark, token))", hold[3])
+        assertEquals("return", hold[4])
         code.has(
             "afterCredentialReset(releaseUpdate.paused.value, { refreshAlarm(s) }, { ownerCheck.onOpened() }, " +
                 "{ items.refreshQuietly() })",
         )
+    }
+
+    /**
+     * (Rule 3, ANDROID-PLAN 0.1.134) A passed check's read is counted among the feed's reads before it is launched, so the
+     * lift's sends (which release what the release check held) wait for it; every launch goes that way, and the place is
+     * given back however the launch ends. Its waiting-asks replay is judged on the first `pending.list` merged after the
+     * check, never the latest.
+     */
+    @Test
+    fun aPassedChecksReadIsCountedBeforeItIsLaunched() {
+        val launch = block("private fun launchAfterHoldPassed(")
+        launch.has("val read = feed.reserveRefresh()")
+        launch.has("scope.launch { afterHoldPassed(gen, listMark, token, read) }.invokeOnCompletion { read.drop() }")
+        assertTrue("reserved before the launch", launch.indexOf("val read = feed.reserveRefresh()") < launch.indexOfFirst { it.contains("scope.launch") })
+        assertEquals("no launch without the reservation", 1, code.count { it.contains("scope.launch { afterHoldPassed(") })
+        val hold = block("private suspend fun afterHoldPassed(")
+        hold.has("runCatching { read.run() }")
+        assertTrue("its replay uses the first list after the check", hold.any { it.contains("social.firstListedSince(listMark)") })
+        assertTrue("never the latest list", hold.none { it.contains("listedNow()") })
+    }
+
+    /** (ANDROID-PLAN 0.1.134 "A push wake") Only a push that came while the phase was unknown makes held-back events a wake's. */
+    @Test
+    fun onlyAPushStartedProcessesHeldBackEventsAreAWakes() {
+        block("override suspend fun collectForWake()").has("if (heldBack.wakeIfUnknown(phaseFlow.value)) refresh()")
+        code.has("replay = { p -> heldBack.releaseHeld(p).let { r -> replayHeldBack(r.events, r.wake) } },")
+        block("private fun replayHeldBack(").has("events.forEach { e -> runCatching { feed.replay(e, wake) } }")
     }
 
     @Test
@@ -172,7 +205,7 @@ class ReleaseGateWiringTest {
         val reads = pause.subList(pause.indexOf("reads = {"), pause.indexOf("sends = {"))
         reads.has("gatedReads()")
         reads.has("sharing.invalidateTags()")
-        reads.has("heldAskReplay.take()?.let { d -> scope.launch { afterHoldPassed(d.gen, d.listMark, d.token) } }")
+        reads.has("heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }")
         val sends = pause.subList(pause.indexOf("sends = {"), pause.size)
         listOf("votes.startSync()", "presence.start()", "location.resume()", "feed.releaseHeld()").forEach { sends.has(it) }
         val opened = block("private fun gatedReads()")

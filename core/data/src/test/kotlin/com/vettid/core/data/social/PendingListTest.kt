@@ -99,6 +99,29 @@ class PendingListTest {
         assertEquals(listOf("auth:r2"), m.listedNow().map { it.key })
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134, owner decision a, #13774 item 3) The waiting-asks replay is judged on the **first** list read
+     * begun after the mark and merged, not on a later one: an ask that a later list adds is not replayed, and nothing is
+     * given before a read after the mark merged.
+     */
+    @Test
+    fun theReplayUsesTheFirstListMergedAfterTheMark() = runTest {
+        val m = manager()
+        m.refreshPendingFrom { page(at(5), ask("authenticate", auth("r0"))) }
+        val mark = m.pendingReadMark()
+        assertEquals(null, m.firstListedSince(mark))
+        m.refreshPendingFrom { page(at(10), ask("authenticate", auth("r1"))) }
+        m.refreshPendingFrom { page(at(20), ask("authenticate", auth("r1")), ask("authenticate", auth("r2"))) }
+        runCurrent()
+        assertEquals(listOf("auth:r1", "auth:r2"), m.listedNow().map { it.key }.sorted())
+        assertEquals(listOf("auth:r1"), m.firstListedSince(mark)!!.map { it.key })
+        // A hold drops it: only a read begun after the hold counts again.
+        m.forgetPending()
+        assertEquals(null, m.firstListedSince(mark))
+        m.refreshPendingFrom { page(at(30), ask("authenticate", auth("r3"))) }
+        assertEquals(listOf("auth:r3"), m.firstListedSince(mark)!!.map { it.key })
+    }
+
     /** A read that fails, or one not merged (its `ts` is older than the list already merged), sets no stamp. */
     @Test
     fun noStampWithoutAMerge() = runTest {

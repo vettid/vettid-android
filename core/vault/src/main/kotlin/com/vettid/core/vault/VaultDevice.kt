@@ -1881,6 +1881,7 @@ class VaultDevice private constructor(
         val id = Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
+        noteOpeningRequest(id)
         try {
             tagged(type) {
                 lock.withLock {
@@ -2181,6 +2182,8 @@ class VaultDevice private constructor(
         val id = innerId ?: Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
+        // Only a request first made now (not one retried under an id it already had) can give the opening its time.
+        if (innerId == null) noteOpeningRequest(id)
         try {
             firstRequest(id, type, body, null)
             repeat(APP_RETRIES + 1) { attempt ->
@@ -2507,7 +2510,11 @@ class VaultDevice private constructor(
             if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) {
                 ownerCheckRefusals.tryEmit(OwnerCheckRefusal(inner.type, inner.ts))
             }
-            pending[re]?.complete(inner)
+            // Past the dedupe above, and only while its request still waits for it ([noteOpeningAnswer]).
+            pending[re]?.let { w ->
+                noteOpeningAnswer(re, inner.ts)
+                w.complete(inner)
+            }
         } else {
             publish(VaultMessage(inner))
         }
@@ -3388,6 +3395,7 @@ class VaultDevice private constructor(
     ): VaultMessage {
         val d = CompletableDeferred<Inner>()
         pending[id] = d
+        noteOpeningRequest(id) // its callers make the id fresh for each request ([newId])
         try {
             firstRequest(id, type, body, exp)
             repeat(APP_RETRIES + 1) { attempt ->
@@ -3403,6 +3411,47 @@ class VaultDevice private constructor(
     }
 
     internal fun newId(): String = Ulid.new(now())
+
+    // --- (Rule 3, ANDROID-PLAN 0.1.134 Notification modes 7) the opening's moment on the vault's clock ---
+
+    /** An opening of the vault being marked: when it began on the monotonic clock, its requests, and who is told. */
+    private class Opening(val atMs: Long, val tell: (Instant) -> Unit) {
+        val ids = HashSet<String>()
+    }
+
+    private val openingLock = Any()
+    private var opening: Opening? = null
+
+    /**
+     * The vault opened on this phone now: the first answer to a request this device first sends from now on, while that
+     * request still waits for it, gives the opening's moment on the vault's clock (its `ts`, less the time on the monotonic
+     * clock from now to its arrival), told once to [tell]. No other message counts: not an event, not an answer to a
+     * request sent before (by this process or an earlier one), a retry under an id the request already had, a kept change
+     * re-sent ([sendKept]), a copy delivered again or an answer that came after its request stopped waiting. A later call
+     * replaces it, and the earlier opening is never told.
+     */
+    fun beginOpening(tell: (Instant) -> Unit) {
+        synchronized(openingLock) { opening = Opening(cfg.elapsedMs(), tell) }
+    }
+
+    private fun noteOpeningRequest(id: String) {
+        synchronized(openingLock) {
+            val o = opening ?: return
+            if (o.ids.size < OPENING_IDS) o.ids.add(id)
+        }
+    }
+
+    /** An answer to [re], past the dedupe, its request still waiting: the opening's first such one is told and ends it. */
+    private fun noteOpeningAnswer(re: String, ts: Instant) {
+        val arrived = cfg.elapsedMs()
+        val o = synchronized(openingLock) {
+            val o = opening ?: return
+            if (re !in o.ids) return
+            opening = null
+            o
+        }
+        o.tell(ts.minusMillis((arrived - o.atMs).coerceAtLeast(0)))
+    }
 
     // --- the vault's clock, and a change request kept for resending (VAULT-MESSAGING 0.44.0 §11.14.9) ---
 
@@ -3756,6 +3805,8 @@ class VaultDevice private constructor(
             setOf("device.paired", TYPE_PAIR_REJECTED, "relay.token.issued", "relay.token.refresh", "identity.rotate")
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2
+        /** At most this many requests of one opening are noted ([beginOpening]); the first answer usually comes long before. */
+        private const val OPENING_IDS = 256
         private const val ROUND_POLL_MS = 50L
 
         /** (§11.14.9) How long after its `exp`, by the vault's clock, an unanswered request can no longer apply. */

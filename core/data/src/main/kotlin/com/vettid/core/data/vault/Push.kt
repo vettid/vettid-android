@@ -193,6 +193,24 @@ object PushWire {
 class HeldBackEvents {
     private val held = ArrayDeque<VaultMessage>()
 
+    /** A push wake came while the phase was not known ([wakeIfUnknown]): what is handed back is what it was for. */
+    private var wake = false
+
+    /** What [releaseHeld] hands back: the events, and whether a push wake started this process ([wakeIfUnknown]). */
+    class Released(val events: List<VaultMessage>, val wake: Boolean)
+
+    /**
+     * A push wake is being handled: true when [phase] is not known yet, and then what is held back until it is counts as
+     * what the push was for (ANDROID-PLAN 0.1.134 "A push wake"). An ordinary start (no push while the phase was unknown)
+     * leaves it false, and its held-back events follow the backlog rule.
+     */
+    @Synchronized
+    fun wakeIfUnknown(phase: AppPhase): Boolean {
+        if (!unknown(phase)) return false
+        wake = true
+        return true
+    }
+
     /** Whether [m] was kept: a `feed.event` while [phase] is not known yet. */
     @Synchronized
     fun hold(m: VaultMessage, phase: AppPhase): Boolean {
@@ -203,12 +221,17 @@ class HeldBackEvents {
     }
 
     /** The phase is known: what to hand to the feed now (the kept events when [phase] is open, nothing otherwise). */
+    fun release(phase: AppPhase): List<VaultMessage> = releaseHeld(phase).events
+
+    /** [release], with whether a push wake started this process; the wake is forgotten once the phase is known. */
     @Synchronized
-    fun release(phase: AppPhase): List<VaultMessage> {
-        if (unknown(phase)) return emptyList()
+    fun releaseHeld(phase: AppPhase): Released {
+        if (unknown(phase)) return Released(emptyList(), false)
         val out = if (phase == AppPhase.Unlocked) held.toList() else emptyList()
+        val w = wake
         held.clear()
-        return out
+        wake = false
+        return Released(out, w)
     }
 
     val waiting: Boolean @Synchronized get() = held.isNotEmpty()

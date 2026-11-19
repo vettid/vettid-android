@@ -6074,6 +6074,87 @@ class VaultDeviceTest {
         }
     }
 
+    /** An answer (or, with [re] null, an event) from the vault stamped [ts], with inner id [id]. */
+    private fun FakeVault.sealAt(type: String, ts: Instant, re: String? = null, id: String = Ulid.new()): RelayMessage =
+        msg(keyring.current()!!.seal(Inner(id = id, type = type, ts = ts, re = re, status = re?.let { Inner.STATUS_OK }, body = "{}".toByteArray())))
+
+    /**
+     * (Rule 3, ANDROID-PLAN 0.1.134) The opening's moment on the vault's clock comes only from the first answer to a request
+     * this device first sent after [VaultDevice.beginOpening]: the answer's `ts` less the monotonic time from the opening to
+     * its arrival. Not an event, not an answer to a request sent before the opening, not a retry under an id the request
+     * already had, not a copy delivered again, and only once.
+     */
+    @Test
+    fun theOpeningsMomentIsTheFirstAnswerToARequestOfThisOpening() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val vaultAt = Instant.now().plusSeconds(60).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val told = java.util.concurrent.CopyOnWriteArrayList<Instant>()
+            val before = async(Dispatchers.IO) { d.request("vault.status") }
+            val old = v.open(nextDeposit().second)
+            elapsed = 1_000
+            d.beginOpening { told += it }
+            // An event (the mailbox's backlog), and the answer to a request sent before the opening: neither counts.
+            d.handle(v.sealAt("feed.event", vaultAt.minusSeconds(120)))
+            d.handle(v.sealAt("vault.status", vaultAt.minusSeconds(90), re = old.id))
+            before.await()
+            // A retry under the id the request already had (the member's retry of the same request) does not either.
+            val retry = async(Dispatchers.IO) { d.request("vault.status", innerId = old.id) }
+            assertEquals(old.id, v.open(nextDeposit().second).id)
+            d.handle(v.sealAt("vault.status", vaultAt.minusSeconds(80), re = old.id))
+            retry.await()
+            assertTrue("nothing told yet: $told", told.isEmpty())
+            // The first answer to a request first sent now, arriving 3 s after the opening on the monotonic clock.
+            val fresh = async(Dispatchers.IO) { d.request("vault.status") }
+            val req = v.open(nextDeposit().second)
+            elapsed = 4_000
+            val answerId = Ulid.new()
+            d.handle(v.sealAt("vault.status", vaultAt, re = req.id, id = answerId))
+            fresh.await()
+            assertEquals(listOf(vaultAt.minusMillis(3_000)), told.toList())
+            // Once: the same answer delivered again, and the next answer of the opening, tell nothing more.
+            d.handle(v.sealAt("vault.status", vaultAt.plusSeconds(5), re = req.id, id = answerId))
+            val next = async(Dispatchers.IO) { d.request("vault.status") }
+            d.handle(v.sealAt("vault.status", vaultAt.plusSeconds(10), re = v.open(nextDeposit().second).id))
+            next.await()
+            assertEquals(1, told.size)
+        }
+    }
+
+    /**
+     * (Rule 3) An answer that comes after its request stopped waiting does not count (a late collection cannot pull the mark
+     * back unbounded), and a later opening replaces an earlier one: a request of the earlier one tells nobody.
+     */
+    @Test
+    fun aLateAnswerOrOneOfAnEarlierOpeningGivesNoMark() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this, timeout = java.time.Duration.ofMillis(200))
+            val at = Instant.now().plusSeconds(30).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val first = java.util.concurrent.CopyOnWriteArrayList<Instant>()
+            val second = java.util.concurrent.CopyOnWriteArrayList<Instant>()
+            d.beginOpening { first += it }
+            // No answer in time: the request gives up (its three sends), and its answer comes after.
+            val gaveUp = async(Dispatchers.IO) { runCatching { d.request("vault.status") } }
+            val late = v.open(nextDeposit().second)
+            repeat(2) { nextDeposit() }
+            assertTrue(gaveUp.await().isFailure)
+            d.handle(v.sealAt("vault.status", at, re = late.id))
+            assertTrue("a late answer: $first", first.isEmpty())
+            // A request of this opening, then a new opening before its answer.
+            val pendingOne = async(Dispatchers.IO) { runCatching { d.request("vault.status") } }
+            val earlier = v.open(nextDeposit().second)
+            d.beginOpening { second += it }
+            d.handle(v.sealAt("vault.status", at.plusSeconds(1), re = earlier.id))
+            pendingOne.await()
+            assertTrue("the earlier opening's request: $first $second", first.isEmpty() && second.isEmpty())
+            val now = async(Dispatchers.IO) { d.request("vault.status") }
+            d.handle(v.sealAt("vault.status", at.plusSeconds(2), re = v.open(nextDeposit().second).id))
+            now.await()
+            assertTrue(first.isEmpty())
+            assertEquals(listOf(at.plusSeconds(2)), second.toList())
+        }
+    }
+
     /**
      * §11.14.9 step 1: the vault's clock as last seen is the newest answer's `ts` carried forward on the phone's monotonic
      * clock; `credential.version` comes with its answer's `ts`.

@@ -116,6 +116,27 @@ class PushTest {
 
     // --- a process a wake started: feed events before the phase is known ---
 
+    /**
+     * (ANDROID-PLAN 0.1.134 "A push wake") Held-back events are a push wake's only when a push came while the phase was not
+     * known (it started the process); an ordinary start's are not. The mark goes once the phase is known.
+     */
+    @Test
+    fun heldBackEventsAreAWakesOnlyWhenAPushCameWhileThePhaseWasUnknown() {
+        val ev = msg("feed.event", """{"item_id":"i1"}""")
+        val plain = HeldBackEvents()
+        assertTrue(plain.hold(ev, AppPhase.Starting))
+        val start = plain.releaseHeld(AppPhase.Unlocked)
+        assertEquals(1, start.events.size)
+        assertFalse("an ordinary start", start.wake)
+        val pushed = HeldBackEvents()
+        assertFalse("the phase known: not a wake's", pushed.wakeIfUnknown(AppPhase.Unlocked))
+        assertTrue(pushed.wakeIfUnknown(AppPhase.Starting))
+        assertTrue(pushed.hold(ev, AppPhase.Starting))
+        assertTrue(pushed.releaseHeld(AppPhase.Unlocked).wake)
+        assertTrue(pushed.hold(ev, AppPhase.Starting))
+        assertFalse("once", pushed.releaseHeld(AppPhase.Unlocked).wake)
+    }
+
     @Test
     fun feedEventsWaitUntilTheVaultIsKnownToBeOpen() {
         val held = HeldBackEvents()

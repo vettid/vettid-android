@@ -215,6 +215,22 @@ class SocialManager internal constructor(
      */
     internal fun pendingListedSince(mark: Long): Boolean = pendingPublished.get() > maxOf(mark, pending.resetAt)
 
+    /** What each of the latest merged `pending.list` reads listed ([listedNow] just after its merge), by its ticket. */
+    private val mergedLists = ArrayDeque<Pair<Long, List<Approval>>>()
+
+    /**
+     * (ANDROID-PLAN 0.1.134, owner decision a of 2026-11-18, item 3) The asks as the **first** `pending.list` read begun
+     * after [mark] and merged left them ([listedNow] just after that merge), not as a later read has them; null while
+     * [pendingListedSince] is false. Of a read kept no longer (more than [MERGED_KEPT] merged since), the oldest kept.
+     */
+    internal fun firstListedSince(mark: Long): List<Approval>? {
+        if (!pendingListedSince(mark)) return null
+        val after = maxOf(mark, pending.resetAt)
+        return synchronized(mergedLists) {
+            mergedLists.filter { it.first > after }.minByOrNull { it.first }?.second
+        } ?: listedNow()
+    }
+
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
 
     /** The feed's items, as they change (the vault manager forwards them). */
@@ -1628,7 +1644,13 @@ class SocialManager internal constructor(
             )
         }
         // Only once [edit] has published the list: a replay that sees the stamp reads what it listed.
-        if (merged) pendingPublished.accumulateAndGet(ticket) { x, y -> maxOf(x, y) }
+        if (merged) {
+            synchronized(mergedLists) {
+                mergedLists.addLast(ticket to listedNow())
+                while (mergedLists.size > MERGED_KEPT) mergedLists.removeFirst()
+            }
+            pendingPublished.accumulateAndGet(ticket) { x, y -> maxOf(x, y) }
+        }
         return merged
     }
 
@@ -2234,6 +2256,9 @@ class SocialManager internal constructor(
             .sortedByDescending { it.last?.sentAt ?: it.connection.createdAt ?: Instant.EPOCH }
 
     companion object {
+        /** The merged `pending.list` reads whose lists are kept for [firstListedSince]. */
+        private const val MERGED_KEPT = 8
+
         /** Failures every thread would meet: a reload stops sending `message.list` after one of these. */
         private val ALL_THREADS = setOf(
             FailureKind.OWNER_CHECK_REQUIRED,

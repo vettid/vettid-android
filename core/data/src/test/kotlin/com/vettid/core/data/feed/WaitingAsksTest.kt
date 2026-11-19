@@ -146,6 +146,29 @@ class WaitingAsksTest {
         job.cancel()
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) A replay held while the release is checked is posted as a fresh arrival when it is released: the
+     * feed's item as it is then, still marked as a replay ([FeedItem.replayed]), so the notification clears for it.
+     */
+    @Test
+    fun aReleasedReplayStaysAReplay() = runTest {
+        var checking = true
+        val m = FeedManager(this, ops = { Ops(listOf(item("1", WaitingAsks.SIGN_IN))) }, now = { now }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue(m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        assertTrue("held while checking", arrived.isEmpty())
+        checking = false
+        m.releaseHeld()
+        advanceUntilIdle()
+        assertEquals(listOf("1"), arrived.map { it.itemId })
+        assertTrue("still a replay", arrived.single().replayed)
+        job.cancel()
+    }
+
     /** An ask that arrived live while the hold's reads ran is not sent again by the replay. */
     @Test
     fun anAskThatArrivedDuringTheReadsIsNotSentTwice() = runTest {
