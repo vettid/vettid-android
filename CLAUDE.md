@@ -601,6 +601,13 @@ The A2 exit test:
   `vote.waiting`, `vote.results`, `vote.conflict_after_verified`, `vote.failed`, `vote.checking_clock`, `vote.checking_list`,
   `vote.site_unreachable`, `vote.refused`, `vote.rejected`, `vote.results_problem`, `vote.results_dont_add_up`,
   `vote.results_not_rechecked`, `vote.rows_unavailable`.
+  **How a vote is decided, and its outcome** (BALLOT-PROTOCOL 0.14.0 §3.5, §7.1; VAULT-MESSAGING 0.90.18 §10.19.8; texts approved by
+  the owner 2026-11-18, the same words as the iPhone app, held by `VoteTextsTest`): `vote.get`'s `decision` and `outcome`
+  (`VoteDecision`, `VoteOutcome`, `VoteWire.decision` / `.outcome`: read as strictly as the vault writes them; anything else is
+  null and no line shows, never a wrong one). The rule is one line under the quorum line (`VoteTexts.rule`: majority, at least N/D,
+  "all" for 1/1, plurality; `vote_rule_*`); the outcome is the first line of Results (`VoteTexts.outcome`; `vote_outcome_*`; a
+  `decided` choice that is not a real choice of the vote, or abstain, shows nothing), so it shows and hides with the numbers
+  (`VoteRules.showNumbers`); the existing unhandled line stays last in Results.
 
 - Wallet (ANDROID-PLAN §4 "Wallet", W1; VAULT-MESSAGING §10.18): **not in production builds**, laid out as calls were before 2026-11-14 (`src/noWallet`, `-PvettidWalletInRelease=true`). `:core:chain` (bitcoin-kmp
   behind the module, PSBT, the Esplora client, `ChainServers`: the chain server per network in `chain-servers.bin`, block 0 checked

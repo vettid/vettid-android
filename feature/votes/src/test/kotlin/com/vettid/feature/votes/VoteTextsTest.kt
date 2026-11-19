@@ -6,9 +6,13 @@ package com.vettid.feature.votes
 import androidx.test.core.app.ApplicationProvider
 import com.vettid.core.data.votes.RejectedWhy
 import com.vettid.core.data.votes.VoteChip
+import com.vettid.core.data.votes.VoteChoice
+import com.vettid.core.data.votes.VoteDecision
 import com.vettid.core.data.votes.VoteNote
+import com.vettid.core.data.votes.VoteOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -112,6 +116,59 @@ class VoteTextsTest {
         )
         assertEquals("Abstain", r.getString(R.string.vote_choice_abstain))
         assertEquals(r.getString(R.string.vote_results_dont_add_up), VoteTexts.text(r, VoteNote.RESULTS_DONT_ADD_UP, "Example", ""))
+    }
+
+    @Test
+    fun theRuleAndOutcomeLinesAreTheOwnersTexts() {
+        // Approved by the owner 2026-11-18, the same words as the iPhone app (the `cast` lines and the 1/1 lines as chosen then).
+        val rows = listOf(
+            R.string.vote_rule_majority_cast to "Decided by more than half of the votes, not counting abstentions.",
+            R.string.vote_rule_majority_voted to "Decided by more than half of all ballots. Abstaining counts against.",
+            R.string.vote_rule_majority_elig to "Decided by more than half of all eligible members. Not voting counts against.",
+            R.string.vote_rule_all_cast to "Decided only if all the votes, not counting abstentions, are for one choice.",
+            R.string.vote_rule_all_voted to "Decided only if all ballots are for one choice. Abstaining counts against.",
+            R.string.vote_rule_all_elig to "Decided only if all eligible members vote for one choice. Not voting counts against.",
+            R.string.vote_rule_plurality to "Decided by the most votes. A tie at the top decides nothing.",
+            R.string.vote_outcome_not_decided to "Not decided: no choice met the rule.",
+            R.string.vote_outcome_tied to "Tied: no choice decided.",
+            R.string.vote_outcome_no_quorum to "No quorum: too few members voted.",
+        )
+        for ((id, text) in rows) assertEquals(text, r.getString(id))
+        assertEquals("Decided by at least 2/3 of the votes, not counting abstentions.", r.getString(R.string.vote_rule_threshold_cast, "2/3"))
+        assertEquals("Decided by at least 2/3 of all ballots. Abstaining counts against.", r.getString(R.string.vote_rule_threshold_voted, "2/3"))
+        assertEquals("Decided by at least 2/3 of all eligible members. Not voting counts against.", r.getString(R.string.vote_rule_threshold_elig, "2/3"))
+        assertEquals("Decided: Example", r.getString(R.string.vote_outcome_decided, "Example"))
+    }
+
+    @Test
+    fun eachRuleReadsAsTheOwnerApproved() {
+        fun rule(rule: VoteDecision.Rule, base: VoteDecision.Base?) = VoteTexts.rule(r, VoteDecision(rule, base))
+        val maj = VoteDecision.Rule.Majority
+        assertEquals("Decided by more than half of the votes, not counting abstentions.", rule(maj, VoteDecision.Base.CAST))
+        assertEquals("Decided by more than half of all ballots. Abstaining counts against.", rule(maj, VoteDecision.Base.VOTED))
+        assertEquals("Decided by more than half of all eligible members. Not voting counts against.", rule(maj, VoteDecision.Base.ELIG))
+        assertEquals("Decided by at least 2/3 of the votes, not counting abstentions.", rule(VoteDecision.Rule.Threshold(2, 3), VoteDecision.Base.CAST))
+        assertEquals("Decided by at least 3/4 of all ballots. Abstaining counts against.", rule(VoteDecision.Rule.Threshold(3, 4), VoteDecision.Base.VOTED))
+        assertEquals("Decided by at least 9/10 of all eligible members. Not voting counts against.", rule(VoteDecision.Rule.Threshold(9, 10), VoteDecision.Base.ELIG))
+        assertEquals("Decided only if all the votes, not counting abstentions, are for one choice.", rule(VoteDecision.Rule.Threshold(1, 1), VoteDecision.Base.CAST))
+        assertEquals("Decided only if all ballots are for one choice. Abstaining counts against.", rule(VoteDecision.Rule.Threshold(1, 1), VoteDecision.Base.VOTED))
+        assertEquals("Decided only if all eligible members vote for one choice. Not voting counts against.", rule(VoteDecision.Rule.Threshold(1, 1), VoteDecision.Base.ELIG))
+        assertEquals("Decided by the most votes. A tie at the top decides nothing.", rule(VoteDecision.Rule.Plurality, null))
+        assertNull(rule(maj, null))
+        assertNull(rule(VoteDecision.Rule.Threshold(2, 3), null))
+    }
+
+    @Test
+    fun eachOutcomeReadsAsTheOwnerApproved() {
+        val choices = listOf(VoteChoice("yes", "Yes"), VoteChoice("no", ""), VoteChoice("abstain", "Abstain"))
+        fun outcome(status: VoteOutcome.Status, choice: String? = null) = VoteTexts.outcome(r, VoteOutcome(status, choice), choices)
+        assertEquals("Decided: \u2068Yes\u2069", outcome(VoteOutcome.Status.DECIDED, "yes"))
+        assertEquals("Decided: no", outcome(VoteOutcome.Status.DECIDED, "no")?.replace("\u2068", "")?.replace("\u2069", ""))
+        assertNull("abstain never decides", outcome(VoteOutcome.Status.DECIDED, "abstain"))
+        assertNull("not a choice of the vote", outcome(VoteOutcome.Status.DECIDED, "maybe"))
+        assertEquals("Not decided: no choice met the rule.", outcome(VoteOutcome.Status.NOT_DECIDED))
+        assertEquals("Tied: no choice decided.", outcome(VoteOutcome.Status.TIED))
+        assertEquals("No quorum: too few members voted.", outcome(VoteOutcome.Status.NO_QUORUM))
     }
 
     @Test
