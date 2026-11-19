@@ -214,7 +214,15 @@ class WalletDetailViewModel @Inject constructor(
         }
     }
 
-    private suspend fun serverNow(): ChainServer? = mutable.value.network?.let { settings.server(it) }
+    /**
+     * The chain server for the wallet's network as the wallets manager has it now, not the screen's: right after a test-network
+     * answer the screen's network comes through the flags' collector, which may follow the look-up, and the server noted for
+     * it ([serverAtLookup]) would be another network's (or none), so the next return would look up again for nothing.
+     */
+    private suspend fun serverNow(): ChainServer? = networkNow()?.let { settings.server(it) }
+
+    /** The wallet's network as the look-up would read it now ([WalletsManager.networkOf]); null while not known. */
+    private suspend fun networkNow(): Network? = wallets.wallets.value.firstOrNull { it.id == walletId }?.let { wallets.networkOf(it) }
 
     private suspend fun hostNow(): String? = when (val s = serverNow()) {
         is ChainServer.Default -> s.url.host
@@ -236,20 +244,16 @@ class WalletDetailViewModel @Inject constructor(
                 mutable.update { it.copy(serverHost = hostNow()) }
                 return@launch
             }
-            val changed = s.lookup != null && serverNow() != serverAtLookup
             when (s.lookup) {
                 null -> Unit
                 LookupResult.NeedsNetwork -> if (networkKnown()) lookUp()
                 is LookupResult.NoServer, is LookupResult.ServerWrongNetwork, is LookupResult.ServerFailed -> lookUp()
-                else -> if (changed) lookUp()
+                else -> if (serverNow() != serverAtLookup) lookUp()
             }
         }
     }
 
-    private suspend fun networkKnown(): Boolean {
-        val w = wallets.wallets.value.firstOrNull { it.id == walletId } ?: return false
-        return wallets.networkOf(w) != null
-    }
+    private suspend fun networkKnown(): Boolean = networkNow() != null
 
     /** "Change" on the testnet3 answer: back to the question. */
     fun changeNetwork() {
