@@ -417,6 +417,32 @@ class FeedManagerTest {
     }
 
     /**
+     * A held-back event of an ordinary start that comes after a lock (it was on its way while the names were read) is kept
+     * nowhere and starts no read: nothing is held outside an open vault, and the next opening sees nothing of it.
+     */
+    @Test
+    fun aHeldBackEventAfterALockIsDropped() = runTest {
+        val ops = Ops()
+        val m = opened(ops, item("b1", 1))
+        val arrived = mutableListOf<FeedItem>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        m.clear() // the lock
+        val reads = ops.lists.size
+        m.replay(event(item("b1", 1)), wake = false)
+        // A read would run on the IO dispatcher: give it the time it would take.
+        repeat(SETTLE_TRIES / 10) {
+            advanceUntilIdle()
+            Thread.sleep(SETTLE_MS)
+        }
+        assertEquals("no read while locked", reads, synchronized(ops) { ops.lists.size })
+        // The next opening: its read releases nothing of it.
+        m.vaultOpened(now)
+        m.refresh()
+        settle { true }
+        assertTrue(arrived.isEmpty())
+    }
+
+    /**
      * (ANDROID-PLAN 0.1.132, 0.1.134) The waiting-asks replay is the replay rule's own second alert: an ask notified live
      * earlier in the same opening (no clear between, as when a due state known only from the clock ends) is replayed.
      */

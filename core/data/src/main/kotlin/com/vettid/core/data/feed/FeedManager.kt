@@ -153,7 +153,10 @@ class FeedManager(
     /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
     private var opening = 0
 
-    /** (Rule 3) The current opening takes its mark: from [vaultOpened] until a [clear] (a lock, the hold, a wipe). Under [lock]. */
+    /**
+     * (Rule 3) The feed's opening is current: from [vaultOpened] until a [clear] (a lock, the hold, a wipe). It takes its
+     * mark only then, and only then does a held-back event wait for the read ([waitsForTheRead]). Under [lock].
+     */
     private var markable = false
 
     /**
@@ -309,11 +312,14 @@ class FeedManager(
      * (ANDROID-PLAN 0.1.134) A held-back event of a start no push caused, while the feed is not loaded (its full read under
      * way, or failed): it cannot be told from the opening's backlog yet, so it waits in [heldEvents] and is judged when the
      * read ends ([readEnded], [releaseNow]); a feed with no read under way is read first ([releaseIfOver]). True when it
-     * waits.
+     * waits, or when it is dropped: one that comes after a [clear] (a lock while it was on its way) is kept nowhere and
+     * starts no read, since nothing is kept outside an open vault.
      */
     private fun waitsForTheRead(m: VaultMessage): Boolean {
+        var dropped = false
         val waits = synchronized(lock) {
-            (loadState.value != ListLoad.LOADED).also { w ->
+            dropped = !markable && loadState.value != ListLoad.LOADED
+            (!dropped && loadState.value != ListLoad.LOADED).also { w ->
                 if (w) {
                     heldEvents.addLast(HeldEvent(m, wake = false))
                     while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
@@ -321,7 +327,7 @@ class FeedManager(
             }
         }
         if (waits) releaseIfOver()
-        return waits
+        return waits || dropped
     }
 
     /**
