@@ -1297,7 +1297,8 @@ class FeedManagerTest {
         // A gap: seq 5 after 3 (4 is another device's read).
         ops.pages += FeedPage(listOf(item("i2", 4, status = "read"), item("i5", 5)), 5)
         m.onEvent(event(item("i5", 5)))
-        settle { ops.lists.size == 2 }
+        // The catch-up's read runs on the IO dispatcher: wait for what it applied, not only for its start.
+        settle { synchronized(ops) { ops.lists.size } == 2 && m.seq == 5L }
         assertEquals(3L, ops.lists.last())
         assertEquals(5L, m.seq)
         assertEquals("read", m.items.value.first { it.itemId == "i2" }.status)
