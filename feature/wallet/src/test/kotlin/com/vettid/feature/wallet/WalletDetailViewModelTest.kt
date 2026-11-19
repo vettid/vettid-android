@@ -204,6 +204,31 @@ class WalletDetailViewModelTest {
         assertFalse(vm.state.value.lookingUp)
     }
 
+    /**
+     * The same after a changed answer (testnet3, then Change, then testnet4): the look-up notes testnet4's server, not the
+     * one of the answer before, so coming back with nothing changed looks up nothing.
+     */
+    @Test
+    fun aLookupAfterAChangedAnswerNotesTheNewNetworksServer() = runTest {
+        ops.wallet(id, network = "testnet")
+        settings.perNetwork = mapOf(
+            Network.TESTNET to ChainServer.Default(com.vettid.core.chain.ChainDefaults.SIGNET),
+            Network.TESTNET4 to ChainServer.Default(com.vettid.core.chain.ChainDefaults.TESTNET4),
+        )
+        open = ChainOpen.Ready("mempool.space") { emptyTotals }
+        val vm = vm()
+        eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
+        vm.chooseTestNetwork(Network.TESTNET)
+        eventually { vm.state.value.lookup == LookupResult.NetworkNotOffered && vm.state.value.network == Network.TESTNET }
+        vm.changeNetwork()
+        vm.chooseTestNetwork(Network.TESTNET4)
+        eventually { vm.state.value.lookup is LookupResult.Done && vm.state.value.network == Network.TESTNET4 }
+        val before = opened
+        vm.resumed()
+        testScheduler.advanceUntilIdle()
+        assertEquals("no second look-up", before, opened)
+    }
+
     @Test
     fun aGoodLookupIsLookedUpAgainWhenTheChainServerChangedMeanwhile() = runTest {
         ops.wallet(id)

@@ -221,6 +221,7 @@ class WalletDetailViewModel @Inject constructor(
      */
     private suspend fun serverNow(): ChainServer? = networkNow()?.let { settings.server(it) }
 
+    /** The wallet's network as the look-up would read it now ([WalletsManager.networkOf]); null while not known. */
     private suspend fun networkNow(): Network? = wallets.wallets.value.firstOrNull { it.id == walletId }?.let { wallets.networkOf(it) }
 
     private suspend fun hostNow(): String? = when (val s = serverNow()) {
@@ -243,12 +244,11 @@ class WalletDetailViewModel @Inject constructor(
                 mutable.update { it.copy(serverHost = hostNow()) }
                 return@launch
             }
-            val changed = s.lookup != null && serverNow() != serverAtLookup
             when (s.lookup) {
                 null -> Unit
                 LookupResult.NeedsNetwork -> if (networkKnown()) lookUp()
                 is LookupResult.NoServer, is LookupResult.ServerWrongNetwork, is LookupResult.ServerFailed -> lookUp()
-                else -> if (changed) lookUp()
+                else -> if (serverNow() != serverAtLookup) lookUp()
             }
         }
     }
