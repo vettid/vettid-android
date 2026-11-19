@@ -42,8 +42,8 @@ class ReleaseGateWiringTest {
         // puts it on the vault's clock, the clock of the messages' `ts` it is compared with (ANDROID-PLAN 0.1.134).
         val open = block("private val phaseFlow = PhaseHolder(")
         open.has("onOpen = { continued ->")
-        open.has("if (!continued || !feed.openingContinues()) {")
-        open.has("val opening = feed.vaultOpened(Instant.now())")
+        // The continue-or-new decision is OpeningSteps.onOpen's (OpeningStepsTest drives it).
+        open.has("openingSteps.onOpen(continued, Instant.now())?.let { opening ->")
         open.has("session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }")
         assertTrue("no vault time learnt before the opening", open.none { it.contains("vaultNow") })
         block("private val phaseFlow = PhaseHolder(").has("releaseUpdate.vaultOpened()")
@@ -54,7 +54,7 @@ class ReleaseGateWiringTest {
         val clear = block("clearReleaseCheck = {")
         clear.has("phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }")
         clear.has("releasePause.reset()")
-        clear.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
+        clear.has("openingSteps.dropReplayOnClose(p)")
     }
 
     @Test
@@ -205,7 +205,8 @@ class ReleaseGateWiringTest {
      */
     @Test
     fun aBlipKeepsWhatIsHeldAndTheLiftIsMarked() {
-        code.has("clearFeed = { p -> feed.clear(keepHeld = p is AppPhase.Unreachable) },")
+        // Soft for Unreachable, nothing for a close reached after a newer opening (OpeningStepsTest drives both).
+        code.has("clearFeed = { p -> openingSteps.clearFeed(p) },")
         // The lift is marked by the owner check before its value is published, with an opening current.
         block("OwnerCheckManager(").has("onLift = { at ->")
         code.has("val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }")
@@ -225,14 +226,17 @@ class ReleaseGateWiringTest {
         block("private suspend fun switchIdentity(").has("runCatching { feed.clear() }")
         // A due state the clock alone began counts (pauseLifted), and a held one too.
         code.has("val checkEnded = lifted || !now && wasHeld")
-        // The held waiting-asks replay is kept across Unreachable, dropped by a close.
-        code.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
+        // The held waiting-asks replay is kept across Unreachable, dropped by a close (OpeningStepsTest).
+        code.has("openingSteps.dropReplayOnClose(p)")
+        // A pass learnt during Unreachable is kept for the continued opening, not launched.
+        code.has("} else if (replayFor != null && unreachable) {")
+        code.has("steps.step { openingSteps.holdForTheContinuedOpening(HeldAskReplay.Due(replayFor, listMark, replayToken)) }")
         // Every lift with the vault open reads the feed in full, also one with no replay and no hold.
         code.has("} else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {")
         code.has("steps.step { launchAfterHoldPassed(null, listMark, replayToken) }")
         // A run waits through Unreachable; a new opening drops a replay kept across it.
         code.has("paused = { phaseFlow.value is AppPhase.Unreachable && record.generation == gen && feed.replayOwns(token) },")
-        assertTrue(block("private val phaseFlow = PhaseHolder(").any { it == "heldAskReplay.drop()" })
+        assertTrue(block("private val phaseFlow = PhaseHolder(").any { it.startsWith("openingSteps.onOpen(") })
         code.has("override fun onUiStopped() = heldBack.uiStopped()")
     }
 

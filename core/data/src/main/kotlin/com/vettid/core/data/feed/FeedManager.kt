@@ -186,6 +186,17 @@ class FeedManager(
     private val notifiedSeq = HashMap<String, Long>()
 
     /**
+     * (ANDROID-PLAN 0.1.134, as the iPhone app) What a status read that could not be made kept of the loaded list: its cursor and
+     * each item's `seq`, ids and numbers only (no item's content is kept while the vault is not open). The first full read
+     * of the opening that continues notifies what a catch-up from that cursor would have brought (an item sent during the
+     * blip whose `feed.event` comes after the read is no longer silent), then it is dropped. Dropped by any other clear, a new
+     * opening and a lift (a lift's full read notifies nothing). Under [lock].
+     */
+    private var kept: KeptList? = null
+
+    private class KeptList(val cursor: Long, val seqs: Map<String, Long>)
+
+    /**
      * (Rule 3) The feed's reads started or under way ([open], [catchUp], [refresh]): what was held is released only after
      * them ([readEnded]), against the feed as they leave it, so an item read or decided elsewhere meanwhile does not notify.
      */
@@ -277,6 +288,12 @@ class FeedManager(
             if (!keepHeld && endsOpening) openingEnded = true
             behind = false
             retried = false
+            // Kept once, from a loaded list: a second soft clear before a read keeps the first.
+            kept = when {
+                !keepHeld -> null
+                loadState.value == ListLoad.LOADED -> KeptList(cursor, byId.mapValues { it.value.seq })
+                else -> kept
+            }
             if (!keepHeld) {
                 arrivedSince = null
                 notifiedSeq.clear()
@@ -334,6 +351,7 @@ class FeedManager(
         // A new opening holds nothing of an earlier one (a soft clear kept it only for an opening that continues).
         heldEvents.clear()
         heldArrivals.clear()
+        kept = null
         markable = true
         openingEnded = false
         ++opening
@@ -371,6 +389,7 @@ class FeedManager(
             // Not known (no time on the vault's clock): no mark, but the rest all the same.
             if (at != null) liftedAt = liftedAt?.let { maxOf(it, at) } ?: at
             lifts++
+            kept = null // the lift's full read notifies nothing: what changed while due is covered by it
             // Held arrivals from before the due state notify nothing after it (the clone alarm's still do); held events
             // are judged by their own `ts` against the lift as they are released.
             heldArrivals.values.removeAll { it.kind !in NOTIFIES_WHILE_HELD }
@@ -685,7 +704,13 @@ class FeedManager(
                     if (full) byId = emptyMap()
                     apply(changed)
                     cursor = maxOf(if (full) 0 else cursor, seq)
-                    Applied.Read(if (full) emptyList() else newUnread(changed, before))
+                    // The first full read after a blip notifies what a catch-up from the kept cursor would have ([kept]).
+                    val arrived = when {
+                        !full -> newUnread(changed) { before[it]?.seq }
+                        else -> kept?.let { k -> newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] } }.orEmpty()
+                    }
+                    if (full) kept = null
+                    Applied.Read(arrived)
                 }
             }
         }
@@ -711,8 +736,8 @@ class FeedManager(
     }
 
     /** What a catch-up brought that is new or changed, and unread (a full read brings nothing new). */
-    private fun newUnread(changed: List<FeedItem>, before: Map<String, FeedItem>): List<FeedItem> =
-        changed.filter { c -> c.status == STATUS_ACTIVE && (before[c.itemId]?.seq ?: 0) < c.seq }
+    private fun newUnread(changed: List<FeedItem>, seqBefore: (String) -> Long?): List<FeedItem> =
+        changed.filter { c -> c.status == STATUS_ACTIVE && (seqBefore(c.itemId) ?: 0) < c.seq }
 
     private fun byIdNow(id: String): FeedItem? = synchronized(lock) { byId[id] }
 

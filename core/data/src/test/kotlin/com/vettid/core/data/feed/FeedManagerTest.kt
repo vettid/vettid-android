@@ -1005,6 +1005,76 @@ class FeedManagerTest {
         assertEquals(listOf("i2"), arrived.map { it.itemId })
     }
 
+    /** A blip, then the continued opening's full read and the arrivals it brings (ids). */
+    private suspend fun TestScope.afterABlip(
+        m: FeedManager,
+        ops: Ops,
+        read: List<FeedItem>,
+        between: () -> Unit = {},
+    ): MutableList<String> {
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // Unreachable
+        between()
+        read.forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(read, read.maxOf { it.seq })
+        m.refresh() // the continued opening's full read
+        advanceUntilIdle()
+        return arrived
+    }
+
+    /**
+     * (As the iPhone app) An item sent during a blip is notified by the continued opening's full read, as a catch-up from
+     * the kept cursor would; its `feed.event` coming after the read notifies nothing more.
+     */
+    @Test
+    fun theReturnReadNotifiesTheBlipsItemOnce() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val g2 = item("g2", 2)
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), g2)) { assertTrue(m.openingContinues()) }
+        assertEquals(listOf("g2"), arrived)
+        m.onEvent(event(g2))
+        advanceUntilIdle()
+        assertEquals("once", listOf("g2"), arrived)
+    }
+
+    /** Only what is new or changed since the kept cursor and still unread: the rest of the list is silent. */
+    @Test
+    fun theReturnReadNotifiesOnlyWhatChangedSinceTheCursor() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("i3", 3))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("i3", 4, status = "read"), item("g5", 5)))
+        assertEquals(listOf("g5"), arrived)
+    }
+
+    /** A lift during the blip: its full read notifies nothing (what changed while due is covered by it). */
+    @Test
+    fun aLiftDuringTheBlipKeepsTheReturnReadSilent() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.ownerCheckLifted(now) }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A new opening holds nothing of the one before: its full read notifies nothing. */
+    @Test
+    fun aNewOpeningAfterTheBlipReadsSilently() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.vaultOpened(now) }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A close after the blip (a lock) drops what it kept. */
+    @Test
+    fun aCloseAfterTheBlipDropsWhatItKept() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.clear() }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
     /** A replay window kept across Unreachable belongs to that opening: a new opening closes it. */
     @Test
     fun aNewOpeningClosesAKeptReplayWindow() = runTest {
