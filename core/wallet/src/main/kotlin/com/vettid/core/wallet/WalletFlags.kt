@@ -1,6 +1,7 @@
 package com.vettid.core.wallet
 
 import com.vettid.core.chain.Network
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -32,9 +33,15 @@ interface WalletFlagsFile {
  * vault learns them only from that request).
  * Read from the file every time, nothing kept in memory. A write is refused when a wipe began
  * after the operation started ([generation] moved), so that a write in flight cannot bring the file back after it was erased.
+ * The file is read and written on [io]: [Dispatchers.IO] in the app. View-model tests pass `Dispatchers.Unconfined`, so no work
+ * on another thread outlives a test and touches the next one's Main dispatcher while it is being set.
  */
 @Suppress("TooManyFunctions")
-class WalletFlags(private val file: WalletFlagsFile, private val generation: () -> Long = { 0 }) {
+class WalletFlags(
+    private val file: WalletFlagsFile,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val generation: () -> Long = { 0 },
+) {
     private val lock = Mutex()
 
     private data class Flags(
@@ -138,7 +145,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             if (generation() != started) return@withLock false
             try {
                 val fresh = Flags(emptySet(), emptyMap(), pendingCaps = pending, askCaps = listed.orEmpty(), askNext = listed == null)
-                withContext(Dispatchers.IO) { file.save(encode(fresh)) }
+                withContext(io) { file.save(encode(fresh)) }
                 true
             } catch (_: Exception) {
                 false
@@ -159,7 +166,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
             if (next == now) return@withLock true
             if (generation() != started) return@withLock false
             try {
-                withContext(Dispatchers.IO) { file.save(encode(next)) }
+                withContext(io) { file.save(encode(next)) }
                 true
             } catch (_: Exception) {
                 false
@@ -179,7 +186,7 @@ class WalletFlags(private val file: WalletFlagsFile, private val generation: () 
     private suspend fun read(): Flags? = (readResult() as? Read.Loaded)?.flags
 
     @Suppress("TooGenericExceptionCaught", "ReturnCount")
-    private suspend fun readResult(): Read = withContext(Dispatchers.IO) {
+    private suspend fun readResult(): Read = withContext(io) {
         val bytes = try {
             file.load() ?: return@withContext Read.Loaded(Flags(emptySet(), emptyMap()))
         } catch (_: Exception) {

@@ -2,7 +2,6 @@ package com.vettid.feature.wallet
 
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.chain.Network
-import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -39,7 +38,7 @@ class BackupViewModelTest {
     }
 
     private suspend fun TestScope.vm(saved: SavedStateHandle = SavedStateHandle()): BackupViewModel {
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         return BackupViewModel(saved, m, Random(7))
     }
@@ -77,7 +76,7 @@ class BackupViewModelTest {
         assertEquals(null, vm.state.value.words)
         // The words that were shown are wiped, not only dropped.
         assertEquals(String(CharArray(ops.words[0].length)), shown.word(0))
-        assertTrue(WalletFlags(flagsFile).backedUp("01NEW000000000000000000000"))
+        assertTrue(testFlags(flagsFile).backedUp("01NEW000000000000000000000"))
     }
 
     @Test
@@ -121,7 +120,7 @@ class BackupViewModelTest {
         eventually { vm.state.value.step == BackupStep.DONE }
         assertEquals(BackupStep.DONE, vm.state.value.step)
         assertTrue(vm.state.value.revealFailed)
-        assertFalse(WalletFlags(flagsFile).backedUp("01NEW000000000000000000000"))
+        assertFalse(testFlags(flagsFile).backedUp("01NEW000000000000000000000"))
     }
 
     @Test
@@ -209,7 +208,7 @@ class BackupViewModelTest {
 
     @Test
     fun theVaultClosingEndsTheFlowAndWipesTheWords() = runTest {
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         val vm = BackupViewModel(SavedStateHandle(), m, Random(7))
         vm.setName("Savings")
@@ -225,7 +224,7 @@ class BackupViewModelTest {
 
     @Test
     fun theListShowsBackedUpOnceTheCheckPassed() = runTest {
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         ops.wallet("01OLD000000000000000000000")
         m.open()
         val list = WalletsViewModel(m)

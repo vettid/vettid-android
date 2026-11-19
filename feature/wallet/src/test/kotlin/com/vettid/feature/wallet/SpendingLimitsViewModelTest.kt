@@ -5,7 +5,6 @@ package com.vettid.feature.wallet
 
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.wallet.WalletFlags
 import com.vettid.core.wallet.WalletsManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -40,7 +39,7 @@ class SpendingLimitsViewModelTest {
         } else {
             w
         }
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.loaded }
@@ -138,7 +137,7 @@ class SpendingLimitsViewModelTest {
     @Test
     fun aRaiseConfirmedAfterTheLimitsMovedSendsNothing() = runTest {
         ops.wallets[id] = ops.wallet(id).copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000, periodSeconds = 86_400)
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.loaded }
@@ -299,7 +298,7 @@ class SpendingLimitsViewModelTest {
         assertEquals("0.001", vm.state.value.form.perTx)
         assertEquals(100_000L, CapsEdit.plan(500_000, 2_000_000, vm.state.value.form, false).newPerTx)
         // The vault not open for the wallets yet: nothing is read, and no form is chosen against limits not read.
-        val early = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), manager(backgroundScope, ops, WalletFlags(flagsFile)))
+        val early = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), manager(backgroundScope, ops, testFlags(flagsFile)))
         early.openLower()
         early.openRaise()
         assertEquals(LimitsStep.OVERVIEW, early.state.value.step)
@@ -311,7 +310,7 @@ class SpendingLimitsViewModelTest {
     fun aFailedFirstReadIsSaidAndTryAgainShowsTheLimits() = runTest {
         ops.wallets[id] = ops.wallet(id).copy(capped = true, perTxSats = 500_000)
         ops.listFails = true
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         assertTrue(runCatching { m.open() }.exceptionOrNull() is com.vettid.core.data.vault.VaultFailure)
         val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.listFailed != null }
@@ -327,9 +326,9 @@ class SpendingLimitsViewModelTest {
     fun aRaiseNeverGoesOverAPendingLowerThatHasNotReachedTheVault() = runTest {
         val w = ops.wallet(id)
         ops.wallets[id] = w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000)
-        WalletFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(null, 1_000_000))
+        testFlags(flagsFile).setPendingCaps(id, com.vettid.core.wallet.WalletCaps(null, 1_000_000))
         ops.capsSetFails = "internal"
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.loaded && vm.state.value.capsPending }
@@ -361,7 +360,7 @@ class SpendingLimitsViewModelTest {
         val w = ops.wallet(id)
         ops.wallets[id] = w.copy(capped = true, perTxSats = 500_000, perPeriodSats = 2_000_000)
         flagsFile.bytes = """{"version":2}""".encodeToByteArray()
-        val m = manager(backgroundScope, ops, WalletFlags(flagsFile))
+        val m = manager(backgroundScope, ops, testFlags(flagsFile))
         m.open()
         val vm = SpendingLimitsViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.loaded }

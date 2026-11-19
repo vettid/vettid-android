@@ -14,7 +14,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.chain.Network
-import com.vettid.core.wallet.WalletFlags
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -41,7 +40,7 @@ class WalletResetTest {
     private val id = "01WALLET0000000000000000AA"
     private val unreadable = """{"version":2,"backed_up":["$id"]}"""
 
-    private fun TestScope.mgr() = manager(backgroundScope, ops, WalletFlags(flagsFile))
+    private fun TestScope.mgr() = manager(backgroundScope, ops, testFlags(flagsFile))
 
     // The screens
 
@@ -145,7 +144,7 @@ class WalletResetTest {
         d.resetSettings()
         eventually { !d.state.value.settingsUnreadable }
         assertTrue(ops.calls.none { it.startsWith("caps.") || it == "new" || it.startsWith("create") })
-        assertFalse(WalletFlags(flagsFile).backedUp(id))
+        assertFalse(testFlags(flagsFile).backedUp(id))
         // Nothing was marked backed up: the wallet shows Not backed up.
         eventually { !d.state.value.backedUp }
     }
@@ -156,7 +155,7 @@ class WalletResetTest {
         flagsFile.bytes = unreadable.encodeToByteArray()
         val m = mgr().also { it.open() }
         m.resetSettings()
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.problem == ReceiveProblem.LIMITS_ASK }
         assertTrue(ops.calls.none { it == "new" })
@@ -173,7 +172,7 @@ class WalletResetTest {
         flagsFile.bytes = unreadable.encodeToByteArray()
         val m = mgr().also { it.open() }
         m.resetSettings()
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.problem == ReceiveProblem.LIMITS_ASK }
         vm.setLimitChoice(true)
@@ -191,7 +190,7 @@ class WalletResetTest {
         flagsFile.bytes = unreadable.encodeToByteArray()
         val m = mgr().also { it.open() }
         m.resetSettings()
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.address != null }
         assertEquals(null, vm.state.value.problem)
@@ -201,7 +200,7 @@ class WalletResetTest {
     fun receiveRefusesTheResetWhileTheSettingsRead() = runTest {
         val w = ops.wallet(id)
         ops.wallets[id] = w.copy(capped = true, perTxSats = 1000, perPeriodSats = 5000)
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         val m = mgr().also { it.open() }
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.address != null }
@@ -249,7 +248,7 @@ class WalletResetTest {
         flagsFile.bytes = unreadable.encodeToByteArray()
         val m = mgr().also { it.open() }
         m.resetSettings()
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         val vm = ReceiveViewModel(SavedStateHandle(mapOf("walletId" to id)), m)
         eventually { vm.state.value.problem == ReceiveProblem.LIMITS_ASK }
         assertFalse(vm.state.value.limitsChosen)
@@ -299,7 +298,7 @@ class WalletResetTest {
         eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
         // The file reads now (and the wallet is backed up there): Try again is Receive.
         flagsFile.bytes = null
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         vm.load()
         eventually { vm.state.value.address != null }
         assertEquals(null, vm.state.value.problem)
@@ -315,7 +314,7 @@ class WalletResetTest {
         eventually { vm.state.value.problem == ReceiveProblem.SETTINGS_UNREADABLE }
         vm.askReset()
         flagsFile.bytes = null
-        WalletFlags(flagsFile).setBackedUp(id)
+        testFlags(flagsFile).setBackedUp(id)
         vm.resetSettings()
         eventually { vm.state.value.address != null }
         assertFalse(vm.state.value.resetFailed)
