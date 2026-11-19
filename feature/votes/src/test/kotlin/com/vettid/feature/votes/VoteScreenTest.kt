@@ -3,29 +3,36 @@
 
 package com.vettid.feature.votes
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.votes.BallotState
 import com.vettid.core.data.votes.CheckState
+import com.vettid.core.data.votes.ObserverVerdict
 import com.vettid.core.data.votes.SiteState
 import com.vettid.core.data.votes.VoteBallot
-import com.vettid.core.data.votes.VoteChoice
 import com.vettid.core.data.votes.VoteCheck
+import com.vettid.core.data.votes.VoteChoice
 import com.vettid.core.data.votes.VoteCounts
+import com.vettid.core.data.votes.VoteDecision
 import com.vettid.core.data.votes.VoteDetail
-import com.vettid.core.data.votes.ObserverVerdict
 import com.vettid.core.data.votes.VoteHint
+import com.vettid.core.data.votes.VoteOutcome
 import com.vettid.core.data.votes.VoteState
 import com.vettid.core.data.votes.VoteSummary
 import com.vettid.core.data.votes.VoteWire
 import com.vettid.core.ui.components.ShellChrome
+import java.time.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
@@ -35,7 +42,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.time.Instant
 
 private const val SERVICE = "Example Cooperative"
 
@@ -69,11 +75,18 @@ class VoteScreenTest {
 
     private val choices = listOf(VoteChoice("no", "No"), VoteChoice("abstain", "Yes, really"), VoteChoice("yes", "Yes"))
 
-    private fun detail(s: VoteSummary, text: String = "The board proposes the budget.", choiceId: String? = null, tally: Map<String, Long>? = null, counts: VoteCounts? = null) =
-        VoteDetail(
-            summary = s, text = text, choices = choices, quorumText = "At least 40 ballots", minBallots = 40, binding = true, recordTag = null,
-            choiceId = choiceId, extensions = 0, tally = tally, counts = counts, serviceBallotChoiceId = null,
-        )
+    private fun detail(
+        s: VoteSummary,
+        text: String = "The board proposes the budget.",
+        choiceId: String? = null,
+        tally: Map<String, Long>? = null,
+        counts: VoteCounts? = null,
+        decision: VoteDecision? = null,
+        outcome: VoteOutcome? = null,
+    ) = VoteDetail(
+        summary = s, text = text, choices = choices, quorumText = "At least 40 ballots", minBallots = 40, binding = true, recordTag = null,
+        choiceId = choiceId, extensions = 0, tally = tally, counts = counts, serviceBallotChoiceId = null, decision = decision, outcome = outcome,
+    )
 
     private fun state(
         s: VoteSummary,
@@ -214,6 +227,64 @@ class VoteScreenTest {
         shown("84 of 120 eligible members voted.").assertIsDisplayed()
         shown("Enough votes were cast: 84, and the service asked for at least 40.").assertIsDisplayed()
         shown("3 messages sent to $SERVICE during the vote were not handled; any vote among them was not counted.").assertIsDisplayed()
+    }
+
+    @Test
+    fun theRuleShowsUnderTheQuorumLineBeforeVoting() {
+        val s = summary()
+        show(state(s, detail(s, decision = VoteDecision(VoteDecision.Rule.Threshold(2, 3), VoteDecision.Base.CAST))))
+        shown("Decided by at least 2/3 of the votes, not counting abstentions.").assertIsDisplayed()
+        val quorum = rule.onNode(matcher("Quorum, as the service states it: At least 40 ballots", false), useUnmergedTree = true).fetchSemanticsNode()
+        val line = rule.onNodeWithTag("vote_rule", useUnmergedTree = true).fetchSemanticsNode()
+        assertTrue("under the quorum line", line.boundsInRoot.top >= quorum.boundsInRoot.bottom)
+        val binding = rule.onNode(matcher("binding", true), useUnmergedTree = true).fetchSemanticsNode()
+        assertTrue("above the binding line", line.boundsInRoot.bottom <= binding.boundsInRoot.top)
+    }
+
+    @Test
+    fun noRuleLineWithoutADecision() {
+        val s = summary()
+        show(state(s, detail(s)))
+        assertEquals(0, rule.onAllNodesWithTag("vote_rule", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals(0, texts("Decided by"))
+    }
+
+    @Test
+    fun theOutcomeIsFirstInTheResultsAndTheUnhandledLineStaysLast() {
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        show(
+            state(
+                s,
+                detail(s, choiceId = "yes", tally = tally, counts = VoteCounts(120, 84, 0, 3), outcome = VoteOutcome(VoteOutcome.Status.DECIDED, "yes")),
+                hint = VoteHint(verdict = ObserverVerdict.PASSED),
+            ),
+        )
+        shown("Decided: Yes").assertIsDisplayed()
+        val title = rule.onNode(matcher("Results", false), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val outcome = rule.onNodeWithTag("vote_outcome", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val row = rule.onNode(matcher("Yes: 52", false), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val unhandled = rule.onNode(matcher("were not handled", true), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("after the title", outcome.top >= title.bottom)
+        assertTrue("before the rows", outcome.bottom <= row.top)
+        assertTrue("the unhandled line last", unhandled.top >= row.bottom)
+        assertEquals(1, shownAll("were not handled", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theOutcomeHidesWithTheNumbers() {
+        val tally = mapOf("yes" to 52L, "no" to 30L, "abstain" to 2L)
+        val s = summary(VoteState.CLOSED, VoteBallot(BallotState.RECORDED), VoteCheck(CheckState.VERIFIED), canCast = false)
+        val d = detail(s, choiceId = "yes", tally = tally, counts = VoteCounts(120, 84, 0, 3), outcome = VoteOutcome(VoteOutcome.Status.TIED, null))
+        var hint by mutableStateOf(VoteHint(observerFailed = true, verdict = ObserverVerdict.FAILED))
+        rule.setContent { VoteScreen(state(s, d, hint = hint), VoteActions(), now = now) }
+        assertEquals(0, texts("Tied:"))
+        hint = VoteHint() // no verdict in memory
+        rule.waitForIdle()
+        assertEquals(0, texts("Tied:"))
+        hint = VoteHint(verdict = ObserverVerdict.PASSED)
+        rule.waitForIdle()
+        shown("Tied: no choice decided.").assertIsDisplayed()
     }
 
     @Test

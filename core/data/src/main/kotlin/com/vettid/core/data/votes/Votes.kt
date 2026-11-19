@@ -6,6 +6,7 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -130,8 +131,34 @@ data class VoteDetail(
     val counts: VoteCounts?,
     /** The ballot of the service while a restore asks "Is this your vote?"; its choice id. */
     val serviceBallotChoiceId: String?,
+    /** How the vote is decided, as the vault holds the proposal (VAULT-MESSAGING 0.90.18 §10.19.8); null for one §3.5 forbids. */
+    val decision: VoteDecision? = null,
+    /** The results' outcome, only with the tally (a `verified` or `unconfirmed` check); null when not consistent in itself. */
+    val outcome: VoteOutcome? = null,
 ) {
     override fun toString() = "VoteDetail(${summary.key})" // never the text, the choice or the tally in a log line
+}
+
+/** How a vote is decided (BALLOT-PROTOCOL 0.14.0 §3.5): a rule and, for a majority or a threshold, what it is of. */
+data class VoteDecision(val rule: Rule, val base: Base?) {
+    sealed interface Rule {
+        data object Majority : Rule
+
+        /** A real choice with at least [num]/[den] of the base. */
+        data class Threshold(val num: Long, val den: Long) : Rule
+
+        data object Plurality : Rule
+    }
+
+    /** What a majority or a threshold is of. */
+    enum class Base(val wire: String) { CAST("cast"), VOTED("voted"), ELIG("elig") }
+}
+
+/** The results' outcome (BALLOT-PROTOCOL 0.14.0 §7.1). [choice] is the decided choice's id, for [Status.DECIDED] only. */
+data class VoteOutcome(val status: Status, val choice: String?) {
+    enum class Status(val wire: String) { DECIDED("decided"), NOT_DECIDED("not_decided"), TIED("tied"), NO_QUORUM("no_quorum") }
+
+    override fun toString() = "VoteOutcome($status)" // never the choice in a log line
 }
 
 data class VoteChoice(val id: String, val label: String)
@@ -258,8 +285,78 @@ object VoteWire {
             tally = tally,
             counts = counts,
             serviceBallotChoiceId = (o["service_ballot"] as? JsonObject)?.s("choice_id"),
+            decision = (o["decision"] as? JsonObject)?.let { decision(it) },
+            outcome = (o["outcome"] as? JsonObject)?.let { outcome(it) },
         )
     }
+
+    /**
+     * `decision` as BALLOT-PROTOCOL 0.14.0 §3.5 and VAULT-MESSAGING 0.90.18 §10.19.8 write it (the vault refused any other on
+     * arrival): exactly `rule`, `base` and `threshold`; `base` null exactly for plurality; `threshold` `{num, den}` exactly for
+     * threshold, with 1 ≤ den ≤ 10, 1 ≤ num ≤ den, 2·num > den, in lowest terms. Null for anything else: then no rule line
+     * shows, rather than a wrong one (as the iPhone app).
+     */
+    @Suppress("ReturnCount")
+    internal fun decision(d: JsonObject): VoteDecision? {
+        if (d.keys != DECISION_MEMBERS) return null
+        val base = nullable(d["base"]) { b ->
+            val wire = (b as? JsonPrimitive)?.takeIf { it.isString }?.content
+            VoteDecision.Base.entries.firstOrNull { it.wire == wire }
+        }
+        val fraction = nullable(d["threshold"]) { t -> fraction(t) }
+        if (base == Unreadable || fraction == Unreadable) return null
+        val b = base as? VoteDecision.Base
+        val f = fraction as? VoteDecision.Rule.Threshold
+        return when (d.s("rule")) {
+            "majority" -> VoteDecision(VoteDecision.Rule.Majority, b).takeIf { f == null && b != null }
+            "threshold" -> VoteDecision(f ?: return null, b ?: return null)
+            "plurality" -> VoteDecision(VoteDecision.Rule.Plurality, null).takeIf { f == null && b == null }
+            else -> null
+        }
+    }
+
+    /** A member that may be JSON null: null for null, [Unreadable] for anything [read] cannot read, else what it read. */
+    private fun nullable(e: JsonElement?, read: (JsonElement) -> Any?): Any? = when (e) {
+        is JsonNull -> null
+        null -> Unreadable
+        else -> read(e) ?: Unreadable
+    }
+
+    private object Unreadable
+
+    /** `{num, den}` as §3.5 allows it: exactly the two, integers, 1 ≤ den ≤ 10, 1 ≤ num ≤ den, above one half, lowest terms. */
+    @Suppress("ReturnCount")
+    private fun fraction(e: JsonElement): VoteDecision.Rule.Threshold? {
+        val t = e as? JsonObject ?: return null
+        val num = t.long("num")
+        val den = t.long("den")
+        if (t.keys != FRACTION_MEMBERS || num == null || den == null) return null
+        val inRange = den in 1..MAX_DEN && num in 1..den
+        return VoteDecision.Rule.Threshold(num, den).takeIf { inRange && 2 * num > den && gcd(num, den) == 1L }
+    }
+
+    /**
+     * `outcome` as the vault sends it (recomputed from the signed tally, §10.19.6 step 2), when consistent in itself
+     * (BALLOT-PROTOCOL §8.5): a known `status`, `quorum_met` false exactly for `no_quorum`, and `choice` a string exactly for
+     * `decided` (null otherwise). Null for anything else. That the choice is a real choice of the vote is checked where shown.
+     */
+    @Suppress("ReturnCount")
+    internal fun outcome(o: JsonObject): VoteOutcome? {
+        val status = VoteOutcome.Status.entries.firstOrNull { it.wire == o.s("status") } ?: return null
+        val met = (o["quorum_met"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: return null
+        if (met == (status == VoteOutcome.Status.NO_QUORUM)) return null
+        if (status == VoteOutcome.Status.DECIDED) {
+            val choice = (o["choice"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+            return VoteOutcome(status, choice)
+        }
+        return if (o["choice"] is JsonNull) VoteOutcome(status, null) else null
+    }
+
+    private tailrec fun gcd(a: Long, b: Long): Long = if (b == 0L) a else gcd(b, a % b)
+
+    private val DECISION_MEMBERS = setOf("rule", "base", "threshold")
+    private val FRACTION_MEMBERS = setOf("num", "den")
+    private const val MAX_DEN = 10L
 
     @Suppress("ReturnCount")
     private fun choice(e: JsonElement): VoteChoice? {
