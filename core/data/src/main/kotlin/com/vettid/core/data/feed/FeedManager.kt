@@ -158,6 +158,12 @@ class FeedManager(
     /** The owner check's hold or due state last ended here, on the vault's clock ([ownerCheckLifted]). Under [lock]. */
     private var liftedAt: Instant? = null
 
+    /**
+     * The lifts counted ([ownerCheckLifted]): an incremental read begun before one reads from the cursor of before the due
+     * state, so it applies nothing and reads in full instead ([readAfter]). Under [lock].
+     */
+    private var lifts = 0
+
     /** (Rule 3) The openings counted ([vaultOpened]): a mark for an earlier one is ignored ([openingMarked]). Under [lock]. */
     private var opening = 0
 
@@ -205,7 +211,7 @@ class FeedManager(
         retried = true
         scope.launch {
             kotlinx.coroutines.delay(RETRY_AFTER_MS)
-            if (synchronized(lock) { queuesBehind() }) catchUp()
+            if (vaultOpen() && synchronized(lock) { queuesBehind() }) catchUp()
         }
     }
 
@@ -338,11 +344,7 @@ class FeedManager(
      * phase's own rule): the same opening carries on, its moment kept, so what the vault sent meanwhile is judged against
      * it, not against a new mark taken now. False when there was no opening to carry on (the caller then opens a new one).
      */
-    fun openingContinues(): Boolean = synchronized(lock) {
-        if (opening == 0 || openedAt == null) return@synchronized false
-        markable = true
-        true
-    }
+    fun openingContinues(): Boolean = synchronized(lock) { opening != 0 && openedAt != null && markable }
 
     /**
      * (ANDROID-PLAN 0.1.134, "nothing missed while due or held notifies later") The owner check's hold or due state ended at
@@ -351,8 +353,18 @@ class FeedManager(
      * covered by the full read every lift starts (a full read notifies nothing), so later catch-ups bring only what changed
      * after it: an item is never judged by its own `at`, which a batch's later ask keeps.
      */
-    fun ownerCheckLifted(at: Instant) {
-        synchronized(lock) { liftedAt = at }
+    fun ownerCheckLifted(at: Instant?) {
+        synchronized(lock) {
+            // Not known (no time on the vault's clock): no mark, but the rest all the same.
+            if (at != null) liftedAt = liftedAt?.let { maxOf(it, at) } ?: at
+            lifts++
+            // Held arrivals from before the due state notify nothing after it (the clone alarm's still do); held events
+            // are judged by their own `ts` against the lift as they are released.
+            heldArrivals.values.removeAll { it.kind !in NOTIFIES_WHILE_HELD }
+            // The cursor is what it was before the due state: until a full read, nothing is read after it, and an event
+            // that comes waits for that read and is judged then (told before the lift is published, so none comes first).
+            if (loadState.value == ListLoad.LOADED) loadState.value = ListLoad.NOT_LOADED
+        }
     }
 
     /**
@@ -619,18 +631,15 @@ class FeedManager(
 
     /** One paged read from the cursor ([full]: from 0, replacing everything). Runs under [reads]. */
     private suspend fun readAfter(full: Boolean) {
-        val gen = synchronized(lock) { generation }
+        val (gen, liftsAtStart) = synchronized(lock) { generation to lifts }
         if (full) loadState.value = ListLoad.LOADING
         try {
             if (full) readRetention()
             val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
-            val arrived = synchronized(lock) {
-                if (gen != generation) return
-                val before = if (full) emptyMap() else byId
-                if (full) byId = emptyMap()
-                apply(changed)
-                cursor = maxOf(if (full) 0 else cursor, seq)
-                if (full) emptyList() else newUnread(changed, before)
+            val arrived = when (val a = applyRead(full, gen, liftsAtStart, changed, seq)) {
+                Applied.Cleared -> return
+                Applied.Lifted -> return readAfter(full = true)
+                is Applied.Read -> a.arrived
             }
             arrived.distinctBy { it.itemId }.forEach { emitArrival(byIdNow(it.itemId) ?: it) }
             loadState.value = ListLoad.LOADED
@@ -639,6 +648,33 @@ class FeedManager(
             throw e
         }
     }
+
+    /** What a read's answer came to ([applyRead]). */
+    private sealed interface Applied {
+        /** A [clear] came since the read began: nothing applied. */
+        data object Cleared : Applied
+
+        /** An incremental read across a lift ([ownerCheckLifted]): nothing applied; a full read instead. */
+        data object Lifted : Applied
+
+        class Read(val arrived: List<FeedItem>) : Applied
+    }
+
+    /** A read's answer applied, under [lock], unless a clear or (for an incremental read) a lift came since it began. */
+    private fun applyRead(full: Boolean, gen: Int, liftsAtStart: Int, changed: List<FeedItem>, seq: Long): Applied =
+        synchronized(lock) {
+            when {
+                gen != generation -> Applied.Cleared
+                !full && lifts != liftsAtStart -> Applied.Lifted
+                else -> {
+                    val before = if (full) emptyMap() else byId
+                    if (full) byId = emptyMap()
+                    apply(changed)
+                    cursor = maxOf(if (full) 0 else cursor, seq)
+                    Applied.Read(if (full) emptyList() else newUnread(changed, before))
+                }
+            }
+        }
 
     /** `feed.list{after_seq}` paged from [from] until a page is shorter than the limit: the items and the answer's `seq`. */
     private suspend fun pages(from: Long): Pair<List<FeedItem>, Long> {

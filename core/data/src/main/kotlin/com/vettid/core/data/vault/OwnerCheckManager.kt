@@ -101,6 +101,12 @@ class OwnerCheckManager(
     private val memberState: suspend () -> String? = { null },
     /** (ANDROID-PLAN 0.1.95) A read found the vault locked: the app moves to its locked screen, as for a `vault.locking`. */
     private val onFoundLocked: () -> Unit = {},
+    /**
+     * (ANDROID-PLAN 0.1.134) The due or held state ends with the value about to be published: told before it is, in the
+     * same step, so nothing that follows the value can come before. [at]: when the check passed, on the vault's clock
+     * (null: not known). A due state the clock alone began counts.
+     */
+    private val onLift: (at: Instant?) -> Unit = {},
 ) : OwnerCheckRepository {
     private val saved = restore()
     private val view = MutableStateFlow(saved?.toView())
@@ -890,6 +896,8 @@ class OwnerCheckManager(
         synchronized(setLock) {
             if (stale()) return false
             if (pass != null) notePass(pass)
+            val t = now()
+            if (view.value?.gated(t) == true && !v.gated(t)) runCatching { onLift(liftTime(v, pass)) }
             val passes = if (pass?.counts == true) passCount.incrementAndGet() else passCount.get()
             view.value = v.copy(passes = passes)
         }
@@ -905,6 +913,17 @@ class OwnerCheckManager(
         runCatching { persist(json.encodeToString(Saved.serializer(), saved).toByteArray()) }
         return true
     }
+
+    /**
+     * When the check that ends a due or held state passed, on the vault's clock: the pass's own time, else the value's
+     * deadline less its interval as it runs on this vault (the last pass the vault counts; a staging time scale divides
+     * it), never earlier than the latest pass known. Never [passedAt] alone: a pass known before the due state began is
+     * earlier than its end, and due-era news would notify. Null: not known.
+     */
+    private fun liftTime(v: OwnerCheckView, pass: Pass?): Instant? =
+        pass?.at ?: v.deadline?.minusSeconds(TimeScales.divide(v.intervalSeconds, lastTimeScale))?.let { fromDeadline ->
+            passedAt?.let { maxOf(it, fromDeadline) } ?: fromDeadline
+        }
 
     /** Under [setLock]: [pass] happened; [passedAt] only ever moves forward. */
     private fun notePass(pass: Pass) {

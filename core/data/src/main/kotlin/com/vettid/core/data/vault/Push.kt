@@ -225,7 +225,11 @@ class HeldBackEvents {
         ui = true
     }
 
-    /** No activity of this app is started any more (the app left the front): a push from now on may start what it collects. */
+    /**
+     * No activity of this app is started any more (the app left the front): a push from now on may start what it collects.
+     * A start the member made, left while the vault is still unknown (Starting or Unreachable) and then reached by a push,
+     * counts as one the push started: its events notify whatever their time. That errs toward notifying, never silence.
+     */
     @Synchronized
     fun uiStopped() {
         ui = false
