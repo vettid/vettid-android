@@ -230,7 +230,8 @@ class ReleaseGateWiringTest {
         code.has("openingSteps.dropReplayOnClose(p)")
         // A pass learnt during Unreachable is kept for the continued opening, not launched.
         code.has("} else if (replayFor != null && unreachable) {")
-        code.has("steps.step { openingSteps.holdForTheContinuedOpening(HeldAskReplay.Due(replayFor, listMark, replayToken)) }")
+        code.has("WaitingAsksReplay.due(before, v, at, unlocked = phaseFlow.value == AppPhase.Unlocked || unreachable)")
+        code.has("if (!openingSteps.holdForTheContinuedOpening(due)) launchAfterHoldPassed(replayFor, listMark, replayToken)")
         // Every lift with the vault open reads the feed in full, also one with no replay and no hold.
         code.has("} else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {")
         code.has("steps.step { launchAfterHoldPassed(null, listMark, replayToken) }")

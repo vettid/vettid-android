@@ -33,7 +33,8 @@ class OpeningStepsTest {
     private class World(scope: TestScope, now: Instant) {
         val held = HeldAskReplay()
         lateinit var phase: PhaseHolder
-        val feed = FeedManager(scope.backgroundScope, ops = { NoFeed() }, now = { now }, vaultOpen = { phase.value == AppPhase.Unlocked })
+        val ops = NoFeed()
+        val feed = FeedManager(scope.backgroundScope, ops = { ops }, now = { now }, vaultOpen = { phase.value == AppPhase.Unlocked })
         val steps = OpeningSteps(feed, held) { phase }
 
         init {
@@ -111,6 +112,35 @@ class OpeningStepsTest {
         w.move(AppPhase.Unlocked)
         assertTrue("the new opening's replay", w.held.held())
         assertTrue(w.feed.replayOwns(token))
+    }
+
+    /**
+     * A blip, a lock and a new opening faster than the collector: its soft clear for the blip, reached in the new opening,
+     * changes nothing there (the new opening's list, read, stays).
+     */
+    @Test
+    fun aLateBlipClearLeavesTheNewOpeningAlone() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        w.phase.value = blip // published; the collector is behind
+        w.phase.value = AppPhase.Locked
+        w.phase.value = AppPhase.Unlocked // a new opening
+        w.feed.refresh() // its read
+        assertTrue(w.feed.loaded)
+        w.collect(blip) // the collector reaches the blip now
+        assertTrue("the new opening's list stays", w.feed.loaded)
+    }
+
+    /** A pass learnt during the blip is held only while the phase is still Unreachable; else the caller launches it. */
+    @Test
+    fun theHoldIsOnlyWhileUnreachable() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        assertFalse(w.steps.holdForTheContinuedOpening(HeldAskReplay.Due(1, 0, 0)))
+        assertFalse(w.held.held())
+        w.move(blip)
+        assertTrue(w.steps.holdForTheContinuedOpening(HeldAskReplay.Due(1, 0, 0)))
+        assertTrue(w.held.held())
     }
 
     /** A close the collector reaches in time clears the feed and ends the opening: the next is a new one, holding nothing. */

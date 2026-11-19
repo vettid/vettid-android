@@ -809,8 +809,9 @@ class FeedManagerTest {
         m.onEvent(event(item("n3", 3), ts = now.plusSeconds(5))) // after the lift
         settle { arrived.isNotEmpty() }
         assertEquals(listOf("n3"), arrived.map { it.itemId })
-        // A new opening forgets the lift.
+        // A new opening forgets the lift (its list too: the event waits for the opening's full read, and is news since it).
         m.vaultOpened(now.minusSeconds(600))
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), item("n3", 3), item("o4", 4)), 4)
         m.onEvent(event(item("o4", 4), ts = now.minusSeconds(120)))
         settle { arrived.size == 2 }
         assertEquals(listOf("n3", "o4"), arrived.map { it.itemId })
@@ -1035,8 +1036,56 @@ class FeedManagerTest {
         val arrived = afterABlip(m, ops, listOf(item("i1", 1), g2)) { assertTrue(m.openingContinues()) }
         assertEquals(listOf("g2"), arrived)
         m.onEvent(event(g2))
+        // Its event held back while the phase was not known, replayed now (covered, sent since the opening): not again.
+        m.replay(event(g2), wake = false)
         advanceUntilIdle()
         assertEquals("once", listOf("g2"), arrived)
+    }
+
+    /**
+     * While the vault is not open on this phone nothing is read for a `sync.event`, and a read made all the same notifies
+     * nothing, marks nothing notified and leaves what the blip kept: the continued opening's read notifies the blip's item.
+     */
+    @Test
+    fun aReadWhileNotOpenTakesNothingOfTheBlip() = runTest {
+        val ops = Ops()
+        var open = true
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        open = false
+        m.clear(keepHeld = true) // Unreachable
+        val reads = synchronized(ops) { ops.lists.size }
+        m.onEvent(sync("feed.updated", "i1", 3))
+        // A read would run on the IO dispatcher: give it the time to show.
+        repeat(SETTLE_TRIES / 4) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) }
+        assertEquals("no read while not open", reads, synchronized(ops) { ops.lists.size })
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // a read all the same (one already asked for)
+        advanceUntilIdle()
+        assertEquals("nothing while not open", emptyList<String>(), arrived)
+        open = true
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
+    @Test
+    fun aNewOpeningEmptiesTheList() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.loaded)
+        m.vaultOpened(now)
+        assertFalse(m.loaded)
+        assertEquals(0L, m.seq)
+        assertEquals(emptyList<FeedItem>(), m.items.value)
     }
 
     /** Only what is new or changed since the kept cursor and still unread: the rest of the list is silent. */

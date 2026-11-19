@@ -288,7 +288,8 @@ class FeedManager(
             if (!keepHeld && endsOpening) openingEnded = true
             behind = false
             retried = false
-            // Kept once, from a loaded list: a second soft clear before a read keeps the first.
+            // Kept once, from a loaded list: a second soft clear before a read keeps the first. A list being read (not loaded)
+            // keeps nothing: the blip's items then fall back to the full read's silence.
             kept = when {
                 !keepHeld -> null
                 loadState.value == ListLoad.LOADED -> KeptList(cursor, byId.mapValues { it.value.seq })
@@ -324,7 +325,8 @@ class FeedManager(
                 onItem(item, notify = !fromTheHold(m, item))
             }
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
-                SYNC_UPDATED, SYNC_DELETED -> if (!gated()) catchUp()
+                // Not while the vault is not open on this phone: nothing is read then (the opening's read covers it).
+                SYNC_UPDATED, SYNC_DELETED -> if (!gated() && vaultOpen()) catchUp()
             }
         }
     }
@@ -352,6 +354,14 @@ class FeedManager(
         heldEvents.clear()
         heldArrivals.clear()
         kept = null
+        // Nor of its list: a close the phase collector had not reached yet (a lock it clears) leaves nothing loaded here, so
+        // the opening's backlog waits for its full read and is judged as backlog; a read still on its way is voided.
+        generation++
+        byId = emptyMap()
+        cursor = 0
+        catchUpQueued = false
+        publish()
+        loadState.value = ListLoad.NOT_LOADED
         markable = true
         openingEnded = false
         ++opening
@@ -705,11 +715,14 @@ class FeedManager(
                     apply(changed)
                     cursor = maxOf(if (full) 0 else cursor, seq)
                     // The first full read after a blip notifies what a catch-up from the kept cursor would have ([kept]).
+                    // Only a read made while the vault is open on this phone takes it (one made while not open notifies nothing).
+                    val take = full && vaultOpen()
                     val arrived = when {
                         !full -> newUnread(changed) { before[it]?.seq }
-                        else -> kept?.let { k -> newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] } }.orEmpty()
+                        take -> kept?.let { k -> newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] } }.orEmpty()
+                        else -> emptyList()
                     }
-                    if (full) kept = null
+                    if (take) kept = null
                     Applied.Read(arrived)
                 }
             }
@@ -790,6 +803,9 @@ class FeedManager(
 
     /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
     private fun emitArrival(item: FeedItem) {
+        // Nothing notifies while the vault is not open on this phone, and nothing is marked as notified or arrived then:
+        // what a read brought meanwhile is notified when the opening continues (its held-back event, its full read).
+        if (!vaultOpen()) return
         synchronized(lock) { arrivedSince?.add(item.itemId) }
         if (FeedKinds.historyOnly(item.kind)) return
         // Rule 3: while the release is checked, nothing notifies yet ([releaseHeld]); after it, nothing overtakes what it held.

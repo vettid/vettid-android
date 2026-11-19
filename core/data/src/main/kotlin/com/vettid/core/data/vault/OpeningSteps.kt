@@ -25,13 +25,13 @@ internal class OpeningSteps(
     }
 
     /**
-     * The phase collector's feed clear for [p]: a soft one for Unreachable, which closes nothing. Any other clears all, unless
-     * a newer opening was published before the collector reached [p] (a lock and an unlock faster than it): that opening
-     * already reset what the feed keeps for it and its read is under way, and the close's own paths cleared the feed when it
-     * happened (a lock, a wipe, a sign-out).
+     * The phase collector's feed clear for [p]: a soft one for Unreachable, which closes nothing; any other clears all. Neither
+     * when an opening was published before the collector reached [p] (a lock and an unlock, or a blip and its return, faster
+     * than it): that opening already emptied the feed's list and reset what it keeps for itself ([FeedManager.vaultOpened]),
+     * or continued the one the blip kept, and its read is under way.
      */
     fun clearFeed(p: AppPhase) {
-        if (p is AppPhase.Unreachable) feed.clear(keepHeld = true) else phase().unlessOpen { feed.clear() }
+        phase().unlessOpen { if (p is AppPhase.Unreachable) feed.clear(keepHeld = true) else feed.clear() }
     }
 
     /**
@@ -45,7 +45,11 @@ internal class OpeningSteps(
 
     /**
      * A check that passed while a status read fails (another device's): its replay is kept for the opening if it continues,
-     * whose owed reads run it; a close or a new opening drops it.
+     * whose owed reads run it; a close or a new opening drops it. Only while the phase is still Unreachable, decided under the
+     * phase holder's lock: false once the vault opened again (or closed) since the caller looked, and the caller launches it.
      */
-    fun holdForTheContinuedOpening(due: HeldAskReplay.Due) = heldAskReplay.hold(due)
+    fun holdForTheContinuedOpening(due: HeldAskReplay.Due): Boolean {
+        val p = phase()
+        return synchronized(p) { (p.value is AppPhase.Unreachable).also { if (it) heldAskReplay.hold(due) } }
+    }
 }
