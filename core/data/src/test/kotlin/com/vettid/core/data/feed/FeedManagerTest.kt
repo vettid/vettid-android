@@ -1076,6 +1076,56 @@ class FeedManagerTest {
         assertEquals(listOf("g2"), arrived)
     }
 
+    /**
+     * A catch-up that ends after the vault stopped being open (a blip published before the collector's soft clear) applies
+     * nothing: the kept cursor still covers what it brought, and the continued opening's read notifies it.
+     */
+    @Test
+    fun aCatchUpEndingWhileNotOpenAppliesNothing() = runTest {
+        val ops = Ops()
+        var open = true
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(g2), 2)
+        m.catchUp() // incremental, waits at the gate
+        repeat(SETTLE_TRIES / 4) { if (synchronized(ops) { ops.lists.size } < 2) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) } }
+        open = false // the blip, published
+        ops.gate = null
+        gate.complete(Unit)
+        repeat(SETTLE_TRIES / 4) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) }
+        assertEquals("not applied", 1L, m.seq)
+        assertEquals(emptyList<String>(), arrived)
+        m.clear(keepHeld = true) // the collector's soft clear
+        open = true
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /** A waiting-asks replay asked while the vault is not open is not done: its window stays for the run to try again. */
+    @Test
+    fun aReplayWhileNotOpenIsNotDone() = runTest {
+        val ops = Ops()
+        var open = true
+        ops.pages += FeedPage(emptyList(), 0)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now); it.refresh() }
+        val token = m.startReplayWindow()
+        open = false
+        assertFalse(m.replayWaitingAsks(token, emptyList(), now))
+        assertTrue(m.replayOwns(token))
+        open = true
+        assertTrue(m.replayWaitingAsks(token, emptyList(), now))
+    }
+
     /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
     @Test
     fun aNewOpeningEmptiesTheList() = runTest {

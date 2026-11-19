@@ -707,6 +707,9 @@ class FeedManager(
         synchronized(lock) {
             when {
                 gen != generation -> Applied.Cleared
+                // A catch-up that ends while the vault is not open applies nothing: its cursor stays where the blip's kept
+                // list has it, so the continued opening's read brings (and notifies) what it would have.
+                !full && !vaultOpen() -> Applied.Cleared
                 // A full read too: begun before the lift, its cursor may stand before changes of the due state.
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
@@ -714,19 +717,21 @@ class FeedManager(
                     if (full) byId = emptyMap()
                     apply(changed)
                     cursor = maxOf(if (full) 0 else cursor, seq)
-                    // The first full read after a blip notifies what a catch-up from the kept cursor would have ([kept]).
-                    // Only a read made while the vault is open on this phone takes it (one made while not open notifies nothing).
-                    val take = full && vaultOpen()
-                    val arrived = when {
-                        !full -> newUnread(changed) { before[it]?.seq }
-                        take -> kept?.let { k -> newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] } }.orEmpty()
-                        else -> emptyList()
-                    }
-                    if (take) kept = null
-                    Applied.Read(arrived)
+                    Applied.Read(if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq })
                 }
             }
         }
+
+    /**
+     * What a full read notifies: what a catch-up from the kept cursor would have ([kept]) for the first one after a blip, and
+     * only when made while the vault is open on this phone (one made while not open notifies nothing and leaves it); else
+     * nothing. Under [lock].
+     */
+    private fun arrivedSinceTheBlip(changed: List<FeedItem>): List<FeedItem> {
+        val k = kept?.takeIf { vaultOpen() } ?: return emptyList()
+        kept = null
+        return newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] }
+    }
 
     /** `feed.list{after_seq}` paged from [from] until a page is shorter than the limit: the items and the answer's `seq`. */
     private suspend fun pages(from: Long): Pair<List<FeedItem>, Long> {
@@ -786,6 +791,8 @@ class FeedManager(
         val waiting: List<FeedItem>? = synchronized(lock) {
             when {
                 token != replayToken -> emptyList() // a later replay owns the window and sends what is waiting
+                // Not while the vault is not open on this phone: the run waits for the opening to continue (or ends with it).
+                !vaultOpen() -> null
                 gated() -> emptyList<FeedItem>().also { arrivedSince = null }
                 loadState.value != ListLoad.LOADED -> null
                 else -> {

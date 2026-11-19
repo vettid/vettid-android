@@ -82,7 +82,7 @@ class OpeningStepsTest {
         val w = World(this, now)
         w.move(AppPhase.Unlocked)
         w.move(blip)
-        val token = w.keepReplay() // [OpeningSteps.holdForTheContinuedOpening]
+        val token = w.keepReplay() // [OpeningSteps.placePassReplay] kept it
         w.move(AppPhase.Unlocked)
         assertTrue(w.held.held())
         assertTrue(w.feed.replayOwns(token))
@@ -131,15 +131,22 @@ class OpeningStepsTest {
         assertTrue("the new opening's list stays", w.feed.loaded)
     }
 
-    /** A pass learnt during the blip is held only while the phase is still Unreachable; else the caller launches it. */
+    /**
+     * A pass learnt during the blip, placed on the phase as it is then: kept while still Unreachable, launched once open
+     * again, dropped once closed (nothing is read with the vault closed).
+     */
     @Test
-    fun theHoldIsOnlyWhileUnreachable() = runTest {
+    fun aPassIsPlacedOnThePhaseAsItIsNow() = runTest {
         val w = World(this, now)
+        val due = HeldAskReplay.Due(1, 0, 0)
         w.move(AppPhase.Unlocked)
-        assertFalse(w.steps.holdForTheContinuedOpening(HeldAskReplay.Due(1, 0, 0)))
+        assertEquals(OpeningSteps.PassReplay.LAUNCH, w.steps.placePassReplay(due))
+        assertFalse(w.held.held())
+        w.move(AppPhase.Locked)
+        assertEquals(OpeningSteps.PassReplay.DROP, w.steps.placePassReplay(due))
         assertFalse(w.held.held())
         w.move(blip)
-        assertTrue(w.steps.holdForTheContinuedOpening(HeldAskReplay.Due(1, 0, 0)))
+        assertEquals(OpeningSteps.PassReplay.HELD, w.steps.placePassReplay(due))
         assertTrue(w.held.held())
     }
 

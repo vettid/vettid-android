@@ -1344,8 +1344,11 @@ class VaultManager(
                     // Not open now: the continued opening runs it ([releasePause] owed reads), after its own reads.
                     steps.step {
                         val due = HeldAskReplay.Due(replayFor, listMark, replayToken)
-                        // Opened again (or closed) since: launched now, as for an open vault (a close ends its run).
-                        if (!openingSteps.holdForTheContinuedOpening(due)) launchAfterHoldPassed(replayFor, listMark, replayToken)
+                        when (openingSteps.placePassReplay(due)) {
+                            OpeningSteps.PassReplay.HELD -> Unit
+                            OpeningSteps.PassReplay.LAUNCH -> launchAfterHoldPassed(replayFor, listMark, replayToken)
+                            OpeningSteps.PassReplay.DROP -> feed.endReplayWindow(replayToken) // closed since: nothing is read
+                        }
                     }
                 } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.

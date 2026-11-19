@@ -43,13 +43,20 @@ internal class OpeningSteps(
         if (p !is AppPhase.Unreachable) phase().unlessOpen { heldAskReplay.drop() }
     }
 
+    /** Where a passed check's waiting-asks replay goes ([placePassReplay]). */
+    enum class PassReplay { HELD, LAUNCH, DROP }
+
     /**
      * A check that passed while a status read fails (another device's): its replay is kept for the opening if it continues,
-     * whose owed reads run it; a close or a new opening drops it. Only while the phase is still Unreachable, decided under the
-     * phase holder's lock: false once the vault opened again (or closed) since the caller looked, and the caller launches it.
+     * whose owed reads run it; a close or a new opening drops it. Decided on the phase now, under the phase holder's lock:
+     * still Unreachable, kept ([PassReplay.HELD]); open again since the caller looked, launched now ([PassReplay.LAUNCH]);
+     * closed since, dropped, its window ended by the caller ([PassReplay.DROP]): nothing is read with the vault closed.
      */
-    fun holdForTheContinuedOpening(due: HeldAskReplay.Due): Boolean {
-        val p = phase()
-        return synchronized(p) { (p.value is AppPhase.Unreachable).also { if (it) heldAskReplay.hold(due) } }
+    fun placePassReplay(due: HeldAskReplay.Due): PassReplay = phase().decide { p ->
+        when {
+            p is AppPhase.Unreachable -> PassReplay.HELD.also { heldAskReplay.hold(due) }
+            p == AppPhase.Unlocked -> PassReplay.LAUNCH
+            else -> PassReplay.DROP
+        }
     }
 }

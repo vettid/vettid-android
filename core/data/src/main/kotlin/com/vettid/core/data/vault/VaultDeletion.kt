@@ -516,6 +516,9 @@ internal class PhaseHolder(
      * Runs [block] under this holder's lock unless the vault is open now: a step that follows a lock (the phase
      * collector's, which may run late) then never undoes an opening published since.
      */
+    /** [block] given the phase, under this holder's lock: no phase is published while it runs. */
+    fun <T> decide(block: (AppPhase) -> T): T = synchronized(this) { block(flow.value) }
+
     fun unlessOpen(block: () -> Unit) = synchronized(this) {
         if (flow.value !is AppPhase.Unlocked) block()
     }
