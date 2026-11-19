@@ -184,6 +184,26 @@ class WalletDetailViewModelTest {
 
     private val emptyTotals = com.vettid.core.chain.ChainSummary(0, 0, 0, 0)
 
+    /**
+     * The look-up right after a test-network answer notes the server of the network answered: coming back with the server
+     * unchanged looks up nothing (not one more chain-server request).
+     */
+    @Test
+    fun aLookupAfterTheNetworkAnswerNotesThatNetworksServer() = runTest {
+        ops.wallet(id, network = "testnet")
+        settings.server = ChainServer.Default(com.vettid.core.chain.ChainDefaults.TESTNET4)
+        open = ChainOpen.Ready("mempool.space") { emptyTotals }
+        val vm = vm()
+        eventually { vm.state.value.lookup == LookupResult.NeedsNetwork }
+        vm.chooseTestNetwork(Network.TESTNET4)
+        eventually { vm.state.value.lookup is LookupResult.Done && vm.state.value.network == Network.TESTNET4 }
+        val before = opened
+        vm.resumed()
+        testScheduler.advanceUntilIdle()
+        assertEquals("no second look-up", before, opened)
+        assertFalse(vm.state.value.lookingUp)
+    }
+
     @Test
     fun aGoodLookupIsLookedUpAgainWhenTheChainServerChangedMeanwhile() = runTest {
         ops.wallet(id)
