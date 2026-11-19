@@ -32,10 +32,43 @@ class FinishMoveRunnerTest {
         val outcomes = mutableListOf<UnlockAttempt>()
         val runner = FinishMoveRunner(
             manager, holdMs = 90_000,
+            guidUsable = { true },
             lock = { locked++ },
             unlock = { _, _ -> answer.await() },
             onOutcome = { outcomes += it },
         )
+    }
+
+    @Test
+    fun withoutAUsableUserGuidNothingIsLockedOrSent() = runTest {
+        val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var locked = 0
+        var unlocked = 0
+        val outcomes = mutableListOf<UnlockAttempt>()
+        val runner = FinishMoveRunner(
+            manager, 90_000, guidUsable = { false }, lock = { locked++ },
+            unlock = { _, _ -> unlocked++; UnlockAttempt.Success },
+            onOutcome = { outcomes += it },
+        )
+        val r = runner.run("975310")
+        assertEquals(0, locked)
+        assertEquals(0, unlocked)
+        assertEquals(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID), r)
+        assertEquals(listOf(r), outcomes)
+        assertEquals(MoveFailure(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID), runner.failure.value)
+        assertEquals(false, runner.finishing.value)
+    }
+
+    @Test
+    fun withAUsableUserGuidItLocksThenUnlocks() = runTest {
+        val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val order = mutableListOf<String>()
+        val runner = FinishMoveRunner(
+            manager, 90_000, guidUsable = { true }, lock = { order += "lock" },
+            unlock = { _, _ -> order += "unlock"; UnlockAttempt.Success },
+        )
+        runner.run("975310")
+        assertEquals(listOf("lock", "unlock"), order)
     }
 
     @Test
@@ -75,7 +108,7 @@ class FinishMoveRunnerTest {
     fun aVaultFailureIsRecorded() = runTest {
         val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         val runner = FinishMoveRunner(
-            manager, 90_000, lock = {}, unlock = { _, _ -> throw VaultFailure(FailureKind.NETWORK) },
+            manager, 90_000, guidUsable = { true }, lock = {}, unlock = { _, _ -> throw VaultFailure(FailureKind.NETWORK) },
         )
         val r = runCatching { runner.run("975310") }
         assertTrue(r.isFailure)
@@ -112,7 +145,7 @@ class FinishMoveRunnerTest {
         val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         var unlocks = 0
         val runner = FinishMoveRunner(
-            manager, 90_000, lock = {},
+            manager, 90_000, guidUsable = { true }, lock = {},
             unlock = { _, _ -> if (++unlocks == 1) throw VaultFailure(FailureKind.NETWORK) else UnlockAttempt.Success },
         )
         assertTrue(runCatching { runner.run("975310") }.isFailure)
@@ -127,7 +160,7 @@ class FinishMoveRunnerTest {
         val manager = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
         var unlocks = 0
         val runner = FinishMoveRunner(
-            manager, 90_000, lock = {},
+            manager, 90_000, guidUsable = { true }, lock = {},
             unlock = { _, _ -> if (++unlocks == 1) throw CancellationException("gone") else UnlockAttempt.Success },
         )
         assertTrue(runCatching { runner.run("975310") }.isFailure)

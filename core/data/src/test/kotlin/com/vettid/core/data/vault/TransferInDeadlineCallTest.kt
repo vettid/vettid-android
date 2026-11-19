@@ -118,7 +118,7 @@ class TransferInDeadlineCallTest {
     @Test
     fun aPhoneWithoutAUserGuidFailsClosed() {
         val unlock = body("private suspend fun unlockStepHeld(")
-        val at = unlock.indexOf("if (TransferInResume.usableGuid(local.userGuid) == null) {")
+        val at = unlock.indexOf("if (!guidUsable()) {")
         assertTrue("the unlock's guard is kept", at >= 0)
         assertEquals(
             "return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))",
@@ -132,6 +132,18 @@ class TransferInDeadlineCallTest {
         )
         assertTrue("before the unlock is sent", at < unlock.indexOfFirst { it.contains("unlockWithSecret(") })
         assertEquals("no_user_guid", UnlockAttempt.CODE_NO_USER_GUID)
+        // One check for the unlock's guard and the two flows that lock before their unlock ("Finish the move", the
+        // release update): each is handed that check, so neither can lock a vault this phone can never open again.
+        assertEquals(
+            listOf("private fun guidUsable(): Boolean = TransferInResume.usableGuid(local.userGuid) != null"),
+            code.filter { it.contains("fun guidUsable(") },
+        )
+        assertEquals(listOf("userGuidUsable = { guidUsable() },"), code.filter { it.startsWith("userGuidUsable =") })
+        assertEquals(listOf("guidUsable = { guidUsable() },"), code.filter { it.startsWith("guidUsable =") })
+        val update = code.indexOfFirst { it.startsWith("val releaseUpdate = ReleaseUpdateManager(") }
+        assertTrue(code.subList(update, update + 4).contains("userGuidUsable = { guidUsable() },"))
+        val finish = code.indexOfFirst { it.startsWith("private val finishMoveRunner = FinishMoveRunner(") }
+        assertTrue(code.subList(finish, finish + 5).contains("guidUsable = { guidUsable() },"))
         val ev = body("private suspend fun evaluate()")
         assertTrue(ev.any { it == "TransferInResume.Action.NO_USER_GUID -> Unit" })
         val completes = "completeTransferIn(s, record.recordGeneration, checkNotNull(TransferInResume.completingGuid(pendingIn)))"
