@@ -3580,6 +3580,11 @@ class VaultDevice private constructor(
         return listOfNotNull(fromVault, fromKeys).maxOrNull()
     }
 
+    /** [vaultNow], or null while no message from the vault in this process has shown its clock. */
+    fun vaultNowIfKnown(): Instant? = synchronized(vaultClockLock) {
+        vaultTs?.plusMillis((cfg.elapsedMs() - vaultTsAtMs).coerceAtLeast(0))
+    }
+
     /**
      * The vault's clock as this phone last saw it (§11.14.9 step 1): the `ts` of the newest message from the vault plus
      * the time elapsed since on the phone's monotonic clock, or the phone's own clock before any message.

@@ -117,6 +117,9 @@ interface AccountRepository {
      */
     fun onUiCreated() {}
 
+    /** (ANDROID-PLAN 0.1.134 "A push wake") No activity of the app is in front any more ([onUiCreated] until this). */
+    fun onUiStopped() {}
+
     /**
      * Redeems the portal's setup code with this phone's app key (§11.12.1) and returns the account's masked email
      * (`email_hint`) for the member to confirm before a PIN is asked for. [FailureKind.SETUP_CODE_INVALID] for any

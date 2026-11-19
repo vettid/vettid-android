@@ -54,7 +54,7 @@ class ReleaseGateWiringTest {
         val clear = block("clearReleaseCheck = {")
         clear.has("phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }")
         clear.has("releasePause.reset()")
-        clear.has("heldAskReplay.drop()")
+        clear.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
     }
 
     @Test
@@ -199,6 +199,43 @@ class ReleaseGateWiringTest {
         block("private fun replayHeldBack(").has("events.forEach { e -> runCatching { feed.replay(e, wake) } }")
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) A status read that could not be made keeps what the release check holds for a continued opening;
+     * the hold's or due state's end marks the lift before any read; the push flag follows the activities.
+     */
+    @Test
+    fun aBlipKeepsWhatIsHeldAndTheLiftIsMarked() {
+        code.has("clearFeed = { p -> feed.clear(keepHeld = p is AppPhase.Unreachable) },")
+        // The lift is marked by the owner check before its value is published, with an opening current.
+        block("OwnerCheckManager(").has("onLift = { at ->")
+        code.has("val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }")
+        code.has("val vaultNow = session?.device?.vaultNowIfKnown()")
+        code.has("if (opening) feed.ownerCheckLifted(listOfNotNull(at, vaultNow).minOrNull())")
+        // The hold's clear keeps the opening (a blip after it continues it).
+        code.has("steps.step { feed.clear(endsOpening = false) }")
+        // A lift the collector did not see as one still gets its full read.
+        code.has("val feedOwed = phaseFlow.value == AppPhase.Unlocked && !releaseUpdate.paused.value && !feed.loaded")
+        code.has("} else if (!gated && feedOwed) {")
+        // A continued opening owes only what follows its own reads.
+        block("private val releasePause = ReleasePauseSteps(").has("owed = { afterGatedReads() },")
+        // A replay a pause kept across Unreachable runs when the opening continues.
+        code.has("if (heldAskReplay.held()) releasePause.owedReads()")
+        // An identity switch keeps nothing of the feed or a replay.
+        block("private suspend fun switchIdentity(").has("heldAskReplay.drop()")
+        block("private suspend fun switchIdentity(").has("runCatching { feed.clear() }")
+        // A due state the clock alone began counts (pauseLifted), and a held one too.
+        code.has("val checkEnded = lifted || !now && wasHeld")
+        // The held waiting-asks replay is kept across Unreachable, dropped by a close.
+        code.has("if (p !is AppPhase.Unreachable) heldAskReplay.drop()")
+        // Every lift with the vault open reads the feed in full, also one with no replay and no hold.
+        code.has("} else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {")
+        code.has("steps.step { launchAfterHoldPassed(null, listMark, replayToken) }")
+        // A run waits through Unreachable; a new opening drops a replay kept across it.
+        code.has("paused = { phaseFlow.value is AppPhase.Unreachable && record.generation == gen && feed.replayOwns(token) },")
+        assertTrue(block("private val phaseFlow = PhaseHolder(").any { it == "heldAskReplay.drop()" })
+        code.has("override fun onUiStopped() = heldBack.uiStopped()")
+    }
+
     /** Nothing of the feed is kept while the vault is not open on this phone; a hold, which keeps it open, keeps nothing out. */
     @Test
     fun theFeedKeepsNothingOutsideAnOpenVault() {
@@ -216,8 +253,10 @@ class ReleaseGateWiringTest {
         pause.has("stopVotes = { votes.stopSync() },")
         val reads = pause.subList(pause.indexOf("reads = {"), pause.indexOf("sends = {"))
         reads.has("gatedReads()")
-        reads.has("sharing.invalidateTags()")
-        reads.has("heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }")
+        reads.has("afterGatedReads()")
+        val after = block("private fun afterGatedReads()")
+        after.has("sharing.invalidateTags()")
+        after.has("heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }")
         val sends = pause.subList(pause.indexOf("sends = {"), pause.size)
         listOf("votes.startSync()", "presence.start()", "location.resume()", "feed.releaseHeld()").forEach { sends.has(it) }
         val opened = block("private fun gatedReads()")

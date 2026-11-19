@@ -638,6 +638,8 @@ class VaultManager(
         // moment kept, and the events held back meanwhile judged against it).
         onOpen = { continued ->
             if (!continued || !feed.openingContinues()) {
+                // A new opening: a waiting-asks replay kept across Unreachable belongs to the one before.
+                heldAskReplay.drop()
                 val opening = feed.vaultOpened(Instant.now())
                 session?.device?.beginOpening { at -> feed.openingMarked(at, opening) }
             }
@@ -1143,6 +1145,15 @@ class VaultManager(
             // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
             // A passed check also reads the approvals again here (§10.4.2), including one that came while the view was already OK.
             onPassed = { if (!releaseUpdate.paused.value) social.refreshAllQuietly() },
+            // (ANDROID-PLAN 0.1.134) The lift, marked before the value is published (nothing after it can come first), with an
+            // opening current (a status read that could not be made included): at the pass's own time on the vault's clock,
+            // else the vault's clock now if known; never the phone's.
+            onLift = { at ->
+                val opening = phaseFlow.value.let { it == AppPhase.Unlocked || it is AppPhase.Unreachable }
+                // Never later than the vault's clock now: a time past it would silence what comes after.
+                val vaultNow = session?.device?.vaultNowIfKnown()
+                if (opening) feed.ownerCheckLifted(listOfNotNull(at, vaultNow).minOrNull())
+            },
             readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
             mark = { record.recordGeneration },
             onRecoveryStatus = { r, since -> noteRecoveryStatus(r, since) },
@@ -1173,11 +1184,10 @@ class VaultManager(
         gateChanged = { lifted -> location.onGateChanged(lifted) },
         reads = {
             gatedReads()
-            // A `tag.changed` held back meanwhile: the tags are read again by whoever shows them.
-            sharing.invalidateTags()
-            // A passed check's waiting asks, kept while paused: notified now, after the lists are read.
-            heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }
+            afterGatedReads()
         },
+        // An opening that continued: its own reads ran ([openedReads]), only what follows them is owed.
+        owed = { afterGatedReads() },
         sends = {
             votes.startSync() // the list, the public site and the results that are due: now, then every hour
             presence.start() // the member's presence policy
@@ -1209,16 +1219,20 @@ class VaultManager(
                 clearAttachments = { attachments.clear() },
                 clearItems = { items.clear() },
                 clearSharing = { sharing.clear() },
-                clearFeed = { feed.clear() },
+                // A status read that could not be made is no close: what the release check holds is kept for the opening
+                // that may continue (ANDROID-PLAN 0.1.134); any other phase drops everything.
+                clearFeed = { p -> feed.clear(keepHeld = p is AppPhase.Unreachable) },
                 clearDevices = { devices.clear() },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },
                 // Rule 3: the release check and its retries end with the lock, unless an opening was published since.
-                clearReleaseCheck = {
+                clearReleaseCheck = { p ->
                     phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }
                     releasePause.reset()
-                    heldAskReplay.drop()
+                    // A status read that could not be made closes nothing: a waiting-asks replay held over a pause is kept
+                    // for the opening that may continue (ANDROID-PLAN 0.1.134 "Held"); a close drops it.
+                    if (p !is AppPhase.Unreachable) heldAskReplay.drop()
                 },
                 // The names, the full email and the photo: memory only, while the vault is open (ANDROID-PLAN §4).
                 ownProfile = { p ->
@@ -1243,6 +1257,9 @@ class VaultManager(
                     // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
                     // end of this opening's check already ran the reads it owed (they run once).
                     if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
+                    // A waiting-asks replay a pause kept across Unreachable (a new opening dropped it): run as the pause's lift
+                    // would, now, or when the pause lifts or the owner check does (ANDROID-PLAN 0.1.134).
+                    if (heldAskReplay.held()) releasePause.owedReads()
                     presence.start() // the member's presence policy
                     attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                     location.resume() // the location shares this phone is the source of are taken up again
@@ -1282,7 +1299,7 @@ class VaultManager(
                 // Every clearing step runs even if one throws (fail secure); the first failure is rethrown after the last.
                 val steps = ClearSteps()
                 if (now && !wasHeld) {
-                    steps.step { feed.clear() }
+                    steps.step { feed.clear(endsOpening = false) } // the vault stays open: the opening goes on
                     steps.step { devices.clear() }
                     steps.step { votes.clear() }
                     steps.step { presence.clear() } // held or due: no presence is asked or shown
@@ -1301,6 +1318,12 @@ class VaultManager(
                     windowOpen = true
                 }
                 val replayFor = replayGen?.takeIf { windowOpen }
+                // (ANDROID-PLAN 0.1.134) The hold or the due state ended (marked by the owner check itself, before the value
+                // was published: onLift). A due state the clock alone began counts too ([pauseLifted] looks at the previous
+                // value again now), and a held value is gated, so this covers the hold's end.
+                val checkEnded = lifted || !now && wasHeld
+                // Open, the gate not pausing the reads, the feed not loaded: a full read is owed.
+                val feedOwed = phaseFlow.value == AppPhase.Unlocked && !releaseUpdate.paused.value && !feed.loaded
                 if (!now && wasHeld && phaseFlow.value == AppPhase.Unlocked) {
                     // The feed's full read, then the replay when it is due (owner decisions of 2026-11-15).
                     steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
@@ -1315,6 +1338,14 @@ class VaultManager(
                 } else if (replayFor != null) {
                     // The due state known only from the clock ended (nothing was cleared): the read and the replay alone.
                     steps.step { launchAfterHoldPassed(replayFor, listMark, replayToken) }
+                } else if (checkEnded && phaseFlow.value == AppPhase.Unlocked) {
+                    // (ANDROID-PLAN 0.1.134) Every lift reads the feed in full, which notifies nothing: what changed while due
+                    // is covered by it, so a later catch-up brings only what changed after (never judged by an item's `at`).
+                    steps.step { launchAfterHoldPassed(null, listMark, replayToken) }
+                } else if (!gated && feedOwed) {
+                    // A lift the owner check told the feed of (a full read owed) that this collector did not see as one (two
+                    // values conflated): the read starts here all the same (a catch-up of a feed not loaded reads in full).
+                    steps.step { feed.catchUp() }
                 }
                 // An open Devices & agents list or device page reads the list the hold cleared, or that the due check refused.
                 if (devicesReadAgain(wasHeld = wasHeld, held = now, gatedEnded = gatedEnded, phase = phaseFlow.value)) {
@@ -1361,6 +1392,14 @@ class VaultManager(
         social.refreshAllQuietly()
         items.refreshQuietly()
         feed.open()
+    }
+
+    /** After a pause's lift's reads ([gatedReads]). */
+    private fun afterGatedReads() {
+        // A `tag.changed` held back meanwhile: the tags are read again by whoever shows them.
+        sharing.invalidateTags()
+        // A passed check's waiting asks, kept while paused: notified now, after the lists are read.
+        heldAskReplay.take()?.let { d -> launchAfterHoldPassed(d.gen, d.listMark, d.token) }
     }
 
     /**
@@ -2019,6 +2058,8 @@ class VaultManager(
      * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
      */
     override fun onUiCreated() = heldBack.uiStarted()
+
+    override fun onUiStopped() = heldBack.uiStopped()
 
     override fun onForeground() {
         // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
@@ -3470,11 +3511,6 @@ class VaultManager(
     }
 
     /**
-     * A hold ended by a passed check, the vault open (owner decision a, 2026-11-15): the feed is read again in full (as at
-     * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
-     * Not at an unlock: only here.
-     */
-    /**
      * [afterHoldPassed], launched with its feed read counted among the feed's reads from now ([FeedManager.reserveRefresh]):
      * a release of what the release check held, asked for before the launched read starts (the lift's sends), waits for it.
      * The place is given back however the launch ends.
@@ -3484,6 +3520,11 @@ class VaultManager(
         scope.launch { afterHoldPassed(gen, listMark, token, read) }.invokeOnCompletion { read.drop() }
     }
 
+    /**
+     * A hold ended by a passed check, the vault open (owner decision a, 2026-11-15): the feed is read again in full (as at
+     * an unlock, nothing of it notifies), the approvals are read again, and then each ask still waiting is notified once.
+     * Not at an unlock: only here.
+     */
     private suspend fun afterHoldPassed(gen: Int?, listMark: Long, token: Int, read: FeedManager.ReservedRead) {
         // Rule 3: nothing is read while the release gate pauses it (the lists, the feed among them, are read when it lifts);
         // the replay waits for the lift with its window open, and runs after the lift's reads.
@@ -3500,6 +3541,8 @@ class VaultManager(
         WaitingAsksRun(
             // Also ended when a later replay replaced this one (it reads for both).
             open = { sameOpenSession(gen) && feed.replayOwns(token) },
+            // A status read that could not be made, the opening the same: wait for it rather than give up (ANDROID-PLAN 0.1.134).
+            paused = { phaseFlow.value is AppPhase.Unreachable && record.generation == gen && feed.replayOwns(token) },
             feedLoaded = { feed.loaded },
             readFeed = { feed.refresh() },
             listed = { social.pendingListedSince(listMark) },
@@ -4310,6 +4353,9 @@ class VaultManager(
         if (slots.active == slot) return
         val d = session?.device
         dropSession(forget = false)
+        // Nothing of the feed, or of a waiting-asks replay, belongs to the other identity.
+        runCatching { feed.clear() }
+        heldAskReplay.drop()
         d?.let {
             runCatching { it.dropKeysFromMemory() }
             liveDevices.remove(it)
