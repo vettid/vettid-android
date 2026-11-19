@@ -112,7 +112,7 @@ class ReleaseGateTest {
 
     private fun TestScope.manager(ops: Ops): ReleaseUpdateManager {
         ops.clock = { testScheduler.currentTime }
-        return ReleaseUpdateManager(backgroundScope, ops, elapsedMs = { testScheduler.currentTime })
+        return ReleaseUpdateManager(backgroundScope, ops, userGuidUsable = { true }, elapsedMs = { testScheduler.currentTime })
     }
 
     // --- the state ---

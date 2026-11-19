@@ -623,7 +623,10 @@ class VaultManager(
      * app requires the vault's current release). Made before the phase: every opening starts its check
      * ([ReleaseUpdateManager.vaultOpened]) before the open phase is published.
      */
-    val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
+    val releaseUpdate = ReleaseUpdateManager(
+        scope, UpdateOps(),
+        userGuidUsable = { TransferInResume.usableGuid(local.userGuid) != null },
+    )
 
     /** The phase, with "being deleted" above every other ([PhaseHolder], ANDROID-PLAN 0.1.54). */
     private val phaseFlow = PhaseHolder(
@@ -768,6 +771,7 @@ class VaultManager(
     private val finishMoveRunner = FinishMoveRunner(
         scope,
         FINISH_MOVE_HOLD_MS,
+        guidUsable = { TransferInResume.usableGuid(local.userGuid) != null },
         lock = { lock() },
         // Its own prompt, not the unlock screen's two steps (§11.14.9 step 2): refused while a change is unresolved.
         unlock = { pin, taken -> unlockOnce(pin, false, holderApp = true, pinTaken = taken) },

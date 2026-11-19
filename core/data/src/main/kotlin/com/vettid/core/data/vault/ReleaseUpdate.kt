@@ -314,6 +314,11 @@ interface ReleaseUpdateRepository {
 class ReleaseUpdateManager(
     private val scope: CoroutineScope,
     private val ops: ReleaseUpdateOps,
+    /**
+     * Whether this phone holds a usable user_guid ([TransferInResume.usableGuid]): the update's unlock needs one (§11.4), so
+     * without it the update locks nothing and sends nothing, and ends as the unlock's own guard would (`no_user_guid`).
+     */
+    private val userGuidUsable: () -> Boolean,
     /** A monotonic clock in milliseconds (tests: the virtual time). */
     private val elapsedMs: () -> Long = { System.nanoTime() / NS_PER_MS },
 ) : ReleaseUpdateRepository {
@@ -636,9 +641,18 @@ class ReleaseUpdateManager(
         if (running() || pin.isEmpty() || !mayStart()) return false
         // The PIN as the keypad took it: whatever moves which PIN the vault expects before an unlock goes out stops it.
         val typed = taken(pin, generation)
-        progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
+        val guidUsable = userGuidUsable()
+        if (!guidUsable) {
+            // Before the lock: a phone that can never open the vault again must not lock it.
+            progressFlow.value = UpdateProgress(
+                UpdateStep.FAILED, offer.current, offer.target,
+                failure = FailureKind.NOT_SUPPORTED, failureCode = UnlockAttempt.CODE_NO_USER_GUID, vaultOpen = true,
+            )
+        } else {
+            progressFlow.value = UpdateProgress(UpdateStep.LOCKING, offer.current, offer.target)
+        }
         // Checked before the lock too: a PIN taken before a change neither locks the vault nor is sent.
-        if (!refusedAsTakenBefore(typed, vaultOpen = true)) {
+        if (guidUsable && !refusedAsTakenBefore(typed, vaultOpen = true)) {
             job = scope.launch {
                 try {
                     ops.lock()
@@ -662,6 +676,11 @@ class ReleaseUpdateManager(
             UpdateStep.FAILED -> launch {
                 if (p.vaultOpen) {
                     if (refusedAsTakenBefore(typed, vaultOpen = true)) return@launch
+                    if (!userGuidUsable()) {
+                        // Before the lock, as at the start.
+                        set { it.copy(failure = FailureKind.NOT_SUPPORTED, failureCode = UnlockAttempt.CODE_NO_USER_GUID) }
+                        return@launch
+                    }
                     try {
                         set { it.copy(step = UpdateStep.LOCKING, failure = null, failureCode = null) }
                         ops.lock()

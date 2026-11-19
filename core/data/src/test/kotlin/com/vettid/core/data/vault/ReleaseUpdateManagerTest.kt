@@ -24,6 +24,8 @@ class ReleaseUpdateManagerTest {
 
     private class Ops : ReleaseUpdateOps {
         val log = mutableListOf<String>()
+        var guid = true
+
         val unlocks = mutableListOf<Call>()
         val results = ArrayDeque<UpdateStepResult>()
         var offer: ReleaseUpdateOffer? = null
@@ -86,7 +88,7 @@ class ReleaseUpdateManagerTest {
         override fun moveMarker() = marker
     }
 
-    private fun TestScope.manager(ops: Ops) = ReleaseUpdateManager(backgroundScope, ops)
+    private fun TestScope.manager(ops: Ops) = ReleaseUpdateManager(backgroundScope, ops, userGuidUsable = { ops.guid })
 
     @Test
     fun lockThenApproveThenMovedThenReopenWithTheSamePin() = runTest {
@@ -104,6 +106,44 @@ class ReleaseUpdateManagerTest {
         assertNull(m.offer.value)
         m.finish()
         assertNull(m.progress.value)
+    }
+
+    @Test
+    fun withoutAUsableUserGuidNothingIsLockedOrSent() = runTest {
+        val ops = Ops()
+        ops.guid = false
+        ops.results += UpdateStepResult.Moved
+        val m = manager(ops)
+        assertTrue(m.start("2468", offer))
+        runCurrent()
+        assertEquals(emptyList<String>(), ops.log)
+        val p = m.progress.value!!
+        assertEquals(UpdateStep.FAILED, p.step)
+        assertEquals(FailureKind.NOT_SUPPORTED, p.failure)
+        assertEquals(UnlockAttempt.CODE_NO_USER_GUID, p.failureCode)
+        assertTrue("the vault is still open", p.vaultOpen)
+        // Try again with the vault open: still nothing locked or sent.
+        m.retry("2468", null)
+        runCurrent()
+        assertEquals(emptyList<String>(), ops.log)
+        assertEquals(UnlockAttempt.CODE_NO_USER_GUID, m.progress.value!!.failureCode)
+    }
+
+    @Test
+    fun aRetryWithTheVaultOpenChecksTheUserGuidBeforeItsLock() = runTest {
+        val ops = Ops()
+        ops.lockFails = VaultFailure(FailureKind.NETWORK)
+        val m = manager(ops)
+        m.start("2468", offer)
+        runCurrent()
+        assertEquals(UpdateStep.FAILED, m.progress.value!!.step)
+        ops.log.clear()
+        ops.lockFails = null
+        ops.guid = false
+        m.retry("2468", null)
+        runCurrent()
+        assertEquals(emptyList<String>(), ops.log)
+        assertEquals(UnlockAttempt.CODE_NO_USER_GUID, m.progress.value!!.failureCode)
     }
 
     @Test
@@ -363,7 +403,7 @@ class ReleaseUpdateManagerTest {
 
             override suspend fun offer(): ReleaseUpdateOffer? = if (calls++ == 0) offer else throw VaultFailure(FailureKind.NETWORK)
         }
-        val m = ReleaseUpdateManager(backgroundScope, ops)
+        val m = ReleaseUpdateManager(backgroundScope, ops, userGuidUsable = { true })
         m.refreshOffer()
         m.refreshOffer()
         assertEquals(offer, m.offer.value)

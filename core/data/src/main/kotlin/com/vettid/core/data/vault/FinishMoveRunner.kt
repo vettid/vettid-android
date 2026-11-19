@@ -25,6 +25,11 @@ import kotlinx.coroutines.launch
 internal class FinishMoveRunner(
     private val scope: CoroutineScope,
     private val holdMs: Long,
+    /**
+     * Whether this phone holds a usable user_guid ([TransferInResume.usableGuid]): the unlock needs one (§11.4), so without
+     * it the move locks nothing and sends nothing, and ends as the unlock's own guard would (`no_user_guid`).
+     */
+    private val guidUsable: () -> Boolean,
     private val lock: suspend () -> Unit,
     /** The unlock with the PIN and the [VaultRepository.pinGeneration] it was taken at. */
     private val unlock: suspend (pin: String, taken: Int?) -> UnlockAttempt,
@@ -66,6 +71,14 @@ internal class FinishMoveRunner(
             finishingFlow.value = false
         }
         try {
+            if (!guidUsable()) {
+                // Checked before the lock: a phone that can never open the vault again must not lock it (the member's open
+                // session would end for nothing, and other devices would see the lock).
+                val r = UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+                failureFlow.value = FinishSetupGate.failureOf(r)
+                onOutcome(r)
+                return r
+            }
             lock()
             val r = unlock(pin, taken)
             failureFlow.value = FinishSetupGate.failureOf(r)
