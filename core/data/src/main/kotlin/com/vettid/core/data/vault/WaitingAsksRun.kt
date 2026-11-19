@@ -14,6 +14,8 @@ import kotlinx.coroutines.delay
  */
 internal class WaitingAsksRun(
     private val open: () -> Boolean,
+    /** The run waits (tries again after the next wait) instead of giving up: a status read that could not be made. */
+    private val paused: () -> Boolean = { false },
     private val feedLoaded: () -> Boolean,
     private val readFeed: suspend () -> Unit,
     private val listed: () -> Boolean,
@@ -37,7 +39,10 @@ internal class WaitingAsksRun(
     }
 
     /** One try: true, replayed; false, given up; null, tried again after the next wait. */
-    private suspend fun tryOnce(): Boolean? {
+    private suspend fun tryOnce(): Boolean? = if (paused()) null else tryOpen()
+
+    /** [tryOnce] when the run is not paused. */
+    private suspend fun tryOpen(): Boolean? {
         if (!open()) return false
         if (!feedLoaded()) attempt(readFeed)
         if (open() && !listed()) attempt(readList)

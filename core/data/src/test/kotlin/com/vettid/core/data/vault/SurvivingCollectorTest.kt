@@ -42,18 +42,27 @@ class SurvivingCollectorTest {
             if (i >= 0) throw pending.removeAt(i).second
         }
 
+        /** The phase each phase-aware clear was told. */
+        val toldPhase = mutableListOf<Pair<String, AppPhase>>()
+
         val steps = PhaseSteps.of(
             replay = { run(PhaseSteps.REPLAY) },
             forgetOpenVault = { run(PhaseSteps.SOCIAL) },
             clearAttachments = { run(PhaseSteps.ATTACHMENTS) },
             clearItems = { run(PhaseSteps.ITEMS) },
             clearSharing = { run(PhaseSteps.SHARING) },
-            clearFeed = { run(PhaseSteps.FEED) },
+            clearFeed = { p ->
+                toldPhase += PhaseSteps.FEED to p
+                run(PhaseSteps.FEED)
+            },
             clearDevices = { run(PhaseSteps.DEVICES) },
             clearVotes = { run(PhaseSteps.VOTES) },
             clearPresence = { run(PhaseSteps.PRESENCE) },
             clearLocation = { run(PhaseSteps.LOCATION) },
-            clearReleaseCheck = { run(PhaseSteps.RELEASE_CHECK) },
+            clearReleaseCheck = { p ->
+                toldPhase += PhaseSteps.RELEASE_CHECK to p
+                run(PhaseSteps.RELEASE_CHECK)
+            },
             ownProfile = { run(PhaseSteps.OWN_PROFILE) },
         )
     }
@@ -71,6 +80,22 @@ class SurvivingCollectorTest {
 
     private suspend fun Flow<AppPhase>.collectPhases(f: Fakes, report: (String, IOException) -> Unit = { _, _ -> }) =
         collectSurviving("phase", report) { p -> f.steps.onPhase(p) { f.ran += OPENED } }
+
+    /** The feed's and the release check's clears are told the phase they clear for (Unreachable keeps what may continue). */
+    @Test
+    fun theClearsAreToldTheirPhase() = runBlocking {
+        val f = Fakes()
+        val unreachable = AppPhase.Unreachable(com.vettid.core.data.vault.FailureKind.NETWORK)
+        f.steps.onPhase(unreachable) { f.ran += OPENED }
+        f.steps.onPhase(AppPhase.Locked) { f.ran += OPENED }
+        assertEquals(
+            listOf(
+                PhaseSteps.FEED to unreachable, PhaseSteps.RELEASE_CHECK to unreachable,
+                PhaseSteps.FEED to AppPhase.Locked, PhaseSteps.RELEASE_CHECK to AppPhase.Locked,
+            ),
+            f.toldPhase,
+        )
+    }
 
     @Test
     fun theFactoryKeepsVaultManagersListInOrder() = runBlocking {

@@ -18,6 +18,7 @@ import org.junit.Test
 class WaitingAsksRunTest {
     private class Fake {
         var open = true
+        var paused = false
         var feedLoaded = true
         var feedReads = 0
         var feedDown = false
@@ -34,6 +35,7 @@ class WaitingAsksRunTest {
 
         fun run() = WaitingAsksRun(
             open = { open },
+            paused = { paused },
             feedLoaded = { feedLoaded },
             readFeed = {
                 feedReads++
@@ -53,6 +55,27 @@ class WaitingAsksRunTest {
             },
             end = { ended++ },
         )
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) A status read that could not be made while the run waits: it waits through it, rather than give
+     * up, and replays once the opening continues.
+     */
+    @Test
+    fun aRunWaitsThroughAStatusReadThatFailed() = runTest {
+        val f = Fake().apply { listed = true; paused = true; open = false }
+        val run = async { f.run().run() }
+        advanceTimeBy(5 * 60_000L)
+        runCurrent()
+        assertFalse("still waiting", run.isCompleted)
+        assertEquals(0, f.ended)
+        f.paused = false
+        f.open = true
+        advanceTimeBy(61_000L)
+        runCurrent()
+        assertTrue(run.await())
+        assertEquals(1, f.replays)
+        assertEquals(0, f.ended)
     }
 
     /** The list the hold's end read is merged by the first try: replayed once, no read of its own. */
