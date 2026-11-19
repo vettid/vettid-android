@@ -3076,6 +3076,13 @@ class VaultManager(
      */
     override suspend fun lock() = lockWith(session?.device?.unlockId)
 
+    /** "Lock and unlock now": the one user_guid check of the unlock and the flows that lock first ([guidUsable]), then [lock]. */
+    override suspend fun lockToSettlePin(): Boolean {
+        if (!guidUsable()) return false
+        lock()
+        return true
+    }
+
     /**
      * (Release L, owner decision 2026-10-24) "Lock it now" after "Your vault was opened again": the vault's status is
      * read for the opening running now, and the lock is bound to it; a status that cannot be read or names none gives

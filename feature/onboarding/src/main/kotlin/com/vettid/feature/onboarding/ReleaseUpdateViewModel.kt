@@ -150,7 +150,13 @@ data class ReleaseUpdateFlowUiState(
     /** (Rule 3, the release gate) The update is required: an open vault shows nothing else, so there is no "Not now". */
     val required: Boolean = false,
 ) {
-    val pinAllowed: Boolean get() = waitSeconds == 0L && progress?.waiting == true
+    /**
+     * The update failed for want of a usable user_guid on this phone ([isNoUserGuid]): no PIN can open the vault here, so
+     * none is asked for and there is no "Try again" (the recover-or-erase words say why).
+     */
+    val noUserGuid: Boolean get() = progress?.let { isNoUserGuid(it.failure, it.failureCode) } == true
+
+    val pinAllowed: Boolean get() = waitSeconds == 0L && progress?.waiting == true && !noUserGuid
 
     val retryAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH
 

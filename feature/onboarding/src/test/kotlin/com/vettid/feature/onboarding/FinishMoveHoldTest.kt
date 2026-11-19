@@ -25,6 +25,27 @@ class FinishMoveHoldTest {
 
     private val vault = FakeVault(AppPhase.Unlocked)
 
+    /** After `no_user_guid` the PIN field takes nothing and the move is not tried again: no PIN can open the vault here. */
+    @Test
+    fun noSecondTryWithoutAUsableUserGuid() = runTest {
+        vault.userGuidUsable = false
+        val vm = FinishMoveViewModel(vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.noUserGuid)
+        assertFalse(vm.uiState.value.pinAllowed)
+        assertEquals(1, vault.finishMoveTaken.size)
+        vm.setPin("40281795")
+        assertEquals("", vm.uiState.value.pin)
+        assertTrue("still said", vm.uiState.value.noUserGuid)
+        vm.finish()
+        advanceUntilIdle()
+        assertEquals("not tried again", 1, vault.finishMoveTaken.size)
+        assertFalse(vault.calls.any { it == "lock" || it == "unlock" })
+    }
+
     @Test
     fun finishTheMoveIsHeldWhileAChangeIsUnresolved() = runTest {
         vault.changeHold.value = FailureKind.CHANGE_UNDECIDED
@@ -84,12 +105,13 @@ class FinishMoveHoldTest {
         assertEquals(listOf<Int?>(9), vault.finishMoveTaken)
     }
 
-    /** A phone with no usable user_guid can never finish the move: the unlock screen's recover-or-erase text, not "not yet". */
+    /**
+     * A phone with no usable user_guid can never finish the move: the unlock screen's recover-or-erase text, not "not yet",
+     * and it stays (typing does not clear it: no PIN can change it).
+     */
     @Test
     fun aPhoneWithoutAUserGuidIsToldItCannotOpenTheVault() = runTest {
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, "unsupported_type")
-        vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockAttempt.CODE_NO_USER_GUID)
         val vm = FinishMoveViewModel(vault)
         advanceUntilIdle()
         vm.setPin("40281795")
@@ -97,21 +119,31 @@ class FinishMoveHoldTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.noUserGuid)
         assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
-        // Typing again clears it with the failure.
         vm.setPin("4")
-        assertFalse(vm.uiState.value.noUserGuid)
-        assertNull(vm.uiState.value.failure)
-        // Any other refusal of the kind keeps its own text.
-        vm.setPin("40281795")
-        vm.finish()
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.noUserGuid)
+        assertTrue(vm.uiState.value.noUserGuid)
         assertEquals(FailureKind.NOT_SUPPORTED, vm.uiState.value.failure)
-        // Nor the code with another kind: only the unlock guard's own refusal.
-        vm.setPin("40281795")
-        vm.finish()
-        advanceUntilIdle()
-        assertFalse(vm.uiState.value.noUserGuid)
-        assertEquals(FailureKind.OTHER, vm.uiState.value.failure)
+    }
+
+    /** Only the unlock guard's own refusal is "cannot open": another code of the kind, or the code with another kind, is not. */
+    @Test
+    fun anotherRefusalKeepsItsOwnTextAndCanBeTriedAgain() = runTest {
+        for (r in listOf(
+            UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, "unsupported_type"),
+            UnlockAttempt.Failed(FailureKind.OTHER, UnlockAttempt.CODE_NO_USER_GUID),
+        )) {
+            val v = FakeVault(AppPhase.Unlocked)
+            v.unlockResults += r
+            val vm = FinishMoveViewModel(v)
+            advanceUntilIdle()
+            vm.setPin("40281795")
+            vm.finish()
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.noUserGuid)
+            assertEquals(r.kind, vm.uiState.value.failure)
+            assertTrue("tried again", vm.uiState.value.pinAllowed)
+            // Typing again clears the failure.
+            vm.setPin("4")
+            assertNull(vm.uiState.value.failure)
+        }
     }
 }

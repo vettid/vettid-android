@@ -271,8 +271,8 @@ fun UnlockContent(
                 val noGuid = isNoUserGuid(f.kind, f.code)
                 NoticeCard(
                     if (noGuid) NoticeKind.URGENT else NoticeKind.WARNING,
-                    stringResource(if (noGuid) R.string.unlock_stuck_title else R.string.onboarding_finish_move_title),
-                    if (noGuid) stringResource(R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
+                    stringResource(if (noGuid) com.vettid.core.ui.R.string.unlock_stuck_title else R.string.onboarding_finish_move_title),
+                    if (noGuid) stringResource(com.vettid.core.ui.R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
                     modifier = Modifier.testTag("unlock_move_failure"),
                     announce = LiveRegionMode.Polite,
                     actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
@@ -385,8 +385,8 @@ fun UnlockContent(
                     UnlockMessage.NoUserGuid -> if (!state.eraseOffered && !state.recoverOnly && !state.moveNoUserGuid) {
                         NoticeCard(
                             NoticeKind.URGENT,
-                            stringResource(R.string.unlock_stuck_title),
-                            stringResource(R.string.unlock_stuck_body),
+                            stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+                            stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
                             modifier = Modifier.testTag("unlock_no_user_guid"),
                         )
                     }
@@ -516,8 +516,8 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
 private fun StuckNotice(erasing: Boolean, onErase: () -> Unit, onRecover: () -> Unit) {
     NoticeCard(
         NoticeKind.URGENT,
-        stringResource(R.string.unlock_stuck_title),
-        stringResource(R.string.unlock_stuck_body),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
         modifier = Modifier.testTag("unlock_stuck"),
         actions = {
             TextButton(onClick = onRecover, modifier = Modifier.testTag("recover_vault")) {
@@ -547,7 +547,7 @@ private fun RecoverOnlyNotice(onRecover: () -> Unit, onContactSupport: () -> Boo
     var noMailApp by rememberSaveable { mutableStateOf(false) }
     NoticeCard(
         NoticeKind.URGENT,
-        stringResource(R.string.unlock_stuck_title),
+        stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
         stringResource(R.string.unlock_recover_only_body),
         modifier = Modifier.testTag("unlock_recover_only"),
         actions = {

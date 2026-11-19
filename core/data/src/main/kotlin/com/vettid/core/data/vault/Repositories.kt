@@ -439,6 +439,14 @@ interface VaultRepository {
 
     suspend fun lock()
 
+    /**
+     * "Lock and unlock now" (VAULT-MESSAGING 0.45.0 §11.14.9 step 3: an uncertain PIN or an unconfirmed new phone secret,
+     * settled by a lock and the unlock screen's two steps): [lock], but only on a phone with a usable `user_guid`
+     * (§6.7.1). Without one the unlock that follows could never open the vault again, so nothing is locked or sent and
+     * it answers false: the caller shows the recover-or-erase words. True once the lock was asked for.
+     */
+    suspend fun lockToSettlePin(): Boolean
+
     suspend fun overview(): VaultOverview
 
     /** `pin.change` (§10.6). */

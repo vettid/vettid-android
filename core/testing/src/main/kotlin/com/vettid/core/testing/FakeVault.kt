@@ -301,11 +301,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** As the vault manager: nothing is sent once [pinGeneration] moved since [taken]; otherwise lock, then unlock. */
     override suspend fun finishMove(pin: String, taken: Int?): UnlockAttempt {
         finishMoveTaken += taken
-        if (taken != null && taken != pinGeneration) {
-            return UnlockAttempt.Failed(FailureKind.CREDENTIAL_UNSETTLED, "pin_taken_before_change")
+        return when {
+            taken != null && taken != pinGeneration -> UnlockAttempt.Failed(FailureKind.CREDENTIAL_UNSETTLED, "pin_taken_before_change")
+            // As the manager: without a usable user_guid nothing is locked or sent.
+            !userGuidUsable -> UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+            else -> {
+                lock()
+                unlock(pin)
+            }
         }
-        lock()
-        return unlock(pin)
     }
     override val movedBack = MutableStateFlow(false)
 
@@ -513,6 +517,16 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override suspend fun lock() {
         call("lock")
         phase.value = AppPhase.Locked
+    }
+
+    /** Whether this phone has a usable user_guid, for [lockToSettlePin] (as `VaultManager.guidUsable`). */
+    var userGuidUsable = true
+
+    override suspend fun lockToSettlePin(): Boolean {
+        call("lockToSettlePin")
+        if (!userGuidUsable) return false
+        lock()
+        return true
     }
 
     /** What the next `credentialKey()` answers (`credential.version`); a failure is `fail["credentialKey"]`. */

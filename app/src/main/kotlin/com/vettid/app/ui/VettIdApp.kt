@@ -341,6 +341,18 @@ private fun MoveNotices(
             statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted,
         )
     }
+    // "Lock and unlock now" refused on a phone with no usable user_guid: nothing was locked; the unlock screen's words.
+    val lockRefused by viewModel.lockRefusedNoUserGuid.collectAsStateWithLifecycle()
+    if (lockRefused) {
+        InfoBanner(
+            stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
+            Modifier.testTag("lock_refused_no_user_guid_banner"),
+            actionLabel = stringResource(R.string.root_preferences_reset_ok),
+            onAction = viewModel::acknowledgeLockRefused,
+            statusBarPadding = statusBarPadding && !askFinishMove && !movedBack && !moveNotDone && !movedAway && !deleted &&
+                changeDecided == null,
+        )
+    }
     // Kept open through the lock and unlock it sends (and never dismissed while they run); never over the app lock. Once
     // the vault is locked and the hold is over (its bound, or the outcome), the unlock screen takes over and says why.
     // Without a usable user_guid nothing is sent and the vault stays open: the screen shows the failure itself.

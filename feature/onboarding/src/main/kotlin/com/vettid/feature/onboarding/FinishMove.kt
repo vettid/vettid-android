@@ -55,8 +55,11 @@ data class FinishMoveUiState(
      */
     val held: FailureKind? = null,
 ) {
-    /** The PIN field can be used: not held, not running, not done. */
-    val pinAllowed: Boolean get() = held == null && !busy && !done
+    /**
+     * The PIN field can be used: not held, not running, not done, and not after `no_user_guid` (no PIN can open the vault
+     * on this phone, so there is no PIN to type and no "Finish the move" to try again; "Later" stays).
+     */
+    val pinAllowed: Boolean get() = held == null && !busy && !done && !noUserGuid
 
     override fun toString(): String =
         "FinishMoveUiState(busy=$busy, done=$done, failure=$failure, noUserGuid=$noUserGuid, held=$held)"
@@ -85,7 +88,7 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
     private fun set(f: (FinishMoveUiState) -> FinishMoveUiState) {
         // Digits typed while held were typed before the hold's decision: they go with it.
         val wasEmpty = state.value.pin.isEmpty()
-        state.update { s -> f(s).let { n -> if (n.held != null && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
+        state.update { s -> f(s).let { n -> if (!n.pinAllowed && !n.busy && n.pin.isNotEmpty()) n.copy(pin = "") else n } }
         keypad.follow(state.value.pinAllowed, wasEmpty)
     }
 
@@ -94,7 +97,10 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
         viewModelScope.launch { vault.changeHold.collect { h -> set { it.copy(held = h) } } }
     }
 
-    fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null, noUserGuid = false) }
+    // Typing does not clear `noUserGuid`: no PIN can change it (the field is disabled then).
+    fun setPin(v: String) = set {
+        if (it.noUserGuid) it else it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null)
+    }
 
     fun finish() {
         val s = state.value
@@ -159,8 +165,8 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             if (state.noUserGuid) {
                 NoticeCard(
                     kind = NoticeKind.URGENT,
-                    title = stringResource(R.string.unlock_stuck_title),
-                    body = stringResource(R.string.unlock_stuck_body),
+                    title = stringResource(com.vettid.core.ui.R.string.unlock_stuck_title),
+                    body = stringResource(com.vettid.core.ui.R.string.unlock_stuck_body),
                     modifier = Modifier.testTag("finish_move_no_user_guid"),
                 )
             } else {

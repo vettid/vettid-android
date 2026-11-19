@@ -90,10 +90,29 @@ class RootViewModel @Inject constructor(
 
     fun acknowledgeChangeDecided() = vault.acknowledgeChangeCheck()
 
-    /** "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. */
+    /**
+     * "Lock and unlock now" (0.45.0 step 3): the unlock screen's two steps settle an uncertain PIN. Without a usable
+     * user_guid on this phone nothing is locked ([VaultRepository.lockToSettlePin]: the unlock could never open the vault
+     * again) and [lockRefusedNoUserGuid] says why, once, until dismissed.
+     */
     fun lockAndUnlockForPin() {
         vault.acknowledgeChangeCheck()
-        lockVault()
+        viewModelScope.launch {
+            try {
+                if (!vault.lockToSettlePin()) noUserGuidFlow.value = true
+            } catch (_: VaultFailure) {
+                accounts.refresh()
+            }
+        }
+    }
+
+    private val noUserGuidFlow = MutableStateFlow(false)
+
+    /** "Lock and unlock now" was refused for want of a usable user_guid: the recover-or-erase words, in a banner. */
+    val lockRefusedNoUserGuid: StateFlow<Boolean> = noUserGuidFlow.asStateFlow()
+
+    fun acknowledgeLockRefused() {
+        noUserGuidFlow.value = false
     }
 
     /** A release update under way or its outcome (ANDROID-PLAN 0.1.19): shown over every phase until it is left. */

@@ -120,6 +120,25 @@ class RootViewModelTest {
         assertTrue("acknowledgeMoveNotDone" in vault.calls)
     }
 
+    /** The open app's "Lock and unlock now" on a phone with no usable user_guid: nothing locked, said until dismissed. */
+    @Test
+    fun lockAndUnlockLocksNothingWithoutAUsableUserGuid() = runTest(dispatcher) {
+        val vault = FakeVault(AppPhase.Unlocked).apply { userGuidUsable = false }
+        val vm = root(vault)
+        vm.lockAndUnlockForPin()
+        advanceUntilIdle()
+        assertTrue(vm.lockRefusedNoUserGuid.value)
+        assertFalse("nothing locked", "lock" in vault.calls)
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        vm.acknowledgeLockRefused()
+        assertFalse(vm.lockRefusedNoUserGuid.value)
+        vault.userGuidUsable = true
+        vm.lockAndUnlockForPin()
+        advanceUntilIdle()
+        assertTrue("lock" in vault.calls)
+        assertFalse(vm.lockRefusedNoUserGuid.value)
+    }
+
     @Test
     fun startOverWithUnreadableKeysErasesThisPhone() = runTest(dispatcher) {
         val vault = FakeVault(AppPhase.Unreachable(FailureKind.LOCAL_STATE))
