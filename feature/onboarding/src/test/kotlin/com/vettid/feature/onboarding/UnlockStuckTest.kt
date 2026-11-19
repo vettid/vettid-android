@@ -3,6 +3,7 @@ package com.vettid.feature.onboarding
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -13,6 +14,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.UnlockAttempt
+import com.vettid.core.data.vault.MoveFailure
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
 import org.junit.Assert.assertEquals
@@ -123,6 +126,8 @@ class UnlockStuckTest {
         assertFalse(s.eraseOffered)
         assertFalse(s.stuckNoticeShown)
         assertFalse(s.stuckWordsOnly)
+        // Nor Recover while a check runs after one that failed.
+        assertFalse(UnlockUiState(loading = true, preflightError = FailureKind.NETWORK, noUserGuid = true).recoverBesideRetry)
     }
 
     /**
@@ -194,6 +199,67 @@ class UnlockStuckTest {
         rule.setContent { UnlockContent(s, actions) }
         rule.onNodeWithTag("unlock_no_user_guid").assertExists()
         rule.onNodeWithTag("recover_vault").assertDoesNotExist()
+    }
+
+    /**
+     * The words on the move card (the last "Finish the move" refused `no_user_guid`) after a failed check: Recover there, once,
+     * beside Continue, and no erase.
+     */
+    @Test
+    fun theMoveCardOffersRecoverAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true,
+            moveFailure = MoveFailure(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID),
+        )
+        assertTrue(s.moveNoUserGuid)
+        assertFalse("the move card carries the words", s.stuckWordsOnly)
+        assertTrue(s.recoverBesideRetry)
+        var recovered = 0
+        rule.setContent { UnlockContent(s, actions, onOpenAccountSite = { recovered++ }) }
+        rule.onNodeWithTag("unlock_move_failure").assertExists()
+        rule.onNodeWithTag("unlock_no_user_guid").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onNodeWithTag("recover_vault").performScrollTo().performClick()
+        assertEquals(1, recovered)
+    }
+
+    /** An unlock not recognised earlier, then a failed check with no usable user_guid: its notice shows no erase. */
+    @Test
+    fun theNotRecognisedNoticeOffersNoEraseAfterAFailedCheck() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, notRecognised = true,
+        )
+        assertFalse(s.eraseOffered)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("unlock_not_recognised").assertExists()
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+    }
+
+    /** A state rollback with a failed check: recover-only, so no second Recover beside the words. */
+    @Test
+    fun aStateRollbackWithAFailedCheckIsRecoverOnly() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.NETWORK, keysGone = true, noUserGuid = true, stateRollback = true,
+        )
+        assertTrue(s.recoverOnly)
+        assertFalse(s.recoverBesideRetry)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onAllNodes(hasTestTag("recover_vault")).assertCountEquals(1)
+        rule.onNodeWithTag("unlock_recover_only").assertExists()
+    }
+
+    /** The service paused: Try again waits for its countdown, and Recover can be used meanwhile. */
+    @Test
+    fun aPausedServiceLeavesRecoverUsableWhileTryAgainWaits() {
+        val s = UnlockUiState(
+            loading = false, preflightError = FailureKind.SERVICE_PAUSED, keysGone = true, noUserGuid = true, serviceWaitSeconds = 30,
+        )
+        assertTrue(s.recoverBesideRetry)
+        assertFalse(s.retryAllowed)
+        rule.setContent { UnlockContent(s, actions) }
+        rule.onNodeWithTag("recover_vault").assertIsEnabled()
     }
 
     /** The words after a check that answered (no erase offered: the keys are there): no Recover beside them, no Try again. */

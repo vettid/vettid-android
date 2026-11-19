@@ -276,7 +276,15 @@ fun UnlockContent(
                     if (noGuid) stringResource(com.vettid.core.ui.R.string.unlock_stuck_body) else failureText(f.kind.messageRes()),
                     modifier = Modifier.testTag("unlock_move_failure"),
                     announce = LiveRegionMode.Polite,
-                    actions = { TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) } },
+                    actions = {
+                        // After a failed release check: "Recover your vault" here too, as on the words' own card.
+                        if (noGuid && state.recoverBesideRetry) {
+                            TextButton(onClick = onOpenAccountSite, modifier = Modifier.testTag("recover_vault")) {
+                                Text(stringResource(R.string.unlock_recover))
+                            }
+                        }
+                        TextButton(onClick = actions::dismissMoveFailure) { Text(stringResource(R.string.onboarding_continue)) }
+                    },
                 )
             }
             if (state.stateRollback) {
@@ -436,7 +444,7 @@ fun UnlockContent(
                 state.recoverOnly -> RecoverOnlyNotice(onOpenAccountSite, contactSupport)
                 // §11.14.10 (owner decision 2026-10-23): waiting for the vault's answer, the notice above; no erase offer.
                 state.keptCheckWaiting -> Unit
-                state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase)
+                state.notRecognised -> NotRecognisedNotice(state.erasing, actions::askErase, canErase = state.eraseOffered)
                 state.stuckNoticeShown -> StuckNotice(state.erasing, actions::askErase, onOpenAccountSite)
             }
             // The release offer last: after the PIN and every result of the unlock (their explanations and the erase come
@@ -498,16 +506,22 @@ private fun MoveUnconfirmedNotice(m: MoveUnconfirmed, enabled: Boolean, onReturn
  * phone" (owner decision, 2026-10-05); [erasing] shows the erase running.
  */
 @Composable
-private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
+private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit, canErase: Boolean) {
     NoticeCard(
         NoticeKind.URGENT,
         stringResource(R.string.unlock_not_recognised_title),
         stringResource(R.string.unlock_not_recognised_body),
         modifier = Modifier.testTag("unlock_not_recognised"),
-        actions = {
-            TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
-                Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
+        // The erase only when it is offered ([UnlockUiState.eraseOffered]): never after a release check that failed on a phone
+        // with no usable user_guid, where the button would do nothing.
+        actions = if (canErase) {
+            {
+                TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
+                    Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
+                }
             }
+        } else {
+            null
         },
     )
     if (erasing) {
