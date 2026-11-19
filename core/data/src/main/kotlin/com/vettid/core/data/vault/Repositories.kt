@@ -447,6 +447,13 @@ interface VaultRepository {
      */
     suspend fun lockToSettlePin(): Boolean
 
+    /**
+     * This phone holds a usable `user_guid` (§6.7.1): without one no unlock can ever open the vault here (the unlock's own
+     * check, the same one [lockToSettlePin] and the flows that lock first use). The unlock screen shows recover-or-erase
+     * at once then, with no PIN asked for (owner decision a, 2026-11-19).
+     */
+    val userGuidUsable: Boolean
+
     suspend fun overview(): VaultOverview
 
     /** `pin.change` (§10.6). */

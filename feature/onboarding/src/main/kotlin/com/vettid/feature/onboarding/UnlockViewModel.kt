@@ -155,6 +155,12 @@ data class UnlockUiState(
      */
     val keysGone: Boolean = false,
     /**
+     * This phone has no usable user_guid ([com.vettid.core.data.vault.VaultRepository.userGuidUsable], read when the screen
+     * loads, or an unlock answered `no_user_guid`): no PIN can ever open the vault here, so none is asked for, and the
+     * recover-or-erase notice ([keysGone]) shows at once (owner decision a, 2026-11-19).
+     */
+    val noUserGuid: Boolean = false,
+    /**
      * The open app was sent here because the relay kept refusing this phone's messages to the vault
      * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
      * sees this screen otherwise. Not proof: the PIN asks the enclave, and an unreadable result then sets
@@ -255,6 +261,7 @@ data class UnlockUiState(
             val p = preflight ?: return false
             // Never a PIN while the last check of the vault's software failed (an earlier check does not count).
             if (preflightError != null) return false
+            if (noUserGuid) return false
             return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy
         }
 
@@ -395,7 +402,11 @@ class UnlockViewModel @Inject constructor(
         if (state.value.serviceWaitSeconds > 0) return
         // The result of an earlier check goes too: no PIN is asked for until this one has verified the vault's software.
         // So does an open erase confirmation: it does not come back by itself while the check runs or after it.
-        state.update { it.copy(loading = true, preflightError = null, preflight = null, keysGone = false, eraseConfirm = false) }
+        // A phone with no usable user_guid is told so at once: recover-or-erase, with no PIN to try first.
+        val noGuid = !vault.userGuidUsable
+        state.update {
+            it.copy(loading = true, preflightError = null, preflight = null, keysGone = noGuid, noUserGuid = noGuid, eraseConfirm = false)
+        }
         viewModelScope.launch {
             try {
                 val p = vault.preflight()
@@ -509,6 +520,7 @@ class UnlockViewModel @Inject constructor(
                     password = "", notRecognised = notRecognisedAfter(r, it.notRecognised),
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
                     keysGone = keysGoneAfter(r, it.keysGone),
+                    noUserGuid = it.noUserGuid || r is UnlockAttempt.Failed && isNoUserGuid(r),
                 )
             }
             when (r) {

@@ -520,7 +520,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     }
 
     /** Whether this phone has a usable user_guid, for [lockToSettlePin] (as `VaultManager.guidUsable`). */
-    var userGuidUsable = true
+    override var userGuidUsable = true
 
     override suspend fun lockToSettlePin(): Boolean {
         call("lockToSettlePin")

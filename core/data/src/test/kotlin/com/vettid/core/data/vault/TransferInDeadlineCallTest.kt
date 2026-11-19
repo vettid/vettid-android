@@ -140,6 +140,8 @@ class TransferInDeadlineCallTest {
         )
         assertEquals(listOf("userGuidUsable = { guidUsable() },"), code.filter { it.startsWith("userGuidUsable =") })
         assertEquals(listOf("guidUsable = { guidUsable() },"), code.filter { it.startsWith("guidUsable =") })
+        // The unlock screen reads the same check when it opens (recover-or-erase at once, no PIN first).
+        assertTrue(code.any { it == "override val userGuidUsable: Boolean get() = guidUsable()" })
         // "Lock and unlock now" (Settings and the open app's banner) goes through the same check before its lock.
         val settle = body("override suspend fun lockToSettlePin()")
         assertEquals(

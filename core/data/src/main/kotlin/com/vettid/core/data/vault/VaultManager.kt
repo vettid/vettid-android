@@ -3076,6 +3076,8 @@ class VaultManager(
      */
     override suspend fun lock() = lockWith(session?.device?.unlockId)
 
+    override val userGuidUsable: Boolean get() = guidUsable()
+
     /** "Lock and unlock now": the one user_guid check of the unlock and the flows that lock first ([guidUsable]), then [lock]. */
     override suspend fun lockToSettlePin(): Boolean {
         if (!guidUsable()) return false
