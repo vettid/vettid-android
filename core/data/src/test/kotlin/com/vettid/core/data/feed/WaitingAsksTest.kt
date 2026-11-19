@@ -146,6 +146,57 @@ class WaitingAsksTest {
         job.cancel()
     }
 
+    /**
+     * (ANDROID-PLAN 0.1.134) A replay held while the release is checked is posted as a fresh arrival when it is released: the
+     * feed's item as it is then, still marked as a replay ([FeedItem.replayed]), so the notification clears for it.
+     */
+    @Test
+    fun aReleasedReplayStaysAReplay() = runTest {
+        var checking = true
+        val m = FeedManager(this, ops = { Ops(listOf(item("1", WaitingAsks.SIGN_IN))) }, now = { now }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue(m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        assertTrue("held while checking", arrived.isEmpty())
+        checking = false
+        m.releaseHeld()
+        advanceUntilIdle()
+        assertEquals(listOf("1"), arrived.map { it.itemId })
+        assertTrue("still a replay", arrived.single().replayed)
+        job.cancel()
+    }
+
+    /** A held replay, then a live change of the same item held behind it: the replay is released first, still a replay. */
+    @Test
+    fun aHeldReplayWithALiveChangeBehindItStaysAReplay() = runTest {
+        var checking = true
+        val items = listOf(item("1", WaitingAsks.SIGN_IN))
+        val m = FeedManager(this, ops = { Ops(items) }, now = { now }, held = { checking })
+        val arrived = mutableListOf<FeedItem>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
+        val token = m.startReplayWindow()
+        m.refresh()
+        advanceUntilIdle()
+        assertTrue(m.replayWaitingAsks(token, listOf(signIn("r1", now.plusSeconds(200))), now))
+        // A live change of the same item, while checking: it replaces the held copy.
+        m.onEvent(
+            com.vettid.core.vault.VaultMessage(
+                com.vettid.core.crypto.envelope.Inner(
+                    id = com.vettid.core.crypto.envelope.Ulid.new(), type = "feed.event", ts = now,
+                    body = com.vettid.core.vault.VaultJson.json.encodeToString(FeedItem.serializer(), items[0].copy(seq = 2)).toByteArray(),
+                ),
+            ),
+        )
+        checking = false
+        m.releaseHeld()
+        advanceUntilIdle()
+        assertTrue("still a replay: $arrived", arrived.first().replayed)
+        job.cancel()
+    }
+
     /** An ask that arrived live while the hold's reads ran is not sent again by the replay. */
     @Test
     fun anAskThatArrivedDuringTheReadsIsNotSentTwice() = runTest {
@@ -180,6 +231,7 @@ class WaitingAsksTest {
         val items = listOf(item("1", WaitingAsks.SIGN_IN, seq = 1), item("2", WaitingAsks.SIGN_IN, seq = 2))
         var down = true
         val m = FeedManager(this, ops = { Ops(items) { down } }, now = { now })
+        m.vaultOpened(now)
         val arrived = mutableListOf<FeedItem>()
         val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it } }
         val token = m.startReplayWindow()
@@ -199,11 +251,18 @@ class WaitingAsksTest {
                 ),
             ),
         )
-        assertEquals(listOf("2"), arrived.map { it.itemId })
+        // (ANDROID-PLAN 0.1.134) It waits for a read of the feed, not loaded now, and is judged then.
+        assertTrue(arrived.isEmpty())
         down = false
         m.refresh()
-        advanceUntilIdle()
+        // The catch-up the event asked for (the read before it had failed) runs on the IO dispatcher: wait for it.
+        repeat(500) {
+            advanceUntilIdle()
+            if (arrived.isNotEmpty()) return@repeat
+            Thread.sleep(10)
+        }
         assertTrue(m.loaded)
+        assertEquals(listOf("2"), arrived.map { it.itemId })
         assertTrue(m.replayWaitingAsks(token, asks, now))
         assertEquals("the live one not twice", listOf("2", "1"), arrived.map { it.itemId })
         job.cancel()

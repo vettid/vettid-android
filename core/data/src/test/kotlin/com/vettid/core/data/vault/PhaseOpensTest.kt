@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import com.vettid.core.data.vault.FailureKind
 import org.junit.Test
 
 /**
@@ -78,5 +79,27 @@ class PhaseOpensTest {
         phase.value = AppPhase.Unlocked
         phase.unlessOpen { ran++ }
         assertEquals(1, ran)
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.134) An opening that only a status read which could not be made interrupted (Unlocked, Unreachable
+     * only, Unlocked) carries on; any other phase between, or none open before, makes it a new opening.
+     */
+    @Test
+    fun anOpeningCarriesOnOnlyAcrossUnreachable() {
+        val told = mutableListOf<Boolean>()
+        val phase = PhaseHolder(AppPhase.Starting, onOpen = { told += it })
+        val unreachable = AppPhase.Unreachable(FailureKind.NETWORK)
+        phase.value = unreachable
+        phase.value = AppPhase.Unlocked // a cold start that first could not reach the service
+        phase.value = unreachable
+        phase.value = unreachable
+        phase.value = AppPhase.Unlocked // a blip
+        phase.value = AppPhase.Locked
+        phase.value = unreachable
+        phase.value = AppPhase.Unlocked // locked between: new
+        phase.value = AppPhase.Locked
+        phase.value = AppPhase.Unlocked
+        assertEquals(listOf(false, true, false, false), told)
     }
 }
