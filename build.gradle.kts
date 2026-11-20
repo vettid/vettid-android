@@ -25,3 +25,23 @@ subprojects {
         systemProperty("robolectric.dependency.dir", rootProject.layout.buildDirectory.dir("robolectric-jars").get().asFile.absolutePath)
     }
 }
+
+// The dependency scan's listing (.github/workflows/deps-scan.yml): with -PvettidScanAll=true every resolvable configuration
+// of every project is locked, and `lockAllForScan --write-locks` resolves them all, so their lockfiles name every test and
+// build dependency for osv-scanner to list. Only the scan's throwaway checkout does this: the committed lock is app's
+// release runtime classpaths (app/build.gradle.kts).
+if (providers.gradleProperty("vettidScanAll").orNull == "true") {
+    allprojects {
+        configurations.configureEach {
+            if (isCanBeResolved) resolutionStrategy.activateDependencyLocking()
+        }
+        tasks.register("lockAllForScan") {
+            notCompatibleWithConfigurationCache("resolves every configuration at execution")
+            doLast {
+                project.configurations.filter { it.isCanBeResolved }.forEach { c ->
+                    c.incoming.artifactView { lenient(true) }.files.files
+                }
+            }
+        }
+    }
+}

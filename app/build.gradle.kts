@@ -927,6 +927,19 @@ abstract class CallsTestCheck : DefaultTask() {
  */
 val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
 
+/*
+ * Dependency locking: the shipped release runtime classpaths of both distributions are locked in app/gradle.lockfile, which
+ * the dependency scan reads (.github/workflows/deps-scan.yml) and which pins the build. A dependency change updates it:
+ *   ./gradlew :app:dependencies --configuration fullReleaseRuntimeClasspath --write-locks
+ *   ./gradlew :app:dependencies --configuration fossReleaseRuntimeClasspath --write-locks
+ * Not in the wallet-in-release check build: its classpath (the wallet linked in) is never shipped.
+ */
+if (!walletInRelease) {
+    configurations.matching { it.name == "fullReleaseRuntimeClasspath" || it.name == "fossReleaseRuntimeClasspath" }.configureEach {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+
 /**
  * Calls in every build (owner decision 2026-11-14): a release dex must reach the call code of :core:crypto and
  * :core:vault, so it must keep these strings (they are in that code and nowhere else, and R8 does not rename strings).

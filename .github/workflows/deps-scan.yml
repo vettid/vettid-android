@@ -1,0 +1,112 @@
+name: deps-scan
+
+# Dependency vulnerability scan. It reports; it never changes a dependency.
+#
+# osv-scanner (google/osv-scanner-action v2.7.1) over app/gradle.lockfile:
+# the locked release runtime classpaths of both distributions
+# (fullReleaseRuntimeClasspath, fossReleaseRuntimeClasspath; app/build.gradle.kts
+# "Dependency locking"), which is all a release APK carries. A finding there
+# fails the job.
+#
+# The listing job scans every other dependency (the tests', lint's and the
+# rest of each project's configurations) and lists what it finds without
+# failing: those are not committed or locked, so it locks them in its own
+# checkout first (-PvettidScanAll=true, build.gradle.kts). The plugins of
+# the build itself (the buildscript and build-logic classpaths) are not in it.
+#
+# On pull requests, on pushes to master, weekly and on demand. On master, a
+# weekly or on-demand run with a finding opens one issue labeled security,
+# or comments on the one already open; a clean run closes it.
+#
+# Actions are pinned by commit SHA (tag in the comment). The scanner action
+# runs its own image (ghcr.io/google/osv-scanner-action:v2.7.1), named by
+# that commit's action.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: '53 5 * * 1' # Mondays, 05:53 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scanner:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: osv-scanner over the release lockfile
+        uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
+        with:
+          scan-args: |-
+            --lockfile=app/gradle.lockfile
+
+  listing:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: lock every configuration (this checkout only)
+        # Gradle's memory is capped by gradle.properties.
+        run: ./gradlew --no-daemon --no-configuration-cache -PvettidScanAll=true lockAllForScan --write-locks
+      - name: osv-scanner over every lockfile (listed, never failing)
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
+        with:
+          scan-args: |-
+            --recursive
+            --format=markdown
+            --output=osv-listing.md
+            ./
+      - name: the listing in the run's summary
+        if: always()
+        run: |
+          { echo "## Every dependency (listed, not failing)"; echo; cat osv-listing.md 2>/dev/null || echo "No listing was written."; } >> "$GITHUB_STEP_SUMMARY"
+
+  issue:
+    # One issue for all findings: opened, or commented on while open; a
+    # clean run closes it.
+    if: always() && github.ref == 'refs/heads/master' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: [osv-scanner]
+    runs-on: ubuntu-26.04
+    permissions:
+      issues: write
+    steps:
+      - name: open, update or close the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCAN: ${{ needs.osv-scanner.result }}
+        run: |
+          title="security: dependency scan findings"
+          n=$(gh issue list --state open --search "in:title \"$title\"" --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ "$SCAN" != success ]; then
+            what="
+          - osv-scanner: a vulnerability in a release runtime dependency (app/gradle.lockfile), or the scan could not run (the job log names it)."
+            if [ -n "$n" ]; then
+              gh issue comment "$n" --body "Found again: $RUN$what"
+            else
+              gh label create security --color B60205 --description "Security findings" 2>/dev/null || true
+              gh issue create --title "$title" --label security --body "The dependency scan on master (.github/workflows/deps-scan.yml) found:$what
+
+          See $RUN."
+            fi
+          elif [ -n "$n" ]; then
+            gh issue close "$n" --comment "Clean on master: $RUN"
+          fi
