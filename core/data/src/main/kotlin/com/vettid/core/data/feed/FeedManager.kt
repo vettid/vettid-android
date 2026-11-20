@@ -654,7 +654,7 @@ class FeedManager(
         }
         if (applied == null) {
             if (wake) {
-                if (notify && item.status == STATUS_ACTIVE) emitArrival(item) // not for an item deleted here ([firstAlertAt])
+                if (notify) wakeArrival(item)
                 catchUp()
             } else if (m != null && vaultOpen() && !waitsForTheRead(m)) {
                 onItem(item, notify, wake = false, m = m) // loaded again meanwhile
@@ -663,6 +663,16 @@ class FeedManager(
         }
         applied.second?.let(::emitPending)
         if (!applied.first) catchUp()
+    }
+
+    /**
+     * A push wake's own copy while the list is not loaded ([onItem]): notified when active, but not a copy the cursor already
+     * covers (a read applied it, or what came after it: an older copy of an item since deleted, here or elsewhere), nor one of
+     * an item deleted here ([firstAlertAt]).
+     */
+    private fun wakeArrival(item: FeedItem) {
+        val covered = synchronized(lock) { item.seq <= cursor }
+        if (item.status == STATUS_ACTIVE && !covered) emitArrival(item)
     }
 
     /**
@@ -1173,14 +1183,15 @@ class FeedManager(
     }
 
     override suspend fun delete(itemId: String) {
-        val gen = synchronized(lock) { generation }
+        val epoch = synchronized(lock) { deletedHere.epoch }
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
             // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
             appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
-            // Not into another opening's list, or after a clear: its next read lists what the vault has.
-            if (gen == generation) deletedHere.add(itemId)
+            // Not after a lock's clear or into another opening (its next read lists what the vault has); across a soft clear
+            // (a blip), yes: the opening may continue, with the set.
+            if (epoch == deletedHere.epoch) deletedHere.add(itemId)
             publish()
         }
     }

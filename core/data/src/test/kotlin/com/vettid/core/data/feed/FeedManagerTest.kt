@@ -1861,6 +1861,50 @@ class FeedManagerTest {
         assertEquals(emptyList<String>(), arrived)
     }
 
+    /**
+     * A push wake's copy that the cursor already covers is not notified while the list is not loaded: here an older copy of
+     * an item deleted here, after a read has ended its entry and an owner-check lift has unloaded the list. A wake above the
+     * cursor still notifies.
+     */
+    @Test
+    fun aWakeCopyTheCursorCoversIsNotNotified() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "deleted")), 3) // a read brings the deletion: the entry ends
+        m.catchUp()
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        assertEquals(0, m.deletedHereCount)
+        m.ownerCheckLifted(now) // the list is not loaded until the lift's read; the cursor stays at 3
+        assertFalse(m.loaded)
+        ops.gate = CompletableDeferred() // the wakes' catch-ups wait
+        m.onItem(item("i1", 1), notify = true, wake = true, m = null) // a late wake with the old, active copy
+        assertEquals(emptyList<String>(), arrived)
+        m.onItem(item("g4", 4), notify = true, wake = true, m = null) // a new item's wake, above the cursor
+        assertEquals(listOf("g4"), arrived)
+        val gate = ops.gate!!
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+    }
+
+    /** A delete answered across a soft clear (a blip) still adds its entry: the opening may continue. */
+    @Test
+    fun aDeleteAnsweredAcrossASoftClearAddsItsEntry() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val gate = CompletableDeferred<Unit>()
+        ops.deleteGate = gate
+        val del = launch { m.delete("i1") }
+        runCurrent()
+        m.clear(keepHeld = true)
+        gate.complete(Unit)
+        settle { del.isCompleted }
+        assertEquals(1, m.deletedHereCount)
+    }
+
     /** A delete answered after a lock's clear adds nothing for the next opening. */
     @Test
     fun aDeleteAnsweredAfterAClearAddsNothing() = runTest {
@@ -1952,8 +1996,10 @@ class FeedManagerTest {
         assertEquals(3L, m.seq)
         assertEquals(1, m.deletedHereCount)
         ops.gate = CompletableDeferred() // the gap's catch-up waits
+        // An older copy (one the vault sent before the delete), out of order above the cursor. Its seq here is above the
+        // deletion's only so that the cursor (now at the deletion) does not cover it: the entry alone is tested.
         val older = item("i1", 5)
-        m.onItem(older, notify = true, wake = false, m = event(older)) // an older copy, out of order
+        m.onItem(older, notify = true, wake = false, m = event(older))
         val other = item("g4", 4)
         m.onItem(other, notify = true, wake = false, m = event(other))
         assertEquals(listOf("g4", "h2"), m.items.value.map { it.itemId }.sorted())

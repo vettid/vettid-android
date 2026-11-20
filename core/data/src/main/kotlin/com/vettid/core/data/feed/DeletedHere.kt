@@ -39,5 +39,12 @@ internal class DeletedHere {
         ids.values.removeAll { it <= startDeletes }
     }
 
-    fun clear() = ids.clear()
+    /** Moved by [clear] (a lock's clear, an opening), not by a soft clear: a delete answered across one adds nothing. */
+    var epoch = 0
+        private set
+
+    fun clear() {
+        ids.clear()
+        epoch++
+    }
 }
