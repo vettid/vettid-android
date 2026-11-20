@@ -146,6 +146,18 @@ internal class ReleasePauseSteps(
      */
     fun sendsAgainAtLift() = synchronized(this) { sendsWaiting = true }
 
+    /**
+     * The sends a missed close's clear stopped, when the end of the check had already sent them: [now] unless [gated] (the
+     * owner check due or held, or the gate) holds them; else armed for the owner check's lift ([sendsAgainAtLift]), and
+     * run at once if a lift came between the look and the flag. [gated] and [now] are called outside this monitor (the
+     * lock order above).
+     */
+    fun sendsAfterMissedClose(gated: () -> Boolean, now: () -> Unit) {
+        if (!gated()) return now()
+        sendsAgainAtLift()
+        if (!gated()) ownerCheckLifted()
+    }
+
     /** The vault locked: what waited for the owner check goes with it. */
     fun reset() = synchronized(this) {
         readsWaiting = false

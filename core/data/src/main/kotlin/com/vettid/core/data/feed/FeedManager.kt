@@ -200,10 +200,28 @@ class FeedManager(
 
     /**
      * While a [quiet] full read runs (the list stays loaded and live events keep applying): each item a live event applied
-     * meanwhile, by its `seq`, and each the member changed here (always kept). The read's answer may not have them, so it
-     * does not replace them. Dropped when the read ends, whatever its end. Under [lock].
+     * meanwhile, each the member changed or deleted here, and each the vault answered a change of, as [Local]. The read's
+     * answer replaces one only when it is newer ([Local.stands]). Dropped when the read ends, whatever its end. Under [lock].
      */
-    private var appliedDuring: HashMap<String, Long>? = null
+    private var appliedDuring: HashMap<String, Local>? = null
+
+    /**
+     * A change applied here while a quiet full read runs ([appliedDuring]): the item's `seq` as applied, and whether it is
+     * the member's own (made on that copy, not answered yet; a delete as the highest `seq`, never undone by an answer).
+     */
+    private class Local(val seq: Long, val own: Boolean) {
+        /**
+         * Whether it stands over the read's answer, which lists the item at [listed] (null: not listed) and was made at
+         * [read]. Not listed: the item is gone (deleted elsewhere, past retention), unless what was applied is newer than
+         * the answer. Listed: a live change stands when newer than the answer's copy; the member's own when the answer's
+         * copy is still the one it was made on (or older), so a newer change elsewhere wins.
+         */
+        fun stands(listed: Long?, read: Long): Boolean = when {
+            listed == null -> seq > read
+            own -> seq >= listed
+            else -> seq > listed
+        }
+    }
 
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
     private var keptAt = 0
@@ -282,6 +300,9 @@ class FeedManager(
 
     /** The highest `seq` applied (tests). */
     val seq: Long get() = synchronized(lock) { cursor }
+
+    /** The reads counted and not ended yet (a read's notifications go before it ends). Internal for its tests. */
+    internal val readsUnderWay: Int get() = readsRunning.get()
 
     /** The vault opened (an unlock, app start with it open, a passed owner check): the feed is read in the background. */
     fun open() {
@@ -606,7 +627,7 @@ class FeedManager(
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
             apply(listOf(item))
-            appliedDuring?.put(item.itemId, item.seq)
+            appliedDuring?.put(item.itemId, Local(item.seq, own = false))
             if (next) cursor = item.seq
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
@@ -733,7 +754,7 @@ class FeedManager(
             throw e
         } finally {
             // One read at a time ([reads]): what this one kept goes with it, however it ended.
-            synchronized(lock) { if (start.gen == generation) appliedDuring = null }
+            synchronized(lock) { appliedDuring = null }
         }
     }
 
@@ -773,9 +794,10 @@ class FeedManager(
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
                     val before = if (full) emptyMap() else byId
-                    // A quiet full read keeps what live events applied meanwhile after its answer (present, or gone if
-                    // deleted), and never moves the cursor back.
-                    val live = appliedDuring?.filterValues { it > seq }.orEmpty()
+                    // A quiet full read keeps what was applied here meanwhile and is newer than its answer (present, or
+                    // gone if deleted), and never moves the cursor back.
+                    val listedSeqs = changed.associate { it.itemId to it.seq }
+                    val live = appliedDuring?.filter { (id, l) -> l.stands(listedSeqs[id], seq) }?.keys.orEmpty()
                     appliedDuring = null
                     if (full) byId = byId.filterKeys { it in live }
                     val fresh = changed.filter { it.itemId !in live }
@@ -1031,15 +1053,19 @@ class FeedManager(
         }
         synchronized(lock) {
             if (answer.seq == cursor + 1) cursor = answer.seq
-            if ((byId[itemId]?.seq ?: 0) <= answer.seq) apply(listOf(answer))
+            if ((byId[itemId]?.seq ?: 0) <= answer.seq) {
+                apply(listOf(answer))
+                appliedDuring?.put(itemId, Local(answer.seq, own = false)) // the vault's copy now, as a live event's
+            }
         }
     }
 
     private fun replace(item: FeedItem) = synchronized(lock) {
         if (byId.containsKey(item.itemId)) {
             apply(listOf(item))
-            // The member's own change (shown at once, or undone): a quiet read's answer never takes it back.
-            appliedDuring?.put(item.itemId, Long.MAX_VALUE)
+            // The member's own change (shown at once, or undone): a quiet read's answer of the copy it was made on (or
+            // an older one) does not take it back; a newer change elsewhere, or the item gone, does.
+            appliedDuring?.put(item.itemId, Local(item.seq, own = true))
         }
     }
 
@@ -1114,6 +1140,8 @@ class FeedManager(
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
+            // Deleted on the vault: a quiet read's answer from before it does not list it again.
+            appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
             publish()
         }
     }

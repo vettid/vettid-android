@@ -46,6 +46,7 @@ class FeedManagerTest {
         var refuse = setOf<String>()
         var retention: Int? = null
         var failLists = 0
+        var updateGate: CompletableDeferred<Unit>? = null
 
         override suspend fun list(afterSeq: Long, limit: Int): FeedPage {
             synchronized(this) { lists += afterSeq }
@@ -56,6 +57,7 @@ class FeedManagerTest {
 
         override suspend fun update(itemId: String, status: String): FeedItem {
             if (itemId in refuse) throw VaultOpException("feed.update", "not_found")
+            updateGate?.await()
             return synchronized(this) {
                 updates += itemId to status
                 val i = known.getValue(itemId).copy(seq = ++counter, status = status)
@@ -1537,11 +1539,125 @@ class FeedManagerTest {
         m.setStatus("i1", "read")
         ops.gate = null
         gate.complete(Unit)
-        settle { synchronized(ops) { ops.pages.isEmpty() } }
-        advanceUntilIdle()
-        Thread.sleep(SETTLE_MS) // the read's apply, on the IO dispatcher
-        advanceUntilIdle()
+        settle { m.readsUnderWay == 0 }
         assertEquals("read", m.items.value.single { it.itemId == "i1" }.status)
+    }
+
+    /**
+     * The member marks an item read while a quiet full read is fetched, and the vault has not answered the change when the read
+     * ends: the read's copy is the one the change was made on, so the member's change stays shown.
+     */
+    @Test
+    fun aQuietFullReadKeepsTheMembersChangeNotAnsweredYet() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2)), 2) // the answer: i1 as the change found it
+        val updateGate = CompletableDeferred<Unit>()
+        ops.updateGate = updateGate
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        val change = launch { m.setStatus("i1", "read") }
+        runCurrent()
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals("read", m.items.value.single { it.itemId == "i1" }.status)
+        updateGate.complete(Unit)
+        settle { change.isCompleted }
+    }
+
+    /** The member deletes an item while a quiet full read is fetched: the read's answer, from before the delete, does not list it again. */
+    @Test
+    fun aQuietFullReadKeepsTheMembersDelete() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2)), 2) // the answer, from before the delete
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("i1")
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+    }
+
+    /**
+     * The member marks an item read while a quiet full read is fetched, and the item was deleted on another device before the
+     * answer (the vault then refuses the change): the answer, which no longer lists it, wins over the member's copy.
+     */
+    @Test
+    fun aDeletionElsewhereBeatsTheMembersChangeInAQuietRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("h2", 2)), 3) // the answer: i1 deleted elsewhere (seq 3)
+        ops.refuse = setOf("i1")
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        runCatching { m.setStatus("i1", "read") }
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        assertEquals(3L, m.seq)
+    }
+
+    /**
+     * The member marks an item read while a quiet full read is fetched and its answer is not back yet; the read's answer holds a
+     * newer change of the item from elsewhere: that copy wins over the member's, made on the older one.
+     */
+    @Test
+    fun aNewerChangeInAQuietReadBeatsTheMembersChange() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "archived")), 3) // the answer: archived elsewhere at seq 3
+        val updateGate = CompletableDeferred<Unit>()
+        ops.updateGate = updateGate
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        val change = launch { m.setStatus("i1", "read") } // a test child: its return from the vault call is run by settle
+        runCurrent()
+        assertEquals("read", m.items.value.single().status) // shown at once
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(3L to "archived", m.items.value.single().let { it.seq to it.status })
+        updateGate.complete(Unit)
+        settle { change.isCompleted }
+        assertEquals(101L to "read", m.items.value.single().let { it.seq to it.status }) // the vault's answer, newer, applies
+    }
+
+    /**
+     * The vault answers the member's change while a quiet full read is fetched, and the read's answer holds an older change of
+     * the item from elsewhere (made before the member's reached the vault): the vault's answer, newer, stays.
+     */
+    @Test
+    fun theVaultsAnswerToTheMembersChangeBeatsAnOlderQuietRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "archived")), 3) // the answer: archived elsewhere at seq 3
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.setStatus("i1", "read") // answered at seq 101, after the change elsewhere
+        assertEquals(101L, m.items.value.single().seq)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(101L to "read", m.items.value.single().let { it.seq to it.status })
     }
 
     /**
@@ -1564,10 +1680,7 @@ class FeedManagerTest {
         m.onItem(g3, notify = false, wake = false, m = event(g3)) // its change, silenced (sent during the hold)
         ops.gate = null
         gate.complete(Unit)
-        settle { synchronized(ops) { ops.pages.isEmpty() } }
-        advanceUntilIdle()
-        Thread.sleep(SETTLE_MS)
-        advanceUntilIdle()
+        settle { m.readsUnderWay == 0 }
         assertEquals(emptyList<String>(), arrived)
     }
 
