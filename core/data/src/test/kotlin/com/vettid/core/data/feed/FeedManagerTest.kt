@@ -47,6 +47,7 @@ class FeedManagerTest {
         var retention: Int? = null
         var failLists = 0
         var updateGate: CompletableDeferred<Unit>? = null
+        var deleteGate: CompletableDeferred<Unit>? = null
 
         override suspend fun list(afterSeq: Long, limit: Int): FeedPage {
             synchronized(this) { lists += afterSeq }
@@ -67,6 +68,7 @@ class FeedManagerTest {
         }
 
         override suspend fun delete(itemId: String) {
+            deleteGate?.await()
             deletes += itemId
         }
 
@@ -1781,17 +1783,97 @@ class FeedManagerTest {
         assertEquals(emptyList<String>(), arrived)
     }
 
-    /** A catch-up's answer from before the member's delete does not list the item again. */
+    /** A catch-up's answer from before the member's delete, with an active copy, neither lists nor notifies the item. */
     @Test
     fun aCatchUpAnswerDoesNotBringBackADeletedItem() = runTest {
         val ops = Ops()
         val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
         m.delete("i1")
-        ops.pages += FeedPage(listOf(item("i1", 3, status = "read")), 3) // an older change of it, from before the delete
+        ops.pages += FeedPage(listOf(item("i1", 3)), 3) // an older, active change of it, from before the delete
         m.catchUp()
         settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
         assertEquals(listOf("h2"), m.items.value.map { it.itemId })
         assertEquals(3L, m.seq)
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /**
+     * A catch-up already on its way when the member deletes an item, whose answer holds an older active copy of it: the
+     * deletion's event, in order, comes before that answer and does not end the entry, so the answer neither lists nor
+     * notifies the item.
+     */
+    @Test
+    fun aCatchUpOnItsWayAtTheDeleteDoesNotBringTheItemBack() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 3)), 3) // taken before the delete: the item's older, active change
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        val older = item("i1", 3)
+        m.onItem(older, notify = false, wake = false, m = event(older)) // that change's own event, in order
+        m.delete("i1")
+        val gone = item("i1", 4, status = "deleted")
+        m.onItem(gone, notify = false, wake = false, m = event(gone)) // the deletion's event, in order
+        assertEquals(1, m.deletedHereCount)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** An older copy held while the release is checked, released after the member's delete, is neither listed nor notified. */
+    @Test
+    fun aHeldEventReleasedAfterTheDeleteDoesNotBringTheItemBack() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = opened(ops, item("i1", 1), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        m.onEvent(event(item("i1", 3))) // an older, active change, held by the release check
+        m.onEvent(event(item("g4", 4)))
+        checking = false
+        m.releaseHeld()
+        settle { arrived.isNotEmpty() }
+        assertEquals(listOf("g4", "h2"), m.items.value.map { it.itemId }.sorted())
+        assertEquals(listOf("g4"), arrived)
+    }
+
+    /** A soft clear keeps the ids deleted here: a push wake's older copy while the continued opening reads is not notified. */
+    @Test
+    fun aSoftClearKeepsTheIdsDeletedHere() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        m.clear(keepHeld = true) // a blip
+        assertEquals(1, m.deletedHereCount)
+        assertTrue(m.openingContinues())
+        m.onItem(item("i1", 3), notify = true, wake = true, m = null) // a push wake's copy, the list not loaded
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A delete answered after a lock's clear adds nothing for the next opening. */
+    @Test
+    fun aDeleteAnsweredAfterAClearAddsNothing() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val gate = CompletableDeferred<Unit>()
+        ops.deleteGate = gate
+        val del = launch { m.delete("i1") }
+        runCurrent()
+        m.clear()
+        gate.complete(Unit)
+        settle { del.isCompleted }
+        assertEquals(0, m.deletedHereCount)
     }
 
     /**
@@ -1854,16 +1936,55 @@ class FeedManagerTest {
         settle { m.readsUnderWay == 0 }
     }
 
-    /** A deletion seen as an event, in order (the cursor passes it), ends the entry of an id deleted here too. */
+    /**
+     * A deletion seen as an event leaves the entry for a read to settle: an older copy after it is still left out, and
+     * another item is listed and notified as ever; the next read, begun after the delete, ends the entry.
+     */
     @Test
-    fun aDeletionEventInOrderEndsTheEntry() = runTest {
+    fun aDeletionEventLeavesTheEntryForARead() = runTest {
         val ops = Ops()
         val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
         m.delete("i1")
         val gone = item("i1", 3, status = "deleted")
         m.onItem(gone, notify = false, wake = false, m = event(gone))
         assertEquals(3L, m.seq)
+        assertEquals(1, m.deletedHereCount)
+        ops.gate = CompletableDeferred() // the gap's catch-up waits
+        val older = item("i1", 5)
+        m.onItem(older, notify = true, wake = false, m = event(older)) // an older copy, out of order
+        val other = item("g4", 4)
+        m.onItem(other, notify = true, wake = false, m = event(other))
+        assertEquals(listOf("g4", "h2"), m.items.value.map { it.itemId }.sorted())
+        assertEquals(listOf("g4"), arrived)
+        val gate = ops.gate!!
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
         assertEquals(0, m.deletedHereCount)
+    }
+
+    /**
+     * A read sent before the delete was answered, but served after it, brings the deletion: that ends the entry, although
+     * the read began before the delete.
+     */
+    @Test
+    fun aReadBringingTheDeletionEndsTheEntry() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "deleted")), 3)
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("i1")
+        assertEquals(1, m.deletedHereCount)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(0, m.deletedHereCount)
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
     }
 
     /** A lock's clear and a new opening empty the set of ids deleted here. */

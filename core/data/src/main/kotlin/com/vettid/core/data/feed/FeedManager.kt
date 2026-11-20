@@ -349,6 +349,7 @@ class FeedManager(
             if (!keepHeld) {
                 arrivedSince = null
                 notifiedSeq.clear()
+                deletedHere.clear() // a lock's clear only: a soft clear keeps it, as what was notified (the opening may continue)
                 markable = false // an answer the device tells after a lock belongs to no opening of this feed
                 liftedAt = null
                 heldEvents.clear()
@@ -356,7 +357,6 @@ class FeedManager(
             }
             generation++
             appliedDuring = null
-            deletedHere.clear()
             byId = emptyMap()
             cursor = 0
             catchUpQueued = false
@@ -648,7 +648,6 @@ class FeedManager(
                 appliedDuring?.put(item.itemId, Local(item.seq, own = false))
             }
             if (next) cursor = item.seq
-            deletedHere.passed(item, cursor)
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
             next to (if (notify) listed(listOf(item)).firstOrNull() else null)
@@ -830,7 +829,7 @@ class FeedManager(
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
                     cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
-                    deletedHere.readApplied(changed, cursor, full, start.deletes)
+                    deletedHere.readApplied(changed, start.deletes)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
@@ -1174,12 +1173,14 @@ class FeedManager(
     }
 
     override suspend fun delete(itemId: String) {
+        val gen = synchronized(lock) { generation }
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
             // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
             appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
-            deletedHere.add(itemId)
+            // Not into another opening's list, or after a clear: its next read lists what the vault has.
+            if (gen == generation) deletedHere.add(itemId)
             publish()
         }
     }

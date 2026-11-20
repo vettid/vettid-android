@@ -4,12 +4,14 @@ import com.vettid.core.vault.FeedItem
 
 /**
  * Items the member deleted on this phone ([FeedManager.delete]), by the deletes counted when each was deleted. An item id is a
- * ULID and a deleted item never comes back (VAULT-MESSAGING §10.9: a later ask of its batch, or a newer guide version, is a
- * new item), so a copy of one that is not deleted is from before the delete: a late event, an event held through a read, a
- * catch-up's or a full read's answer. The feed neither lists nor notifies it, and its cursor moves on. An id goes once the
- * cursor has passed its deletion (an answer or an event in order with it deleted: anything older is then behind the cursor)
- * or a full read begun after the delete has applied; all go at a clear and an opening. Not thread-safe: the feed uses it under
- * its lock.
+ * ULID and a deleted item never comes back (VAULT-MESSAGING §10.9 and §10.4.1 Batching: a later ask of a deleted item's
+ * batch starts a new one; §10.9 Guides: a newer guide version is a new item; §10.10: missed calls likewise), so a copy of one
+ * that is not deleted is from before the delete: a late event, an event held through a read or the release check, a
+ * catch-up's or a full read's answer. The feed neither lists nor notifies it, and its cursor moves on. An entry goes only
+ * when a read has settled it, never on an event (a read already on its way may still bring an older copy): once a read's
+ * answer with the deletion has applied, or a read begun after the delete has. All go at a lock's
+ * clear and at an opening; a soft clear keeps them, as the opening may continue. Not thread-safe: the feed uses it under its
+ * lock.
  */
 internal class DeletedHere {
     private val ids = HashMap<String, Long>()
@@ -27,18 +29,14 @@ internal class DeletedHere {
     /** Whether [item] is an older copy of one deleted here, to be left out. */
     fun olderCopy(item: FeedItem): Boolean = item.itemId in ids && item.status != FeedManager.STATUS_DELETED
 
-    /** [item]'s deletion, once the [cursor] has passed it: nothing older can come in order, so its entry goes. */
-    fun passed(item: FeedItem, cursor: Long) {
-        if (item.status == FeedManager.STATUS_DELETED && item.seq <= cursor) ids.remove(item.itemId)
-    }
-
     /**
-     * A read's answer [changed] applied, the cursor now [cursor]: the deletions it passed end their entries, and a [full] read
-     * begun when [startDeletes] deletes had been made answers for each of them.
+     * A read's answer [changed] applied (the cursor is then at its `seq` or past it): the deletions it brought end their
+     * entries, since anything older is behind the cursor, and a read begun when [startDeletes] deletes had been made answers
+     * for each of them (reads run one at a time, so none older is on its way).
      */
-    fun readApplied(changed: List<FeedItem>, cursor: Long, full: Boolean, startDeletes: Long) {
-        changed.forEach { passed(it, cursor) }
-        if (full) ids.values.removeAll { it <= startDeletes }
+    fun readApplied(changed: List<FeedItem>, startDeletes: Long) {
+        changed.forEach { if (it.status == FeedManager.STATUS_DELETED) ids.remove(it.itemId) }
+        ids.values.removeAll { it <= startDeletes }
     }
 
     fun clear() = ids.clear()
