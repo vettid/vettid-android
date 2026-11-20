@@ -207,7 +207,7 @@ class FeedManager(
     private var appliedDuring: HashMap<String, Local>? = null
 
     /**
-     * A change applied here while a quiet full read runs ([appliedDuring]): the item's `seq` as applied, and whether it is
+     * A change applied here while a full read over a list shown runs ([appliedDuring]): the item's `seq` as applied, and whether it is
      * the member's own (made on that copy, not answered yet; a delete as the highest `seq`, never undone by an answer).
      */
     private class Local(val seq: Long, val own: Boolean) {
@@ -634,7 +634,7 @@ class FeedManager(
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
             // An item the member deleted here while a read runs: an older change's event, arriving late, does not list it
-            // again (nor notify it); the cursor moves on as for any event.
+            // again (so it is not notified: [listed] judges the list); the cursor moves on as for any event.
             val deletedHere = appliedDuring?.get(item.itemId)?.deletedHere == true
             if (!deletedHere) {
                 apply(listOf(item))
@@ -643,7 +643,7 @@ class FeedManager(
             if (next) cursor = item.seq
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
-            next to (if (notify && !deletedHere) listed(listOf(item)).firstOrNull() else null)
+            next to (if (notify) listed(listOf(item)).firstOrNull() else null)
         }
         if (applied == null) {
             if (wake) {
@@ -776,9 +776,10 @@ class FeedManager(
      * runs (one that ends with the vault not open leaves the list not loaded, as any full read).
      */
     private fun beginRead(full: Boolean, quiet: Boolean): ReadStart = synchronized(lock) {
-        // Over a list shown (a quiet read, a refresh of a loaded list, or a full read again across a lift, which keeps what
-        // the first one recorded): what changes here meanwhile is weighed against the answer ([appliedDuring]).
-        val shown = loadState.value == ListLoad.LOADED
+        // Over a list shown (any items held: the screen shows them whatever the load state, after a failed read or a lift
+        // too; a clear empties them), and for a full read again across a lift, which keeps what the first one recorded: what
+        // changes here meanwhile is weighed against the answer ([appliedDuring]).
+        val shown = byId.isNotEmpty()
         if (full && !quiet) loadState.value = ListLoad.LOADING
         appliedDuring = if (full && (quiet || shown || appliedDuring != null)) appliedDuring ?: HashMap() else null
         ReadStart(generation, lifts, keptAt, quiet)
@@ -1056,11 +1057,11 @@ class FeedManager(
 
     override suspend fun setStatus(itemId: String, status: String) {
         require(status in SETTABLE) { "status $status" }
-        val before = synchronized(lock) {
+        val (before, gen) = synchronized(lock) {
             val b = byId[itemId] ?: return
             if (b.status == status) return
             replace(b.copy(status = status))
-            b
+            b to generation
         }
         val answer = try {
             vaultGuard { ops().update(itemId, status) }
@@ -1070,10 +1071,12 @@ class FeedManager(
             throw e
         }
         synchronized(lock) {
+            // The cursor moves past the answer's change unless a clear (a lock) came since: its own event then is not applied
+            // later over a list that has moved on (the item deleted meanwhile, or a newer change of it listed).
+            if (gen == generation && answer.seq == cursor + 1) cursor = answer.seq
             // Only over the item still listed, at that change or an older one: one deleted meanwhile (here or elsewhere), or
-            // cleared by a lock, is not listed again by a late answer, nor moves the cursor.
+            // cleared by a lock, is not listed again by a late answer.
             if (byId[itemId]?.let { it.seq <= answer.seq } == true) {
-                if (answer.seq == cursor + 1) cursor = answer.seq
                 apply(listOf(answer))
                 appliedDuring?.put(itemId, Local(answer.seq, own = false)) // the vault's copy now, as a live event's
             }

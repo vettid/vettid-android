@@ -1586,8 +1586,8 @@ class FeedManagerTest {
         m.catchUp()
         settle { synchronized(ops) { ops.lists.size } >= 2 }
         m.delete("i1")
-        val late = item("i1", 3, status = "read")
-        m.onItem(late, notify = true, wake = false, m = event(late)) // an older change's event, delayed
+        val late = item("i1", 3)
+        m.onItem(late, notify = true, wake = false, m = event(late)) // an older change's event, delayed (active)
         assertEquals(listOf("h2"), m.items.value.map { it.itemId })
         assertEquals(3L, m.seq)
         ops.gate = null
@@ -1645,6 +1645,53 @@ class FeedManagerTest {
         assertEquals("read", m.items.value.single().status)
         updateGate.complete(Unit)
         settle { change.isCompleted }
+    }
+
+    /**
+     * A refresh fails and the list stays shown; the member pulls again and deletes an item while that read is fetched: its
+     * answer, from before the delete, does not list it again.
+     */
+    @Test
+    fun aRefreshAfterAFailedOneKeepsTheMembersDelete() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        synchronized(ops) { ops.failLists = 1 }
+        runCatching { m.refresh() }
+        assertEquals(listOf("h2", "i1"), m.items.value.map { it.itemId }.sorted()) // still shown
+        assertFalse(m.loaded)
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2)), 2) // the answer, from before the delete
+        val read = launch { runCatching { m.refresh() } }
+        runCurrent()
+        settle { synchronized(ops) { ops.lists.size } >= 3 }
+        m.delete("h2")
+        ops.gate = null
+        gate.complete(Unit)
+        settle { read.isCompleted }
+        assertEquals(listOf("i1"), m.items.value.map { it.itemId })
+    }
+
+    /**
+     * The member's change and their delete of an item cross: the delete is answered first, then the change's answer, at the
+     * seq next to the cursor. Its own event, coming after, is behind the cursor and does not list the item again.
+     */
+    @Test
+    fun aChangesEventAfterTheMembersDeleteDoesNotListItAgain() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val updateGate = CompletableDeferred<Unit>()
+        ops.updateGate = updateGate
+        ops.counter = 2 // the change's answer comes at seq 3, next to the cursor
+        val change = launch { m.setStatus("i1", "read") }
+        runCurrent()
+        m.delete("i1")
+        updateGate.complete(Unit)
+        settle { change.isCompleted }
+        assertEquals(3L, m.seq)
+        val own = item("i1", 3, status = "read")
+        m.onItem(own, notify = false, wake = false, m = event(own)) // the change's own event
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
     }
 
     /** A late answer to the member's change after a clear (a lock): the list stays empty, the cursor and the badge at 0. */
