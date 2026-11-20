@@ -199,9 +199,10 @@ class FeedManager(
     private class Kept(val cursor: Long, val seqs: Map<String, Long>)
 
     /**
-     * While a [quiet] full read runs (the list stays loaded and live events keep applying): each item a live event applied
-     * meanwhile, each the member changed or deleted here, and each the vault answered a change of, as [Local]. The read's
-     * answer replaces one only when it is newer ([Local.stands]). Dropped when the read ends, whatever its end. Under [lock].
+     * While a full read runs over a list shown (a [quiet] one, where live events keep applying, or a refresh of a loaded
+     * list): each item a live event applied meanwhile, each the member changed or deleted here, and each the vault answered
+     * a change of, as [Local]. The read's answer replaces one only when it is newer ([Local.stands]). Dropped when the read
+     * ends, whatever its end. Under [lock].
      */
     private var appliedDuring: HashMap<String, Local>? = null
 
@@ -210,6 +211,9 @@ class FeedManager(
      * the member's own (made on that copy, not answered yet; a delete as the highest `seq`, never undone by an answer).
      */
     private class Local(val seq: Long, val own: Boolean) {
+        /** The member's delete ([delete]): an event for the item meanwhile does not list it again. */
+        val deletedHere: Boolean get() = own && seq == Long.MAX_VALUE
+
         /**
          * Whether it stands over the read's answer, which lists the item at [listed] (null: not listed) and was made at
          * [read]. Not listed: the item is gone (deleted elsewhere, past retention), unless what was applied is newer than
@@ -629,12 +633,17 @@ class FeedManager(
             if (loadState.value != ListLoad.LOADED) return@synchronized null
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
-            apply(listOf(item))
-            appliedDuring?.put(item.itemId, Local(item.seq, own = false))
+            // An item the member deleted here while a read runs: an older change's event, arriving late, does not list it
+            // again (nor notify it); the cursor moves on as for any event.
+            val deletedHere = appliedDuring?.get(item.itemId)?.deletedHere == true
+            if (!deletedHere) {
+                apply(listOf(item))
+                appliedDuring?.put(item.itemId, Local(item.seq, own = false))
+            }
             if (next) cursor = item.seq
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
-            next to (if (notify) listed(listOf(item)).firstOrNull() else null)
+            next to (if (notify && !deletedHere) listed(listOf(item)).firstOrNull() else null)
         }
         if (applied == null) {
             if (wake) {
@@ -767,8 +776,11 @@ class FeedManager(
      * runs (one that ends with the vault not open leaves the list not loaded, as any full read).
      */
     private fun beginRead(full: Boolean, quiet: Boolean): ReadStart = synchronized(lock) {
+        // Over a list shown (a quiet read, a refresh of a loaded list, or a full read again across a lift, which keeps what
+        // the first one recorded): what changes here meanwhile is weighed against the answer ([appliedDuring]).
+        val shown = loadState.value == ListLoad.LOADED
         if (full && !quiet) loadState.value = ListLoad.LOADING
-        appliedDuring = if (full && quiet) HashMap() else null
+        appliedDuring = if (full && (quiet || shown || appliedDuring != null)) appliedDuring ?: HashMap() else null
         ReadStart(generation, lifts, keptAt, quiet)
     }
 
@@ -1044,9 +1056,12 @@ class FeedManager(
 
     override suspend fun setStatus(itemId: String, status: String) {
         require(status in SETTABLE) { "status $status" }
-        val before = synchronized(lock) { byId[itemId] } ?: return
-        if (before.status == status) return
-        replace(before.copy(status = status))
+        val before = synchronized(lock) {
+            val b = byId[itemId] ?: return
+            if (b.status == status) return
+            replace(b.copy(status = status))
+            b
+        }
         val answer = try {
             vaultGuard { ops().update(itemId, status) }
         } catch (e: VaultFailure) {
@@ -1055,10 +1070,10 @@ class FeedManager(
             throw e
         }
         synchronized(lock) {
-            if (answer.seq == cursor + 1) cursor = answer.seq
             // Only over the item still listed, at that change or an older one: one deleted meanwhile (here or elsewhere), or
-            // cleared by a lock, is not listed again by a late answer.
+            // cleared by a lock, is not listed again by a late answer, nor moves the cursor.
             if (byId[itemId]?.let { it.seq <= answer.seq } == true) {
+                if (answer.seq == cursor + 1) cursor = answer.seq
                 apply(listOf(answer))
                 appliedDuring?.put(itemId, Local(answer.seq, own = false)) // the vault's copy now, as a live event's
             }
@@ -1068,7 +1083,7 @@ class FeedManager(
     private fun replace(item: FeedItem) = synchronized(lock) {
         if (byId.containsKey(item.itemId)) {
             apply(listOf(item))
-            // The member's own change (shown at once, or undone): a quiet read's answer of the copy it was made on (or
+            // The member's own change (shown at once, or undone): a full read's answer of the copy it was made on (or
             // an older one) does not take it back; a newer change elsewhere, or the item gone, does.
             appliedDuring?.put(item.itemId, Local(item.seq, own = true))
         }
@@ -1145,7 +1160,7 @@ class FeedManager(
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
-            // Deleted on the vault: a quiet read's answer from before it does not list it again.
+            // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
             appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
             publish()
         }
