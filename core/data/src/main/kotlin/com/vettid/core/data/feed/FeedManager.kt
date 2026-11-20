@@ -1,7 +1,6 @@
 package com.vettid.core.data.feed
 
 import com.vettid.core.data.items.ListLoad
-import com.vettid.core.data.social.AskBatching
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.vault.FeedItem
@@ -142,6 +141,21 @@ class FeedManager(
     private val lock = Any()
     private var byId: Map<String, FeedItem> = emptyMap()
     private var cursor = 0L
+
+    /**
+     * The highest [cursor] this opening reached: what it has applied in order. A clear puts the cursor back to 0, also a soft
+     * one (a blip) and the owner check's hold while the opening goes on; this stays, and only an opening resets it (while the
+     * vault is not open nothing is notified). A push wake's copy at or below it was covered already, and is not notified while
+     * the list is not loaded ([onItem]). Under [lock].
+     */
+    private var coveredSeq = 0L
+
+    /** Moves [cursor] and [coveredSeq] with it. Under [lock]. */
+    private fun cursorTo(seq: Long) {
+        cursor = seq
+        if (seq > coveredSeq) coveredSeq = seq
+    }
+
     private var retentionDays = DEFAULT_RETENTION_DAYS
 
     /** (Rule 3) The `feed.event`s and arrivals that came while [held], in order (under [lock]; at most [ARRIVAL_BUFFER] each). */
@@ -201,34 +215,13 @@ class FeedManager(
     /**
      * While a full read runs over a list shown (a [quiet] one, where live events keep applying, or a refresh of a loaded
      * list): each item a live event applied meanwhile, each the member changed or deleted here, and each the vault answered
-     * a change of, as [Local]. The read's answer replaces one only when it is newer ([Local.stands]). Dropped when the read
+     * a change of, as [LocalChange]. The read's answer replaces one only when it is newer ([LocalChange.stands]). Dropped when the read
      * ends, whatever its end. Under [lock].
      */
-    private var appliedDuring: HashMap<String, Local>? = null
-
-    /**
-     * A change applied here while a full read over a list shown runs ([appliedDuring]): the item's `seq` as applied, and whether it is
-     * the member's own (made on that copy, not answered yet; a delete as the highest `seq`, never undone by an answer).
-     */
-    private class Local(val seq: Long, val own: Boolean) {
-        /**
-         * Whether it stands over the read's answer, which lists the item at [listed] (null: not listed) and was made at
-         * [read]. Not listed: the item is gone (deleted elsewhere, past retention), unless what was applied is newer than
-         * the answer. Listed: a live change stands when newer than the answer's copy; the member's own when the answer's
-         * copy is still the one it was made on (or older), so a newer change elsewhere wins.
-         */
-        fun stands(listed: Long?, read: Long): Boolean = when {
-            listed == null -> seq > read
-            own -> seq >= listed
-            else -> seq > listed
-        }
-    }
+    private var appliedDuring: HashMap<String, LocalChange>? = null
 
     /** Items the member deleted on this phone ([DeletedHere]). Under [lock]. */
     private val deletedHere = DeletedHere()
-
-    /** Whether [item] is an older copy of one deleted here ([deletedHere]), to be left out. Under [lock]. */
-    private fun deletedEarlier(item: FeedItem): Boolean = deletedHere.olderCopy(item)
 
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
     private var keptAt = 0
@@ -414,6 +407,7 @@ class FeedManager(
         deletedHere.clear()
         byId = emptyMap()
         cursor = 0
+        coveredSeq = 0
         catchUpQueued = false
         publish()
         loadState.value = ListLoad.NOT_LOADED
@@ -637,24 +631,31 @@ class FeedManager(
      * Internal for its test.
      */
     internal fun onItem(item: FeedItem, notify: Boolean, wake: Boolean, m: VaultMessage?) {
+        // Decided with the load state, in the same section: a read landing in between must not make a new item look covered.
+        var covered = false
         val applied = synchronized(lock) {
-            if (loadState.value != ListLoad.LOADED) return@synchronized null
+            if (loadState.value != ListLoad.LOADED) {
+                covered = item.seq <= coveredSeq
+                return@synchronized null
+            }
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
             // An item the member deleted here ([deletedHere]): an older change's event, arriving late or held through a read,
             // does not list it again (so it is not notified: [listed] judges the list); the cursor moves on as for any event.
-            if (!deletedEarlier(item)) {
+            if (!deletedHere.olderCopy(item)) {
                 apply(listOf(item))
-                appliedDuring?.put(item.itemId, Local(item.seq, own = false))
+                appliedDuring?.put(item.itemId, LocalChange(item.seq, own = false))
             }
-            if (next) cursor = item.seq
+            if (next) cursorTo(item.seq)
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
             next to (if (notify) listed(listOf(item)).firstOrNull() else null)
         }
         if (applied == null) {
             if (wake) {
-                if (notify) wakeArrival(item)
+                // A push wake's own copy: not one already covered ([coveredSeq]: a read applied it, or what came after it,
+                // such as an older copy of an item since deleted), nor one of an item deleted here ([firstAlertAt]).
+                if (notify) wakeArrival(item, covered)
                 catchUp()
             } else if (m != null && vaultOpen() && !waitsForTheRead(m)) {
                 onItem(item, notify, wake = false, m = m) // loaded again meanwhile
@@ -665,13 +666,8 @@ class FeedManager(
         if (!applied.first) catchUp()
     }
 
-    /**
-     * A push wake's own copy while the list is not loaded ([onItem]): notified when active, but not a copy the cursor already
-     * covers (a read applied it, or what came after it: an older copy of an item since deleted, here or elsewhere), nor one of
-     * an item deleted here ([firstAlertAt]).
-     */
-    private fun wakeArrival(item: FeedItem) {
-        val covered = synchronized(lock) { item.seq <= cursor }
+    /** A push wake's own copy, notified when active and not [covered] (decided with the load state, [onItem]). */
+    private fun wakeArrival(item: FeedItem, covered: Boolean) {
         if (item.status == STATUS_ACTIVE && !covered) emitArrival(item)
     }
 
@@ -803,17 +799,6 @@ class FeedManager(
         ReadStart(generation, lifts, keptAt, quiet, deletedHere.deletes)
     }
 
-    /** What a read's answer came to ([applyRead]). */
-    private sealed interface Applied {
-        /** A [clear] came since the read began: nothing applied. */
-        data object Cleared : Applied
-
-        /** A read across a lift ([ownerCheckLifted]): nothing applied; a full read again. */
-        data object Lifted : Applied
-
-        class Read(val arrived: List<FeedItem>) : Applied
-    }
-
     /** A read's answer applied, under [lock], unless a clear or (for an incremental read) a lift came since it began. */
     private fun applyRead(full: Boolean, start: ReadStart, changed: List<FeedItem>, seq: Long): Applied =
         synchronized(lock) {
@@ -828,7 +813,7 @@ class FeedManager(
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
                     // Older copies of items deleted here are left out ([deletedHere]).
-                    val changed = changed.filterNot(::deletedEarlier)
+                    val changed = changed.filterNot(deletedHere::olderCopy)
                     val before = if (full) emptyMap() else byId
                     // A quiet full read keeps what was applied here meanwhile and is newer than its answer (present, or
                     // gone if deleted), and never moves the cursor back.
@@ -838,7 +823,7 @@ class FeedManager(
                     if (full) byId = byId.filterKeys { it in live }
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
-                    cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
+                    cursorTo(maxOf(if (full && !start.quiet) 0 else cursor, seq))
                     deletedHere.readApplied(changed, start.deletes)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
@@ -870,8 +855,6 @@ class FeedManager(
         return if (gated()) emptyList() else newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] }
     }
 
-    /** What a read had when it began ([readAfter]): its generation, the lifts and the blips' snapshots so far. */
-    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int, val quiet: Boolean, val deletes: Long)
 
     /**
      * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list, or with
@@ -1043,7 +1026,7 @@ class FeedManager(
      */
     private fun firstAlertAt(item: FeedItem): Boolean = synchronized(lock) {
         // An older copy of an item deleted here, also one that passed its checks just before the delete: never notified.
-        if (deletedEarlier(item)) return@synchronized false
+        if (deletedHere.olderCopy(item)) return@synchronized false
         if (item.quietRepost) return@synchronized true
         val last = notifiedSeq[item.itemId]
         if (!item.replayed && last != null && item.seq <= last) return@synchronized false
@@ -1096,12 +1079,12 @@ class FeedManager(
         synchronized(lock) {
             // The cursor moves past the answer's change unless a clear (a lock) came since: its own event then is not applied
             // later over a list that has moved on (the item deleted meanwhile, or a newer change of it listed).
-            if (gen == generation && answer.seq == cursor + 1) cursor = answer.seq
+            if (gen == generation && answer.seq == cursor + 1) cursorTo(answer.seq)
             // Only over the item still listed, at that change or an older one: one deleted meanwhile (here or elsewhere), or
             // cleared by a lock, is not listed again by a late answer.
             if (byId[itemId]?.let { it.seq <= answer.seq } == true) {
                 apply(listOf(answer))
-                appliedDuring?.put(itemId, Local(answer.seq, own = false)) // the vault's copy now, as a live event's
+                appliedDuring?.put(itemId, LocalChange(answer.seq, own = false)) // the vault's copy now, as a live event's
             }
         }
     }
@@ -1111,7 +1094,7 @@ class FeedManager(
             apply(listOf(item))
             // The member's own change (shown at once, or undone): a full read's answer of the copy it was made on (or
             // an older one) does not take it back; a newer change elsewhere, or the item gone, does.
-            appliedDuring?.put(item.itemId, Local(item.seq, own = true))
+            appliedDuring?.put(item.itemId, LocalChange(item.seq, own = true))
         }
     }
 
@@ -1146,7 +1129,7 @@ class FeedManager(
      */
     fun askWithdrawn(b: WithdrawnBatch) {
         // The withdrawn ask's own item first, even with a count: another batch's item is never picked for it.
-        val (own, item) = synchronized(lock) { ownItem(b).let { it to (it ?: batchItem(b)) } }
+        val (own, item) = synchronized(lock) { ownItem(b).let { it to (it ?: FeedAsks.batchItem(byId.values, b)) } }
         if (own != null && own.count == null) {
             markReadQuietly(own.itemId)
             return
@@ -1165,30 +1148,13 @@ class FeedManager(
     private fun ownItem(b: WithdrawnBatch): FeedItem? =
         byId.values.firstOrNull { it.connectionId == b.connectionId && FeedAsks.approvalKey(it.kind, it.ref) == b.askKey }
 
-    /**
-     * The batch item that stands for [b]: the ask-kind item of the connection whose `ref` is one of the batch's asks; if
-     * the first ask of the batch is gone already, the newest unread batch item of the connection that began within the
-     * window before the ask was created, by the vault's own times where the app has the ask's (else the phone's).
-     */
-    private fun batchItem(b: WithdrawnBatch): FeedItem? {
-        val items = byId.values.filter { it.connectionId == b.connectionId && it.kind in FeedAsks.ASK_KINDS }
-        items.firstOrNull { FeedAsks.approvalKey(it.kind, it.ref) in b.askKeys }?.let { return it }
-        val at = b.askTs ?: b.receivedAt
-        val from = at.minus(BATCH_WINDOW).minus(BATCH_SKEW)
-        val to = at.plus(BATCH_SKEW)
-        return items.filter { it.count != null && it.status == STATUS_ACTIVE }
-            .mapNotNull { i -> runCatching { Instant.parse(i.at) }.getOrNull()?.let { i to it } }
-            .filter { (_, t) -> !t.isBefore(from) && !t.isAfter(to) }
-            .maxByOrNull { it.second }?.first
-    }
-
     override suspend fun delete(itemId: String) {
         val epoch = synchronized(lock) { deletedHere.epoch }
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
             // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
-            appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
+            appliedDuring?.put(itemId, LocalChange(Long.MAX_VALUE, own = true))
             // Not after a lock's clear or into another opening (its next read lists what the vault has); across a soft clear
             // (a blip), yes: the opening may continue, with the set.
             if (epoch == deletedHere.epoch) deletedHere.add(itemId)
@@ -1236,8 +1202,6 @@ class FeedManager(
         /** (Rule 3) How long after a failed read the one catch-up for what is held waits ([retryOnce]). */
         const val RETRY_AFTER_MS = 5_000L
 
-        private val BATCH_WINDOW: java.time.Duration = AskBatching.WINDOW
-        private val BATCH_SKEW: java.time.Duration = java.time.Duration.ofMinutes(2)
         const val STATUS_ACTIVE = "active"
         const val STATUS_READ = "read"
         const val STATUS_ARCHIVED = "archived"

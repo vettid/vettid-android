@@ -9,8 +9,8 @@ import com.vettid.core.vault.FeedItem
  * that is not deleted is from before the delete: a late event, an event held through a read or the release check, a
  * catch-up's or a full read's answer. The feed neither lists nor notifies it, and its cursor moves on. An entry goes only
  * when a read has settled it, never on an event (a read already on its way may still bring an older copy): once a read's
- * answer with the deletion has applied, or a read begun after the delete has. All go at a lock's
- * clear and at an opening; a soft clear keeps them, as the opening may continue. Not thread-safe: the feed uses it under its
+ * answer with the deletion has applied, or a read begun after the delete has. All go at a lock's clear, at the owner check's
+ * hold and at an opening; a soft clear keeps them, as the opening may continue. Not thread-safe: the feed uses it under its
  * lock.
  */
 internal class DeletedHere {
@@ -39,7 +39,11 @@ internal class DeletedHere {
         ids.values.removeAll { it <= startDeletes }
     }
 
-    /** Moved by [clear] (a lock's clear, an opening), not by a soft clear: a delete answered across one adds nothing. */
+    /**
+     * Moved by [clear]: a lock's clear, the owner check's hold and an opening, not a soft clear (a blip). A delete answered
+     * across one adds nothing: after a lock or an opening its next read lists what the vault has, and after the hold the
+     * lift's full read, begun after the delete, does.
+     */
     var epoch = 0
         private set
 

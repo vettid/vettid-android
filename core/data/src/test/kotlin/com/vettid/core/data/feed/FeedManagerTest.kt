@@ -1903,6 +1903,48 @@ class FeedManagerTest {
         gate.complete(Unit)
         settle { del.isCompleted }
         assertEquals(1, m.deletedHereCount)
+        // Its effect: the continued opening does not notify an older copy of it from a push wake.
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues())
+        ops.gate = CompletableDeferred() // the wake's catch-up waits
+        m.onItem(item("i1", 5), notify = true, wake = true, m = null)
+        assertEquals(emptyList<String>(), arrived)
+        val g = ops.gate!!
+        ops.gate = null
+        g.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+    }
+
+    /**
+     * A soft clear (a blip) and the owner check's hold put the cursor back to 0 while the opening goes on: a push wake's copy
+     * the opening already applied is still not notified (its entry ended by a read), and a new one still is.
+     */
+    @Test
+    fun aWakeCopyAppliedBeforeABlipOrAHoldIsNotNotified() = runTest {
+        for (soft in listOf(true, false)) {
+            val ops = Ops()
+            val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+            val arrived = mutableListOf<String>()
+            val collector = backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
+                m.arrivals.collect { arrived += it.itemId }
+            }
+            m.delete("i1")
+            ops.pages += FeedPage(listOf(item("i1", 3, status = "deleted")), 3) // a read brings the deletion: the entry ends
+            m.catchUp()
+            settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+            if (soft) m.clear(keepHeld = true) else m.clear(endsOpening = false)
+            ops.gate = CompletableDeferred() // the wakes' catch-ups wait
+            m.onItem(item("i1", 1), notify = true, wake = true, m = null) // the old, active copy
+            assertEquals("soft=$soft", emptyList<String>(), arrived)
+            m.onItem(item("g4", 4), notify = true, wake = true, m = null)
+            assertEquals("soft=$soft", listOf("g4"), arrived)
+            val g = ops.gate!!
+            ops.gate = null
+            g.complete(Unit)
+            settle { m.readsUnderWay == 0 }
+            collector.cancel()
+        }
     }
 
     /** A delete answered after a lock's clear adds nothing for the next opening. */
