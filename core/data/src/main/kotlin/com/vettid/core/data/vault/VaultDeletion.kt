@@ -438,12 +438,10 @@ internal class DeletionWatch(
 }
 
 /**
- * The phase as [VaultManager] publishes it, with "being deleted" above every other (ANDROID-PLAN 0.1.54): while
- * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
- * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
+ * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of openings so far, counted
+ * with it under the holder's lock.
  */
-/** A phase as the lock clears follow it: with the number of closes so far ([PhaseHolder.ticks]). */
-internal data class PhaseTick(val phase: AppPhase, val closes: Int)
+internal data class PhaseTick(val phase: AppPhase, val closes: Int, val opens: Int)
 
 /** A phase that closes the vault on this phone: a lock, a sign-out or wipe, a setup, a deletion. */
 internal fun isClose(p: AppPhase): Boolean = when (p) {
@@ -451,6 +449,11 @@ internal fun isClose(p: AppPhase): Boolean = when (p) {
     else -> false
 }
 
+/**
+ * The phase as [VaultManager] publishes it, with "being deleted" above every other (ANDROID-PLAN 0.1.54): while
+ * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
+ * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
+ */
 internal class PhaseHolder(
     initial: AppPhase,
     /**
@@ -483,7 +486,7 @@ internal class PhaseHolder(
     /** Closes counted so far (a move into a close from a phase that is not one): carried by [ticks]. Under this. */
     private var closes = 0
 
-    private val ticksFlow = MutableStateFlow(PhaseTick(initial, 0))
+    private val ticksFlow = MutableStateFlow(PhaseTick(initial, 0, 0))
 
     /**
      * The phase with the number of closes so far, published with it: a close that follows an opening the collector never saw
@@ -519,7 +522,7 @@ internal class PhaseHolder(
         flow.value = v
         val ends = isClose(v)
         if (ends && !isClose(was)) closes++
-        ticksFlow.value = PhaseTick(v, closes)
+        ticksFlow.value = PhaseTick(v, closes, opensFlow.value)
         if (ends && v != was) CredentialRequired.clear()
     }
 

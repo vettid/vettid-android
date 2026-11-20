@@ -113,6 +113,20 @@ internal class PhaseSteps private constructor(
         throw if (second != null) LockClearFailed(first, second) else first
     }
 
+    /**
+     * A close the collector was not told of on its own, its phase now Unlocked (a lock and an unlock, conflated): the lock's
+     * clears and the own profile's forget, as at a lock, before that opening's steps ([onPhase]). Not the held-back events'
+     * release: what is held now belongs to the opening. Each clear keeps its own guard against a vault open now.
+     */
+    fun onMissedClose() {
+        val steps = ClearSteps()
+        clearInto(steps, AppPhase.Locked)
+        steps.step { ownProfile(AppPhase.Locked) }
+        val first = steps.takeFailure() ?: return
+        val second = clearAgain(AppPhase.Locked)
+        throw if (second != null) LockClearFailed(first, second) else first
+    }
+
     /** Once more: the clears and the own profile's step (the release ran; it holds nothing of the vault's). */
     private fun clearAgain(phase: AppPhase): Throwable? {
         val again = ClearSteps()
@@ -178,5 +192,43 @@ internal class PhaseSteps private constructor(
             ),
             ownProfile,
         )
+    }
+}
+
+/**
+ * What the phase collector makes of each [PhaseTick] it receives, against the one before: whether a close came since the
+ * vault was open (the "Your vault is locked" notice, when the member did not lock here) and whether a close was conflated
+ * into an opening (its clears then run before that opening's steps, [follow]). Not thread-safe: one collector.
+ */
+internal class PhaseFollower {
+    private var seen: PhaseTick? = null
+    private var seenBlipKept = false
+
+    /** [closedSinceOpen]: Locked or Unreachable after a close, the vault open since the tick before. */
+    data class Step(val closedSinceOpen: Boolean, val missedClose: Boolean)
+
+    /** [tick] received; [blipKept]: it is a blip of an open vault ([PhaseHolder.blipKeepsOpening]). */
+    fun next(tick: PhaseTick, blipKept: Boolean): Step {
+        val last = seen
+        val p = tick.phase
+        val closed = last != null && tick.closes > last.closes
+        // Open since the tick before: it was open or a blip of an open vault, or an opening came between.
+        val wasOpen = last != null && (last.phase == AppPhase.Unlocked || seenBlipKept || tick.opens > last.opens)
+        seen = tick
+        seenBlipKept = p is AppPhase.Unreachable && blipKept
+        val locked = p == AppPhase.Locked || p is AppPhase.Unreachable
+        return Step(closedSinceOpen = closed && wasOpen && locked, missedClose = closed && p == AppPhase.Unlocked)
+    }
+}
+
+/**
+ * One tick through [steps]: a close conflated into an opening runs its clears first ([PhaseSteps.onMissedClose]), then the
+ * phase's own steps run whatever they did, [opened] told whether the clears ran.
+ */
+internal suspend fun PhaseSteps.follow(phase: AppPhase, step: PhaseFollower.Step, opened: suspend (afterMissedClose: Boolean) -> Unit) {
+    try {
+        if (step.missedClose) onMissedClose()
+    } finally {
+        onPhase(phase) { opened(step.missedClose) }
     }
 }

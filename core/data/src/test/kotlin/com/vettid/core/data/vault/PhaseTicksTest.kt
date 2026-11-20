@@ -17,7 +17,7 @@ class PhaseTicksTest {
     @Test
     fun aMoveIntoACloseCountsAndNothingElseDoes() {
         val phase = PhaseHolder(AppPhase.Locked)
-        assertEquals(PhaseTick(AppPhase.Locked, 0), phase.ticks.value)
+        assertEquals(PhaseTick(AppPhase.Locked, 0, 0), phase.ticks.value)
         phase.value = AppPhase.Unlocked
         phase.value = blip // a blip closes nothing
         phase.value = AppPhase.Unlocked
@@ -25,7 +25,7 @@ class PhaseTicksTest {
         phase.value = AppPhase.Locked
         assertEquals(1, phase.ticks.value.closes)
         phase.value = AppPhase.SignedOut // from one close to another: the same close
-        assertEquals(PhaseTick(AppPhase.SignedOut, 1), phase.ticks.value)
+        assertEquals(PhaseTick(AppPhase.SignedOut, 1, 2), phase.ticks.value)
         phase.value = AppPhase.Unlocked
         phase.value = AppPhase.Deleting()
         assertEquals(2, phase.ticks.value.closes)

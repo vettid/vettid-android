@@ -254,6 +254,20 @@ class OpeningStepsTest {
         assertTrue(w.held.held())
     }
 
+    /** A pass placed during a blip that came after a close, in the same feed opening: no opening to keep it for, dropped. */
+    @Test
+    fun aPassDuringABlipAfterACloseIsDropped() = runTest {
+        val w = World(this, now)
+        val due = HeldAskReplay.Due(1, 0, 0)
+        w.move(AppPhase.Unlocked)
+        val opening = w.feed.openingNumber
+        w.publish(AppPhase.Locked)
+        w.publish(blip) // a status read after the lock: the feed's opening number has not moved
+        assertEquals(opening, w.feed.openingNumber)
+        assertEquals(OpeningSteps.PassReplay.DROP, w.steps.placePassReplay(due, opening))
+        assertFalse(w.held.held())
+    }
+
     /** A pass learnt in a blip, placed after a lock and a new opening came: dropped, never launched at an unlock. */
     @Test
     fun aPassFromAnEarlierOpeningIsDropped() = runTest {

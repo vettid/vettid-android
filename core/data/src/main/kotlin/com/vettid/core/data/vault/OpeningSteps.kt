@@ -70,7 +70,7 @@ internal class OpeningSteps(
     fun placePassReplay(due: HeldAskReplay.Due, opening: Int): PassReplay = phase().decide { p ->
         val same = feed.openingNumber == opening
         when {
-            same && p is AppPhase.Unreachable -> PassReplay.HELD.also { heldAskReplay.hold(due) }
+            same && p is AppPhase.Unreachable && phase().blipKeepsOpening -> PassReplay.HELD.also { heldAskReplay.hold(due) }
             same && p == AppPhase.Unlocked -> PassReplay.LAUNCH
             else -> PassReplay.DROP
         }

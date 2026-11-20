@@ -957,6 +957,27 @@ class ReleaseGateTest {
     }
 
     /**
+     * A close conflated into an opening cleared what that opening's check had read at its end: the opened steps read again
+     * (the forced case), and only then.
+     */
+    @Test
+    fun aMissedCloseReadsAgainAfterTheChecksEnd() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        val s = Steps()
+        m.onGateChange = s.pause::onGate
+        ops.failing = true
+        m.vaultOpened()
+        runCurrent()
+        s.log.clear()
+        ops.failing = false
+        m.vaultOpened()
+        runCurrent() // the check's end ran the owed reads
+        if (m.openingReadsDue(afterMissedClose = true)) openedReads(m.paused.value) { s.log += "reads" }
+        assertEquals(listOf("gate:true", "reads", "sends", "reads"), s.log)
+    }
+
+    /**
      * The lock's step ran after the next opening was published (so it did not end the check), and the opened steps follow:
      * the reads that opening owed run once, whichever comes first, the opened steps or the end of its check.
      */

@@ -442,12 +442,13 @@ class ReleaseUpdateManager(
     /**
      * The opened steps of an opening are about to run its reads (an unlock the phase's followers saw, the lock before it
      * included): they pay what that opening owed ([readsOwed]), so the end of its check reads nothing more. False when the
-     * end of the check already told the owed reads: the lift's reads run once, not again here.
+     * end of the check already told the owed reads: the lift's reads run once, not again here. [afterMissedClose]: a close
+     * conflated into this opening cleared the lists those reads loaded, so they are due again whatever the end told.
      */
-    fun openingReadsDue(): Boolean = synchronized(gate) {
+    fun openingReadsDue(afterMissedClose: Boolean = false): Boolean = synchronized(gate) {
         if (owedTold) {
             owedTold = false
-            return false
+            if (!afterMissedClose) return false
         }
         readsOwed = false
         true

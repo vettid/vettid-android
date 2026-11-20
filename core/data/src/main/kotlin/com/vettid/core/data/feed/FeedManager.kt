@@ -187,13 +187,19 @@ class FeedManager(
 
     /**
      * (ANDROID-PLAN 0.1.134, as the iPhone app) What a status read that could not be made kept of the loaded list: each
-     * item's id and `seq` ([keptNow]; no item's content is kept while the vault is not open). The first full read of the
-     * opening that continues notifies each active item it lists whose `seq` is above the kept one (an item sent during the
-     * blip whose `feed.event` comes after the read is no longer silent, nor one in a gap below an item applied out of
-     * order), then it is dropped. Dropped by any other clear, a new opening, a lift, and a read while the owner check is due
-     * or held (notified then, nothing would be). Under [lock].
+     * item's id and `seq`, and its in-order cursor ([keptNow]; no item's content is kept while the vault is not open). The
+     * first full read of the opening that continues notifies each active item it lists above that cursor whose `seq` is above
+     * the kept one (an item sent during the blip whose `feed.event` comes after the read is no longer silent, nor one in a gap
+     * below an item applied out of order; an older one back in the list, a longer retention, is not news), then it is
+     * dropped. Dropped by any other clear, a new opening, a lift, a read while the owner check is due or held (notified then,
+     * nothing would be), and a catch-up begun after it was taken (which notifies what it brings). Under [lock].
      */
-    private var kept: Map<String, Long>? = null
+    private var kept: Kept? = null
+
+    private class Kept(val cursor: Long, val seqs: Map<String, Long>)
+
+    /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
+    private var keptAt = 0
 
     /**
      * Arrivals applied to the list and not yet handed to [emitArrival] (it runs outside the lock): a soft clear between the
@@ -297,7 +303,7 @@ class FeedManager(
             retried = false
             // Kept once, from a loaded list: a second soft clear before a read keeps the first. A list being read (not loaded)
             // keeps nothing: the blip's items then fall back to the full read's silence.
-            kept = if (!keepHeld) null else kept ?: keptNow()
+            if (keepHeld) takeKept() else kept = null
             pendingArrivals.clear()
             if (!keepHeld) {
                 arrivedSince = null
@@ -326,7 +332,7 @@ class FeedManager(
                 // and is judged then, as a held one: the opening's backlog drained meanwhile stays silent (0.1.134).
                 if (takenElsewhere(m, wake = false)) return
                 val item = runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull() ?: return
-                onItem(item, notify = !fromTheHold(m, item), wake = false)
+                onItem(item, notify = !fromTheHold(m, item), wake = false, m = m)
             }
             "sync.event" -> when (VaultJson.str(m.body, "kind")) {
                 // Not while the vault is not open on this phone: nothing is read then (the opening's read covers it).
@@ -391,7 +397,8 @@ class FeedManager(
         markable = true // a hold's clear left it off; the same opening goes on
         // A blip whose soft clear did not run (the phase collector reached it only after the return): the list is still
         // loaded, and its cursor is what the blip would have kept.
-        if (kept == null) kept = keptNow()
+        takeKept()
+        pendingArrivals.clear() // left out of what it kept (an arrival dropped for a vault not open): the return read has them
         true
     }
 
@@ -444,7 +451,7 @@ class FeedManager(
         }
         val mayNotify = notify && !fromTheHold(m, item)
         if (!covered) {
-            onItem(item, mayNotify, wake)
+            onItem(item, mayNotify, wake, m)
         } else if (mayNotify && isNewsSinceTheOpening(m, wake) && listed?.status == STATUS_ACTIVE) {
             emitArrival(listed)
         }
@@ -580,14 +587,13 @@ class FeedManager(
     }
 
     /**
-     * A `feed.event` applied in order, or a catch-up asked for. [wake]: a push wake's replay, the only one whose own copy is
-     * notified while the list is not loaded (what the push was for); any other then notifies nothing, its item coming with
-     * the read that loads the list. Internal for its test: a live event reaches the not-loaded branch only when a clear
-     * comes between [takenElsewhere] and here.
+     * A `feed.event` applied in order, or a catch-up asked for. When the list is not loaded (a full read started, a lift or
+     * a clear, after [takenElsewhere] looked): a push wake's replay ([wake]) notifies its own copy, what the push was for;
+     * any other event [m] waits for the read as one that came while not loaded ([waitsForTheRead]), judged at its end.
+     * Internal for its test.
      */
-    internal fun onItem(item: FeedItem, notify: Boolean, wake: Boolean) {
+    internal fun onItem(item: FeedItem, notify: Boolean, wake: Boolean, m: VaultMessage? = null) {
         val applied = synchronized(lock) {
-            // Not loaded (a push wake's replay, a clear racing in): the event's own copy, the push-wake exception only.
             if (loadState.value != ListLoad.LOADED) return@synchronized null
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
@@ -598,8 +604,12 @@ class FeedManager(
             next to (if (notify) listed(listOf(item)).firstOrNull() else null)
         }
         if (applied == null) {
-            if (notify && wake && item.status == STATUS_ACTIVE) emitArrival(item)
-            catchUp()
+            if (wake) {
+                if (notify && item.status == STATUS_ACTIVE) emitArrival(item)
+                catchUp()
+            } else if (m != null && !waitsForTheRead(m)) {
+                onItem(item, notify, wake = false, m = m) // loaded again meanwhile
+            }
             return
         }
         applied.second?.let(::emitPending)
@@ -697,14 +707,14 @@ class FeedManager(
     private suspend fun readAfter(full: Boolean) {
         // Loading and failed are written with the generation they belong to, as loaded is ([applyRead]): a clear between
         // never has its not-loaded overwritten.
-        val (gen, liftsAtStart) = synchronized(lock) {
+        val (gen, liftsAtStart, keptAtStart) = synchronized(lock) {
             if (full) loadState.value = ListLoad.LOADING
-            generation to lifts
+            Triple(generation, lifts, keptAt)
         }
         try {
             if (full) readRetention()
             val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
-            val arrived = when (val a = applyRead(full, gen, liftsAtStart, changed, seq)) {
+            val arrived = when (val a = applyRead(full, ReadStart(gen, liftsAtStart, keptAtStart), changed, seq)) {
                 Applied.Cleared -> return
                 Applied.Lifted -> return readAfter(full = true)
                 is Applied.Read -> a.arrived
@@ -728,8 +738,9 @@ class FeedManager(
     }
 
     /** A read's answer applied, under [lock], unless a clear or (for an incremental read) a lift came since it began. */
-    private fun applyRead(full: Boolean, gen: Int, liftsAtStart: Int, changed: List<FeedItem>, seq: Long): Applied =
+    private fun applyRead(full: Boolean, start: ReadStart, changed: List<FeedItem>, seq: Long): Applied =
         synchronized(lock) {
+            val (gen, liftsAtStart, keptAtStart) = start
             when {
                 gen != generation -> Applied.Cleared
                 // A read that ends while the vault is not open applies nothing (no content while not open): a catch-up's
@@ -747,8 +758,9 @@ class FeedManager(
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
                     // A catch-up notifies what it brought on its own terms, so what the blip kept is not for a later full
-                    // read (the list stayed loaded: no soft clear ran, and the continued opening read incrementally).
-                    if (!full) kept = null
+                    // read (the list stayed loaded: no soft clear ran, and the continued opening read incrementally). Not
+                    // one begun before the blip: it may not have what the vault sent during it.
+                    if (!full && keptAtStart == keptAt) kept = null
                     val arrived = if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq }
                     Applied.Read(listed(arrived))
                 }
@@ -764,15 +776,32 @@ class FeedManager(
         val k = kept ?: return emptyList()
         kept = null
         // Not while the owner check is due or held: nothing would be notified then, and the lift's read is silent.
-        return if (gated()) emptyList() else newUnread(changed) { k[it] }
+        return if (gated()) emptyList() else newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] }
+    }
+
+    /** What a read had when it began ([readAfter]): its generation, the lifts and the blips' snapshots so far. */
+    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int)
+
+    /** A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Under [lock]. */
+    private fun takeKept() {
+        if (kept != null) return
+        kept = keptNow()
+        if (kept != null) keptAt++
     }
 
     /**
-     * What a blip keeps of a loaded list (null when not loaded): each item's `seq` (one the hold silenced, applied out of
-     * order, is never notified by the return read), less the arrivals not handed on yet ([pendingArrivals]). Under [lock].
+     * What a blip keeps of a loaded list (null when not loaded): its in-order cursor and each item's `seq` (one the hold
+     * silenced, applied out of order, is never notified by the return read), less the arrivals not handed on yet
+     * ([pendingArrivals]), the cursor below them. Under [lock].
      */
-    private fun keptNow(): Map<String, Long>? =
-        if (loadState.value != ListLoad.LOADED) null else byId.filterKeys { it !in pendingArrivals.keys }.mapValues { it.value.seq }
+    private fun keptNow(): Kept? =
+        if (loadState.value != ListLoad.LOADED) {
+            null
+        } else {
+            // Below the arrivals not handed on yet, which it does not keep: the return read has them.
+            val below = (pendingArrivals.values.minOrNull() ?: Long.MAX_VALUE) - 1
+            Kept(minOf(cursor, below), byId.filterKeys { it !in pendingArrivals.keys }.mapValues { it.value.seq })
+        }
 
     /**
      * [arrived] as the feed lists each one now, under the lock that applied them (owner decision 2026-11-18): one it no
@@ -783,10 +812,22 @@ class FeedManager(
         arrived.distinctBy { it.itemId }.mapNotNull { a -> byId[a.itemId]?.takeIf { it.status == STATUS_ACTIVE } }
             .onEach { pendingArrivals[it.itemId] = it.seq }
 
-    /** A pending arrival ([listed]) handed on, unless a clear came between (a soft one kept none, so the return read has it). */
+    /**
+     * A pending arrival ([listed]) handed on while it is still the feed's: not after a clear (a soft one kept none, so the
+     * return read has it), nor once the list has a newer change of it or no longer lists it active (read, deleted, past
+     * retention). One [emitArrival] dropped for a vault not open stays pending, so a blip's snapshot keeps it out.
+     */
     private fun emitPending(item: FeedItem) {
-        if (synchronized(lock) { pendingArrivals[item.itemId] == item.seq }) emitArrival(item)
-        synchronized(lock) { pendingArrivals.remove(item.itemId, item.seq) }
+        var done = true
+        try {
+            val live = synchronized(lock) {
+                pendingArrivals[item.itemId] == item.seq &&
+                    byId[item.itemId]?.let { it.seq == item.seq && it.status == STATUS_ACTIVE } == true
+            }
+            if (live) done = emitArrival(item)
+        } finally {
+            if (done) synchronized(lock) { pendingArrivals.remove(item.itemId, item.seq) }
+        }
     }
 
     /** The feed's opening (moved by each new opening, [vaultOpened]; one that continues keeps it). */
@@ -815,7 +856,6 @@ class FeedManager(
     /** What a catch-up brought that is new or changed, and unread (a full read brings nothing new). */
     private fun newUnread(changed: List<FeedItem>, seqBefore: (String) -> Long?): List<FeedItem> =
         changed.filter { c -> c.status == STATUS_ACTIVE && (seqBefore(c.itemId) ?: 0) < c.seq }
-
 
     /** Items that arrived since [startReplayWindow] (live or a catch-up): the replay does not send them again. */
     private var arrivedSince: MutableSet<String>? = null
@@ -866,13 +906,21 @@ class FeedManager(
     /** The feed holds a full read (none failed or runs since, and nothing cleared it). */
     val loaded: Boolean get() = loadState.value == ListLoad.LOADED
 
-    /** A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication). */
-    private fun emitArrival(item: FeedItem) {
+    /**
+     * A notification's source, except the History-only kinds (ANDROID-PLAN 0.1.52 §4 "Event titles", de-duplication).
+     * False only when dropped for a vault not open on this phone.
+     */
+    private fun emitArrival(item: FeedItem): Boolean {
         // Nothing notifies while the vault is not open on this phone, and nothing is marked as notified or arrived then:
         // what a read brought meanwhile is notified when the opening continues (its held-back event, its full read).
-        if (!vaultOpen()) return
+        if (!vaultOpen()) return false
         synchronized(lock) { arrivedSince?.add(item.itemId) }
-        if (FeedKinds.historyOnly(item.kind)) return
+        if (!FeedKinds.historyOnly(item.kind)) notifyArrival(item)
+        return true
+    }
+
+    /** [emitArrival]'s notification: held behind the release check or the queue, else sent once per change. */
+    private fun notifyArrival(item: FeedItem) {
         // Rule 3: while the release is checked, nothing notifies yet ([releaseHeld]); after it, nothing overtakes what it held.
         // Not while the owner check is due or held ([ownerGated]): then it goes as it would with no release check.
         val checking = held() && !ownerGated()
