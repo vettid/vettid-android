@@ -98,6 +98,36 @@ class PhaseFollowTest {
         assertEquals(listOf(1), f.notices)
     }
 
+    /** Locked, then an unlock, a lock and an unlock again before the collector runs: a close of an open vault, missed. */
+    @Test
+    fun aCloseBetweenTwoOpeningsIsAMissedClose() = runTest {
+        val f = Follow(this, AppPhase.Locked)
+        runCurrent()
+        f.ran.clear() // the first Locked's own clears
+        f.phase.value = AppPhase.Unlocked
+        f.phase.value = AppPhase.Locked
+        f.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(1, f.clears(PhaseSteps.ITEMS))
+        assertEquals(listOf("opened:true"), f.ran.filter { it.startsWith("opened") })
+    }
+
+    /** A blip whose return continues the same opening is no opening before a close: no missed close is run for it. */
+    @Test
+    fun aBlipsReturnIsNoOpeningBeforeTheClose() = runTest {
+        val f = Follow(this, AppPhase.Locked)
+        runCurrent()
+        f.ran.clear() // the first Locked's own clears
+        f.phase.value = blip // a status read while locked
+        f.phase.value = AppPhase.Locked
+        f.phase.value = AppPhase.Unlocked // the one opening
+        f.phase.value = blip
+        f.phase.value = AppPhase.Unlocked // the same opening continues
+        runCurrent()
+        assertEquals(0, f.clears(PhaseSteps.ITEMS))
+        assertEquals(listOf("opened:false"), f.ran.filter { it.startsWith("opened") })
+    }
+
     @Test
     fun aBlipOfANewerOpeningIsNoNotice() = runTest {
         val f = Follow(this, AppPhase.Unlocked)

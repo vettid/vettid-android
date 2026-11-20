@@ -438,8 +438,9 @@ internal class DeletionWatch(
 }
 
 /**
- * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of openings so far, and
- * whether it is a blip of an open vault ([PhaseHolder.blipKeepsOpening]), all taken with it under the holder's lock.
+ * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of new openings so far (not an
+ * opening that continued across a blip), and whether it is a blip of an open vault ([PhaseHolder.blipKeepsOpening]), all
+ * taken with it under the holder's lock.
  */
 internal data class PhaseTick(val phase: AppPhase, val closes: Int, val opens: Int, val blipKept: Boolean = false)
 
@@ -486,6 +487,9 @@ internal class PhaseHolder(
     /** Closes counted so far (a move into a close from a phase that is not one): carried by [ticks]. Under this. */
     private var closes = 0
 
+    /** New openings counted so far (not one that continued across a blip): carried by [ticks]. Under this. */
+    private var newOpens = 0
+
     private val ticksFlow = MutableStateFlow(PhaseTick(initial, 0, 0))
 
     /**
@@ -513,7 +517,9 @@ internal class PhaseHolder(
         val was = flow.value
         if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) {
             opensFlow.value += 1
-            onOpen(was is AppPhase.Unreachable && openBeforeUnreachable)
+            val continued = was is AppPhase.Unreachable && openBeforeUnreachable
+            if (!continued) newOpens++
+            onOpen(continued)
         }
         openBeforeUnreachable = when (v) {
             is AppPhase.Unreachable -> was is AppPhase.Unlocked || was is AppPhase.Unreachable && openBeforeUnreachable
@@ -522,7 +528,7 @@ internal class PhaseHolder(
         flow.value = v
         val ends = isClose(v)
         if (ends && !isClose(was)) closes++
-        ticksFlow.value = PhaseTick(v, closes, opensFlow.value, v is AppPhase.Unreachable && openBeforeUnreachable)
+        ticksFlow.value = PhaseTick(v, closes, newOpens, v is AppPhase.Unreachable && openBeforeUnreachable)
         if (ends && v != was) CredentialRequired.clear()
     }
 

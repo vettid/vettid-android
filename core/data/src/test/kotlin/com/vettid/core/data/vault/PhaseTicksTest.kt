@@ -25,7 +25,7 @@ class PhaseTicksTest {
         phase.value = AppPhase.Locked
         assertEquals(1, phase.ticks.value.closes)
         phase.value = AppPhase.SignedOut // from one close to another: the same close
-        assertEquals(PhaseTick(AppPhase.SignedOut, 1, 2), phase.ticks.value)
+        assertEquals("the blip's return is the same opening", PhaseTick(AppPhase.SignedOut, 1, 1), phase.ticks.value)
         phase.value = AppPhase.Unlocked
         phase.value = AppPhase.Deleting()
         assertEquals(2, phase.ticks.value.closes)
