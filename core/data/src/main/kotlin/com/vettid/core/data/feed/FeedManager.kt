@@ -150,10 +150,10 @@ class FeedManager(
      */
     private var coveredSeq = 0L
 
-    /** Moves [cursor] and [coveredSeq] with it. Under [lock]. */
-    private fun cursorTo(seq: Long) {
+    /** Moves [cursor] and [coveredSeq] with it; a full read's answer ([answered]) sets it, as it sets the cursor. Under [lock]. */
+    private fun cursorTo(seq: Long, answered: Boolean = false) {
         cursor = seq
-        if (seq > coveredSeq) coveredSeq = seq
+        if (answered || seq > coveredSeq) coveredSeq = seq
     }
 
     private var retentionDays = DEFAULT_RETENTION_DAYS
@@ -635,7 +635,7 @@ class FeedManager(
         var covered = false
         val applied = synchronized(lock) {
             if (loadState.value != ListLoad.LOADED) {
-                covered = item.seq <= coveredSeq
+                covered = wakeCovered(item, wake, m)
                 return@synchronized null
             }
             if (item.seq <= cursor) return // already applied
@@ -664,6 +664,20 @@ class FeedManager(
         }
         applied.second?.let(::emitPending)
         if (!applied.first) catchUp()
+    }
+
+    /**
+     * Whether a push wake's copy, while the list is not loaded, is one this opening already covered ([coveredSeq]): the item the
+     * push was for may have been taken silently as backlog, or the copy is an older one of an item since deleted. Its event
+     * [m] is then held, and judged against the list once it is loaded ([replay]: the list's own copy, if active). Under [lock].
+     */
+    private fun wakeCovered(item: FeedItem, wake: Boolean, m: VaultMessage?): Boolean {
+        if (!wake || item.seq > coveredSeq) return false
+        if (m != null) {
+            heldEvents.addLast(HeldEvent(m, wake = true))
+            while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+        }
+        return true
     }
 
     /** A push wake's own copy, notified when active and not [covered] (decided with the load state, [onItem]). */
@@ -767,7 +781,7 @@ class FeedManager(
         val start = beginRead(full, quiet)
         try {
             if (full) readRetention()
-            val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
+            val (changed, seq) = readPages(ops, if (full) 0L else synchronized(lock) { cursor })
             val arrived = when (val a = applyRead(full, start, changed, seq)) {
                 Applied.Cleared -> return
                 Applied.Lifted -> return readAfter(full = true)
@@ -823,7 +837,8 @@ class FeedManager(
                     if (full) byId = byId.filterKeys { it in live }
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
-                    cursorTo(maxOf(if (full && !start.quiet) 0 else cursor, seq))
+                    val answered = full && !start.quiet // the list replaced: the cursor and the mark are its answer's
+                    cursorTo(maxOf(if (answered) 0 else cursor, seq), answered)
                     deletedHere.readApplied(changed, start.deletes)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
@@ -854,7 +869,6 @@ class FeedManager(
         // Not while the owner check is due or held: nothing would be notified then, and the lift's read is silent.
         return if (gated()) emptyList() else newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] }
     }
-
 
     /**
      * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list, or with
@@ -908,21 +922,6 @@ class FeedManager(
 
     /** The feed's opening (moved by each new opening, [vaultOpened]; one that continues keeps it). */
     val openingNumber: Int get() = synchronized(lock) { opening }
-
-    /** `feed.list{after_seq}` paged from [from] until a page is shorter than the limit: the items and the answer's `seq`. */
-    private suspend fun pages(from: Long): Pair<List<FeedItem>, Long> {
-        var after = from
-        val changed = ArrayList<FeedItem>()
-        var seq = from
-        for (i in 0 until MAX_PAGES) {
-            val page = vaultGuard(resend = true) { ops().list(after, PAGE) }
-            seq = maxOf(seq, page.seq)
-            changed += page.items
-            if (page.items.size < PAGE) break
-            after = page.items.last().seq
-        }
-        return changed to seq
-    }
 
     private suspend fun readRetention() {
         val d = runCatching { vaultGuard(resend = true) { ops().retentionDays() } }.getOrNull() ?: return
@@ -1221,7 +1220,6 @@ class FeedManager(
         const val PAGE = 500
 
         /** The feed keeps at most 1,000 live items (§10.9); deleted ones come too, so a few pages more. */
-        private const val MAX_PAGES = 8
         private const val MARK_ALL_IN_FLIGHT = 4
         private const val ARRIVAL_BUFFER = 64
 

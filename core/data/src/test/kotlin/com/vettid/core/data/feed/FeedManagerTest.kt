@@ -1947,6 +1947,46 @@ class FeedManagerTest {
         }
     }
 
+    /**
+     * The item a push was for, taken silently as backlog by the opening's read, then a blip before the push's replay: the
+     * covered wake copy is held, and notified with the list's copy once the continued opening has read the list.
+     */
+    @Test
+    fun aCoveredWakeCopyIsJudgedOnceTheListIsRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2)) // y2 read as backlog
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // a blip
+        val y = item("y2", 2)
+        m.onItem(y, notify = true, wake = true, m = event(y)) // the push's replay, the list not loaded
+        assertEquals(emptyList<String>(), arrived)
+        assertTrue(m.openingContinues())
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2) // the continued opening's read
+        m.catchUp()
+        settle { m.readsUnderWay == 0 && arrived.isNotEmpty() }
+        assertEquals(listOf("y2"), arrived)
+    }
+
+    /** A full read's answer sets the covered mark: after it, a new item's wake above the answer, but below the old mark, notifies. */
+    @Test
+    fun aFullReadsAnswerSetsTheCoveredMark() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h5", 5)) // the mark at 5
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        ops.pages += FeedPage(listOf(item("i1", 1)), 2) // a refresh answers at 2 (the vault's counter went back)
+        m.refresh()
+        m.ownerCheckLifted(now) // not loaded until the lift's read
+        ops.gate = CompletableDeferred() // that read waits
+        m.onItem(item("g3", 3), notify = true, wake = true, m = null)
+        assertEquals(listOf("g3"), arrived)
+        val g = ops.gate!!
+        ops.gate = null
+        g.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+    }
+
     /** A delete answered after a lock's clear adds nothing for the next opening. */
     @Test
     fun aDeleteAnsweredAfterAClearAddsNothing() = runTest {
