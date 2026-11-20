@@ -832,6 +832,17 @@ class VaultManager(
     @Volatile
     private var lockedHere = false
 
+    /** The close the member's lock here makes ([PhaseTick.closes]): a later one behind it is not the member's. */
+    @Volatile
+    private var lockedHereClose = -1
+
+    /** The member locks here: the close it is about to publish (or the one in force, if already closed). */
+    private fun markLockedHere() {
+        lockedHere = true
+        // The phase and its count read together (no publish between them).
+        lockedHereClose = phaseFlow.decide { p -> phaseFlow.ticks.value.closes + if (isClose(p)) 0 else 1 }
+    }
+
     /** The relay connection is closed by the notification service while the vault is locked ([pauseRelay]). */
     @Volatile
     private var relayPaused = false
@@ -1212,7 +1223,7 @@ class VaultManager(
         scope.launch { io { runCatching { if (legacyOwnAccount && record.rewrite()) legacyOwnAccount = false } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
-            var previous: AppPhase = AppPhase.Starting
+            val follower = PhaseFollower()
             // The feed's opening when this collector received the phase: a late clear never touches a newer one.
             var openingAtPhase = 0
             // Every step runs even if one throws (fail secure); a lock's clears that failed run once more (PhaseSteps).
@@ -1232,8 +1243,12 @@ class VaultManager(
                 clearLocation = { location.clear() },
                 // Rule 3: the release check and its retries end with the lock, unless an opening was published since.
                 clearReleaseCheck = { p ->
-                    phaseFlow.unlessOpen { releaseUpdate.vaultClosed() }
-                    releasePause.reset()
+                    phaseFlow.unlessOpen {
+                        releaseUpdate.vaultClosed()
+                        // Not once open again: what that opening waits for may be its own (an earlier opening's, left, runs
+                        // its read or send once more, for the open vault).
+                        releasePause.reset()
+                    }
                     // A status read that could not be made closes nothing: a waiting-asks replay held over a pause is kept
                     // for the opening that may continue (ANDROID-PLAN 0.1.134 "Held"); a close drops it.
                     openingSteps.dropReplayOnClose(p, openingAtPhase)
@@ -1247,31 +1262,55 @@ class VaultManager(
                     }
                 },
             )
-            // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
-            phaseFlow.asStateFlow().collectSurviving("phase") {
-                // First: a lock and an unlock after this value was taken cannot make it look like a newer opening's.
-                openingAtPhase = feed.openingNumber
-                // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
-                if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
-                previous = it
-                phaseSteps.onPhase(it) {
-                    lockedHere = false
-                    lockedElsewhereFlow.value = false
-                    // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
-                    social.reopen() // the pending.list read below may merge again
-                    resumeRelay() // after an unlock the notification service's connection comes back
-                    // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
-                    // end of this opening's check already ran the reads it owed (they run once).
-                    if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }
-                    // A waiting-asks replay a pause kept across Unreachable (a new opening dropped it): run as the pause's lift
-                    // would, now, or when the pause lifts or the owner check does (ANDROID-PLAN 0.1.134).
-                    if (heldAskReplay.held()) releasePause.owedReads()
-                    presence.start() // the member's presence policy
-                    attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
-                    location.resume() // the location shares this phone is the source of are taken up again
-                    // The release gate's check (Rule 3): the manifest is read by the opening
-                    // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
+            // An opening's steps ([PhaseSteps.onPhase]); [afterMissedClose]: a close conflated into it cleared its lists first.
+            suspend fun opened(afterMissedClose: Boolean) {
+                lockedHere = false
+                lockedElsewhereFlow.value = false
+                // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
+                social.reopen() // the pending.list read below may merge again
+                resumeRelay() // after an unlock the notification service's connection comes back
+                // Rule 3: started at once, unless the release gate already pauses them (then read when it lifts), or the
+                // end of this opening's check already ran the reads it owed (they run once; again after a missed close,
+                // whose clears emptied what they read).
+                if (releaseUpdate.openingReadsDue(afterMissedClose)) openedReads(releaseUpdate.paused.value) { gatedReads() }
+                // A waiting-asks replay a pause kept across Unreachable (a new opening dropped it): run as the pause's lift
+                // would, now, or when the pause lifts or the owner check does (ANDROID-PLAN 0.1.134).
+                if (heldAskReplay.held()) releasePause.owedReads()
+                presence.start() // the member's presence policy
+                attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
+                location.resume() // the location shares this phone is the source of are taken up again
+                // The votes' sync the missed close's clear stopped, when the check's end already sent: started again now, or
+                // with the sends when the owner check lifts (while the check runs, its end starts it; while the gate pauses,
+                // nothing is sent and its lift decides).
+                val gateSent = !releaseUpdate.checking.value && !releaseUpdate.required.value && !releaseUpdate.paused.value
+                if (afterMissedClose && gateSent) {
+                    if (!sendsGated()) {
+                        votes.startSync()
+                    } else {
+                        releasePause.sendsAgainAtLift()
+                        // A lift that came between the look and the flag: run them now.
+                        if (!sendsGated()) releasePause.ownerCheckLifted()
+                    }
                 }
+                // The release gate's check (Rule 3): the manifest is read by the opening itself
+                // (ReleaseUpdateManager.vaultOpened), not here.
+            }
+            // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
+            // The phase with its count of closes: a second lock behind one this collector still holds is a new value, and its
+            // clears run (a lock, an unlock and a lock again would otherwise look like no change).
+            phaseFlow.ticks.collectSurviving("phase") { tick ->
+                // Each close counts ([PhaseTick.closes]), so a lock the collector was not told of on its own (a lock, an
+                // unlock and a lock again, conflated) still comes as a new value and runs the lock's clears. One that ends
+                // Unlocked (a lock and an unlock, conflated) runs them too, then that opening's steps and its reads again.
+                val p = tick.phase
+                // First, so that an opening published later is less likely to be taken for this phase's (the window between
+                // the value's delivery and this read is narrow, not closed: the late steps check the phase again).
+                openingAtPhase = feed.openingNumber
+                val step = follower.next(tick)
+                // Closed since it was open, and not by the member here: "Your vault is locked" (not at a cold start), also
+                // when the lock comes conflated (a second lock, or Unreachable after it).
+                if (lockedElsewhere(step, tick.closes, lockedHereClose)) lockedElsewhereFlow.value = true
+                phaseSteps.follow(p, step) { missed -> opened(missed) }
             }
         }
         // The feed's owner-check items are the shell's notices (one source, ANDROID-PLAN 0.1.23, 6).
@@ -1637,7 +1676,7 @@ class VaultManager(
         // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver, the pending
         // lock's job), bound to the same unlock as before when it was bound (release L).
         lockKeeper.resume()
-        if (lockKeeper.holdsPhone) lockedHere = true
+        if (lockKeeper.holdsPhone) markLockedHere()
         scope.launch {
             lockKeeper.notice.collectSurviving("lock notice") {
                 if (it !is LockNotice.Unconfirmed && pauseWanted) {
@@ -3187,7 +3226,7 @@ class VaultManager(
 
     /** This phone locked at once, and the lock pending durably ([LockKeeper.begin]); its number, for [LockKeeper.ask]. */
     private suspend fun beginLock(unlockId: String?): Long {
-        lockedHere = true
+        markLockedHere()
         // (Release L) Not "locked itself" on a later unlock screen: the member locked it here.
         ownerCheck.onLockedHere()
         // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.

@@ -171,6 +171,37 @@ class OpeningStepsTest {
         assertFalse("the opening ended", w.feed.openingContinues())
     }
 
+    /**
+     * A close, then a blip (a status read that could not be made, with the vault already closed), and the collector reaches only
+     * the blip: it continues no opening, so it clears as the close would, list, opening and kept replay.
+     */
+    @Test
+    fun aBlipRightAfterACloseClearsItAll() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        w.feed.refresh()
+        w.keepReplay()
+        w.publish(AppPhase.Locked) // conflated away: the collector never gets it
+        val seen = w.publish(blip)
+        assertFalse(w.phase.blipKeepsOpening)
+        w.collect(blip, seen)
+        assertFalse("the opening ended", w.feed.openingContinues())
+        assertFalse("the replay went", w.held.held())
+    }
+
+    /** A blip of an open vault keeps the opening and its replay (the soft clear). */
+    @Test
+    fun aBlipOfAnOpenVaultKeepsTheOpening() = runTest {
+        val w = World(this, now)
+        w.move(AppPhase.Unlocked)
+        w.feed.refresh()
+        w.keepReplay()
+        w.move(blip)
+        assertTrue(w.phase.blipKeepsOpening)
+        assertTrue("the replay stays", w.held.held())
+        assertTrue("the opening continues", w.feed.openingContinues())
+    }
+
     /** A blip and the return of the same opening, both before the collector reaches the blip: its soft clear is skipped. */
     @Test
     fun aLateBlipClearOfAContinuedOpeningLeavesItAlone() = runTest {
@@ -221,6 +252,20 @@ class OpeningStepsTest {
         w.move(blip)
         assertEquals(OpeningSteps.PassReplay.HELD, w.steps.placePassReplay(due, second))
         assertTrue(w.held.held())
+    }
+
+    /** A pass placed during a blip that came after a close, in the same feed opening: no opening to keep it for, dropped. */
+    @Test
+    fun aPassDuringABlipAfterACloseIsDropped() = runTest {
+        val w = World(this, now)
+        val due = HeldAskReplay.Due(1, 0, 0)
+        w.move(AppPhase.Unlocked)
+        val opening = w.feed.openingNumber
+        w.publish(AppPhase.Locked)
+        w.publish(blip) // a status read after the lock: the feed's opening number has not moved
+        assertEquals(opening, w.feed.openingNumber)
+        assertEquals(OpeningSteps.PassReplay.DROP, w.steps.placePassReplay(due, opening))
+        assertFalse(w.held.held())
     }
 
     /** A pass learnt in a blip, placed after a lock and a new opening came: dropped, never launched at an unlock. */

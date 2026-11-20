@@ -438,6 +438,19 @@ internal class DeletionWatch(
 }
 
 /**
+ * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of new openings so far (not an
+ * opening that continued across a blip), and whether it is a blip of an open vault ([PhaseHolder.blipKeepsOpening]), all
+ * taken with it under the holder's lock.
+ */
+internal data class PhaseTick(val phase: AppPhase, val closes: Int, val opens: Int, val blipKept: Boolean = false)
+
+/** A phase that closes the vault on this phone: a lock, a sign-out or wipe, a setup, a deletion. */
+internal fun isClose(p: AppPhase): Boolean = when (p) {
+    AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
+    else -> false
+}
+
+/**
  * The phase as [VaultManager] publishes it, with "being deleted" above every other (ANDROID-PLAN 0.1.54): while
  * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
  * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
@@ -471,6 +484,24 @@ internal class PhaseHolder(
      */
     val opens: StateFlow<Int> = opensFlow.asStateFlow()
 
+    /** Closes counted so far (a move into a close from a phase that is not one): carried by [ticks]. Under this. */
+    private var closes = 0
+
+    /** New openings counted so far (not one that continued across a blip): carried by [ticks]. Under this. */
+    private var newOpens = 0
+
+    private val ticksFlow = MutableStateFlow(PhaseTick(initial, 0, 0))
+
+    /**
+     * The phase with the number of closes so far, published with it: a close that follows an opening the collector never saw
+     * (Locked, Unlocked, Locked again while it still holds the first Locked) is a new value here, where the phase alone
+     * would look unchanged and never be delivered. The lock clears follow this.
+     */
+    val ticks: StateFlow<PhaseTick> = ticksFlow.asStateFlow()
+
+    /** The phase is a blip of an opening ([AppPhase.Unreachable] right after the vault was open), not one after a close. */
+    val blipKeepsOpening: Boolean @Synchronized get() = flow.value is AppPhase.Unreachable && openBeforeUnreachable
+
     var value: AppPhase
         get() = flow.value
         set(v) = synchronized(this) {
@@ -486,17 +517,18 @@ internal class PhaseHolder(
         val was = flow.value
         if (v is AppPhase.Unlocked && was !is AppPhase.Unlocked) {
             opensFlow.value += 1
-            onOpen(was is AppPhase.Unreachable && openBeforeUnreachable)
+            val continued = was is AppPhase.Unreachable && openBeforeUnreachable
+            if (!continued) newOpens++
+            onOpen(continued)
         }
         openBeforeUnreachable = when (v) {
             is AppPhase.Unreachable -> was is AppPhase.Unlocked || was is AppPhase.Unreachable && openBeforeUnreachable
             else -> false
         }
         flow.value = v
-        val ends = when (v) {
-            AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
-            else -> false
-        }
+        val ends = isClose(v)
+        if (ends && !isClose(was)) closes++
+        ticksFlow.value = PhaseTick(v, closes, newOpens, v is AppPhase.Unreachable && openBeforeUnreachable)
         if (ends && v != was) CredentialRequired.clear()
     }
 
