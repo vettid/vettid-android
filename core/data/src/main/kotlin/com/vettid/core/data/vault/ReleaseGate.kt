@@ -54,9 +54,10 @@ data class GateChange(
  * Not while the owner check is due or held ([checkGated], §3.6.3): those wait for the check to lift ([ownerCheckLifted]).
  * The location sharing is told of every change ([gateChanged], lifted when nothing is [required]).
  *
- * Lock order: this object's monitor is the innermost. Nothing under it calls out ([unlocked] reads the phase holder,
- * whose lock the lock clears hold when they [reset] this): the phase holder's, then the feed's, then this one, never the
- * reverse.
+ * Lock order: this object's monitor is the innermost. Nothing under it takes another lock: [unlocked] reads the phase
+ * holder, whose lock the lock clears hold when they [reset] this, so it is looked at before; [checkGated], [paused] and
+ * [required] only read flows, and are looked at under it, so a lift cannot pass between a look and its flag. The phase
+ * holder's, then the feed's, then this one, never the reverse.
  */
 @Suppress("LongParameterList") // each step named
 internal class ReleasePauseSteps(
@@ -105,9 +106,10 @@ internal class ReleasePauseSteps(
      * once (unless the gate paused the work, or required the update, again meanwhile).
      */
     fun ownerCheckLifted() {
-        // Read before this monitor (the lock order above): a lock after the look ends what the reads and sends start.
-        if (!unlocked() || checkGated()) return
+        // Before this monitor (the lock order above): a lock after the look ends what the reads and sends start.
+        if (!unlocked()) return
         val (r, s) = synchronized(this) {
+            if (checkGated()) return
             val r = readsWaiting && !paused()
             val s = sendsWaiting && !required() && !paused()
             if (r) readsWaiting = false
@@ -127,9 +129,8 @@ internal class ReleasePauseSteps(
      */
     fun owedReads() {
         if (paused() || !unlocked()) return
-        val gated = checkGated()
         val run = synchronized(this) {
-            if (gated) {
+            if (checkGated()) {
                 readsWaiting = true
                 false
             } else {

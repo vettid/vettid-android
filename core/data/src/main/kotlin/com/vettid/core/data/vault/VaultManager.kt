@@ -833,6 +833,7 @@ class VaultManager(
     private var lockedHere = false
 
     /** The close the member's lock here makes ([PhaseTick.closes]): a later one behind it is not the member's. */
+    @Volatile
     private var lockedHereClose = -1
 
     /** The member locks here: the close it is about to publish (or the one in force, if already closed). */
@@ -1283,7 +1284,13 @@ class VaultManager(
                 // nothing is sent and its lift decides).
                 val gateSent = !releaseUpdate.checking.value && !releaseUpdate.required.value && !releaseUpdate.paused.value
                 if (afterMissedClose && gateSent) {
-                    if (!sendsGated()) votes.startSync() else releasePause.sendsAgainAtLift()
+                    if (!sendsGated()) {
+                        votes.startSync()
+                    } else {
+                        releasePause.sendsAgainAtLift()
+                        // A lift that came between the look and the flag: run them now.
+                        if (!sendsGated()) releasePause.ownerCheckLifted()
+                    }
                 }
                 // The release gate's check (Rule 3): the manifest is read by the opening itself
                 // (ReleaseUpdateManager.vaultOpened), not here.

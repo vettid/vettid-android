@@ -1494,6 +1494,35 @@ class FeedManagerTest {
         assertTrue("still loaded", m.loaded)
     }
 
+    /**
+     * A live event applied while a quiet full read (a snapshot held, the list still loaded) is fetched: the read's answer,
+     * from before it, does not take it out of the list or move the cursor back, and it is notified once.
+     */
+    @Test
+    fun aQuietFullReadKeepsWhatALiveEventAppliedMeanwhile() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues()) // the snapshot is held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the answer, from before the live event
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        val g2 = item("g2", 2)
+        m.onItem(g2, notify = true, wake = false, m = event(g2)) // live, in order, while the read is fetched
+        assertEquals(listOf("g2"), arrived)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { synchronized(ops) { ops.pages.isEmpty() } }
+        settle { m.items.value.isNotEmpty() && m.seq >= 2 }
+        advanceUntilIdle()
+        assertEquals(listOf("g2", "i1"), m.items.value.map { it.itemId }.sorted())
+        assertEquals(2L, m.seq)
+        assertEquals(listOf("g2"), arrived)
+    }
+
     /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */
     @Test
     fun aNonWakeEventFindingTheListClearedNotifiesNothing() = runTest {

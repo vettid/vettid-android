@@ -5,12 +5,69 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
- * [ReleasePauseSteps]' monitor is the innermost lock: nothing it calls while holding it reaches another lock. The lock clears
- * hold the phase holder's lock when they reset it, so a call into the phase holder under it ([ReleasePauseSteps.unlocked])
- * could deadlock against an owner-check lift.
+ * [ReleasePauseSteps]' monitor is the innermost lock. The lock clears hold the phase holder's lock when they reset it, so the
+ * look at the phase holder ([ReleasePauseSteps.unlocked]) is never made under it; the owner check's look (a flow read, no
+ * lock) is, so that a lift cannot pass between it and the flag it sets.
  */
 class ReleasePauseLockOrderTest {
-    /** Sends armed for the lift do not go while the gate pauses (Rule 3): only reads and sends once it does not. */
+    @Test
+    fun thePhaseIsNeverLookedAtUnderTheMonitor() {
+        lateinit var steps: ReleasePauseSteps
+        val ran = mutableListOf<String>()
+        steps = ReleasePauseSteps(
+            unlocked = {
+                assertFalse("the phase looked at under the pause's monitor", Thread.holdsLock(steps))
+                ran += "unlocked"
+                true
+            },
+            checkGated = { false },
+            paused = { false },
+            required = { false },
+            stopVotes = {},
+            gateChanged = {},
+            reads = { ran += "reads" },
+            sends = { ran += "sends" },
+            owed = { ran += "owed" },
+        )
+        steps.sendsAgainAtLift()
+        steps.ownerCheckLifted()
+        steps.owedReads()
+        steps.onGate(GateChange(paused = false, required = false, pausedChanged = true, requiredChanged = true))
+        assertEquals(listOf("unlocked", "sends", "unlocked", "owed", "unlocked", "reads", "sends"), ran)
+    }
+
+    /** A lift that comes right after the owed reads looked at the owner check still runs them (the look is under the monitor). */
+    @Test
+    fun aLiftRightAfterTheLookStillRunsTheReads() {
+        val gated = java.util.concurrent.atomic.AtomicBoolean(true)
+        val ran = java.util.Collections.synchronizedList(mutableListOf<String>())
+        lateinit var steps: ReleasePauseSteps
+        var lift: Thread? = null
+        steps = ReleasePauseSteps(
+            unlocked = { true },
+            checkGated = {
+                val was = gated.get()
+                if (was && lift == null) {
+                    gated.set(false) // the check passes now, and its lift runs at once on another thread
+                    lift = Thread { steps.ownerCheckLifted() }.also { it.start() }
+                    Thread.sleep(LIFT_HEAD_START_MS)
+                }
+                was
+            },
+            paused = { false },
+            required = { false },
+            stopVotes = {},
+            gateChanged = {},
+            reads = { ran += "reads" },
+            sends = {},
+            owed = { ran += "owed" },
+        )
+        steps.owedReads()
+        lift!!.join(JOIN_MS)
+        assertEquals(listOf("reads"), ran.toList())
+    }
+
+    /** Sends armed for the lift do not go while the gate pauses (Rule 3): only once it does not. */
     @Test
     fun armedSendsWaitWhileTheGatePauses() {
         var paused = true
@@ -27,29 +84,8 @@ class ReleasePauseLockOrderTest {
         assertEquals(listOf("sends"), ran)
     }
 
-    @Test
-    fun noLookIsMadeUnderTheMonitor() {
-        lateinit var steps: ReleasePauseSteps
-        val looks = mutableListOf<String>()
-        fun look(name: String, v: Boolean): Boolean {
-            assertFalse("$name under the pause's monitor", Thread.holdsLock(steps))
-            looks += name
-            return v
-        }
-        steps = ReleasePauseSteps(
-            unlocked = { look("unlocked", true) },
-            checkGated = { look("checkGated", false) },
-            paused = { false },
-            required = { false },
-            stopVotes = {},
-            gateChanged = {},
-            reads = { looks += "reads" },
-            sends = { looks += "sends" },
-            owed = { looks += "owed" },
-        )
-        steps.sendsAgainAtLift()
-        steps.ownerCheckLifted()
-        steps.owedReads()
-        assertEquals(listOf("unlocked", "checkGated", "sends", "unlocked", "checkGated", "owed"), looks)
+    private companion object {
+        const val LIFT_HEAD_START_MS = 200L
+        const val JOIN_MS = 5_000L
     }
 }

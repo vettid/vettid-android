@@ -198,6 +198,12 @@ class FeedManager(
 
     private class Kept(val cursor: Long, val seqs: Map<String, Long>)
 
+    /**
+     * While a [quiet] full read runs (the list stays loaded and live events keep applying): each item a live event applied
+     * meanwhile, by its `seq`. The read's answer may not have them, so it does not replace them. Under [lock].
+     */
+    private var appliedDuring: HashMap<String, Long>? = null
+
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
     private var keptAt = 0
 
@@ -314,6 +320,7 @@ class FeedManager(
                 heldArrivals.clear()
             }
             generation++
+            appliedDuring = null
             byId = emptyMap()
             cursor = 0
             catchUpQueued = false
@@ -598,6 +605,7 @@ class FeedManager(
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
             apply(listOf(item))
+            appliedDuring?.put(item.itemId, item.seq)
             if (next) cursor = item.seq
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
@@ -713,12 +721,13 @@ class FeedManager(
         // never has its not-loaded overwritten. Not for a [quiet] read, over a list that stays loaded while it runs.
         val (gen, liftsAtStart, keptAtStart) = synchronized(lock) {
             if (full && !quiet) loadState.value = ListLoad.LOADING
+            appliedDuring = if (full && quiet) HashMap() else null
             Triple(generation, lifts, keptAt)
         }
         try {
             if (full) readRetention()
             val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
-            val arrived = when (val a = applyRead(full, ReadStart(gen, liftsAtStart, keptAtStart), changed, seq)) {
+            val arrived = when (val a = applyRead(full, ReadStart(gen, liftsAtStart, keptAtStart, quiet), changed, seq)) {
                 Applied.Cleared -> return
                 Applied.Lifted -> return readAfter(full = true)
                 is Applied.Read -> a.arrived
@@ -755,9 +764,13 @@ class FeedManager(
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
                     val before = if (full) emptyMap() else byId
-                    if (full) byId = emptyMap()
-                    apply(changed)
-                    cursor = maxOf(if (full) 0 else cursor, seq)
+                    // A quiet full read keeps what live events applied meanwhile after its answer (present, or gone if
+                    // deleted), and never moves the cursor back.
+                    val live = appliedDuring?.filterValues { it > seq }.orEmpty()
+                    appliedDuring = null
+                    if (full) byId = byId.filterKeys { it in live }
+                    apply(changed.filter { it.itemId !in live })
+                    cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
@@ -789,7 +802,7 @@ class FeedManager(
     }
 
     /** What a read had when it began ([readAfter]): its generation, the lifts and the blips' snapshots so far. */
-    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int)
+    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int, val quiet: Boolean)
 
     /**
      * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list, or with
