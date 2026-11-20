@@ -1993,6 +1993,32 @@ class FeedManagerTest {
         assertEquals(listOf("g3"), arrived)
     }
 
+    /**
+     * A covered wake copy kept across a blip, then the owner check's hold: its clear drops the copy with the held events, so
+     * the lift's read notifies nothing for it (a push that came before the hold is not notified after it).
+     */
+    @Test
+    fun theHoldsClearDropsACoveredCopy() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2)) // y2 read as backlog
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // a blip
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate // the wake's read waits, with the list's answer queued (y2 active in it)
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2)
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        m.clear(endsOpening = false) // the hold
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2)
+        m.ownerCheckLifted(now.minusSeconds(60)) // the copy's event was sent after this mark: only the clear stops it
+        m.refresh() // the lift's full read
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
     /** A full read's answer sets the covered mark: after it, a new item's wake above the answer, but below the old mark, notifies. */
     @Test
     fun aFullReadsAnswerSetsTheCoveredMark() = runTest {

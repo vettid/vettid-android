@@ -166,8 +166,9 @@ class FeedManager(
 
     /**
      * Push wakes' copies this opening already covered ([wakeCovered]), judged against the list once a read has loaded it
-     * ([releaseNowOpen]). Not in [queuesBehind]: they can only notify the list's own copy, so later wakes do not wait behind
-     * them. Cleared with [heldEvents]. Under [lock] (at most [ARRIVAL_BUFFER]).
+     * ([releaseNowOpen], after the held events). Not in [queuesBehind]: they notify the list's own copy (or, only when a full
+     * read's answer went below the copy because the vault's counter went back, the copy itself), so later wakes do not wait
+     * behind them. Cleared with [heldEvents]. Under [lock] (at most [ARRIVAL_BUFFER]).
      */
     private val coveredWakes = ArrayDeque<VaultMessage>()
 
@@ -586,7 +587,8 @@ class FeedManager(
      * (Rule 3) The release check is over with the vault not behind, or the gate lifted: what waited comes now, as it would
      * have come live: the arrivals as the feed has them now (not at all once read, archived, deleted or no longer listed),
      * then the events
-     * ([replay]; an event of an item that just arrived here is applied, and notified again only for a newer change).
+     * ([replay]; an event of an item that just arrived here is applied, and notified again only for a newer change), then the
+     * push wakes' covered copies ([coveredWakes]).
      * Nothing while the feed is [gated] (the owner check due or held: as live ones, they are not notified).
      *
      * It all runs under [lock], the notifications' emission included (a non-suspending `tryEmit`): the queues are emptied at
