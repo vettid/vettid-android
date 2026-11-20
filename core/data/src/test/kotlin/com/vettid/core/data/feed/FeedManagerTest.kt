@@ -1718,6 +1718,127 @@ class FeedManagerTest {
         assertEquals(emptyList<FeedItem>(), m.items.value)
     }
 
+    /**
+     * The member deletes an item during a refresh, and an older change's event arrives meanwhile (held while the list loads,
+     * replayed after the read): the item stays gone and is not notified.
+     */
+    @Test
+    fun aRefreshDoesNotBringBackAnItemDeletedDuringIt() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2)), 2) // the answer, from before the delete
+        val read = launch { m.refresh() }
+        runCurrent()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("i1")
+        val late = item("i1", 3)
+        m.onItem(late, notify = true, wake = false, m = event(late)) // an older change's event, while the list loads
+        ops.gate = null
+        gate.complete(Unit)
+        settle { read.isCompleted && m.readsUnderWay == 0 }
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** Outside any read, a delayed event of an older change of an item the member deleted does not list it again. */
+    @Test
+    fun aDelayedEventOutsideAReadDoesNotBringBackADeletedItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        val late = item("i1", 3)
+        m.onItem(late, notify = true, wake = false, m = event(late))
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        assertEquals(3L, m.seq) // the cursor moves on
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A push wake's event for an item deleted here, while the list loads, does not notify its own copy. */
+    @Test
+    fun aWakeEventForADeletedItemIsNotNotified() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("h2", 2)), 3)
+        val read = launch { m.refresh() }
+        runCurrent()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("i1")
+        m.onItem(item("i1", 3), notify = true, wake = true, m = null) // a push wake's copy, the list loading
+        assertEquals(emptyList<String>(), arrived)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { read.isCompleted && m.readsUnderWay == 0 }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A catch-up's answer from before the member's delete does not list the item again. */
+    @Test
+    fun aCatchUpAnswerDoesNotBringBackADeletedItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        m.delete("i1")
+        ops.pages += FeedPage(listOf(item("i1", 3, status = "read")), 3) // an older change of it, from before the delete
+        m.catchUp()
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        assertEquals(3L, m.seq)
+    }
+
+    /**
+     * An id deleted here goes from the set when its deletion is seen, or when a full read begun after the delete has applied;
+     * not for a full read begun before it.
+     */
+    @Test
+    fun anIdDeletedHereGoesWhenItsDeletionIsSeen() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2), item("k3", 3))
+        m.delete("i1")
+        assertEquals(1, m.deletedHereCount)
+        val gone = item("i1", 4, status = "deleted")
+        m.onItem(gone, notify = false, wake = false, m = event(gone)) // the deletion's own event
+        assertEquals(0, m.deletedHereCount)
+        // A full read begun before the delete keeps it; one begun after lets it go.
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("h2", 2), item("k3", 3)), 4)
+        val read = launch { m.refresh() }
+        runCurrent()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("h2")
+        ops.gate = null
+        gate.complete(Unit)
+        settle { read.isCompleted }
+        assertEquals(1, m.deletedHereCount)
+        assertEquals(listOf("k3"), m.items.value.map { it.itemId })
+        ops.pages += FeedPage(listOf(item("k3", 3)), 5)
+        m.refresh()
+        assertEquals(0, m.deletedHereCount)
+    }
+
+    /** A lock's clear and a new opening empty the set of ids deleted here. */
+    @Test
+    fun theIdsDeletedHereGoAtAClearAndAnOpening() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        m.delete("i1")
+        m.clear()
+        assertEquals(0, m.deletedHereCount)
+        val n = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        n.delete("i1")
+        n.vaultOpened(now)
+        assertEquals(0, n.deletedHereCount)
+    }
+
     /** A late answer to the member's change after a clear (a lock): the list stays empty, the cursor and the badge at 0. */
     @Test
     fun aLateAnswerAfterAClearListsNothing() = runTest {
