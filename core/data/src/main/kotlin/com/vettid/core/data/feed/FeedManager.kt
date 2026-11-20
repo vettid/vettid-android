@@ -781,7 +781,8 @@ class FeedManager(
         // changes here meanwhile is weighed against the answer ([appliedDuring]).
         val shown = byId.isNotEmpty()
         if (full && !quiet) loadState.value = ListLoad.LOADING
-        appliedDuring = if (full && (quiet || shown || appliedDuring != null)) appliedDuring ?: HashMap() else null
+        val recording = quiet || shown || appliedDuring != null
+        appliedDuring = if (full && recording) appliedDuring ?: HashMap() else null
         ReadStart(generation, lifts, keptAt, quiet)
     }
 
