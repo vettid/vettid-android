@@ -928,14 +928,15 @@ abstract class CallsTestCheck : DefaultTask() {
 val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
 
 /*
- * Dependency locking: the shipped release runtime classpaths of both distributions are locked in app/gradle.lockfile, which
- * the dependency scan reads (.github/workflows/deps-scan.yml) and which pins the build. A dependency change updates it (one
- * command, which writes both):
+ * Dependency locking: the runtime classpaths of what reaches phones (both distributions' releases, and staging, which carries
+ * the wallet) are locked in app/gradle.lockfile, which the dependency scan reads (.github/workflows/deps-scan.yml) and which
+ * pins those builds. A dependency change updates it (one command, which writes all three):
  *   ./gradlew :app:dependencies --write-locks
- * Not in the wallet-in-release check build: its classpath (the wallet linked in) is never shipped.
+ * Not in the wallet-in-release check build: its classpath (the wallet linked in a release) is never shipped.
  */
+val lockedClasspaths = setOf("fullReleaseRuntimeClasspath", "fossReleaseRuntimeClasspath", "fullStagingRuntimeClasspath")
 if (!walletInRelease) {
-    configurations.matching { it.name == "fullReleaseRuntimeClasspath" || it.name == "fossReleaseRuntimeClasspath" }.configureEach {
+    configurations.matching { it.name in lockedClasspaths }.configureEach {
         resolutionStrategy.activateDependencyLocking()
     }
 }

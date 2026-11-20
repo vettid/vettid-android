@@ -29,7 +29,7 @@ subprojects {
 // The dependency scan's listing (.github/workflows/deps-scan.yml): with -PvettidScanAll=true every resolvable configuration
 // of every project is locked, and `lockAllForScan --write-locks` resolves them all, so their lockfiles name every test and
 // build dependency for osv-scanner to list. Only the scan's throwaway checkout does this: the committed lock is app's
-// release runtime classpaths (app/build.gradle.kts).
+// release and staging runtime classpaths (app/build.gradle.kts).
 if (providers.gradleProperty("vettidScanAll").orNull == "true") {
     allprojects {
         configurations.configureEach {
@@ -38,11 +38,12 @@ if (providers.gradleProperty("vettidScanAll").orNull == "true") {
         tasks.register("lockAllForScan") {
             notCompatibleWithConfigurationCache("resolves every configuration at execution")
             doLast {
-                // Gradle writes no lock for a configuration whose resolution failed: name each, so a gap in the listing
-                // shows in the job's log.
+                // Gradle writes no lock for a configuration with an unresolved dependency: name each, so a gap in the
+                // listing shows in the job's log.
                 project.configurations.filter { it.isCanBeResolved }.forEach { c ->
-                    val failures = c.incoming.artifactView { lenient(true) }.artifacts.failures
-                    if (failures.isNotEmpty()) logger.warn("not listed: ${project.path} ${c.name} (${failures.size} failures)")
+                    val unresolved = c.incoming.resolutionResult.allDependencies
+                        .count { it is org.gradle.api.artifacts.result.UnresolvedDependencyResult }
+                    if (unresolved > 0) logger.warn("not listed: ${project.path} ${c.name} ($unresolved unresolved)")
                 }
             }
         }
