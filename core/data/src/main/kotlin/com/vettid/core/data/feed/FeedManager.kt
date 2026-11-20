@@ -211,9 +211,6 @@ class FeedManager(
      * the member's own (made on that copy, not answered yet; a delete as the highest `seq`, never undone by an answer).
      */
     private class Local(val seq: Long, val own: Boolean) {
-        /** The member's delete ([delete]): an event for the item meanwhile does not list it again. */
-        val deletedHere: Boolean get() = own && seq == Long.MAX_VALUE
-
         /**
          * Whether it stands over the read's answer, which lists the item at [listed] (null: not listed) and was made at
          * [read]. Not listed: the item is gone (deleted elsewhere, past retention), unless what was applied is newer than
@@ -226,6 +223,12 @@ class FeedManager(
             else -> seq > listed
         }
     }
+
+    /** Items the member deleted on this phone ([DeletedHere]). Under [lock]. */
+    private val deletedHere = DeletedHere()
+
+    /** Whether [item] is an older copy of one deleted here ([deletedHere]), to be left out. Under [lock]. */
+    private fun deletedEarlier(item: FeedItem): Boolean = deletedHere.olderCopy(item)
 
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
     private var keptAt = 0
@@ -311,6 +314,9 @@ class FeedManager(
      */
     internal val readsUnderWay: Int get() = readsRunning.get()
 
+    /** The ids deleted here still kept ([deletedHere]). Internal for its tests. */
+    internal val deletedHereCount: Int get() = synchronized(lock) { deletedHere.size }
+
     /** The vault opened (an unlock, app start with it open, a passed owner check): the feed is read in the background. */
     fun open() {
         readsRunning.incrementAndGet() // counted before it starts, so a release asked for meanwhile waits for it
@@ -343,6 +349,7 @@ class FeedManager(
             if (!keepHeld) {
                 arrivedSince = null
                 notifiedSeq.clear()
+                deletedHere.clear() // a lock's clear only: a soft clear keeps it, as what was notified (the opening may continue)
                 markable = false // an answer the device tells after a lock belongs to no opening of this feed
                 liftedAt = null
                 heldEvents.clear()
@@ -404,6 +411,7 @@ class FeedManager(
         // Nor of its list: a close the phase collector had not reached yet (a lock it clears) leaves nothing loaded here, so
         // the opening's backlog waits for its full read and is judged as backlog; a read still on its way is voided.
         generation++
+        deletedHere.clear()
         byId = emptyMap()
         cursor = 0
         catchUpQueued = false
@@ -633,10 +641,9 @@ class FeedManager(
             if (loadState.value != ListLoad.LOADED) return@synchronized null
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
-            // An item the member deleted here while a read runs: an older change's event, arriving late, does not list it
-            // again (so it is not notified: [listed] judges the list); the cursor moves on as for any event.
-            val deletedHere = appliedDuring?.get(item.itemId)?.deletedHere == true
-            if (!deletedHere) {
+            // An item the member deleted here ([deletedHere]): an older change's event, arriving late or held through a read,
+            // does not list it again (so it is not notified: [listed] judges the list); the cursor moves on as for any event.
+            if (!deletedEarlier(item)) {
                 apply(listOf(item))
                 appliedDuring?.put(item.itemId, Local(item.seq, own = false))
             }
@@ -647,7 +654,7 @@ class FeedManager(
         }
         if (applied == null) {
             if (wake) {
-                if (notify && item.status == STATUS_ACTIVE) emitArrival(item)
+                if (notify && item.status == STATUS_ACTIVE) emitArrival(item) // not for an item deleted here ([firstAlertAt])
                 catchUp()
             } else if (m != null && vaultOpen() && !waitsForTheRead(m)) {
                 onItem(item, notify, wake = false, m = m) // loaded again meanwhile
@@ -783,7 +790,7 @@ class FeedManager(
         if (full && !quiet) loadState.value = ListLoad.LOADING
         val recording = quiet || shown || appliedDuring != null
         appliedDuring = if (full && recording) appliedDuring ?: HashMap() else null
-        ReadStart(generation, lifts, keptAt, quiet)
+        ReadStart(generation, lifts, keptAt, quiet, deletedHere.deletes)
     }
 
     /** What a read's answer came to ([applyRead]). */
@@ -810,6 +817,8 @@ class FeedManager(
                 // A full read too: begun before the lift, its cursor may stand before changes of the due state.
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
+                    // Older copies of items deleted here are left out ([deletedHere]).
+                    val changed = changed.filterNot(::deletedEarlier)
                     val before = if (full) emptyMap() else byId
                     // A quiet full read keeps what was applied here meanwhile and is newer than its answer (present, or
                     // gone if deleted), and never moves the cursor back.
@@ -820,6 +829,7 @@ class FeedManager(
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
                     cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
+                    deletedHere.readApplied(changed, start.deletes)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
@@ -851,7 +861,7 @@ class FeedManager(
     }
 
     /** What a read had when it began ([readAfter]): its generation, the lifts and the blips' snapshots so far. */
-    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int, val quiet: Boolean)
+    private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int, val quiet: Boolean, val deletes: Long)
 
     /**
      * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list, or with
@@ -1022,6 +1032,8 @@ class FeedManager(
      * updated without sound) is no alert, and passes.
      */
     private fun firstAlertAt(item: FeedItem): Boolean = synchronized(lock) {
+        // An older copy of an item deleted here, also one that passed its checks just before the delete: never notified.
+        if (deletedEarlier(item)) return@synchronized false
         if (item.quietRepost) return@synchronized true
         val last = notifiedSeq[item.itemId]
         if (!item.replayed && last != null && item.seq <= last) return@synchronized false
@@ -1161,11 +1173,14 @@ class FeedManager(
     }
 
     override suspend fun delete(itemId: String) {
+        val gen = synchronized(lock) { generation }
         vaultGuard { ops().delete(itemId) }
         synchronized(lock) {
             byId = byId - itemId
             // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
             appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
+            // Not into another opening's list, or after a clear: its next read lists what the vault has.
+            if (gen == generation) deletedHere.add(itemId)
             publish()
         }
     }
