@@ -200,7 +200,8 @@ class FeedManager(
 
     /**
      * While a [quiet] full read runs (the list stays loaded and live events keep applying): each item a live event applied
-     * meanwhile, by its `seq`. The read's answer may not have them, so it does not replace them. Under [lock].
+     * meanwhile, by its `seq`, and each the member changed here (always kept). The read's answer may not have them, so it
+     * does not replace them. Dropped when the read ends, whatever its end. Under [lock].
      */
     private var appliedDuring: HashMap<String, Long>? = null
 
@@ -717,26 +718,34 @@ class FeedManager(
 
     /** One paged read from the cursor ([full]: from 0, replacing everything). Runs under [reads]. */
     private suspend fun readAfter(full: Boolean, quiet: Boolean = false) {
-        // Loading and failed are written with the generation they belong to, as loaded is ([applyRead]): a clear between
-        // never has its not-loaded overwritten. Not for a [quiet] read, over a list that stays loaded while it runs.
-        val (gen, liftsAtStart, keptAtStart) = synchronized(lock) {
-            if (full && !quiet) loadState.value = ListLoad.LOADING
-            appliedDuring = if (full && quiet) HashMap() else null
-            Triple(generation, lifts, keptAt)
-        }
+        val start = beginRead(full, quiet)
         try {
             if (full) readRetention()
             val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
-            val arrived = when (val a = applyRead(full, ReadStart(gen, liftsAtStart, keptAtStart, quiet), changed, seq)) {
+            val arrived = when (val a = applyRead(full, start, changed, seq)) {
                 Applied.Cleared -> return
                 Applied.Lifted -> return readAfter(full = true)
                 is Applied.Read -> a.arrived
             }
             arrived.forEach(::emitPending)
         } catch (e: VaultFailure) {
-            if (full && !quiet) synchronized(lock) { if (gen == generation) loadState.value = ListLoad.FAILED }
+            if (full && !quiet) synchronized(lock) { if (start.gen == generation) loadState.value = ListLoad.FAILED }
             throw e
+        } finally {
+            // One read at a time ([reads]): what this one kept goes with it, however it ended.
+            synchronized(lock) { if (start.gen == generation) appliedDuring = null }
         }
+    }
+
+    /**
+     * A read begins: loading and failed are written with the generation they belong to, as loaded is ([applyRead]), so a
+     * clear between never has its not-loaded overwritten. Not for a [quiet] read, over a list that stays loaded while it
+     * runs (one that ends with the vault not open leaves the list not loaded, as any full read).
+     */
+    private fun beginRead(full: Boolean, quiet: Boolean): ReadStart = synchronized(lock) {
+        if (full && !quiet) loadState.value = ListLoad.LOADING
+        appliedDuring = if (full && quiet) HashMap() else null
+        ReadStart(generation, lifts, keptAt, quiet)
     }
 
     /** What a read's answer came to ([applyRead]). */
@@ -769,7 +778,8 @@ class FeedManager(
                     val live = appliedDuring?.filterValues { it > seq }.orEmpty()
                     appliedDuring = null
                     if (full) byId = byId.filterKeys { it in live }
-                    apply(changed.filter { it.itemId !in live })
+                    val fresh = changed.filter { it.itemId !in live }
+                    apply(fresh)
                     cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
@@ -779,7 +789,7 @@ class FeedManager(
                     // one begun before the blip: it may not have what the vault sent during it.
                     if (!full && keptAtStart == keptAt) kept = null
                     val arrived = if (full) {
-                        arrivedSinceTheBlip(changed, stale = keptAtStart != keptAt)
+                        arrivedSinceTheBlip(fresh, stale = keptAtStart != keptAt)
                     } else {
                         newUnread(changed) { before[it]?.seq }
                     }
@@ -1026,7 +1036,11 @@ class FeedManager(
     }
 
     private fun replace(item: FeedItem) = synchronized(lock) {
-        if (byId.containsKey(item.itemId)) apply(listOf(item))
+        if (byId.containsKey(item.itemId)) {
+            apply(listOf(item))
+            // The member's own change (shown at once, or undone): a quiet read's answer never takes it back.
+            appliedDuring?.put(item.itemId, Long.MAX_VALUE)
+        }
     }
 
     override fun markReadQuietly(itemId: String) {

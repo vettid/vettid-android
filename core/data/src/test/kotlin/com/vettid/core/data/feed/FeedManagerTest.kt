@@ -1523,6 +1523,54 @@ class FeedManagerTest {
         assertEquals(listOf("g2"), arrived)
     }
 
+    /** The member marks an item read while a quiet full read is fetched: the read's older, unread copy does not undo it. */
+    @Test
+    fun aQuietFullReadKeepsTheMembersOwnChange() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the answer, from before the member's change
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.setStatus("i1", "read")
+        ops.gate = null
+        gate.complete(Unit)
+        settle { synchronized(ops) { ops.pages.isEmpty() } }
+        advanceUntilIdle()
+        Thread.sleep(SETTLE_MS) // the read's apply, on the IO dispatcher
+        advanceUntilIdle()
+        assertEquals("read", m.items.value.single { it.itemId == "i1" }.status)
+    }
+
+    /**
+     * A change applied silently while a quiet full read is fetched (an event sent during the hold) is not notified through
+     * the read's older copy of the same item.
+     */
+    @Test
+    fun aQuietFullReadDoesNotNotifyASilencedLiveChange() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1), item("g2", 2)), 2) // the answer: g2 as it was
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        val g3 = item("g2", 3)
+        m.onItem(g3, notify = false, wake = false, m = event(g3)) // its change, silenced (sent during the hold)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { synchronized(ops) { ops.pages.isEmpty() } }
+        advanceUntilIdle()
+        Thread.sleep(SETTLE_MS)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+    }
+
     /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */
     @Test
     fun aNonWakeEventFindingTheListClearedNotifiesNothing() = runTest {
