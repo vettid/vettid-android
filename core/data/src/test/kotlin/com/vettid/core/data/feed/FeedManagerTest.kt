@@ -1694,6 +1694,30 @@ class FeedManagerTest {
         assertEquals(listOf("h2"), m.items.value.map { it.itemId })
     }
 
+    /**
+     * The member deletes the last item during a quiet full read, and a lift sends it round again: the second read starts over
+     * an empty list, and still keeps what the first recorded, so its answer from before the delete does not list the item.
+     */
+    @Test
+    fun aReadAgainAcrossALiftOverAnEmptiedListKeepsTheMembersDelete() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a snapshot held: a catch-up reads in full, quietly
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the first answer, from before the delete
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the read again's answer, still from before it
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        m.delete("i1")
+        assertEquals(emptyList<FeedItem>(), m.items.value) // nothing left shown
+        m.ownerCheckLifted(now) // the lift: the read's answer is read again in full
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        assertEquals(emptyList<FeedItem>(), m.items.value)
+    }
+
     /** A late answer to the member's change after a clear (a lock): the list stays empty, the cursor and the badge at 0. */
     @Test
     fun aLateAnswerAfterAClearListsNothing() = runTest {
