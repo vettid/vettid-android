@@ -1948,8 +1948,9 @@ class FeedManagerTest {
     }
 
     /**
-     * The item a push was for, taken silently as backlog by the opening's read, then a blip before the push's replay: the
-     * covered wake copy is held, and notified with the list's copy once the continued opening has read the list.
+     * The item a push was for, taken silently as backlog by the opening's read, then a blip before the push's replay (through
+     * the public route): the covered wake copy is kept, and notified with the list's copy once the continued opening has read
+     * the list.
      */
     @Test
     fun aCoveredWakeCopyIsJudgedOnceTheListIsRead() = runTest {
@@ -1958,38 +1959,37 @@ class FeedManagerTest {
         val arrived = mutableListOf<String>()
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
         m.clear(keepHeld = true) // a blip
-        val y = item("y2", 2)
-        m.onItem(y, notify = true, wake = true, m = event(y)) // the push's replay, the list not loaded
-        assertEquals(emptyList<String>(), arrived)
         assertTrue(m.openingContinues())
-        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2) // the continued opening's read
-        m.catchUp()
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate // the one read waits, with this answer queued
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2)
+        m.replay(event(item("y2", 2)), wake = true) // the push's replay, the list not loaded
+        assertEquals(emptyList<String>(), arrived)
+        ops.gate = null
+        gate.complete(Unit)
         settle { m.readsUnderWay == 0 && arrived.isNotEmpty() }
         assertEquals(listOf("y2"), arrived)
+        assertTrue("the queued answer was the one read", ops.pages.isEmpty())
     }
 
     /**
-     * A covered wake copy held ahead of a new item's push: the new item waits behind it (the order kept) and is notified once
-     * the list is read; the covered copy of an item since deleted is not.
+     * A covered wake copy kept, then a new item's push above the mark: the new one is notified at once, not behind the kept
+     * copy, even if the read then fails.
      */
     @Test
-    fun aNewPushBehindAHeldCoveredCopyIsNotifiedAfterTheRead() = runTest {
+    fun aNewPushIsNotHeldBehindACoveredCopy() = runTest {
         val ops = Ops()
         val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
         val arrived = mutableListOf<String>()
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
-        m.delete("i1")
         m.ownerCheckLifted(now) // not loaded until the lift's read
-        val gate = CompletableDeferred<Unit>()
-        ops.gate = gate
-        ops.pages += FeedPage(listOf(item("h2", 2), item("g3", 3)), 3) // the lift's read: i1 gone, g3 new
+        synchronized(ops) { ops.failLists = 1 } // that read fails
         val old = item("i1", 1)
-        m.onItem(old, notify = true, wake = true, m = event(old)) // covered: held
+        m.onItem(old, notify = true, wake = true, m = event(old)) // covered: kept, nothing notified
         val g3 = item("g3", 3)
-        m.onItem(g3, notify = true, wake = true, m = event(g3)) // new, behind it
-        ops.gate = null
-        gate.complete(Unit)
-        settle { m.readsUnderWay == 0 && "g3" in arrived }
+        m.onItem(g3, notify = true, wake = true, m = event(g3)) // new, above the mark
+        assertEquals(listOf("g3"), arrived)
+        settle { m.readsUnderWay == 0 }
         assertEquals(listOf("g3"), arrived)
     }
 

@@ -150,7 +150,10 @@ class FeedManager(
      */
     private var coveredSeq = 0L
 
-    /** Moves [cursor] and [coveredSeq] with it; a full read's answer ([answered]) sets it, as it sets the cursor. Under [lock]. */
+    /**
+     * Moves [cursor] and [coveredSeq] with it. A full read's answer ([answered]) sets the mark as it sets the cursor, so it
+     * is lowered only if the vault's counter went back. Under [lock].
+     */
     private fun cursorTo(seq: Long, answered: Boolean = false) {
         cursor = seq
         if (answered || seq > coveredSeq) coveredSeq = seq
@@ -160,6 +163,13 @@ class FeedManager(
 
     /** (Rule 3) The `feed.event`s and arrivals that came while [held], in order (under [lock]; at most [ARRIVAL_BUFFER] each). */
     private val heldEvents = ArrayDeque<HeldEvent>()
+
+    /**
+     * Push wakes' copies this opening already covered ([wakeCovered]), judged against the list once a read has loaded it
+     * ([releaseNowOpen]). Not in [queuesBehind]: they can only notify the list's own copy, so later wakes do not wait behind
+     * them. Cleared with [heldEvents]. Under [lock] (at most [ARRIVAL_BUFFER]).
+     */
+    private val coveredWakes = ArrayDeque<VaultMessage>()
 
     /**
      * (Rule 3) When the vault last opened, on the vault's clock: a held event the feed's read covers notifies only if the
@@ -347,6 +357,7 @@ class FeedManager(
                 liftedAt = null
                 heldEvents.clear()
                 heldArrivals.clear()
+                coveredWakes.clear()
             }
             generation++
             appliedDuring = null
@@ -400,6 +411,7 @@ class FeedManager(
         // A new opening holds nothing of an earlier one (a soft clear kept it only for an opening that continues).
         heldEvents.clear()
         heldArrivals.clear()
+        coveredWakes.clear()
         kept = null
         // Nor of its list: a close the phase collector had not reached yet (a lock it clears) leaves nothing loaded here, so
         // the opening's backlog waits for its full read and is judged as backlog; a read still on its way is voided.
@@ -607,8 +619,10 @@ class FeedManager(
             if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
+            val covered = coveredWakes.toList()
             heldEvents.clear()
             heldArrivals.clear()
+            coveredWakes.clear()
             if (gatedNow) return
             val notified = HashMap<String, Long>()
             arrived.forEach { a ->
@@ -621,6 +635,7 @@ class FeedManager(
                 }
             }
             events.forEach { replay(it.m, notified, it.wake) }
+            covered.forEach { replay(it, notified, wake = true) }
         }
     }
 
@@ -669,13 +684,16 @@ class FeedManager(
     /**
      * Whether a push wake's copy, while the list is not loaded, is one this opening already covered ([coveredSeq]): the item the
      * push was for may have been taken silently as backlog, or the copy is an older one of an item since deleted. Its event
-     * [m] is then held, and judged against the list once it is loaded ([replay]: the list's own copy, if active). Under [lock].
+     * [m] is then kept in [coveredWakes], and judged against the list once it is loaded ([replay]: the list's own copy, if
+     * active). Only a test passes no [m]; such a copy is dropped. Known limit: an opening starts the mark again, so an older
+     * copy replayed during a new opening's first read (after a lock, or of an item deleted on another device) still notifies:
+     * holding every wake then would cost real pushes their promptness. Under [lock].
      */
     private fun wakeCovered(item: FeedItem, wake: Boolean, m: VaultMessage?): Boolean {
         if (!wake || item.seq > coveredSeq) return false
         if (m != null) {
-            heldEvents.addLast(HeldEvent(m, wake = true))
-            while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
+            coveredWakes.addLast(m)
+            while (coveredWakes.size > ARRIVAL_BUFFER) coveredWakes.removeFirst()
         }
         return true
     }
@@ -773,7 +791,7 @@ class FeedManager(
         }
         if (readsRunning.decrementAndGet() > 0 || !ok) return
         val releasable = vaultOpen() && !held() && !gated() && loadState.value == ListLoad.LOADED
-        if (releasable && synchronized(lock) { queuesBehind() }) releaseNow()
+        if (releasable && synchronized(lock) { queuesBehind() || coveredWakes.isNotEmpty() }) releaseNow()
     }
 
     /** One paged read from the cursor ([full]: from 0, replacing everything). Runs under [reads]. */
