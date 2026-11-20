@@ -34,8 +34,9 @@ internal class OpeningSteps(
     fun clearFeed(p: AppPhase, openingSeen: Int) = phase().decide { now ->
         when {
             now == AppPhase.Unlocked || newerBlip(now, openingSeen) -> Unit
-            // A close now (one the collector may never be told of, its value conflated): everything goes, whatever came between.
-            p is AppPhase.Unreachable && !closed(now) -> feed.clear(keepHeld = true)
+            // Soft only for a blip that continues an opening; a close now, or a blip after a close (no opening to carry on),
+            // clears it all, whatever came between.
+            p is AppPhase.Unreachable && keepsOpening(now) -> feed.clear(keepHeld = true)
             else -> feed.clear()
         }
     }
@@ -45,17 +46,16 @@ internal class OpeningSteps(
      * and not with a close reached once open again or in a newer opening (that opening dropped the old one in [onOpen], and
      * what it holds now is its own).
      */
-    fun dropReplayOnClose(p: AppPhase, openingSeen: Int) {
-        if (p !is AppPhase.Unreachable) {
-            phase().decide { now -> if (now != AppPhase.Unlocked && !newerBlip(now, openingSeen)) heldAskReplay.drop() }
-        }
+    fun dropReplayOnClose(p: AppPhase, openingSeen: Int) = phase().decide { now ->
+        val blipKept = p is AppPhase.Unreachable && keepsOpening(now)
+        if (now != AppPhase.Unlocked && !newerBlip(now, openingSeen) && !blipKept) heldAskReplay.drop()
     }
 
     /** A blip of an opening newer than [openingSeen]: a late step of the one before leaves it alone. Under the phase lock. */
     private fun newerBlip(now: AppPhase, openingSeen: Int) = now is AppPhase.Unreachable && feed.openingNumber != openingSeen
 
-    /** The vault closed on this phone ([now]: a lock, a sign-out, a setup, a deletion): neither open nor a blip. */
-    private fun closed(now: AppPhase) = now != AppPhase.Unlocked && now !is AppPhase.Unreachable
+    /** [now] is a blip that continues an opening (not one right after a close, with no opening to carry on). Under the lock. */
+    private fun keepsOpening(now: AppPhase) = now is AppPhase.Unreachable && phase().blipKeepsOpening
 
     /** Where a passed check's waiting-asks replay goes ([placePassReplay]). */
     enum class PassReplay { HELD, LAUNCH, DROP }

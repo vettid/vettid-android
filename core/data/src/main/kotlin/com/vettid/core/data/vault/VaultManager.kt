@@ -1248,13 +1248,20 @@ class VaultManager(
                 },
             )
             // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
-            phaseFlow.asStateFlow().collectSurviving("phase") {
-                // First: a lock and an unlock after this value was taken cannot make it look like a newer opening's.
+            // The phase with its count of closes: a second lock behind one this collector still holds is a new value, and its
+            // clears run (a lock, an unlock and a lock again would otherwise look like no change).
+            phaseFlow.ticks.collectSurviving("phase") { tick ->
+                // Each close counts ([PhaseTick.closes]), so a lock the collector was not told of on its own (a lock, an
+                // unlock and a lock again, conflated) still comes as a new value and runs the lock's clears. One that ends
+                // Unlocked is a new opening: its own steps emptied what the close would have, and its reads run below.
+                val p = tick.phase
+                // First, so that an opening published later is less likely to be taken for this phase's (the window between
+                // the value's delivery and this read is narrow, not closed: the late steps check the phase again).
                 openingAtPhase = feed.openingNumber
                 // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
-                if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
-                previous = it
-                phaseSteps.onPhase(it) {
+                if (p == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
+                previous = p
+                phaseSteps.onPhase(p) {
                     lockedHere = false
                     lockedElsewhereFlow.value = false
                     // First: events delivered from here on update the state it reopens (a throw below cannot skip it).

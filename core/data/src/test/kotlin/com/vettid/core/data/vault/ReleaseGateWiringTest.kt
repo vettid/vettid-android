@@ -100,7 +100,7 @@ class ReleaseGateWiringTest {
     fun theVaultIsClosedBeforeTheLockHoldAndWipeClearPhotos() {
         // A lock: the clears run on the phase already published (the phase's collector).
         code.has("clearAttachments = { attachments.clear() },")
-        assertTrue(block("phaseFlow.asStateFlow().collectSurviving(\"phase\") {").any { it.startsWith("phaseSteps.onPhase(it) {") })
+        assertTrue(block("phaseFlow.ticks.collectSurviving(\"phase\") { tick ->").any { it.startsWith("phaseSteps.onPhase(p) {") })
         // The hold or due state: on an owner-check value that is already held (held means gated).
         val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
         held.has("val now = OwnProfileStep.held(v)")
@@ -131,7 +131,7 @@ class ReleaseGateWiringTest {
     fun photosAreToldEachOpening() {
         val pause = block("private val releasePause = ReleasePauseSteps(")
         pause.subList(pause.indexOf("sends = {"), pause.size).has("attachments.opened()")
-        block("phaseSteps.onPhase(it) {").has("attachments.opened()")
+        block("phaseSteps.onPhase(p) {").has("attachments.opened()")
         val held = block("ownerCheck.ownerCheck.collectSurviving(\"owner check\") { v ->")
         assertEquals(2, held.count { it == "steps.step { attachments.opened() }" })
         assertEquals(held.count { it == "steps.step { presence.start() }" }, held.count { it == "steps.step { attachments.opened() }" })
@@ -148,7 +148,7 @@ class ReleaseGateWiringTest {
     @Test
     fun theOpeningsReadsAndTheChecksStepsWaitWhilePaused() {
         // The opened steps read only what the end of this opening's check has not read already (once).
-        block("phaseSteps.onPhase(it) {").has(
+        block("phaseSteps.onPhase(p) {").has(
             "if (releaseUpdate.openingReadsDue()) openedReads(releaseUpdate.paused.value) { gatedReads() }",
         )
         code.has("onPassed = { if (!releaseUpdate.paused.value) social.refreshAllQuietly() },")
@@ -272,7 +272,7 @@ class ReleaseGateWiringTest {
         listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "feed.open()").forEach { opened.has(it) }
         assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
         // Nothing in the opened steps starts the votes' work.
-        assertTrue(block("phaseSteps.onPhase(it) {").none { it.contains("votes.startSync()") })
+        assertTrue(block("phaseSteps.onPhase(p) {").none { it.contains("votes.startSync()") })
     }
 
     @Test

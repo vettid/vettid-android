@@ -442,6 +442,15 @@ internal class DeletionWatch(
  * [deleting] holds, no other write is published (an unlock, a lock or a refresh that was on its way, an event), so that
  * nothing reopens a vault that can never run again. Only [endDeleting] (the vault gone, or a wipe) ends it.
  */
+/** A phase as the lock clears follow it: with the number of closes so far ([PhaseHolder.ticks]). */
+internal data class PhaseTick(val phase: AppPhase, val closes: Int)
+
+/** A phase that closes the vault on this phone: a lock, a sign-out or wipe, a setup, a deletion. */
+internal fun isClose(p: AppPhase): Boolean = when (p) {
+    AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
+    else -> false
+}
+
 internal class PhaseHolder(
     initial: AppPhase,
     /**
@@ -471,6 +480,21 @@ internal class PhaseHolder(
      */
     val opens: StateFlow<Int> = opensFlow.asStateFlow()
 
+    /** Closes counted so far (a move into a close from a phase that is not one): carried by [ticks]. Under this. */
+    private var closes = 0
+
+    private val ticksFlow = MutableStateFlow(PhaseTick(initial, 0))
+
+    /**
+     * The phase with the number of closes so far, published with it: a close that follows an opening the collector never saw
+     * (Locked, Unlocked, Locked again while it still holds the first Locked) is a new value here, where the phase alone
+     * would look unchanged and never be delivered. The lock clears follow this.
+     */
+    val ticks: StateFlow<PhaseTick> = ticksFlow.asStateFlow()
+
+    /** The phase is a blip of an opening ([AppPhase.Unreachable] right after the vault was open), not one after a close. */
+    val blipKeepsOpening: Boolean @Synchronized get() = flow.value is AppPhase.Unreachable && openBeforeUnreachable
+
     var value: AppPhase
         get() = flow.value
         set(v) = synchronized(this) {
@@ -493,10 +517,9 @@ internal class PhaseHolder(
             else -> false
         }
         flow.value = v
-        val ends = when (v) {
-            AppPhase.Locked, AppPhase.SignedOut, is AppPhase.Setup, is AppPhase.Deleting -> true
-            else -> false
-        }
+        val ends = isClose(v)
+        if (ends && !isClose(was)) closes++
+        ticksFlow.value = PhaseTick(v, closes)
         if (ends && v != was) CredentialRequired.clear()
     }
 

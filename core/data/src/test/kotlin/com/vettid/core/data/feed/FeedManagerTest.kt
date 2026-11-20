@@ -1208,6 +1208,81 @@ class FeedManagerTest {
         assertEquals("still silent", emptyList<String>(), arrived)
     }
 
+    /**
+     * What a blip keeps is each item's seq, not the highest: an item in a gap below one applied out of order (the gap's
+     * catch-up had not brought it) is notified by the return read.
+     */
+    @Test
+    fun aGapItemBelowAnOutOfOrderOneIsNotifiedAfterABlip() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val g3 = item("g3", 3)
+        ops.known["g3"] = g3
+        ops.pages += FeedPage(emptyList(), 1) // the gap's catch-up finds nothing yet
+        m.onEvent(event(g3)) // live, out of order: notified
+        settle { arrived.isNotEmpty() && synchronized(ops) { ops.lists.size } >= 2 }
+        advanceUntilIdle()
+        val g2 = item("g2", 2)
+        m.clear(keepHeld = true) // a blip
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(item("i1", 1), g2, g3), 3)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g3", "g2"), arrived)
+    }
+
+    /**
+     * A soft clear that comes while a read's arrivals are being handed on (here from the first one's own hand-off) loses
+     * none of the others: they are not kept by the blip, so the return read notifies them, and the first not twice.
+     */
+    @Test
+    fun aSoftClearDuringTheFirstArrivalLosesNothing() = runTest {
+        val ops = Ops()
+        var armed = false
+        lateinit var m: FeedManager
+        m = openedEarlier(ops, item("i1", 1), held = {
+            if (armed) {
+                armed = false
+                m.clear(keepHeld = true) // the blip, while the first arrival is handed on
+            }
+            false
+        })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val g2 = item("g2", 2)
+        val g3 = item("g3", 3)
+        ops.known["g2"] = g2
+        ops.known["g3"] = g3
+        ops.pages += FeedPage(listOf(g2, g3), 3)
+        armed = true
+        m.catchUp()
+        settle { arrived.isNotEmpty() }
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+        ops.pages += FeedPage(listOf(item("i1", 1), g2, g3), 3)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2", "g3"), arrived)
+    }
+
+    /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */
+    @Test
+    fun aNonWakeEventFindingTheListClearedNotifiesNothing() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // a clear racing in after the event's checks
+        m.onItem(item("g2", 2), notify = true, wake = false)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+        m.onItem(item("w3", 3), notify = true, wake = true)
+        advanceUntilIdle()
+        assertEquals(listOf("w3"), arrived)
+    }
+
     /** A catch-up's item the feed no longer lists (past retention) is not notified (owner decision 2026-11-18). */
     @Test
     fun aCatchUpsItemPastRetentionIsNotNotified() = runTest {
