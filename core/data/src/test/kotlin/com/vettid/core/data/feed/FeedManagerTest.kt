@@ -1208,6 +1208,85 @@ class FeedManagerTest {
         assertEquals("still silent", emptyList<String>(), arrived)
     }
 
+    /** A catch-up's item the feed no longer lists (past retention) is not notified (owner decision 2026-11-18). */
+    @Test
+    fun aCatchUpsItemPastRetentionIsNotNotified() = runTest {
+        val ops = Ops()
+        ops.retention = 1
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val old = item("o2", 2, minutesAgo = 3 * 24 * 60L) // older than the 1 day kept
+        ops.known["o2"] = old
+        ops.pages += FeedPage(listOf(old), 2)
+        m.catchUp()
+        settle { m.seq == 2L }
+        assertEquals(emptyList<String>(), arrived)
+        assertEquals(listOf("i1"), m.items.value.map { it.itemId })
+    }
+
+    /**
+     * A clear that comes right after a read applied (here, from a collector of its first arrival) leaves the list not
+     * loaded: the read is marked loaded with its list, never over a cleared one.
+     */
+    @Test
+    fun aClearAfterTheApplyLeavesTheListNotLoaded() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { m.clear() } }
+        val n2 = item("n2", 2)
+        ops.known["n2"] = n2
+        ops.pages += FeedPage(listOf(n2), 2)
+        m.catchUp()
+        settle { m.seq == 0L }
+        assertFalse("not marked loaded over the cleared list", m.loaded)
+    }
+
+    /** A lift that comes right after a read applied (from a collector of its first arrival) leaves the list not loaded. */
+    @Test
+    fun aLiftAfterTheApplyLeavesTheListNotLoaded() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { m.ownerCheckLifted(now) } }
+        val n2 = item("n2", 2)
+        ops.known["n2"] = n2
+        ops.pages += FeedPage(listOf(n2), 2)
+        m.catchUp()
+        settle { m.seq == 2L }
+        advanceUntilIdle()
+        assertFalse("the lift's full read is owed", m.loaded)
+    }
+
+    /** A catch-up page with an item and its later change (sent, then read on another device): nothing notified. */
+    @Test
+    fun anItemReadInTheSamePageIsNotNotified() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        ops.pages += FeedPage(listOf(item("x", 2), item("x", 3, status = "read")), 3)
+        m.catchUp()
+        settle { m.seq == 3L }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A live event of an item the feed does not list once applied (past retention) is not notified. */
+    @Test
+    fun aLiveItemPastRetentionIsNotNotified() = runTest {
+        val ops = Ops()
+        ops.retention = 1
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.onEvent(event(item("o2", 2, minutesAgo = 3 * 24 * 60L))) // a batch's later ask keeps its first `at`
+        advanceUntilIdle()
+        assertEquals(2L, m.seq)
+        assertEquals(emptyList<String>(), arrived)
+        m.onEvent(event(item("n3", 3)))
+        advanceUntilIdle()
+        assertEquals(listOf("n3"), arrived)
+    }
+
     /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
     @Test
     fun aNewOpeningEmptiesTheList() = runTest {

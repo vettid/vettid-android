@@ -302,8 +302,8 @@ class FeedManager(
             cursor = 0
             catchUpQueued = false
             publish()
+            loadState.value = ListLoad.NOT_LOADED // with the generation, as a read marks it loaded ([applyRead])
         }
-        loadState.value = ListLoad.NOT_LOADED
     }
 
     /** `feed.event` and `sync.event{feed.updated, feed.deleted}` (§10.1, §10.9). */
@@ -546,8 +546,8 @@ class FeedManager(
         val gatedNow = gated()
         synchronized(lock) {
             // Read again here, as late as it can be: a full read that began (or a clear) since the caller looked leaves the
-            // queues for that read's end ([readEnded]) to release. `loadState` is written outside [lock], so a read starting
-            // after this look is not excluded; its end releases what comes after, against the feed it leaves.
+            // queues for that read's end ([readEnded]) to release. A read's start (LOADING) is written outside [lock], so a read
+            // starting after this look is not excluded; its end releases what comes after, against the feed it leaves.
             if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
@@ -569,15 +569,18 @@ class FeedManager(
     }
 
     private fun onItem(item: FeedItem, notify: Boolean = true) {
-        val inOrder = synchronized(lock) {
-            if (loadState.value != ListLoad.LOADED) return@synchronized false
+        val (inOrder, shown) = synchronized(lock) {
+            // Not loaded (a push wake's replay, a clear racing in): the event's own copy, the push-wake exception.
+            if (loadState.value != ListLoad.LOADED) return@synchronized false to item
             if (item.seq <= cursor) return // already applied
             val next = item.seq == cursor + 1
             apply(listOf(item))
             if (next) cursor = item.seq
-            next
+            // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
+            // History-only) is not notified.
+            next to byId[item.itemId]
         }
-        if (notify && item.status == STATUS_ACTIVE) emitArrival(item)
+        if (notify && shown?.status == STATUS_ACTIVE) emitArrival(shown)
         if (!inOrder) catchUp()
     }
 
@@ -680,8 +683,9 @@ class FeedManager(
                 Applied.Lifted -> return readAfter(full = true)
                 is Applied.Read -> a.arrived
             }
-            arrived.distinctBy { it.itemId }.forEach { emitArrival(byIdNow(it.itemId) ?: it) }
-            loadState.value = ListLoad.LOADED
+            // As the feed lists each one now (owner decision 2026-11-18): one it no longer lists (past retention, deleted)
+            // or no longer active is not notified.
+            arrived.distinctBy { it.itemId }.forEach { a -> byIdNow(a.itemId)?.takeIf { it.status == STATUS_ACTIVE }?.let(::emitArrival) }
         } catch (e: VaultFailure) {
             if (full && synchronized(lock) { gen == generation }) loadState.value = ListLoad.FAILED
             throw e
@@ -715,6 +719,9 @@ class FeedManager(
                     if (full) byId = emptyMap()
                     apply(changed)
                     cursor = maxOf(if (full) 0 else cursor, seq)
+                    // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
+                    // it leaves the list not loaded, never marked loaded over a cleared list.
+                    loadState.value = ListLoad.LOADED
                     Applied.Read(if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq })
                 }
             }
