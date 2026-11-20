@@ -278,7 +278,9 @@ class ReleaseGateWiringTest {
         val starts = block("suspend fun opened(afterMissedClose: Boolean) {").filter { it.contains("votes.startSync()") }
         assertEquals(listOf("if (!sendsGated()) votes.startSync() else releasePause.sendsAgainAtLift()"), starts)
         block("suspend fun opened(afterMissedClose: Boolean) {")
-            .has("if (afterMissedClose && !releaseUpdate.checking.value && !releaseUpdate.required.value) {")
+            .has("if (afterMissedClose && gateSent) {")
+        block("suspend fun opened(afterMissedClose: Boolean) {")
+            .has("val gateSent = !releaseUpdate.checking.value && !releaseUpdate.required.value && !releaseUpdate.paused.value")
     }
 
     @Test

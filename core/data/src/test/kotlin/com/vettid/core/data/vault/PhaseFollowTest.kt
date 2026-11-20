@@ -145,10 +145,10 @@ class PhaseFollowTest {
     @Test
     fun theMembersOwnLockIsNotNoticedButOneBehindItIs() {
         val closed = PhaseFollower.Step(closedSinceOpen = true, missedClose = false)
-        assertFalse(lockedElsewhere(closed, closes = 1, lockedHere = true, lockedHereClose = 1))
-        assertTrue(lockedElsewhere(closed, closes = 2, lockedHere = true, lockedHereClose = 1))
-        assertTrue(lockedElsewhere(closed, closes = 1, lockedHere = false, lockedHereClose = 1))
-        assertFalse(lockedElsewhere(closed.copy(closedSinceOpen = false), closes = 2, lockedHere = false, lockedHereClose = 1))
+        assertFalse(lockedElsewhere(closed, closes = 1, lockedHereClose = 1))
+        assertTrue(lockedElsewhere(closed, closes = 2, lockedHereClose = 1))
+        assertTrue("never locked here", lockedElsewhere(closed, closes = 1, lockedHereClose = -1))
+        assertFalse(lockedElsewhere(closed.copy(closedSinceOpen = false), closes = 2, lockedHereClose = 1))
     }
 
     @Test

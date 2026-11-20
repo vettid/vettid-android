@@ -838,7 +838,8 @@ class VaultManager(
     /** The member locks here: the close it is about to publish (or the one in force, if already closed). */
     private fun markLockedHere() {
         lockedHere = true
-        lockedHereClose = phaseFlow.ticks.value.closes + if (isClose(phaseFlow.value)) 0 else 1
+        // The phase and its count read together (no publish between them).
+        lockedHereClose = phaseFlow.decide { p -> phaseFlow.ticks.value.closes + if (isClose(p)) 0 else 1 }
     }
 
     /** The relay connection is closed by the notification service while the vault is locked ([pauseRelay]). */
@@ -1278,8 +1279,10 @@ class VaultManager(
                 attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                 location.resume() // the location shares this phone is the source of are taken up again
                 // The votes' sync the missed close's clear stopped, when the check's end already sent: started again now, or
-                // with the sends when the owner check lifts (while the check runs, its end starts it).
-                if (afterMissedClose && !releaseUpdate.checking.value && !releaseUpdate.required.value) {
+                // with the sends when the owner check lifts (while the check runs, its end starts it; while the gate pauses,
+                // nothing is sent and its lift decides).
+                val gateSent = !releaseUpdate.checking.value && !releaseUpdate.required.value && !releaseUpdate.paused.value
+                if (afterMissedClose && gateSent) {
                     if (!sendsGated()) votes.startSync() else releasePause.sendsAgainAtLift()
                 }
                 // The release gate's check (Rule 3): the manifest is read by the opening itself
@@ -1299,7 +1302,7 @@ class VaultManager(
                 val step = follower.next(tick)
                 // Closed since it was open, and not by the member here: "Your vault is locked" (not at a cold start), also
                 // when the lock comes conflated (a second lock, or Unreachable after it).
-                if (lockedElsewhere(step, tick.closes, lockedHere, lockedHereClose)) lockedElsewhereFlow.value = true
+                if (lockedElsewhere(step, tick.closes, lockedHereClose)) lockedElsewhereFlow.value = true
                 phaseSteps.follow(p, step) { missed -> opened(missed) }
             }
         }

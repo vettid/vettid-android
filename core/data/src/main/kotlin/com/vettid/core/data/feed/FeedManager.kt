@@ -635,8 +635,9 @@ class FeedManager(
                         catchUpQueued = false
                         // A blip's snapshot held: a full read, judged against it (a catch-up from the cursor would miss what
                         // the blip kept out, an arrival it dropped).
-                        val full = synchronized(lock) { loadState.value != ListLoad.LOADED || kept != null }
-                        readAfter(full)
+                        val (loaded, snapshot) = synchronized(lock) { (loadState.value == ListLoad.LOADED) to (kept != null) }
+                        // Quiet over a list still loaded: shown meanwhile, and one that fails leaves it loaded, behind.
+                        readAfter(full = !loaded || snapshot, quiet = loaded)
                     }
                 }.isSuccess
             } finally {
@@ -707,11 +708,11 @@ class FeedManager(
     }
 
     /** One paged read from the cursor ([full]: from 0, replacing everything). Runs under [reads]. */
-    private suspend fun readAfter(full: Boolean) {
+    private suspend fun readAfter(full: Boolean, quiet: Boolean = false) {
         // Loading and failed are written with the generation they belong to, as loaded is ([applyRead]): a clear between
-        // never has its not-loaded overwritten.
+        // never has its not-loaded overwritten. Not for a [quiet] read, over a list that stays loaded while it runs.
         val (gen, liftsAtStart, keptAtStart) = synchronized(lock) {
-            if (full) loadState.value = ListLoad.LOADING
+            if (full && !quiet) loadState.value = ListLoad.LOADING
             Triple(generation, lifts, keptAt)
         }
         try {
@@ -724,7 +725,7 @@ class FeedManager(
             }
             arrived.forEach(::emitPending)
         } catch (e: VaultFailure) {
-            if (full) synchronized(lock) { if (gen == generation) loadState.value = ListLoad.FAILED }
+            if (full && !quiet) synchronized(lock) { if (gen == generation) loadState.value = ListLoad.FAILED }
             throw e
         }
     }

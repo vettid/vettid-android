@@ -230,11 +230,12 @@ internal class PhaseFollower {
 }
 
 /**
- * "Your vault is locked" for [step] at [closes]: a close since the vault was open, and not the one the member's lock here
- * made ([lockedHere], at [lockedHereClose]); a close behind it (an unlock and a lock elsewhere, conflated) is not theirs.
+ * "Your vault is locked" for [step] at [closes]: a close since the vault was open, and not the one the member's last lock
+ * here made ([lockedHereClose], -1 for none); a close behind it (an unlock and a lock elsewhere, conflated) is not theirs.
+ * By the count alone, so an opening's steps that run late cannot make the member's own lock look like another's.
  */
-internal fun lockedElsewhere(step: PhaseFollower.Step, closes: Int, lockedHere: Boolean, lockedHereClose: Int): Boolean =
-    step.closedSinceOpen && !(lockedHere && closes == lockedHereClose)
+internal fun lockedElsewhere(step: PhaseFollower.Step, closes: Int, lockedHereClose: Int): Boolean =
+    step.closedSinceOpen && closes != lockedHereClose
 
 /**
  * One tick through [steps]: a close conflated into an opening runs its clears first ([PhaseSteps.onMissedClose]), then the

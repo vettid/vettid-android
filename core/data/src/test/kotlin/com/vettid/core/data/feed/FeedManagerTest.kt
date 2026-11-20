@@ -1481,6 +1481,19 @@ class FeedManagerTest {
         assertEquals(listOf("x2"), arrived)
     }
 
+    /** A catch-up's full read over a list still loaded (a blip's snapshot held) that fails leaves the list loaded. */
+    @Test
+    fun aFailedCatchUpWhileTheSnapshotIsHeldLeavesTheListLoaded() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.openingContinues()) // a blip with no soft clear: the snapshot is held, the list loaded
+        synchronized(ops) { ops.failLists = 1 }
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        advanceUntilIdle()
+        assertTrue("still loaded", m.loaded)
+    }
+
     /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */
     @Test
     fun aNonWakeEventFindingTheListClearedNotifiesNothing() = runTest {

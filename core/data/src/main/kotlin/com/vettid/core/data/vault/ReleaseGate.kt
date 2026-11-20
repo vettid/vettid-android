@@ -109,7 +109,7 @@ internal class ReleasePauseSteps(
         if (!unlocked() || checkGated()) return
         val (r, s) = synchronized(this) {
             val r = readsWaiting && !paused()
-            val s = sendsWaiting && !required()
+            val s = sendsWaiting && !required() && !paused()
             if (r) readsWaiting = false
             if (s) sendsWaiting = false
             r to s

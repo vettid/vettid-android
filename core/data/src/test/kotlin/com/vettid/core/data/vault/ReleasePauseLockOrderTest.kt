@@ -10,6 +10,23 @@ import org.junit.Test
  * could deadlock against an owner-check lift.
  */
 class ReleasePauseLockOrderTest {
+    /** Sends armed for the lift do not go while the gate pauses (Rule 3): only reads and sends once it does not. */
+    @Test
+    fun armedSendsWaitWhileTheGatePauses() {
+        var paused = true
+        val ran = mutableListOf<String>()
+        val steps = ReleasePauseSteps(
+            unlocked = { true }, checkGated = { false }, paused = { paused }, required = { false }, stopVotes = {},
+            gateChanged = {}, reads = { ran += "reads" }, sends = { ran += "sends" },
+        )
+        steps.sendsAgainAtLift()
+        steps.ownerCheckLifted()
+        assertEquals(emptyList<String>(), ran)
+        paused = false
+        steps.ownerCheckLifted()
+        assertEquals(listOf("sends"), ran)
+    }
+
     @Test
     fun noLookIsMadeUnderTheMonitor() {
         lateinit var steps: ReleasePauseSteps
