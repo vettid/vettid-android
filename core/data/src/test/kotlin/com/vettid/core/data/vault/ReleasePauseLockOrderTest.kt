@@ -67,6 +67,50 @@ class ReleasePauseLockOrderTest {
         assertEquals(listOf("reads"), ran.toList())
     }
 
+    /**
+     * After a missed close, the votes' sends armed for the owner check's lift still go when the lift comes on another thread
+     * right after the look found the check due (before the flag was set): the look is made again after arming.
+     */
+    @Test
+    fun aLiftRightAfterTheSendsLookStillRunsThem() {
+        val gated = java.util.concurrent.atomic.AtomicBoolean(true)
+        val ran = java.util.Collections.synchronizedList(mutableListOf<String>())
+        lateinit var steps: ReleasePauseSteps
+        var lift: Thread? = null
+        steps = ReleasePauseSteps(
+            unlocked = { true }, checkGated = { gated.get() }, paused = { false }, required = { false }, stopVotes = {},
+            gateChanged = {}, reads = { ran += "reads" }, sends = { ran += "sends" },
+        )
+        steps.sendsAfterMissedClose(
+            gated = {
+                val was = gated.get()
+                if (was && lift == null) {
+                    gated.set(false) // the check passes now, and its lift runs at once on another thread, before the flag
+                    lift = Thread { steps.ownerCheckLifted() }.also { it.start() }
+                    lift!!.join(JOIN_MS)
+                }
+                was
+            },
+            now = { ran += "now" },
+        )
+        // The lift ended inside the look: the look was made outside the pause's monitor, so the lift was not held up.
+        assertFalse("the lift waited for the pause's monitor", lift!!.isAlive)
+        assertEquals(listOf("sends"), ran.toList())
+    }
+
+    /** Not held: the sends go at once, nothing is armed for a lift. */
+    @Test
+    fun sendsAfterAMissedCloseGoAtOnceWhenNotHeld() {
+        val ran = mutableListOf<String>()
+        val steps = ReleasePauseSteps(
+            unlocked = { true }, checkGated = { false }, paused = { false }, required = { false }, stopVotes = {},
+            gateChanged = {}, reads = { ran += "reads" }, sends = { ran += "sends" },
+        )
+        steps.sendsAfterMissedClose(gated = { false }, now = { ran += "now" })
+        steps.ownerCheckLifted()
+        assertEquals(listOf("now"), ran)
+    }
+
     /** Sends armed for the lift do not go while the gate pauses (Rule 3): only once it does not. */
     @Test
     fun armedSendsWaitWhileTheGatePauses() {
