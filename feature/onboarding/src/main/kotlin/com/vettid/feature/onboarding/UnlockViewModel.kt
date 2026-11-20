@@ -130,6 +130,12 @@ data class UnlockUiState(
      */
     val serviceWaitSeconds: Long = 0,
     val recoveryPending: Boolean = false,
+    /**
+     * A cancel of the recovery did not end it (`bad_pin`, `backoff` while that waits, a failure, a new PIN asked for): the
+     * recovery stays pending (the vault applies the cancel only after a correct PIN), the PIN typed is cleared, and the keypad
+     * asks for it again, with any wait, for the cancel alone.
+     */
+    val cancelPinAsked: Boolean = false,
     val stateRollback: Boolean = false,
     /**
      * The vault answered `signer_refused` (VAULT-MESSAGING 0.27.0 §11.7.1): its release does not accept this
@@ -229,8 +235,13 @@ data class UnlockUiState(
     /** The way back may be started with the PIN typed. */
     val returnSubmitAllowed: Boolean get() = returnPinAllowed && pin.length >= MIN_PIN_LENGTH
 
-    /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
-    val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
+    /**
+     * "Cancel the recovery and unlock" may be pressed whenever it would be sent: a PIN, no wait, the password when the owner
+     * check is due, and with a phone secret the password for its owner check too (after a cancel that did not end the
+     * recovery, [cancelPinAsked], a new PIN is typed first).
+     */
+    val cancelAllowed: Boolean
+        get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty()) && submitAllowed
 
     /**
      * The vault cannot be opened from here and erasing this phone would not help (owner decision: a way forward, no
@@ -461,7 +472,12 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
-    override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
+    override fun submit() = when {
+        state.value.returnAsked -> wayBack()
+        // With a recovery pending, only "Cancel the recovery and unlock" sends: never a plain unlock.
+        state.value.recoveryPending -> Unit
+        else -> attempt(cancelRecovery = false)
+    }
 
     override fun askReturn() = state.update { if (it.returnOffered && !it.busy && !it.erasing) it.copy(returnConfirm = true) else it }
 
@@ -545,6 +561,8 @@ class UnlockViewModel @Inject constructor(
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
                     keysGone = keysGoneAfter(r, it.keysGone),
                     noUserGuid = it.noUserGuid || r is UnlockAttempt.Failed && isNoUserGuid(r),
+                    cancelPinAsked = cancelRecovery && it.recoveryPending &&
+                        r != UnlockAttempt.Success && r != UnlockAttempt.RecoveryPending,
                 )
             }
             when (r) {
