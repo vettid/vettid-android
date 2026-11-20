@@ -274,8 +274,12 @@ class ReleaseGateWiringTest {
         val opened = block("private fun gatedReads()")
         listOf("social.refreshAllQuietly()", "items.refreshQuietly()", "feed.open()").forEach { opened.has(it) }
         assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
-        // Nothing in the opened steps starts the votes' work.
-        assertTrue(block("suspend fun opened(afterMissedClose: Boolean) {").none { it.contains("votes.startSync()") })
+        // The opened steps start the votes' work only again after a missed close stopped it, and only once sends may go.
+        val starts = block("suspend fun opened(afterMissedClose: Boolean) {").filter { it.contains("votes.startSync()") }
+        assertEquals(
+            listOf("if (afterMissedClose && !sendsGated() && !releaseUpdate.required.value) votes.startSync()"),
+            starts,
+        )
     }
 
     @Test

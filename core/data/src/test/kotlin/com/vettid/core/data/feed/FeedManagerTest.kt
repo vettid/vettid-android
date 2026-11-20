@@ -1334,27 +1334,26 @@ class FeedManagerTest {
     @Test
     fun arrivalsDroppedForTheBlipAreNotifiedByTheReturnRead() = runTest {
         val ops = Ops()
-        var open = true
-        var closeAfterNext = false
+        // Read and written on the read's thread and the test's.
+        val open = java.util.concurrent.atomic.AtomicBoolean(true)
+        val closeAfterNext = java.util.concurrent.atomic.AtomicBoolean(false)
         val m = openedEarlier(ops, item("i1", 1), vaultOpen = {
-            val now = open
-            if (closeAfterNext) {
-                closeAfterNext = false
-                open = false // the read's apply saw the vault open; the phase shows the blip right after
-            }
+            val now = open.get()
+            // The read's apply saw the vault open; the phase shows the blip right after.
+            if (closeAfterNext.compareAndSet(true, false)) open.set(false)
             now
         })
         val arrived = mutableListOf<String>()
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
         listOf(item("g2", 2), item("g3", 3)).forEach { ops.known[it.itemId] = it }
         ops.pages += FeedPage(listOf(item("g2", 2), item("g3", 3)), 3)
-        closeAfterNext = true
+        closeAfterNext.set(true)
         m.catchUp()
-        settle { synchronized(ops) { ops.lists.size } >= 2 && !closeAfterNext }
+        settle { synchronized(ops) { ops.lists.size } >= 2 && !closeAfterNext.get() }
         advanceUntilIdle()
         assertEquals(emptyList<String>(), arrived)
         m.clear(keepHeld = true) // the collector's soft clear, after
-        open = true
+        open.set(true)
         ops.pages += FeedPage(listOf(item("i1", 1), item("g2", 2), item("g3", 3)), 3)
         m.refresh() // the continued opening's read
         advanceUntilIdle()
@@ -1417,6 +1416,31 @@ class FeedManagerTest {
         ops.known["g2"] = g2
         ops.pages += FeedPage(listOf(item("i1", 1), g2), 2)
         m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /** As above, with a first blip before the catch-up began: the second blip's snapshot still counts as after it. */
+    @Test
+    fun aCatchUpBegunBetweenTwoBlipsLeavesWhatTheyKept() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues()) // a first blip, no soft clear
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(emptyList(), 1) // the catch-up's answer, from before the second blip
+        m.catchUp()
+        settle { synchronized(ops) { ops.lists.size } >= 2 }
+        assertTrue(m.openingContinues()) // the second blip's return
+        ops.gate = null
+        gate.complete(Unit)
+        settle { synchronized(ops) { ops.pages.isEmpty() } }
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(item("i1", 1), g2), 2)
+        m.refresh()
         advanceUntilIdle()
         assertEquals(listOf("g2"), arrived)
     }

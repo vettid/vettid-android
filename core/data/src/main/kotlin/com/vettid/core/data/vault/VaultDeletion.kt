@@ -438,10 +438,10 @@ internal class DeletionWatch(
 }
 
 /**
- * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of openings so far, counted
- * with it under the holder's lock.
+ * A phase as the lock clears follow it ([PhaseHolder.ticks]): with the number of closes and of openings so far, and
+ * whether it is a blip of an open vault ([PhaseHolder.blipKeepsOpening]), all taken with it under the holder's lock.
  */
-internal data class PhaseTick(val phase: AppPhase, val closes: Int, val opens: Int)
+internal data class PhaseTick(val phase: AppPhase, val closes: Int, val opens: Int, val blipKept: Boolean = false)
 
 /** A phase that closes the vault on this phone: a lock, a sign-out or wipe, a setup, a deletion. */
 internal fun isClose(p: AppPhase): Boolean = when (p) {
@@ -522,7 +522,7 @@ internal class PhaseHolder(
         flow.value = v
         val ends = isClose(v)
         if (ends && !isClose(was)) closes++
-        ticksFlow.value = PhaseTick(v, closes, opensFlow.value)
+        ticksFlow.value = PhaseTick(v, closes, opensFlow.value, v is AppPhase.Unreachable && openBeforeUnreachable)
         if (ends && v != was) CredentialRequired.clear()
     }
 

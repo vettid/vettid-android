@@ -958,7 +958,7 @@ class ReleaseGateTest {
 
     /**
      * A close conflated into an opening cleared what that opening's check had read at its end: the opened steps read again
-     * (the forced case), and only then.
+     * (the forced case; without it they read nothing, as [theOwedReadsRunOnceWithTheOpenedSteps] shows).
      */
     @Test
     fun aMissedCloseReadsAgainAfterTheChecksEnd() = runTest {

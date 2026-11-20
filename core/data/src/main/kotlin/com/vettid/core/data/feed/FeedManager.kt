@@ -607,7 +607,7 @@ class FeedManager(
             if (wake) {
                 if (notify && item.status == STATUS_ACTIVE) emitArrival(item)
                 catchUp()
-            } else if (m != null && !waitsForTheRead(m)) {
+            } else if (m != null && vaultOpen() && !waitsForTheRead(m)) {
                 onItem(item, notify, wake = false, m = m) // loaded again meanwhile
             }
             return
@@ -782,11 +782,13 @@ class FeedManager(
     /** What a read had when it began ([readAfter]): its generation, the lifts and the blips' snapshots so far. */
     private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int)
 
-    /** A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Under [lock]. */
+    /**
+     * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list moves
+     * [keptAt], so a catch-up begun before the latest one leaves the snapshot. Under [lock].
+     */
     private fun takeKept() {
-        if (kept != null) return
-        kept = keptNow()
-        if (kept != null) keptAt++
+        if (loadState.value == ListLoad.LOADED) keptAt++
+        if (kept == null) kept = keptNow()
     }
 
     /**

@@ -1234,7 +1234,8 @@ class VaultManager(
                 clearReleaseCheck = { p ->
                     phaseFlow.unlessOpen {
                         releaseUpdate.vaultClosed()
-                        // What the opening published since waits for is its own.
+                        // Not once open again: what that opening waits for may be its own (an earlier opening's, left, runs
+                        // its read or send once more, for the open vault).
                         releasePause.reset()
                     }
                     // A status read that could not be made closes nothing: a waiting-asks replay held over a pause is kept
@@ -1267,8 +1268,11 @@ class VaultManager(
                 presence.start() // the member's presence policy
                 attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                 location.resume() // the location shares this phone is the source of are taken up again
-                // The release gate's check (Rule 3): the manifest is read by the opening
-                // itself (ReleaseUpdateManager.vaultOpened), also when this step is skipped for a conflated lock.
+                // The votes' sync the missed close's clear stopped: started again when the check's end already sent
+                // (else that end, or the lift, starts it).
+                if (afterMissedClose && !sendsGated() && !releaseUpdate.required.value) votes.startSync()
+                // The release gate's check (Rule 3): the manifest is read by the opening itself
+                // (ReleaseUpdateManager.vaultOpened), not here.
             }
             // The only place a lock clears these: one failure on one phase never ends this collector (surviveEvent).
             // The phase with its count of closes: a second lock behind one this collector still holds is a new value, and its
@@ -1281,7 +1285,7 @@ class VaultManager(
                 // First, so that an opening published later is less likely to be taken for this phase's (the window between
                 // the value's delivery and this read is narrow, not closed: the late steps check the phase again).
                 openingAtPhase = feed.openingNumber
-                val step = follower.next(tick, phaseFlow.blipKeepsOpening)
+                val step = follower.next(tick)
                 // Closed since it was open, and not by the member here: "Your vault is locked" (not at a cold start), also
                 // when the lock comes conflated (a second lock, or Unreachable after it).
                 if (step.closedSinceOpen && !lockedHere) lockedElsewhereFlow.value = true

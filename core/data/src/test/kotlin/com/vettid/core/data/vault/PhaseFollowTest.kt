@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -40,7 +41,7 @@ class PhaseFollowTest {
         init {
             scope.backgroundScope.launch {
                 phase.ticks.collect { t ->
-                    val step = follower.next(t, phase.blipKeepsOpening)
+                    val step = follower.next(t)
                     if (step.closedSinceOpen) notices += t.closes
                     steps.follow(t.phase, step) { missed -> ran += "opened:$missed" }
                 }
@@ -74,9 +75,10 @@ class PhaseFollowTest {
         f.phase.value = AppPhase.Locked
         f.phase.value = AppPhase.Unlocked
         runCurrent()
+        // Not the feed's or the release check's: the opening reset both for itself (and may be in a blip already).
         val clears = listOf(
-            PhaseSteps.SOCIAL, PhaseSteps.ATTACHMENTS, PhaseSteps.ITEMS, PhaseSteps.SHARING, PhaseSteps.FEED, PhaseSteps.DEVICES,
-            PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION, PhaseSteps.RELEASE_CHECK,
+            PhaseSteps.SOCIAL, PhaseSteps.ATTACHMENTS, PhaseSteps.ITEMS, PhaseSteps.SHARING, PhaseSteps.DEVICES,
+            PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION,
         )
         // The lock's clears and the profile's forget, then the opening's steps, its reads due again; no replay for Locked.
         assertEquals(
@@ -94,6 +96,45 @@ class PhaseFollowTest {
         f.phase.value = blip // a status read after the lock, all the collector sees
         runCurrent()
         assertEquals(listOf(1), f.notices)
+    }
+
+    @Test
+    fun aBlipOfANewerOpeningIsNoNotice() = runTest {
+        val f = Follow(this, AppPhase.Unlocked)
+        runCurrent()
+        f.phase.value = AppPhase.Locked
+        f.phase.value = AppPhase.Unlocked
+        f.phase.value = blip // a blip of the new opening, all the collector sees
+        runCurrent()
+        assertEquals(emptyList<Int>(), f.notices)
+    }
+
+    @Test
+    fun aColdStartsLockAndUnlockTogetherClearNothing() = runTest {
+        val f = Follow(this, AppPhase.Starting)
+        runCurrent()
+        f.phase.value = AppPhase.Locked
+        f.phase.value = AppPhase.Unlocked
+        runCurrent()
+        assertEquals(0, f.clears(PhaseSteps.ITEMS))
+        assertEquals(listOf("opened:false"), f.ran.filter { it.startsWith("opened") })
+    }
+
+    /** The missed close's clears failing twice end the process ([LockClearFailed]), even if the opening's steps fail too. */
+    @Test
+    fun aFailedMissedCloseIsNotHiddenByTheOpening() = runTest {
+        val steps = PhaseSteps.of(
+            replay = {}, forgetOpenVault = {}, clearAttachments = {}, clearItems = { error("items") }, clearSharing = {},
+            clearFeed = {}, clearDevices = {}, clearVotes = {}, clearPresence = {}, clearLocation = {}, clearReleaseCheck = {},
+            ownProfile = {},
+        )
+        val thrown = runCatching {
+            steps.follow(AppPhase.Unlocked, PhaseFollower.Step(closedSinceOpen = false, missedClose = true)) {
+                throw java.io.IOException("relay")
+            }
+        }.exceptionOrNull()
+        assertTrue(thrown is LockClearFailed)
+        assertTrue(thrown!!.suppressed.any { it is java.io.IOException })
     }
 
     @Test
