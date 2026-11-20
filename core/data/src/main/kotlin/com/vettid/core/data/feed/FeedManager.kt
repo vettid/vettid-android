@@ -1219,7 +1219,6 @@ class FeedManager(
         /** `feed.list`'s largest page (§10.9). */
         const val PAGE = 500
 
-        /** The feed keeps at most 1,000 live items (§10.9); deleted ones come too, so a few pages more. */
         private const val MARK_ALL_IN_FLIGHT = 4
         private const val ARRIVAL_BUFFER = 64
 

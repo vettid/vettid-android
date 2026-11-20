@@ -1968,6 +1968,31 @@ class FeedManagerTest {
         assertEquals(listOf("y2"), arrived)
     }
 
+    /**
+     * A covered wake copy held ahead of a new item's push: the new item waits behind it (the order kept) and is notified once
+     * the list is read; the covered copy of an item since deleted is not.
+     */
+    @Test
+    fun aNewPushBehindAHeldCoveredCopyIsNotifiedAfterTheRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        m.ownerCheckLifted(now) // not loaded until the lift's read
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(item("h2", 2), item("g3", 3)), 3) // the lift's read: i1 gone, g3 new
+        val old = item("i1", 1)
+        m.onItem(old, notify = true, wake = true, m = event(old)) // covered: held
+        val g3 = item("g3", 3)
+        m.onItem(g3, notify = true, wake = true, m = event(g3)) // new, behind it
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 && "g3" in arrived }
+        assertEquals(listOf("g3"), arrived)
+    }
+
     /** A full read's answer sets the covered mark: after it, a new item's wake above the answer, but below the old mark, notifies. */
     @Test
     fun aFullReadsAnswerSetsTheCoveredMark() = runTest {

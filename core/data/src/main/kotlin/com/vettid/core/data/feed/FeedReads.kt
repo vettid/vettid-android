@@ -20,7 +20,10 @@ internal sealed interface Applied {
  */
 internal data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int, val quiet: Boolean, val deletes: Long)
 
-/** At most this many pages a read ([readPages]). */
+/**
+ * At most this many pages a read ([readPages]): the feed keeps at most 1,000 live items (§10.9); deleted ones come too, so a
+ * few pages more.
+ */
 private const val MAX_PAGES = 8
 
 /**
