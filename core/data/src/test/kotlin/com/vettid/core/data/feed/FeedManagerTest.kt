@@ -100,10 +100,15 @@ class FeedManagerTest {
     }
 
     /** [opened], the vault opened ten minutes ago: the events the tests send since are news, not backlog. */
-    private suspend fun TestScope.openedEarlier(ops: Ops, vararg items: FeedItem, held: () -> Boolean = { false }): FeedManager {
+    private suspend fun TestScope.openedEarlier(
+        ops: Ops,
+        vararg items: FeedItem,
+        held: () -> Boolean = { false },
+        vaultOpen: () -> Boolean = { true },
+    ): FeedManager {
         items.forEach { ops.known[it.itemId] = it }
         ops.pages += FeedPage(items.toList(), items.maxOfOrNull { it.seq } ?: 0)
-        return manager(ops, held = held).also {
+        return manager(ops, held = held, vaultOpen = vaultOpen).also {
             it.vaultOpened(now.minusSeconds(600))
             it.refresh()
         }
@@ -1241,11 +1246,13 @@ class FeedManagerTest {
     fun aSoftClearDuringTheFirstArrivalLosesNothing() = runTest {
         val ops = Ops()
         var armed = false
+        var open = true
         lateinit var m: FeedManager
-        m = openedEarlier(ops, item("i1", 1), held = {
+        m = openedEarlier(ops, item("i1", 1), vaultOpen = { open }, held = {
             if (armed) {
                 armed = false
-                m.clear(keepHeld = true) // the blip, while the first arrival is handed on
+                open = false // the phase shows the blip first,
+                m.clear(keepHeld = true) // then its collector clears, while the first arrival is handed on
             }
             false
         })
@@ -1261,10 +1268,36 @@ class FeedManagerTest {
         settle { arrived.isNotEmpty() }
         advanceUntilIdle()
         assertEquals(listOf("g2"), arrived)
+        open = true
         ops.pages += FeedPage(listOf(item("i1", 1), g2, g3), 3)
         m.refresh() // the continued opening's read
         advanceUntilIdle()
         assertEquals(listOf("g2", "g3"), arrived)
+    }
+
+    /** A lock that comes while a read's arrivals are handed on: none of the others goes out after it. */
+    @Test
+    fun aLockDuringTheFirstArrivalStopsTheOthers() = runTest {
+        val ops = Ops()
+        var armed = false
+        lateinit var m: FeedManager
+        m = openedEarlier(ops, item("i1", 1), held = {
+            if (armed) {
+                armed = false
+                m.clear() // the lock's clear (the vault still reads open here: only the clear stops the others)
+            }
+            false
+        })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        listOf(item("g2", 2), item("g3", 3)).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("g2", 2), item("g3", 3)), 3)
+        armed = true
+        m.catchUp()
+        settle { arrived.isNotEmpty() }
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+        assertFalse(m.openingContinues())
     }
 
     /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */

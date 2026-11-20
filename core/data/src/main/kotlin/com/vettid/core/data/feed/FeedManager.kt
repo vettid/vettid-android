@@ -198,9 +198,10 @@ class FeedManager(
     /**
      * Arrivals applied to the list and not yet handed to [emitArrival] (it runs outside the lock): a soft clear between the
      * two keeps none of them ([keptNow]), so the return read notifies them, and [firstAlertAt] keeps one that did go out
-     * from going again. Under [lock].
+     * from going again. By id, the `seq` handed on: a newer change of the item listed meanwhile (a catch-up and a live
+     * event at once) takes the entry, and only its own hand-off goes ahead and removes it. Under [lock].
      */
-    private val pendingArrivals = HashSet<String>()
+    private val pendingArrivals = HashMap<String, Long>()
 
     /**
      * (Rule 3) The feed's reads started or under way ([open], [catchUp], [refresh]): what was held is released only after
@@ -556,8 +557,8 @@ class FeedManager(
         val gatedNow = gated()
         synchronized(lock) {
             // Read again here, as late as it can be: a full read that began (or a clear) since the caller looked leaves the
-            // queues for that read's end ([readEnded]) to release. A read's start (LOADING) is written outside [lock], so a read
-            // starting after this look is not excluded; its end releases what comes after, against the feed it leaves.
+            // queues for that read's end ([readEnded]) to release. A read that starts after this look
+            // (LOADING) is not excluded; its end releases what comes after, against the feed it leaves.
             if (!gatedNow && loadState.value != ListLoad.LOADED) return
             val events = heldEvents.toList()
             val arrived = heldArrivals.values.toList()
@@ -745,6 +746,9 @@ class FeedManager(
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
+                    // A catch-up notifies what it brought on its own terms, so what the blip kept is not for a later full
+                    // read (the list stayed loaded: no soft clear ran, and the continued opening read incrementally).
+                    if (!full) kept = null
                     val arrived = if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq }
                     Applied.Read(listed(arrived))
                 }
@@ -764,11 +768,11 @@ class FeedManager(
     }
 
     /**
-     * What a blip keeps of a loaded list (null when not loaded): the highest `seq` it holds, its cursor or an item applied out
-     * of order above it (one the hold silenced is never notified by the return read). Under [lock].
+     * What a blip keeps of a loaded list (null when not loaded): each item's `seq` (one the hold silenced, applied out of
+     * order, is never notified by the return read), less the arrivals not handed on yet ([pendingArrivals]). Under [lock].
      */
     private fun keptNow(): Map<String, Long>? =
-        if (loadState.value != ListLoad.LOADED) null else byId.filterKeys { it !in pendingArrivals }.mapValues { it.value.seq }
+        if (loadState.value != ListLoad.LOADED) null else byId.filterKeys { it !in pendingArrivals.keys }.mapValues { it.value.seq }
 
     /**
      * [arrived] as the feed lists each one now, under the lock that applied them (owner decision 2026-11-18): one it no
@@ -777,12 +781,12 @@ class FeedManager(
      */
     private fun listed(arrived: List<FeedItem>): List<FeedItem> =
         arrived.distinctBy { it.itemId }.mapNotNull { a -> byId[a.itemId]?.takeIf { it.status == STATUS_ACTIVE } }
-            .onEach { pendingArrivals.add(it.itemId) }
+            .onEach { pendingArrivals[it.itemId] = it.seq }
 
     /** A pending arrival ([listed]) handed on, unless a clear came between (a soft one kept none, so the return read has it). */
     private fun emitPending(item: FeedItem) {
-        if (synchronized(lock) { pendingArrivals.contains(item.itemId) }) emitArrival(item)
-        synchronized(lock) { pendingArrivals.remove(item.itemId) }
+        if (synchronized(lock) { pendingArrivals[item.itemId] == item.seq }) emitArrival(item)
+        synchronized(lock) { pendingArrivals.remove(item.itemId, item.seq) }
     }
 
     /** The feed's opening (moved by each new opening, [vaultOpened]; one that continues keeps it). */
