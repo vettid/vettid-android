@@ -1854,6 +1854,18 @@ class FeedManagerTest {
         settle { m.readsUnderWay == 0 }
     }
 
+    /** A deletion seen as an event, in order (the cursor passes it), ends the entry of an id deleted here too. */
+    @Test
+    fun aDeletionEventInOrderEndsTheEntry() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        m.delete("i1")
+        val gone = item("i1", 3, status = "deleted")
+        m.onItem(gone, notify = false, wake = false, m = event(gone))
+        assertEquals(3L, m.seq)
+        assertEquals(0, m.deletedHereCount)
+    }
+
     /** A lock's clear and a new opening empty the set of ids deleted here. */
     @Test
     fun theIdsDeletedHereGoAtAClearAndAnOpening() = runTest {

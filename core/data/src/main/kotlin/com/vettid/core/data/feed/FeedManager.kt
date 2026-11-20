@@ -224,26 +224,11 @@ class FeedManager(
         }
     }
 
-    /**
-     * Items the member deleted on this phone, by [deletes] when each was deleted. An item id is a ULID and a deleted item never
-     * comes back (VAULT-MESSAGING §10.9: a later ask of its batch, or a newer guide version, is a new item), so a copy of one
-     * that is not deleted is from before the delete: a late event, an event held through a read, a catch-up's or a full read's
-     * answer. It is neither listed nor notified, and the cursor moves on. An id goes once the cursor has passed its deletion
-     * (an answer or an event in order with it deleted: anything older is then behind the cursor) or a full read begun after
-     * the delete has applied; all go at a clear and an opening. Under [lock].
-     */
-    private val deletedHere = HashMap<String, Long>()
-
-    /** The deletes made on this phone so far ([deletedHere]); a read takes it when it begins ([ReadStart]). Under [lock]. */
-    private var deletes = 0L
+    /** Items the member deleted on this phone ([DeletedHere]). Under [lock]. */
+    private val deletedHere = DeletedHere()
 
     /** Whether [item] is an older copy of one deleted here ([deletedHere]), to be left out. Under [lock]. */
-    private fun deletedEarlier(item: FeedItem): Boolean = item.itemId in deletedHere && item.status != STATUS_DELETED
-
-    /** [item]'s deletion, once the cursor has passed it: nothing older can come in order, so its entry goes. Under [lock]. */
-    private fun deletionPassed(item: FeedItem) {
-        if (item.status == STATUS_DELETED && item.seq <= cursor) deletedHere.remove(item.itemId)
-    }
+    private fun deletedEarlier(item: FeedItem): Boolean = deletedHere.olderCopy(item)
 
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
     private var keptAt = 0
@@ -663,7 +648,7 @@ class FeedManager(
                 appliedDuring?.put(item.itemId, Local(item.seq, own = false))
             }
             if (next) cursor = item.seq
-            deletionPassed(item)
+            deletedHere.passed(item, cursor)
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
             next to (if (notify) listed(listOf(item)).firstOrNull() else null)
@@ -806,7 +791,7 @@ class FeedManager(
         if (full && !quiet) loadState.value = ListLoad.LOADING
         val recording = quiet || shown || appliedDuring != null
         appliedDuring = if (full && recording) appliedDuring ?: HashMap() else null
-        ReadStart(generation, lifts, keptAt, quiet, deletes)
+        ReadStart(generation, lifts, keptAt, quiet, deletedHere.deletes)
     }
 
     /** What a read's answer came to ([applyRead]). */
@@ -833,10 +818,8 @@ class FeedManager(
                 // A full read too: begun before the lift, its cursor may stand before changes of the due state.
                 lifts != liftsAtStart -> Applied.Lifted
                 else -> {
-                    // Older copies of items deleted here are left out ([deletedHere]); a full read begun after a delete
-                    // answers for it, so its entry goes.
+                    // Older copies of items deleted here are left out ([deletedHere]).
                     val changed = changed.filterNot(::deletedEarlier)
-                    if (full) deletedHere.values.removeAll { it <= start.deletes }
                     val before = if (full) emptyMap() else byId
                     // A quiet full read keeps what was applied here meanwhile and is newer than its answer (present, or
                     // gone if deleted), and never moves the cursor back.
@@ -847,7 +830,7 @@ class FeedManager(
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
                     cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
-                    changed.forEach(::deletionPassed)
+                    deletedHere.readApplied(changed, cursor, full, start.deletes)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
@@ -1196,7 +1179,7 @@ class FeedManager(
             byId = byId - itemId
             // Deleted on the vault: a full read's answer from before it does not list it again, nor a late event.
             appliedDuring?.put(itemId, Local(Long.MAX_VALUE, own = true))
-            deletedHere[itemId] = ++deletes
+            deletedHere.add(itemId)
             publish()
         }
     }
