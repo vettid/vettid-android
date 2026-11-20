@@ -472,7 +472,12 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
-    override fun submit() = if (state.value.returnAsked) wayBack() else attempt(cancelRecovery = false)
+    override fun submit() = when {
+        state.value.returnAsked -> wayBack()
+        // With a recovery pending, only "Cancel the recovery and unlock" sends: never a plain unlock.
+        state.value.recoveryPending -> Unit
+        else -> attempt(cancelRecovery = false)
+    }
 
     override fun askReturn() = state.update { if (it.returnOffered && !it.busy && !it.erasing) it.copy(returnConfirm = true) else it }
 

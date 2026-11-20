@@ -307,8 +307,9 @@ fun UnlockContent(
                     },
                 )
                 if (state.phoneSecret || state.checkDue) {
-                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock, and the password);
-                    // a due owner check (§3.6.5) goes with the cancel too. Only the cancel button sends it.
+                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock or typed again after a
+                    // refused cancel, and the password); a due owner check (§3.6.5) goes with the cancel too. Only the cancel
+                    // button sends it.
                     SecretField(
                         value = state.password,
                         onValueChange = actions::setPassword,

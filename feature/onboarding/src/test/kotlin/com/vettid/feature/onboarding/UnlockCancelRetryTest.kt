@@ -133,11 +133,12 @@ class UnlockCancelRetryTest {
         assertTrue(vm.uiState.value.cancelPinAsked)
         vm.setPin("11223344")
         assertFalse("the password again", vm.uiState.value.cancelAllowed)
-        vm.setPassword("the password")
+        vm.setPassword("the second password")
         assertTrue(vm.uiState.value.cancelAllowed)
         vm.cancelRecoveryAndUnlock()
         advanceUntilIdle()
         assertEquals("11223344", vault.lastPin)
+        assertEquals("the password typed again", "the second password", vault.lastCancelCheckPassword)
         assertTrue(vault.lastCancelRecovery)
         assertFalse(vm.uiState.value.recoveryPending)
     }
@@ -193,5 +194,55 @@ class UnlockCancelRetryTest {
         assertTrue(vault.lastCancelRecovery)
         assertEquals("the password", vault.lastPassword)
         assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    /** Inside the wait, and with no PIN typed, the cancel sends nothing; nor does the keyboard's submit while pending. */
+    @Test
+    fun nothingIsSentInsideTheWaitWithoutAPinOrByASubmit() = runTest {
+        vault.unlockResults += UnlockAttempt.RecoveryPending
+        vault.unlockResults += UnlockAttempt.BadPin(30)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        vault.unlockResults.addFirst(UnlockAttempt.Success)
+        vm.submit() // the PIN kept, no wait: a plain unlock would go if submit sent while pending
+        runCurrent()
+        assertEquals("no plain unlock", UnlockAttempt.Success, vault.unlockResults.removeFirst())
+        vm.cancelRecoveryAndUnlock()
+        runCurrent()
+        vault.unlockResults += UnlockAttempt.Success
+        vm.setPin("11223344")
+        vm.cancelRecoveryAndUnlock() // inside the wait
+        runCurrent()
+        vm.submit() // a plain unlock, while pending
+        runCurrent()
+        advanceTimeBy(31_000)
+        runCurrent()
+        vm.setPin("")
+        vm.cancelRecoveryAndUnlock() // no PIN
+        vm.submit()
+        runCurrent()
+        assertEquals("nothing sent", 1, vault.unlockResults.size)
+        assertTrue(vm.uiState.value.recoveryPending)
+    }
+
+    /** A failed cancel says why, with the keypad back and the PIN cleared. */
+    @Test
+    fun aFailedCancelSaysWhy() = runTest {
+        vault.unlockResults += UnlockAttempt.RecoveryPending
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NO_RESPONSE, null)
+        val vm = UnlockViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        vm.cancelRecoveryAndUnlock()
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertTrue(s.message is UnlockMessage.Failed)
+        assertTrue(s.cancelPinAsked)
+        assertEquals("", s.pin)
     }
 }

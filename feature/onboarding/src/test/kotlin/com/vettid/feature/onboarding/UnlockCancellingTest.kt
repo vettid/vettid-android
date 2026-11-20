@@ -11,6 +11,7 @@ import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.text.input.ImeAction
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
+import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
 import org.junit.Rule
@@ -65,6 +66,31 @@ class UnlockCancellingTest {
         rule.setContent { UnlockContent(pending.copy(phoneSecret = false, checkDue = true, password = ""), actions) }
         rule.onNodeWithTag("unlock_cancel_password").assertExists()
         rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
+    }
+
+    /** A due check with a refused cancel: exactly one password field (the card's), and the keypad's action is Done. */
+    @Test
+    fun aDueCheckWithARefusedCancelHasOnePasswordField() {
+        rule.setContent {
+            UnlockContent(pending.copy(phoneSecret = false, checkDue = true, cancelPinAsked = true, pin = "", password = ""), actions)
+        }
+        rule.onNodeWithTag("unlock_password").assertDoesNotExist()
+        rule.onNodeWithTag("unlock_cancel_password").assertExists()
+        rule.onNodeWithTag("unlock_pin").assert(SemanticsMatcher.expectValue(SemanticsProperties.ImeAction, ImeAction.Done))
+    }
+
+    /** A failed cancel shows its notice beside the keypad. */
+    @Test
+    fun aFailedCancelShowsItsNotice() {
+        rule.setContent {
+            UnlockContent(
+                pending.copy(
+                    phoneSecret = false, cancelPinAsked = true, pin = "", message = UnlockMessage.Failed(FailureKind.NO_RESPONSE, null),
+                ),
+                actions,
+            )
+        }
+        rule.onNodeWithTag("unlock_failed").assertExists()
     }
 
     /** The cancel button is enabled only when the cancel would be sent. */
