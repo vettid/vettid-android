@@ -228,23 +228,21 @@ class FeedManager(
      * Items the member deleted on this phone, by [deletes] when each was deleted. An item id is a ULID and a deleted item never
      * comes back (VAULT-MESSAGING §10.9: a later ask of its batch, or a newer guide version, is a new item), so a copy of one
      * that is not deleted is from before the delete: a late event, an event held through a read, a catch-up's or a full read's
-     * answer. It is neither listed nor notified, and the cursor moves on. An id goes when its deletion is seen (an event or an
-     * answer with it deleted) or a full read begun after the delete has applied; all go at a clear and an opening. Under
-     * [lock].
+     * answer. It is neither listed nor notified, and the cursor moves on. An id goes once the cursor has passed its deletion
+     * (an answer or an event in order with it deleted: anything older is then behind the cursor) or a full read begun after
+     * the delete has applied; all go at a clear and an opening. Under [lock].
      */
     private val deletedHere = HashMap<String, Long>()
 
     /** The deletes made on this phone so far ([deletedHere]); a read takes it when it begins ([ReadStart]). Under [lock]. */
     private var deletes = 0L
 
-    /**
-     * Whether [item] is an older copy of one deleted here ([deletedHere]), to be left out; its deletion itself ends the entry.
-     * Under [lock].
-     */
-    private fun deletedEarlier(item: FeedItem): Boolean {
-        if (item.itemId !in deletedHere) return false
-        if (item.status == STATUS_DELETED) deletedHere.remove(item.itemId)
-        return item.status != STATUS_DELETED
+    /** Whether [item] is an older copy of one deleted here ([deletedHere]), to be left out. Under [lock]. */
+    private fun deletedEarlier(item: FeedItem): Boolean = item.itemId in deletedHere && item.status != STATUS_DELETED
+
+    /** [item]'s deletion, once the cursor has passed it: nothing older can come in order, so its entry goes. Under [lock]. */
+    private fun deletionPassed(item: FeedItem) {
+        if (item.status == STATUS_DELETED && item.seq <= cursor) deletedHere.remove(item.itemId)
     }
 
     /** Moved each time [kept] is taken: a catch-up begun before then (a stale one) leaves it for the full read. Under [lock]. */
@@ -665,14 +663,14 @@ class FeedManager(
                 appliedDuring?.put(item.itemId, Local(item.seq, own = false))
             }
             if (next) cursor = item.seq
+            deletionPassed(item)
             // As the feed lists it now (owner decision 2026-11-18): one it does not list (past retention, deleted,
             // History-only) is not notified. Pending until handed on, so a soft clear between the two keeps it out.
             next to (if (notify) listed(listOf(item)).firstOrNull() else null)
         }
         if (applied == null) {
             if (wake) {
-                val deletedHereEarlier = synchronized(lock) { deletedEarlier(item) }
-                if (notify && item.status == STATUS_ACTIVE && !deletedHereEarlier) emitArrival(item)
+                if (notify && item.status == STATUS_ACTIVE) emitArrival(item) // not for an item deleted here ([firstAlertAt])
                 catchUp()
             } else if (m != null && vaultOpen() && !waitsForTheRead(m)) {
                 onItem(item, notify, wake = false, m = m) // loaded again meanwhile
@@ -849,6 +847,7 @@ class FeedManager(
                     val fresh = changed.filter { it.itemId !in live }
                     apply(fresh)
                     cursor = maxOf(if (full && !start.quiet) 0 else cursor, seq)
+                    changed.forEach(::deletionPassed)
                     // Loaded with the list it applies, under the lock and only for this generation: a clear that comes after
                     // it leaves the list not loaded, never marked loaded over a cleared list.
                     loadState.value = ListLoad.LOADED
@@ -1051,6 +1050,8 @@ class FeedManager(
      * updated without sound) is no alert, and passes.
      */
     private fun firstAlertAt(item: FeedItem): Boolean = synchronized(lock) {
+        // An older copy of an item deleted here, also one that passed its checks just before the delete: never notified.
+        if (deletedEarlier(item)) return@synchronized false
         if (item.quietRepost) return@synchronized true
         val last = notifiedSeq[item.itemId]
         if (!item.replayed && last != null && item.seq <= last) return@synchronized false

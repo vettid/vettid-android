@@ -1804,13 +1804,14 @@ class FeedManagerTest {
         val m = openedEarlier(ops, item("i1", 1), item("h2", 2), item("k3", 3))
         m.delete("i1")
         assertEquals(1, m.deletedHereCount)
-        val gone = item("i1", 4, status = "deleted")
-        m.onItem(gone, notify = false, wake = false, m = event(gone)) // the deletion's own event
+        ops.pages += FeedPage(listOf(item("i1", 4, status = "deleted")), 4) // a catch-up brings the deletion
+        m.catchUp()
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
         assertEquals(0, m.deletedHereCount)
         // A full read begun before the delete keeps it; one begun after lets it go.
         val gate = CompletableDeferred<Unit>()
         ops.gate = gate
-        ops.pages += FeedPage(listOf(item("h2", 2), item("k3", 3)), 4)
+        ops.pages += FeedPage(listOf(item("h2", 2), item("k3", 3)), 5)
         val read = launch { m.refresh() }
         runCurrent()
         settle { synchronized(ops) { ops.lists.size } >= 2 }
@@ -1820,9 +1821,37 @@ class FeedManagerTest {
         settle { read.isCompleted }
         assertEquals(1, m.deletedHereCount)
         assertEquals(listOf("k3"), m.items.value.map { it.itemId })
-        ops.pages += FeedPage(listOf(item("k3", 3)), 5)
+        ops.pages += FeedPage(listOf(item("k3", 3)), 6)
         m.refresh()
         assertEquals(0, m.deletedHereCount)
+    }
+
+    /**
+     * The deletion of an item deleted here comes out of order (above the cursor): its entry stays, so an older event that comes
+     * after it, still above the cursor, does not list the item again. Another item's event is listed and notified as ever.
+     */
+    @Test
+    fun aDeletionOutOfOrderKeepsTheEntryForAnOlderEvent() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.delete("i1")
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate // the catch-up the gap asks for waits
+        val gone = item("i1", 5, status = "deleted")
+        m.onItem(gone, notify = false, wake = false, m = event(gone)) // out of order: the cursor stays at 2
+        assertEquals(1, m.deletedHereCount)
+        val older = item("i1", 4)
+        m.onItem(older, notify = true, wake = false, m = event(older))
+        assertEquals(listOf("h2"), m.items.value.map { it.itemId })
+        val other = item("g3", 3)
+        m.onItem(other, notify = true, wake = false, m = event(other))
+        assertEquals(listOf("g3", "h2"), m.items.value.map { it.itemId }.sorted())
+        assertEquals(listOf("g3"), arrived)
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
     }
 
     /** A lock's clear and a new opening empty the set of ids deleted here. */
