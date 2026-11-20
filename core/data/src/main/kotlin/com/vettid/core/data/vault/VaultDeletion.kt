@@ -520,6 +520,9 @@ internal class PhaseHolder(
         if (flow.value !is AppPhase.Unlocked) block()
     }
 
+    /** [block] given the phase, under this holder's lock: no phase is published while it runs. */
+    fun <T> decide(block: (AppPhase) -> T): T = synchronized(this) { block(flow.value) }
+
     /** Whether "being deleted" holds. */
     val deleting: Boolean @Synchronized get() = held != null
 

@@ -809,8 +809,9 @@ class FeedManagerTest {
         m.onEvent(event(item("n3", 3), ts = now.plusSeconds(5))) // after the lift
         settle { arrived.isNotEmpty() }
         assertEquals(listOf("n3"), arrived.map { it.itemId })
-        // A new opening forgets the lift.
+        // A new opening forgets the lift (its list too: the event waits for the opening's full read, and is news since it).
         m.vaultOpened(now.minusSeconds(600))
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), item("n3", 3), item("o4", 4)), 4)
         m.onEvent(event(item("o4", 4), ts = now.minusSeconds(120)))
         settle { arrived.size == 2 }
         assertEquals(listOf("n3", "o4"), arrived.map { it.itemId })
@@ -1003,6 +1004,256 @@ class FeedManagerTest {
         m.releaseHeld()
         settle { arrived.isNotEmpty() }
         assertEquals(listOf("i2"), arrived.map { it.itemId })
+    }
+
+    /** A blip, then the continued opening's full read and the arrivals it brings (ids). */
+    private suspend fun TestScope.afterABlip(
+        m: FeedManager,
+        ops: Ops,
+        read: List<FeedItem>,
+        between: () -> Unit = {},
+    ): MutableList<String> {
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // Unreachable
+        between()
+        read.forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(read, read.maxOf { it.seq })
+        m.refresh() // the continued opening's full read
+        advanceUntilIdle()
+        return arrived
+    }
+
+    /**
+     * (As the iPhone app) An item sent during a blip is notified by the continued opening's full read, as a catch-up from
+     * the kept cursor would; its `feed.event` coming after the read notifies nothing more.
+     */
+    @Test
+    fun theReturnReadNotifiesTheBlipsItemOnce() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val g2 = item("g2", 2)
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), g2)) { assertTrue(m.openingContinues()) }
+        assertEquals(listOf("g2"), arrived)
+        m.onEvent(event(g2))
+        // Its event held back while the phase was not known, replayed now (covered, sent since the opening): not again.
+        m.replay(event(g2), wake = false)
+        advanceUntilIdle()
+        assertEquals("once", listOf("g2"), arrived)
+    }
+
+    /**
+     * While the vault is not open on this phone nothing is read for a `sync.event`, and a read made all the same notifies
+     * nothing, marks nothing notified and leaves what the blip kept: the continued opening's read notifies the blip's item.
+     */
+    @Test
+    fun aReadWhileNotOpenTakesNothingOfTheBlip() = runTest {
+        val ops = Ops()
+        var open = true
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        open = false
+        m.clear(keepHeld = true) // Unreachable
+        val reads = synchronized(ops) { ops.lists.size }
+        m.onEvent(sync("feed.updated", "i1", 3))
+        // A read would run on the IO dispatcher: give it the time to show.
+        repeat(SETTLE_TRIES / 4) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) }
+        assertEquals("no read while not open", reads, synchronized(ops) { ops.lists.size })
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // a read all the same (one already asked for)
+        advanceUntilIdle()
+        assertEquals("nothing while not open", emptyList<String>(), arrived)
+        assertFalse("nothing applied while not open", m.loaded)
+        assertEquals(emptyList<FeedItem>(), m.items.value)
+        open = true
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /**
+     * A catch-up that ends after the vault stopped being open (a blip published before the collector's soft clear) applies
+     * nothing: the kept cursor still covers what it brought, and the continued opening's read notifies it.
+     */
+    @Test
+    fun aCatchUpEndingWhileNotOpenAppliesNothing() = runTest {
+        val ops = Ops()
+        var open = true
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate
+        ops.pages += FeedPage(listOf(g2), 2)
+        m.catchUp() // incremental, waits at the gate
+        repeat(SETTLE_TRIES / 4) { if (synchronized(ops) { ops.lists.size } < 2) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) } }
+        open = false // the blip, published
+        ops.gate = null
+        gate.complete(Unit)
+        repeat(SETTLE_TRIES / 4) { advanceUntilIdle(); Thread.sleep(SETTLE_MS) }
+        assertEquals("not applied", 1L, m.seq)
+        assertEquals(emptyList<String>(), arrived)
+        m.clear(keepHeld = true) // the collector's soft clear
+        open = true
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /** A waiting-asks replay asked while the vault is not open is not done: its window stays for the run to try again. */
+    @Test
+    fun aReplayWhileNotOpenIsNotDone() = runTest {
+        val ops = Ops()
+        var open = true
+        ops.pages += FeedPage(emptyList(), 0)
+        val m = manager(ops, vaultOpen = { open }).also { it.vaultOpened(now); it.refresh() }
+        val token = m.startReplayWindow()
+        open = false
+        assertFalse(m.replayWaitingAsks(token, emptyList(), now))
+        assertTrue(m.replayOwns(token))
+        open = true
+        assertTrue(m.replayWaitingAsks(token, emptyList(), now))
+    }
+
+    /** The return read while the owner check is due or held notifies nothing, and drops what the blip kept. */
+    @Test
+    fun aReturnReadWhileTheCheckIsDueNotifiesNothing() = runTest {
+        val ops = Ops()
+        var due = false
+        val i1 = item("i1", 1)
+        ops.known["i1"] = i1
+        ops.pages += FeedPage(listOf(i1), 1)
+        val m = manager(ops, gated = { due }).also { it.vaultOpened(now.minusSeconds(600)); it.refresh() }
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // the blip
+        due = true // another device's pass not known yet: still due here
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the return read
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+        due = false
+        ops.pages += FeedPage(listOf(i1, g2), 2)
+        m.refresh() // the lift's read
+        advanceUntilIdle()
+        assertEquals("dropped, not notified later", emptyList<String>(), arrived)
+    }
+
+    /** A blip the phase collector never cleared for (it reached it after the return): the opening's cursor is kept then. */
+    @Test
+    fun aBlipWithNoSoftClearIsKeptWhenTheOpeningContinues() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        assertTrue(m.openingContinues()) // the return, with no soft clear before it
+        val g2 = item("g2", 2)
+        ops.known["g2"] = g2
+        ops.pages += FeedPage(listOf(item("i1", 1), g2), 2)
+        m.refresh()
+        advanceUntilIdle()
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /** Two soft clears before the return keep the first's cursor: the return read notifies the blip's item. */
+    @Test
+    fun twoSoftClearsKeepTheFirst() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val g2 = item("g2", 2)
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), g2)) { m.clear(keepHeld = true) } // a second blip clear
+        assertEquals(listOf("g2"), arrived)
+    }
+
+    /**
+     * An item applied out of order while the hold silenced it (sent during the hold, never notified) stays silent through a
+     * blip: what the blip keeps is the highest seq the list held, not only its cursor.
+     */
+    @Test
+    fun aSilencedGapItemStaysSilentThroughABlip() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        ops.pages += FeedPage(listOf(item("i1", 1)), 1) // the lift's full read
+        m.refresh()
+        val g3 = item("g3", 3)
+        ops.known["g3"] = g3
+        ops.pages += FeedPage(emptyList(), 1) // the gap's catch-up finds nothing more
+        m.onEvent(event(g3, ts = now.minusSeconds(120))) // sent during the hold: applied, silent, out of order
+        settle { synchronized(ops) { ops.lists.size } >= 3 }
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), arrived)
+        assertEquals(1L, m.seq)
+        m.clear(keepHeld = true) // a blip
+        ops.pages += FeedPage(listOf(item("i1", 1), g3), 3)
+        m.refresh() // the continued opening's read
+        advanceUntilIdle()
+        assertEquals("still silent", emptyList<String>(), arrived)
+    }
+
+    /** A new opening holds nothing of the list before it: its backlog waits for its own full read. */
+    @Test
+    fun aNewOpeningEmptiesTheList() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        assertTrue(m.loaded)
+        m.vaultOpened(now)
+        assertFalse(m.loaded)
+        assertEquals(0L, m.seq)
+        assertEquals(emptyList<FeedItem>(), m.items.value)
+    }
+
+    /** Only what is new or changed since the kept cursor and still unread: the rest of the list is silent. */
+    @Test
+    fun theReturnReadNotifiesOnlyWhatChangedSinceTheCursor() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("i3", 3))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("i3", 4, status = "read"), item("g5", 5)))
+        assertEquals(listOf("g5"), arrived)
+    }
+
+    /** A lift during the blip: its full read notifies nothing (what changed while due is covered by it). */
+    @Test
+    fun aLiftDuringTheBlipKeepsTheReturnReadSilent() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.ownerCheckLifted(now) }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A new opening holds nothing of the one before: its full read notifies nothing. */
+    @Test
+    fun aNewOpeningAfterTheBlipReadsSilently() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.vaultOpened(now) }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A close after the blip (a lock) drops what it kept. */
+    @Test
+    fun aCloseAfterTheBlipDropsWhatItKept() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1))
+        val arrived = afterABlip(m, ops, listOf(item("i1", 1), item("g2", 2))) { m.clear() }
+        assertEquals(emptyList<String>(), arrived)
     }
 
     /** A replay window kept across Unreachable belongs to that opening: a new opening closes it. */
