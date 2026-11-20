@@ -306,14 +306,15 @@ fun UnlockContent(
                         }
                     },
                 )
-                if (state.phoneSecret) {
-                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock, and the password).
+                if (state.phoneSecret || state.checkDue) {
+                    // Release R: the owner check follows the cancel at once (the PIN, kept from the unlock, and the password);
+                    // a due owner check (§3.6.5) goes with the cancel too. Only the cancel button sends it.
                     SecretField(
                         value = state.password,
                         onValueChange = actions::setPassword,
                         label = stringResource(R.string.unlock_password_label),
                         enabled = !state.busy,
-                        onImeAction = actions::cancelRecoveryAndUnlock,
+                        onImeAction = null,
                         modifier = Modifier.testTag("unlock_cancel_password"),
                     )
                 }
@@ -366,8 +367,12 @@ fun UnlockContent(
                     enabled = state.pinAllowed || (state.returnAsked && state.returnPinAllowed),
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
-                    imeAction = if (state.checkDue && !state.returnAsked) ImeAction.Next else ImeAction.Done,
-                    onImeAction = if ((state.checkDue && !state.returnAsked) || cancelPin) null else actions::submit,
+                    imeAction = if (state.checkDue && !state.returnAsked && !cancelPin) ImeAction.Next else ImeAction.Done,
+                    onImeAction = when {
+                        state.returnAsked -> actions::submit
+                        cancelPin || state.checkDue -> null
+                        else -> actions::submit
+                    },
                     modifier = Modifier.testTag("unlock_pin"),
                 )
                 // With a recovery pending, the recovery card has the password field.

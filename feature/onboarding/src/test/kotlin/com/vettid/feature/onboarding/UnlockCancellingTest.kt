@@ -4,7 +4,12 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.text.input.ImeAction
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
@@ -50,7 +55,27 @@ class UnlockCancellingTest {
         }
         rule.onNodeWithTag("recovery_pending").assertExists()
         rule.onNodeWithTag("unlock_pin").assertExists()
+        rule.onNodeWithText("Too many wrong PINs. Try again in", substring = true).assertExists()
         rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
+    }
+
+    /** The owner check due without a phone secret: the recovery card asks for the password the cancel sends with it. */
+    @Test
+    fun aDueCheckAsksForThePasswordInTheRecoveryCard() {
+        rule.setContent { UnlockContent(pending.copy(phoneSecret = false, checkDue = true, password = ""), actions) }
+        rule.onNodeWithTag("unlock_cancel_password").assertExists()
+        rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
+    }
+
+    /** The cancel button is enabled only when the cancel would be sent. */
+    @Test
+    fun theCancelIsEnabledOnlyWhenItWouldBeSent() {
+        val s = pending.copy(phoneSecret = false)
+        assertTrue(s.cancelAllowed)
+        assertFalse("no PIN", s.copy(pin = "").cancelAllowed)
+        assertFalse("waiting", s.copy(waitSeconds = 5).cancelAllowed)
+        assertFalse("the due check's password", s.copy(checkDue = true).cancelAllowed)
+        assertTrue(s.copy(checkDue = true, password = "the password").cancelAllowed)
     }
 
     /** The keypad's Done does not send anything while a recovery is pending: only the cancel button cancels it. */
@@ -62,7 +87,8 @@ class UnlockCancellingTest {
             null
         } as UnlockActions
         rule.setContent { UnlockContent(pending.copy(phoneSecret = false, pin = "11223344", cancelPinAsked = true), recording) }
-        runCatching { rule.onNodeWithTag("unlock_pin").performImeAction() }
+        rule.onNodeWithTag("unlock_pin").assert(SemanticsMatcher.expectValue(SemanticsProperties.ImeAction, ImeAction.Done))
+        rule.onNodeWithTag("unlock_pin").performImeAction()
         assertFalse("submitted: $called", called.any { it == "submit" || it == "cancelRecoveryAndUnlock" })
     }
 
