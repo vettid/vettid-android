@@ -51,6 +51,7 @@ jobs:
         with:
           persist-credentials: false
       - name: osv-scanner over the locked lockfile
+        # The binary itself, not the image's entrypoint script (which passes "no lockfile found"): a missing lockfile fails.
         run: docker run --rm -v "$PWD:/src:ro" -w /src --entrypoint /root/osv-scanner "$OSV_IMAGE" scan source --lockfile=app/gradle.lockfile
 
   listing:

@@ -40,10 +40,15 @@ if (providers.gradleProperty("vettidScanAll").orNull == "true") {
             doLast {
                 // Gradle writes no lock for a configuration with an unresolved dependency: name each, so a gap in the
                 // listing shows in the job's log.
+                // A configuration whose resolution fails as a whole is named too, and the others are still resolved.
                 project.configurations.filter { it.isCanBeResolved }.forEach { c ->
-                    val unresolved = c.incoming.resolutionResult.allDependencies
-                        .count { it is org.gradle.api.artifacts.result.UnresolvedDependencyResult }
-                    if (unresolved > 0) logger.warn("not listed: ${project.path} ${c.name} ($unresolved unresolved)")
+                    runCatching {
+                        c.incoming.resolutionResult.allDependencies
+                            .count { it is org.gradle.api.artifacts.result.UnresolvedDependencyResult }
+                    }.fold(
+                        onSuccess = { n -> if (n > 0) logger.warn("not listed: ${project.path} ${c.name} ($n unresolved)") },
+                        onFailure = { e -> logger.warn("not listed: ${project.path} ${c.name} (failed: ${e.javaClass.simpleName})") },
+                    )
                 }
             }
         }
