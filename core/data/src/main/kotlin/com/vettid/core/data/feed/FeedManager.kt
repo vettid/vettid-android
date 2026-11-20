@@ -301,7 +301,10 @@ class FeedManager(
     /** The highest `seq` applied (tests). */
     val seq: Long get() = synchronized(lock) { cursor }
 
-    /** The reads counted and not ended yet (a read's notifications go before it ends). Internal for its tests. */
+    /**
+     * The reads counted and not ended yet (a read's notifications go before it ends; a release of held queues that its end
+     * starts may come just after). Internal for its tests.
+     */
     internal val readsUnderWay: Int get() = readsRunning.get()
 
     /** The vault opened (an unlock, app start with it open, a passed owner check): the feed is read in the background. */
@@ -1053,7 +1056,9 @@ class FeedManager(
         }
         synchronized(lock) {
             if (answer.seq == cursor + 1) cursor = answer.seq
-            if ((byId[itemId]?.seq ?: 0) <= answer.seq) {
+            // Only over the item still listed, at that change or an older one: one deleted meanwhile (here or elsewhere), or
+            // cleared by a lock, is not listed again by a late answer.
+            if (byId[itemId]?.let { it.seq <= answer.seq } == true) {
                 apply(listOf(answer))
                 appliedDuring?.put(itemId, Local(answer.seq, own = false)) // the vault's copy now, as a live event's
             }

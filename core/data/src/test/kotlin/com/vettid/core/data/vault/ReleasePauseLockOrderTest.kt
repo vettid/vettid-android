@@ -93,6 +93,8 @@ class ReleasePauseLockOrderTest {
             },
             now = { ran += "now" },
         )
+        // The lift ended inside the look: the look was made outside the pause's monitor, so the lift was not held up.
+        assertFalse("the lift waited for the pause's monitor", lift!!.isAlive)
         assertEquals(listOf("sends"), ran.toList())
     }
 
