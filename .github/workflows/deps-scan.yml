@@ -8,9 +8,9 @@ name: deps-scan
 # "Dependency locking"), which is all a release APK carries. A finding there
 # fails the job.
 #
-# The listing job scans every other dependency (the tests', lint's and the
-# rest of each project's configurations) and lists what it finds without
-# failing: those are not committed or locked, so it locks them in its own
+# The listing job scans every dependency (the release ones again, the
+# tests', lint's and the rest of each project's configurations) and lists
+# what it finds without failing: those are not committed or locked, so it locks them in its own
 # checkout first (-PvettidScanAll=true, build.gradle.kts). The plugins of
 # the build itself (the buildscript and build-logic classpaths) are not in it.
 #

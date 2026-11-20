@@ -929,9 +929,9 @@ val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull =
 
 /*
  * Dependency locking: the shipped release runtime classpaths of both distributions are locked in app/gradle.lockfile, which
- * the dependency scan reads (.github/workflows/deps-scan.yml) and which pins the build. A dependency change updates it:
- *   ./gradlew :app:dependencies --configuration fullReleaseRuntimeClasspath --write-locks
- *   ./gradlew :app:dependencies --configuration fossReleaseRuntimeClasspath --write-locks
+ * the dependency scan reads (.github/workflows/deps-scan.yml) and which pins the build. A dependency change updates it (one
+ * command, which writes both):
+ *   ./gradlew :app:dependencies --write-locks
  * Not in the wallet-in-release check build: its classpath (the wallet linked in) is never shipped.
  */
 if (!walletInRelease) {

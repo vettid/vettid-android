@@ -38,8 +38,11 @@ if (providers.gradleProperty("vettidScanAll").orNull == "true") {
         tasks.register("lockAllForScan") {
             notCompatibleWithConfigurationCache("resolves every configuration at execution")
             doLast {
+                // Gradle writes no lock for a configuration whose resolution failed: name each, so a gap in the listing
+                // shows in the job's log.
                 project.configurations.filter { it.isCanBeResolved }.forEach { c ->
-                    c.incoming.artifactView { lenient(true) }.files.files
+                    val failures = c.incoming.artifactView { lenient(true) }.artifacts.failures
+                    if (failures.isNotEmpty()) logger.warn("not listed: ${project.path} ${c.name} (${failures.size} failures)")
                 }
             }
         }
