@@ -832,6 +832,15 @@ class VaultManager(
     @Volatile
     private var lockedHere = false
 
+    /** The close the member's lock here makes ([PhaseTick.closes]): a later one behind it is not the member's. */
+    private var lockedHereClose = -1
+
+    /** The member locks here: the close it is about to publish (or the one in force, if already closed). */
+    private fun markLockedHere() {
+        lockedHere = true
+        lockedHereClose = phaseFlow.ticks.value.closes + if (isClose(phaseFlow.value)) 0 else 1
+    }
+
     /** The relay connection is closed by the notification service while the vault is locked ([pauseRelay]). */
     @Volatile
     private var relayPaused = false
@@ -1268,9 +1277,11 @@ class VaultManager(
                 presence.start() // the member's presence policy
                 attachments.opened() // photos refused while closed are asked again; cleanups kept meanwhile go
                 location.resume() // the location shares this phone is the source of are taken up again
-                // The votes' sync the missed close's clear stopped: started again when the check's end already sent
-                // (else that end, or the lift, starts it).
-                if (afterMissedClose && !sendsGated() && !releaseUpdate.required.value) votes.startSync()
+                // The votes' sync the missed close's clear stopped, when the check's end already sent: started again now, or
+                // with the sends when the owner check lifts (while the check runs, its end starts it).
+                if (afterMissedClose && !releaseUpdate.checking.value && !releaseUpdate.required.value) {
+                    if (!sendsGated()) votes.startSync() else releasePause.sendsAgainAtLift()
+                }
                 // The release gate's check (Rule 3): the manifest is read by the opening itself
                 // (ReleaseUpdateManager.vaultOpened), not here.
             }
@@ -1288,7 +1299,7 @@ class VaultManager(
                 val step = follower.next(tick)
                 // Closed since it was open, and not by the member here: "Your vault is locked" (not at a cold start), also
                 // when the lock comes conflated (a second lock, or Unreachable after it).
-                if (step.closedSinceOpen && !lockedHere) lockedElsewhereFlow.value = true
+                if (lockedElsewhere(step, tick.closes, lockedHere, lockedHereClose)) lockedElsewhereFlow.value = true
                 phaseSteps.follow(p, step) { missed -> opened(missed) }
             }
         }
@@ -1655,7 +1666,7 @@ class VaultManager(
         // (whatever started the process: the app, the on-phone service, a push wake, the boot receiver, the pending
         // lock's job), bound to the same unlock as before when it was bound (release L).
         lockKeeper.resume()
-        if (lockKeeper.holdsPhone) lockedHere = true
+        if (lockKeeper.holdsPhone) markLockedHere()
         scope.launch {
             lockKeeper.notice.collectSurviving("lock notice") {
                 if (it !is LockNotice.Unconfirmed && pauseWanted) {
@@ -3205,7 +3216,7 @@ class VaultManager(
 
     /** This phone locked at once, and the lock pending durably ([LockKeeper.begin]); its number, for [LockKeeper.ask]. */
     private suspend fun beginLock(unlockId: String?): Long {
-        lockedHere = true
+        markLockedHere()
         // (Release L) Not "locked itself" on a later unlock screen: the member locked it here.
         ownerCheck.onLockedHere()
         // (ANDROID-PLAN 0.1.57 (1)) "This phone can't use your vault" goes with the open vault.

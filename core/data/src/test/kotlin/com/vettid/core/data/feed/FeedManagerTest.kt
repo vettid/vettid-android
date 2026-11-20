@@ -1445,6 +1445,42 @@ class FeedManagerTest {
         assertEquals(listOf("g2"), arrived)
     }
 
+    /**
+     * An arrival dropped for the blip (the vault not open as it was handed on), the opening continued with no soft clear, and
+     * a catch-up first: it reads in full against the blip's snapshot, so the arrival is notified once.
+     */
+    @Test
+    fun anArrivalDroppedForABlipWithNoSoftClearIsNotifiedByTheNextRead() = runTest {
+        val ops = Ops()
+        val open = java.util.concurrent.atomic.AtomicBoolean(true)
+        val closeAfterNext = java.util.concurrent.atomic.AtomicBoolean(false)
+        val m = openedEarlier(ops, item("i1", 1), vaultOpen = {
+            val now = open.get()
+            if (closeAfterNext.compareAndSet(true, false)) open.set(false)
+            now
+        })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        val x = item("x2", 2)
+        ops.known["x2"] = x
+        ops.pages += FeedPage(listOf(x), 2)
+        closeAfterNext.set(true)
+        m.catchUp()
+        settle { synchronized(ops) { ops.pages.isEmpty() } && !closeAfterNext.get() }
+        advanceUntilIdle()
+        assertEquals("dropped: the vault was not open", emptyList<String>(), arrived)
+        open.set(true)
+        assertTrue(m.openingContinues()) // the return, the collector never cleared for the blip
+        ops.pages += FeedPage(listOf(item("i1", 1), x), 2)
+        m.catchUp() // a catch-up first: a full read while the snapshot is held
+        settle { arrived.isNotEmpty() }
+        advanceUntilIdle()
+        ops.pages += FeedPage(listOf(item("i1", 1), x), 2)
+        m.refresh()
+        advanceUntilIdle()
+        assertEquals(listOf("x2"), arrived)
+    }
+
     /** An event that finds the list not loaded notifies its own copy only for a push wake (what the push was for). */
     @Test
     fun aNonWakeEventFindingTheListClearedNotifiesNothing() = runTest {
@@ -1453,10 +1489,10 @@ class FeedManagerTest {
         val arrived = mutableListOf<String>()
         backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
         m.clear(keepHeld = true) // a clear racing in after the event's checks
-        m.onItem(item("g2", 2), notify = true, wake = false)
+        m.onItem(item("g2", 2), notify = true, wake = false, m = null)
         advanceUntilIdle()
         assertEquals(emptyList<String>(), arrived)
-        m.onItem(item("w3", 3), notify = true, wake = true)
+        m.onItem(item("w3", 3), notify = true, wake = true, m = null)
         advanceUntilIdle()
         assertEquals(listOf("w3"), arrived)
     }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -126,6 +127,28 @@ class PhaseFollowTest {
         runCurrent()
         assertEquals(0, f.clears(PhaseSteps.ITEMS))
         assertEquals(listOf("opened:false"), f.ran.filter { it.startsWith("opened") })
+    }
+
+    /** A lock found after a blip of the open vault: the vault was open before it, so the notice shows. */
+    @Test
+    fun aLockFoundAfterABlipIsNoticed() = runTest {
+        val f = Follow(this, AppPhase.Unlocked)
+        runCurrent()
+        f.phase.value = blip
+        runCurrent()
+        f.phase.value = AppPhase.Locked
+        runCurrent()
+        assertEquals(listOf(1), f.notices)
+    }
+
+    /** The member's own lock is not "locked elsewhere"; a lock behind it, conflated with an unlock, is. */
+    @Test
+    fun theMembersOwnLockIsNotNoticedButOneBehindItIs() {
+        val closed = PhaseFollower.Step(closedSinceOpen = true, missedClose = false)
+        assertFalse(lockedElsewhere(closed, closes = 1, lockedHere = true, lockedHereClose = 1))
+        assertTrue(lockedElsewhere(closed, closes = 2, lockedHere = true, lockedHereClose = 1))
+        assertTrue(lockedElsewhere(closed, closes = 1, lockedHere = false, lockedHereClose = 1))
+        assertFalse(lockedElsewhere(closed.copy(closedSinceOpen = false), closes = 2, lockedHere = false, lockedHereClose = 1))
     }
 
     @Test

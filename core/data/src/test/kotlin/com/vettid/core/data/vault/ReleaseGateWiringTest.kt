@@ -276,10 +276,9 @@ class ReleaseGateWiringTest {
         assertTrue("the votes send: not before the check is over", opened.none { it.contains("votes.startSync()") })
         // The opened steps start the votes' work only again after a missed close stopped it, and only once sends may go.
         val starts = block("suspend fun opened(afterMissedClose: Boolean) {").filter { it.contains("votes.startSync()") }
-        assertEquals(
-            listOf("if (afterMissedClose && !sendsGated() && !releaseUpdate.required.value) votes.startSync()"),
-            starts,
-        )
+        assertEquals(listOf("if (!sendsGated()) votes.startSync() else releasePause.sendsAgainAtLift()"), starts)
+        block("suspend fun opened(afterMissedClose: Boolean) {")
+            .has("if (afterMissedClose && !releaseUpdate.checking.value && !releaseUpdate.required.value) {")
     }
 
     @Test

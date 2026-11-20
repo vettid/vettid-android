@@ -592,7 +592,7 @@ class FeedManager(
      * any other event [m] waits for the read as one that came while not loaded ([waitsForTheRead]), judged at its end.
      * Internal for its test.
      */
-    internal fun onItem(item: FeedItem, notify: Boolean, wake: Boolean, m: VaultMessage? = null) {
+    internal fun onItem(item: FeedItem, notify: Boolean, wake: Boolean, m: VaultMessage?) {
         val applied = synchronized(lock) {
             if (loadState.value != ListLoad.LOADED) return@synchronized null
             if (item.seq <= cursor) return // already applied
@@ -633,7 +633,10 @@ class FeedManager(
                 ok = runCatching {
                     reads.withLock {
                         catchUpQueued = false
-                        if (loadState.value == ListLoad.LOADED) readAfter(full = false) else readAfter(full = true)
+                        // A blip's snapshot held: a full read, judged against it (a catch-up from the cursor would miss what
+                        // the blip kept out, an arrival it dropped).
+                        val full = synchronized(lock) { loadState.value != ListLoad.LOADED || kept != null }
+                        readAfter(full)
                     }
                 }.isSuccess
             } finally {
@@ -761,7 +764,11 @@ class FeedManager(
                     // read (the list stayed loaded: no soft clear ran, and the continued opening read incrementally). Not
                     // one begun before the blip: it may not have what the vault sent during it.
                     if (!full && keptAtStart == keptAt) kept = null
-                    val arrived = if (full) arrivedSinceTheBlip(changed) else newUnread(changed) { before[it]?.seq }
+                    val arrived = if (full) {
+                        arrivedSinceTheBlip(changed, stale = keptAtStart != keptAt)
+                    } else {
+                        newUnread(changed) { before[it]?.seq }
+                    }
                     Applied.Read(listed(arrived))
                 }
             }
@@ -770,11 +777,12 @@ class FeedManager(
     /**
      * What a full read notifies: what a catch-up from the kept cursor would have ([kept]) for the first one after a blip, and
      * only when made while the vault is open on this phone (one made while not open notifies nothing and leaves it); else
-     * nothing. Under [lock].
+     * nothing. A read begun before the latest blip ([stale]) may not have what the vault sent during it: the snapshot stays
+     * for the next read. Under [lock].
      */
-    private fun arrivedSinceTheBlip(changed: List<FeedItem>): List<FeedItem> {
+    private fun arrivedSinceTheBlip(changed: List<FeedItem>, stale: Boolean): List<FeedItem> {
         val k = kept ?: return emptyList()
-        kept = null
+        if (!stale) kept = null
         // Not while the owner check is due or held: nothing would be notified then, and the lift's read is silent.
         return if (gated()) emptyList() else newUnread(changed.filter { it.seq > k.cursor }) { k.seqs[it] }
     }
@@ -783,11 +791,11 @@ class FeedManager(
     private data class ReadStart(val gen: Int, val lifts: Int, val keptAt: Int)
 
     /**
-     * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list moves
-     * [keptAt], so a catch-up begun before the latest one leaves the snapshot. Under [lock].
+     * A blip's snapshot ([keptNow]), once: a second blip before a read keeps the first. Each blip of a loaded list, or with
+     * a snapshot held, moves [keptAt], so a read begun before the latest one leaves the snapshot. Under [lock].
      */
     private fun takeKept() {
-        if (loadState.value == ListLoad.LOADED) keptAt++
+        if (loadState.value == ListLoad.LOADED || kept != null) keptAt++
         if (kept == null) kept = keptNow()
     }
 
