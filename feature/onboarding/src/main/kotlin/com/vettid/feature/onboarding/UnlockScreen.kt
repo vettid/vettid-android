@@ -334,7 +334,9 @@ fun UnlockContent(
             state.move?.takeIf { state.returnOffered }?.let { m -> MoveUnconfirmedNotice(m, enabled = !state.busy, actions::askReturn) }
             // Never a PIN field while the last check of the vault's software failed (the way back asks for its own PIN).
             val verified = p != null && state.preflightError == null
-            val unlockPin = !blocked && !state.recoveryPending && verified && !state.noUserGuid
+            // While a recovery is pending, only for a cancel refused for its PIN: the cancel button sends it, never the keypad.
+            val cancelPin = state.recoveryPending && state.cancelPinAsked
+            val unlockPin = !blocked && (!state.recoveryPending || cancelPin) && verified && !state.noUserGuid
             if (unlockPin || state.returnAsked) {
                 // VAULT-MESSAGING 0.44.0 §11.14.9 step 5: an unresolved PIN change asks for the previous PIN first, and for
                 // the new one only after the vault showed that it holds the change.
@@ -365,10 +367,11 @@ fun UnlockContent(
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
                     imeAction = if (state.checkDue && !state.returnAsked) ImeAction.Next else ImeAction.Done,
-                    onImeAction = if (state.checkDue && !state.returnAsked) null else actions::submit,
+                    onImeAction = if ((state.checkDue && !state.returnAsked) || cancelPin) null else actions::submit,
                     modifier = Modifier.testTag("unlock_pin"),
                 )
-                if (state.checkDue && !state.returnAsked) {
+                // With a recovery pending, the recovery card has the password field.
+                if (state.checkDue && !state.returnAsked && !cancelPin) {
                     // §3.6.5: a locked vault past its deadline asks for the PIN and the password on one screen.
                     SecretField(
                         value = state.password,

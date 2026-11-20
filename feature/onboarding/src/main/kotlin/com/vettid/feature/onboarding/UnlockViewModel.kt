@@ -130,6 +130,12 @@ data class UnlockUiState(
      */
     val serviceWaitSeconds: Long = 0,
     val recoveryPending: Boolean = false,
+    /**
+     * A cancel of the recovery was refused for its PIN (`bad_pin`, or `backoff` while that waits): the recovery stays pending
+     * (the vault applies the cancel only after a correct PIN), and the keypad asks for the PIN again, with its wait, for the
+     * cancel alone.
+     */
+    val cancelPinAsked: Boolean = false,
     val stateRollback: Boolean = false,
     /**
      * The vault answered `signer_refused` (VAULT-MESSAGING 0.27.0 §11.7.1): its release does not accept this
@@ -229,8 +235,12 @@ data class UnlockUiState(
     /** The way back may be started with the PIN typed. */
     val returnSubmitAllowed: Boolean get() = returnPinAllowed && pin.length >= MIN_PIN_LENGTH
 
-    /** "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered. */
-    val cancelAllowed: Boolean get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty())
+    /**
+     * "Cancel the recovery and unlock" may be pressed: with a phone secret, once the password is entered; after a cancel
+     * refused for its PIN ([cancelPinAsked]), once a new PIN is typed and its wait is over.
+     */
+    val cancelAllowed: Boolean
+        get() = recoveryPending && !busy && (!phoneSecret || password.isNotEmpty()) && (!cancelPinAsked || submitAllowed)
 
     /**
      * The vault cannot be opened from here and erasing this phone would not help (owner decision: a way forward, no
@@ -545,6 +555,8 @@ class UnlockViewModel @Inject constructor(
                     signerRefused = signerRefusedAfter(r, it.signerRefused),
                     keysGone = keysGoneAfter(r, it.keysGone),
                     noUserGuid = it.noUserGuid || r is UnlockAttempt.Failed && isNoUserGuid(r),
+                    cancelPinAsked = cancelRecovery && it.recoveryPending &&
+                        (r is UnlockAttempt.BadPin || r is UnlockAttempt.Backoff),
                 )
             }
             when (r) {

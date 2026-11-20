@@ -4,6 +4,8 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performImeAction
+import org.junit.Assert.assertFalse
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
 import org.junit.Rule
@@ -38,6 +40,37 @@ class UnlockCancellingTest {
         rule.onNodeWithTag("unlock_recovery_cancelling").assertExists()
         rule.onNodeWithText("Canceling the recovery…").assertExists()
         rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
+    }
+
+    /** A cancel refused for its PIN: the keypad shows under the recovery card, with its wait. */
+    @Test
+    fun aCancelRefusedForItsPinShowsTheKeypadWithItsWait() {
+        rule.setContent {
+            UnlockContent(pending.copy(phoneSecret = false, pin = "", cancelPinAsked = true, waitSeconds = 30), actions)
+        }
+        rule.onNodeWithTag("recovery_pending").assertExists()
+        rule.onNodeWithTag("unlock_pin").assertExists()
+        rule.onNodeWithText("Cancel the recovery and unlock").assertIsNotEnabled()
+    }
+
+    /** The keypad's Done does not send anything while a recovery is pending: only the cancel button cancels it. */
+    @Test
+    fun theKeypadsDoneSendsNothingWhileARecoveryIsPending() {
+        val called = mutableListOf<String>()
+        val recording = Proxy.newProxyInstance(UnlockActions::class.java.classLoader, arrayOf(UnlockActions::class.java)) { _, m, _ ->
+            called += m.name
+            null
+        } as UnlockActions
+        rule.setContent { UnlockContent(pending.copy(phoneSecret = false, pin = "11223344", cancelPinAsked = true), recording) }
+        runCatching { rule.onNodeWithTag("unlock_pin").performImeAction() }
+        assertFalse("submitted: $called", called.any { it == "submit" || it == "cancelRecoveryAndUnlock" })
+    }
+
+    /** Before any refusal, a pending recovery shows no keypad (the PIN typed for the unlock goes with the cancel). */
+    @Test
+    fun noKeypadBeforeACancelIsRefused() {
+        rule.setContent { UnlockContent(pending.copy(phoneSecret = false), actions) }
+        rule.onNodeWithTag("unlock_pin").assertDoesNotExist()
     }
 
     @Test
