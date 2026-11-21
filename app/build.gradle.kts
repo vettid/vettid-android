@@ -1142,6 +1142,12 @@ afterEvaluate {
 }
 
 dependencies {
+    constraints {
+        // guava reaches the app only through CameraX and media3 (33.3.1-android). Before 33.7.2 its CompactHashMap,
+        // CompactHashSet and MapMakerInternalMap allocate a size read from a Java-serialized stream unchecked
+        // (GHSA-xxph-c9ww-hj94). The app reads no Java-serialized data; the floor keeps a release clear of it anyway.
+        implementation(libs.guava) { because("GHSA-xxph-c9ww-hj94") }
+    }
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)
