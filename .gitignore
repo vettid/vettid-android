@@ -44,3 +44,6 @@ local/
 
 # Staging signing (app/build.gradle.kts reads it from ~/.vettid/, outside the repo)
 staging-signing.properties
+
+# Written by --write-locks; no settings configuration is locked (app/build.gradle.kts "Dependency locking").
+/settings-gradle.lockfile

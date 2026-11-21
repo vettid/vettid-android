@@ -25,3 +25,32 @@ subprojects {
         systemProperty("robolectric.dependency.dir", rootProject.layout.buildDirectory.dir("robolectric-jars").get().asFile.absolutePath)
     }
 }
+
+// The dependency scan's listing (.github/workflows/deps-scan.yml): with -PvettidScanAll=true every resolvable configuration
+// of every project is locked, and `lockAllForScan --write-locks` resolves them all, so their lockfiles name every test and
+// build dependency for osv-scanner to list. Only the scan's throwaway checkout does this: the committed lock is app's
+// release and staging runtime classpaths (app/build.gradle.kts).
+if (providers.gradleProperty("vettidScanAll").orNull == "true") {
+    allprojects {
+        configurations.configureEach {
+            if (isCanBeResolved) resolutionStrategy.activateDependencyLocking()
+        }
+        tasks.register("lockAllForScan") {
+            notCompatibleWithConfigurationCache("resolves every configuration at execution")
+            doLast {
+                // Gradle writes no lock for a configuration with an unresolved dependency: name each, so a gap in the
+                // listing shows in the job's log.
+                // A configuration whose resolution fails as a whole is named too, and the others are still resolved.
+                project.configurations.filter { it.isCanBeResolved }.forEach { c ->
+                    runCatching {
+                        c.incoming.resolutionResult.allDependencies
+                            .count { it is org.gradle.api.artifacts.result.UnresolvedDependencyResult }
+                    }.fold(
+                        onSuccess = { n -> if (n > 0) logger.warn("not listed: ${project.path} ${c.name} ($n unresolved)") },
+                        onFailure = { e -> logger.warn("not listed: ${project.path} ${c.name} (failed: ${e.javaClass.simpleName})") },
+                    )
+                }
+            }
+        }
+    }
+}
