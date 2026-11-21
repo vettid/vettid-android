@@ -33,8 +33,10 @@ internal fun List<CharArray>.allWipedAndSome(): Boolean = isNotEmpty() && all { 
 
 /** A vault for the screens: wallets as given, a 24-word phrase, and what was asked. */
 internal class FakeWallets : WalletOps {
-    val wallets = linkedMapOf<String, VaultWallet>()
-    val calls = mutableListOf<String>()
+    // Written on the IO dispatcher (vaultGuard): `calls` is polled by `eventually` on Dispatchers.Default, `wallets` read
+    // on the test thread.
+    val wallets: MutableMap<String, VaultWallet> = java.util.Collections.synchronizedMap(linkedMapOf())
+    val calls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
     var revealFails = false
     /** A vault error code for the reveal (e.g. `pin_required`), else none. */
     var revealCode: String? = null
@@ -65,7 +67,7 @@ internal class FakeWallets : WalletOps {
         calls += "list"
         if (unsupported) throw VaultOpException("wallet.list", "unsupported_type")
         if (listFails) throw VaultOpException("wallet.list", "internal")
-        return wallets.values.toList()
+        return synchronized(wallets) { wallets.values.toList() }
     }
 
     override suspend fun get(walletId: String) = wallets.getValue(walletId)
@@ -87,7 +89,7 @@ internal class FakeWallets : WalletOps {
     var pin = "123456"
 
     /** Every password and PIN array handed to this fake, by reference: the manager wipes them (N1). */
-    val handedSecrets = mutableListOf<CharArray>()
+    val handedSecrets: MutableList<CharArray> = java.util.concurrent.CopyOnWriteArrayList()
 
     override suspend fun create(name: String, network: String, password: CharArray, item: WalletImport?): VaultWallet {
         handedSecrets += password

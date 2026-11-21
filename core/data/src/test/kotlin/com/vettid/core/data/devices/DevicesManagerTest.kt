@@ -54,7 +54,8 @@ class DevicesManagerTest {
         var devices: JsonObject = JsonObject(emptyMap())
         var grantsAll: JsonObject = JsonObject(emptyMap())
         var grantsByAgent = mutableMapOf<String, JsonObject>()
-        val calls = mutableListOf<String>()
+        /** Appended on the IO dispatcher (vaultGuard) while `settle` reads it on the test thread: copy-on-write. */
+        val calls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
         var gate: CompletableDeferred<Unit>? = null
         var refuse = mutableMapOf<String, String>()
 
