@@ -1,5 +1,10 @@
 package com.vettid.core.data.feed
 
+import com.vettid.core.data.social.AskBatching
+import com.vettid.core.vault.FeedItem
+import java.time.Duration
+import java.time.Instant
+
 /**
  * The feed item of an ask (ANDROID-PLAN 0.1.23, §9 question 2): deciding it in Approvals marks its item read, matched
  * by kind and `ref` (VAULT-MESSAGING §10.9 names each kind's `ref`).
@@ -45,4 +50,25 @@ object FeedAsks {
     const val MESSAGE_RECEIVED = "message.received"
 
     private val DEVICE_KINDS = setOf("approval.pending", "device.session.pending")
+
+    /**
+     * The batch item of [listed] that stands for [b] ([FeedManager.askWithdrawn]): the ask-kind item of the connection whose
+     * `ref` is one of the batch's asks; if the first ask of the batch is gone already, the newest unread batch item of the
+     * connection that began within the window before the ask was created, by the vault's own times where the app has the
+     * ask's (else the phone's).
+     */
+    fun batchItem(listed: Collection<FeedItem>, b: WithdrawnBatch): FeedItem? {
+        val items = listed.filter { it.connectionId == b.connectionId && it.kind in ASK_KINDS }
+        items.firstOrNull { approvalKey(it.kind, it.ref) in b.askKeys }?.let { return it }
+        val at = b.askTs ?: b.receivedAt
+        val from = at.minus(BATCH_WINDOW).minus(BATCH_SKEW)
+        val to = at.plus(BATCH_SKEW)
+        return items.filter { it.count != null && it.status == FeedManager.STATUS_ACTIVE }
+            .mapNotNull { i -> runCatching { Instant.parse(i.at) }.getOrNull()?.let { i to it } }
+            .filter { (_, t) -> !t.isBefore(from) && !t.isAfter(to) }
+            .maxByOrNull { it.second }?.first
+    }
+
+    private val BATCH_WINDOW: Duration = AskBatching.WINDOW
+    private val BATCH_SKEW: Duration = Duration.ofMinutes(2)
 }
