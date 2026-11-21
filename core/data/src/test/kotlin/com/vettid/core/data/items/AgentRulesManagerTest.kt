@@ -39,7 +39,8 @@ class AgentRulesManagerTest {
 
     /** The vault side and the window, in one log so that the order of the calls can be asserted. */
     private class Log {
-        val events = mutableListOf<String>()
+        /** Appended on the IO dispatcher (vaultGuard) while a test polls it on Dispatchers.Default: copy-on-write. */
+        val events: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
         var windowUntil: Instant? = null
         var unlockFailure: VaultFailure? = null
         var setFailure: Throwable? = null
@@ -47,8 +48,8 @@ class AgentRulesManagerTest {
         var setGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var unlockGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var unlockThrows: Throwable? = null
-        val bodies = mutableListOf<JsonObject>()
-        val passwords = mutableListOf<String>()
+        val bodies: MutableList<JsonObject> = java.util.concurrent.CopyOnWriteArrayList()
+        val passwords: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
     }
 
     private val log = Log()

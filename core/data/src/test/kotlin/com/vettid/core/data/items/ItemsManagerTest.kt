@@ -31,7 +31,8 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ItemsManagerTest {
     private class Ops : ItemsOps {
-        val calls = mutableListOf<String>()
+        /** Appended on the IO dispatcher (vaultGuard) while a test counts it on another thread: copy-on-write. */
+        val calls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
         var pages = ArrayDeque<ItemPage>()
         var items = mutableMapOf<String, Item>()
         var revealed = mutableMapOf<String, Item>()

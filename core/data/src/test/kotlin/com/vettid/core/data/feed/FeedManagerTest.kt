@@ -36,10 +36,11 @@ class FeedManagerTest {
     private val now = Instant.parse("2026-10-09T12:00:00Z")
 
     private class Ops : FeedOps {
-        val lists = mutableListOf<Long>()
+        // Written on the IO dispatcher (vaultGuard) while tests read them on the test thread: copy-on-write.
+        val lists: MutableList<Long> = java.util.concurrent.CopyOnWriteArrayList()
         val pages = ArrayDeque<FeedPage>()
-        val updates = mutableListOf<Pair<String, String>>()
-        val deletes = mutableListOf<String>()
+        val updates: MutableList<Pair<String, String>> = java.util.concurrent.CopyOnWriteArrayList()
+        val deletes: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
         val known = mutableMapOf<String, FeedItem>()
         var counter = 100L
         var gate: CompletableDeferred<Unit>? = null
@@ -555,19 +556,26 @@ class FeedManagerTest {
         m.catchUp() // fails: behind
         // Without moving the clock, so that the one scheduled catch-up does not run first.
         val settledNow = { done: () -> Boolean ->
-            repeat(SETTLE_TRIES) {
-                runCurrent()
-                if (done()) return@repeat
-                Thread.sleep(SETTLE_MS)
+            var ok = false
+            run tries@{
+                repeat(SETTLE_TRIES) {
+                    runCurrent()
+                    if (done()) {
+                        ok = true
+                        return@tries
+                    }
+                    Thread.sleep(SETTLE_MS)
+                }
             }
+            if (!ok) fail("not settled")
         }
-        settledNow { ops.failLists == 0 && synchronized(ops) { ops.lists.size } >= 2 }
+        // The failure is applied (no read under way), not only thrown: an event that came while the read was still under
+        // way would leave its release to that read's end, which, failed, releases nothing.
+        settledNow { m.readsUnderWay == 0 && synchronized(ops) { ops.failLists == 0 && ops.lists.size >= 2 } }
         // i1 was read on another device meanwhile; a live event comes.
         ops.pages += FeedPage(listOf(item("i1", 3, status = "read")), 3)
         m.onEvent(event(item("i4", 4)))
         settledNow { m.seq >= 3L }
-        runCurrent()
-        assertTrue(m.seq >= 3L)
         assertFalse("read elsewhere: $arrived", arrived.any { it.itemId == "i1" })
     }
 
