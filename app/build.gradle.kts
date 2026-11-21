@@ -927,6 +927,20 @@ abstract class CallsTestCheck : DefaultTask() {
  */
 val walletInRelease = providers.gradleProperty("vettidWalletInRelease").orNull == "true"
 
+/*
+ * Dependency locking: the runtime classpaths of what reaches phones (both distributions' releases, and staging, which carries
+ * the wallet) are locked in app/gradle.lockfile, which the dependency scan reads (.github/workflows/deps-scan.yml) and which
+ * pins those builds. A dependency change updates it (one command, which writes all three):
+ *   ./gradlew :app:dependencies --write-locks
+ * Not in the wallet-in-release check build: its classpath (the wallet linked in a release) is never shipped.
+ */
+val lockedClasspaths = setOf("fullReleaseRuntimeClasspath", "fossReleaseRuntimeClasspath", "fullStagingRuntimeClasspath")
+if (!walletInRelease) {
+    configurations.matching { it.name in lockedClasspaths }.configureEach {
+        resolutionStrategy.activateDependencyLocking()
+    }
+}
+
 /**
  * Calls in every build (owner decision 2026-11-14): a release dex must reach the call code of :core:crypto and
  * :core:vault, so it must keep these strings (they are in that code and nowhere else, and R8 does not rename strings).
@@ -1128,6 +1142,12 @@ afterEvaluate {
 }
 
 dependencies {
+    constraints {
+        // guava reaches the app only through CameraX and media3 (33.3.1-android). Before 33.7.2 its CompactHashMap,
+        // CompactHashSet and MapMakerInternalMap allocate a size read from a Java-serialized stream unchecked
+        // (GHSA-xxph-c9ww-hj94). The app reads no Java-serialized data; the floor keeps a release clear of it anyway.
+        implementation(libs.guava) { because("GHSA-xxph-c9ww-hj94") }
+    }
     implementation(projects.core.ui)
     implementation(projects.core.data)
     implementation(projects.core.notify)

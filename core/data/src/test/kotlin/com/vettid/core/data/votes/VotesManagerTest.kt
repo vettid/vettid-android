@@ -86,11 +86,12 @@ class VotesManagerTest {
         var list: JsonObject = JsonObject(emptyMap())
         var detail: JsonObject = JsonObject(emptyMap())
         var evidence: JsonObject = obj("""{"evidence":{"proposal":"AAAA","member":{"ballot":{"choice_id":"yes"}}}}""")
-        val calls = mutableListOf<String>()
-        val acks = mutableListOf<List<String>>()
-        val synced = mutableListOf<JsonObject>()
-        val blobs = mutableListOf<Int>()
-        val submitted = mutableListOf<JsonObject>()
+        val calls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
+        // Appended on the IO dispatcher (vaultGuard) while `eventually` reads them on Dispatchers.Default: copy-on-write.
+        val acks: MutableList<List<String>> = java.util.concurrent.CopyOnWriteArrayList()
+        val synced: MutableList<JsonObject> = java.util.concurrent.CopyOnWriteArrayList()
+        val blobs: MutableList<Int> = java.util.concurrent.CopyOnWriteArrayList()
+        val submitted: MutableList<JsonObject> = java.util.concurrent.CopyOnWriteArrayList()
         var refuse = mutableMapOf<String, String>()
         var castGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var submitAnswer: JsonObject = obj("""{"proposal_id":"$PID","check":{"state":"verified"}}""")
@@ -213,7 +214,7 @@ class VotesManagerTest {
 
     private class Window {
         var until: Instant? = null
-        val opened = mutableListOf<String>()
+        val opened: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
         var closed = 0
         var openFail: VaultFailure? = null
         var closeFail: Exception? = null
