@@ -115,9 +115,9 @@ interface FeedRepository {
  *   a later event or arrival waits behind them, so none overtakes them ([queuesBehind]); a push wake while the list is
  *   not loaded does not wait behind what only waits for the read (not held: no check held it), except a change of its
  *   own item as new or newer. Nothing is held while the owner check is due or held ([ownerGated]), and a released
- *   arrival is the feed's item as it is then, or nothing. A held
- *   event the open read covers notifies only if the vault sent it since it opened ([vaultOpened]) or it came from a push
- *   wake: the opening's backlog stays silent (ANDROID-PLAN §6.7).
+ *   arrival is the feed's item as it is then, or nothing. A held event the open read covers notifies only if the vault
+ *   sent it since it opened ([vaultOpened]) or it came from a push wake: the opening's backlog stays silent
+ *   (ANDROID-PLAN §6.7).
  */
 @Suppress("TooManyFunctions", "LargeClass") // One class: the feed's queues, reads and notifications share its lock.
 class FeedManager(
@@ -284,20 +284,24 @@ class FeedManager(
 
     /**
      * (Rule 3) An incremental read failed with something held (the feed loaded but behind), or any read failed with a
-     * push wake held: one catch-up after [RETRY_AFTER_MS], so what is held is not left waiting
-     * for the next trigger (or dropped by a lock) when none comes. Once per failure run: a second failure waits for a
-     * trigger, as before.
+     * push wake waiting in any of the queues (held, or a covered copy in [coveredWakes]): one catch-up after
+     * [RETRY_AFTER_MS], so what waits is not left waiting for the next trigger (or dropped by a lock) when none comes.
+     * Once per failure run: a second failure waits for a trigger, as before.
      */
     private fun retryOnce() {
         // For a read that left the feed loaded but behind (an incremental one), and for one that left it not loaded with a
-        // push wake held: no next event may come to start the read it waits for. Any other read that leaves the feed not
-        // loaded starts no read of its own; the next event starts one (ANDROID-PLAN 0.1.134, 0.1.136).
+        // push wake waiting (held, or a covered copy): no next event may come to start the read it waits for. Any other
+        // read that leaves the feed not loaded starts no read of its own; the next event starts one (ANDROID-PLAN 0.1.134,
+        // 0.1.136).
         if (retried || gated()) return
-        if (!synchronized(lock) { queuesBehind() && (loadState.value == ListLoad.LOADED || heldEvents.any { it.wake }) }) return
+        val due = synchronized(lock) {
+            queuesBehind() && (loadState.value == ListLoad.LOADED || heldEvents.any { it.wake }) || coveredWakes.isNotEmpty()
+        }
+        if (!due) return
         retried = true
         scope.launch {
             kotlinx.coroutines.delay(RETRY_AFTER_MS)
-            if (vaultOpen() && synchronized(lock) { queuesBehind() }) catchUp()
+            if (vaultOpen() && synchronized(lock) { queuesBehind() || coveredWakes.isNotEmpty() }) catchUp()
         }
     }
 
@@ -549,11 +553,12 @@ class FeedManager(
      */
     private fun waitsForTheRead(m: VaultMessage): Boolean {
         var dropped = false
+        val item = itemOf(m)
         val waits = synchronized(lock) {
             dropped = !vaultOpen() && loadState.value != ListLoad.LOADED
             (!dropped && loadState.value != ListLoad.LOADED).also { w ->
                 if (w) {
-                    heldEvents.addLast(HeldEvent(m, wake = false, forRead = true))
+                    heldEvents.addLast(HeldEvent(m, wake = false, forRead = true, item = item))
                     while (heldEvents.size > ARRIVAL_BUFFER) heldEvents.removeFirst()
                 }
             }
@@ -838,12 +843,15 @@ class FeedManager(
      * does.
      */
     private fun readEnded(ok: Boolean, ran: Boolean = true) {
+        // Counted out first: a push that comes from here on sees no read under way and starts one, and one that came before
+        // is in the queues retryOnce looks at.
+        val left = readsRunning.decrementAndGet()
         // A reservation given back unrun read nothing: what the last read said of the feed stands.
         if (ran) {
             behind = !ok
             if (ok) retried = false else retryOnce()
         }
-        if (readsRunning.decrementAndGet() > 0 || !ok) return
+        if (left > 0 || !ok) return
         val releasable = vaultOpen() && !held() && !gated() && loadState.value == ListLoad.LOADED
         if (releasable && synchronized(lock) { queuesBehind() || coveredWakes.isNotEmpty() }) releaseNow()
     }

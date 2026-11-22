@@ -2242,6 +2242,62 @@ class FeedManagerTest {
         assertEquals(emptyList<String>(), arrived)
     }
 
+    /** The same at the same change (`seq`): the push waits behind it too, judged with it. */
+    @Test
+    fun aPushWaitsBehindTheSameChangeOfItsItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("g3", 3, status = "read")), wake = false) // read on another device, at that change
+        m.replay(event(item("g3", 3)), wake = true)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /**
+     * An arrival that waited for the read, then held again by a release check: it is what the check held now, so a push
+     * that comes after the check, with the list not loaded, waits behind it.
+     */
+    @Test
+    fun anArrivalTheCheckHeldAgainIsWaitedFor() = runTest {
+        val ops = Ops()
+        var checking = false
+        val m = openedEarlier(ops, batchItem("b", 1, "r1", count = 3), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 2 }
+        m.replay(event(item("x3", 3)), wake = false) // waits for the read
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3")) // b, queued behind it: waits for the read too
+        checking = true
+        m.askWithdrawn(withdrawn(1, "auth:r1", "auth:r2")) // b again, now held by the check
+        checking = false
+        m.replay(event(item("g4", 4)), wake = true)
+        assertEquals("the push overtook what the check held", emptyList<String>(), arrived)
+    }
+
+    /**
+     * A push copy the opening already covered, kept while the list is not loaded, then the read fails: one catch-up is
+     * made, whose read judges the copy against the list (it notifies the item, active and listed).
+     */
+    @Test
+    fun aCoveredCopyIsRetriedOnceAfterAFailedRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 } // the read the push starts fails
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2) // the catch-up's answer
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // (settle runs the virtual clock past the catch-up's wait.)
+        settle { m.readsUnderWay == 0 && arrived.isNotEmpty() }
+        assertEquals(listOf("y2"), arrived)
+    }
+
     /** A push for a newer change of an item whose older change waits for the read is notified at once. */
     @Test
     fun aNewerPushIsNotHeldBehindAnOlderChangeOfItsItem() = runTest {
