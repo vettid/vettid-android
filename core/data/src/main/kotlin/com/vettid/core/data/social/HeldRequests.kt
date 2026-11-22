@@ -143,6 +143,17 @@ object HeldRequests {
     }
 
     /**
+     * Whether [a] and [b] ask the same thing (AA8: a listed approval is compared with the one shown). [HeldRequest.ItemUse]
+     * and [HeldRequest.ItemGet] are compared by what they hold, the others by value.
+     */
+    fun same(a: HeldRequest?, b: HeldRequest?): Boolean = when {
+        a is HeldRequest.ItemUse && b is HeldRequest.ItemUse ->
+            a.itemId == b.itemId && a.fieldId == b.fieldId && a.data.contentEquals(b.data)
+        a is HeldRequest.ItemGet && b is HeldRequest.ItemGet -> a.itemId == b.itemId && a.fieldIds == b.fieldIds
+        else -> a == b
+    }
+
+    /**
      * Whether the item cache can name everything [h] is about: the item for an `item.use` or `item.get`, the field of an
      * `item.use`, every field of an `item.get`. Anything else is not approved (nothing is shown unseen).
      */

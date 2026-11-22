@@ -685,7 +685,7 @@ class SocialManager internal constructor(
         val differ = listed.mapNotNull { e ->
             val old = shown[e.key] ?: return@mapNotNull null
             val now = ApprovalParser.parse(e.type, e.body, now(), e.raw) as? Approval.DeviceRequest ?: return@mapNotNull e.key
-            e.key.takeIf { old.held != now.held || old.role != now.role || old.requestType != now.requestType }
+            e.key.takeIf { !HeldRequests.same(old.held, now.held) || old.role != now.role || old.requestType != now.requestType }
         }
         if (differ.isNotEmpty()) mismatchFlow.update { it + differ }
     }
