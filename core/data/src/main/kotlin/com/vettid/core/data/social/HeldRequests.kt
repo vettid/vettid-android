@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.crypto.json.JsonObject as StrictObject
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
@@ -30,9 +31,46 @@ sealed interface HeldRequest {
     /** `agent.request{op: "catalog"}`: the names and field labels of the items the agent may use. */
     data object Catalog : HeldRequest
 
-    /** `item.run` and `item.proxy` (AA8): shown by a later version of the app, so deny-only until then (decision 15). */
-    class Later(val itemId: String?) : HeldRequest {
-        override fun toString(): String = "Later"
+    /**
+     * `agent.request{op: "item.run"}` as ANDROID-PLAN 0.1.138 AA8 shows it, read strictly from `approval.pending` ("Fail
+     * closed"; [AgentApprovals]). Everything is the vault's (`body`, `flags`, `previous_*`, `replaces`), never the app's copy
+     * of the item's settings. [env] keeps the body's order. [cwdUnflagged]: a `cwd` without `member_folder`, which a vault
+     * that carries `run.folders` never sends (AA8: judged against the item's settings before it may be approved).
+     */
+    data class ItemRun(
+        val itemId: String,
+        val fieldId: String,
+        val program: String,
+        val sha256: String,
+        val argv: List<String>,
+        val cwd: String?,
+        val how: SecretHow,
+        val name: String?,
+        val env: List<Pair<String, String>>,
+        val flags: Set<RunFlag>,
+        val previousSha256: String?,
+        val previousPath: String?,
+        val replaces: String?,
+    ) : HeldRequest {
+        val cwdUnflagged: Boolean get() = cwd != null
+
+        override fun toString(): String = "ItemRun"
+    }
+
+    /**
+     * `agent.request{op: "item.proxy"}` (AA8): [host], [header] and [prefix] from `approval.pending`'s `proxy` (the vault's
+     * note, never the app's copy), [seconds] from the body (900 when absent).
+     */
+    data class ItemProxy(
+        val itemId: String,
+        val fieldId: String,
+        val host: String,
+        val header: String,
+        val prefix: String,
+        val seconds: Int,
+        val replaces: String?,
+    ) : HeldRequest {
+        override fun toString(): String = "ItemProxy"
     }
 
     /** A desktop's step-up request (decision 9): deny-only. */
@@ -41,8 +79,39 @@ sealed interface HeldRequest {
     /** Any other type or op, or a body that does not read: deny-only. */
     data object Unshown : HeldRequest
 
-    /** Whether the request can be approved here: only what the app shows in full. */
+    /**
+     * Whether the request can be approved here: only what the app shows in full. A run and a proxy are read (AA8's rules)
+     * but not yet approved: their screens come with the next step, so they stay deny-only until then.
+     */
     val approvable: Boolean get() = this is ItemUse || this is ItemGet || this is Catalog
+}
+
+/** How a run gets the secret (`body.how`). */
+enum class SecretHow(val wire: String) {
+    ENV("env"),
+    STDIN("stdin"),
+    FILE("file"),
+    ;
+
+    companion object {
+        fun of(w: String?): SecretHow? = entries.firstOrNull { it.wire == w }
+    }
+}
+
+/** A run's `flags` (VAULT-MESSAGING §10.11 "The approval"). */
+enum class RunFlag(val wire: String) {
+    SHELL("shell"),
+    INLINE_CODE("inline_code"),
+    UNBOUND_PROGRAM("unbound_program"),
+    PROGRAM_UNRECORDED("program_unrecorded"),
+    PROGRAM_CHANGED("program_changed"),
+    MEMBER_FOLDER("member_folder"),
+    MEMBER_FILES("member_files"),
+    ;
+
+    companion object {
+        fun of(w: String): RunFlag? = entries.firstOrNull { it.wire == w }
+    }
 }
 
 /** Reads a held request from the event's `role`, `type` and `body` (§6.8: `body` is the held request's body). */
@@ -53,17 +122,24 @@ object HeldRequests {
     /** The most field ids an `item.get` is shown with. */
     const val MAX_FIELDS = 64
 
-    @Suppress("ReturnCount")
-    fun of(role: String?, type: String?, body: JsonObject?): HeldRequest {
-        if (role == "desktop") return HeldRequest.DesktopStepUp
-        if (role != "agent" || type != "agent.request" || body == null) return HeldRequest.Unshown
-        return when (VaultJson.str(body, "op")) {
-            "item.use" -> itemUse(body)
-            "item.get" -> itemGet(body)
-            "catalog" -> HeldRequest.Catalog
-            "item.run", "item.proxy" -> HeldRequest.Later(VaultJson.str(body, "item_id")?.takeIf { it.isNotEmpty() })
-            else -> HeldRequest.Unshown
-        }
+    /**
+     * [pending] is the whole `approval.pending` (or its `pending.list` entry) read strictly, or null when it did not read so
+     * (a duplicate member) or its source text is not known: an agent's `item.run`, `item.proxy` and `item.get` are then
+     * deny-only (AA8 "Fail closed"; VAULT-MESSAGING 0.93.2 §6.8 step 1). The other ops follow §10.1 and read [body].
+     */
+    fun of(role: String?, type: String?, body: JsonObject?, pending: StrictObject? = null): HeldRequest = when {
+        role == "desktop" -> HeldRequest.DesktopStepUp
+        role != "agent" || type != "agent.request" || body == null -> HeldRequest.Unshown
+        else -> agentRequest(body, pending)
+    }
+
+    private fun agentRequest(body: JsonObject, pending: StrictObject?): HeldRequest = when (VaultJson.str(body, "op")) {
+        "item.use" -> itemUse(body)
+        "item.get" -> if (pending != null && AgentApprovals.getShown(pending)) itemGet(body) else HeldRequest.Unshown
+        "catalog" -> HeldRequest.Catalog
+        "item.run" -> pending?.let { AgentApprovals.run(it) } ?: HeldRequest.Unshown
+        "item.proxy" -> pending?.let { AgentApprovals.proxy(it) } ?: HeldRequest.Unshown
+        else -> HeldRequest.Unshown
     }
 
     /**
@@ -79,6 +155,8 @@ object HeldRequests {
         return when (h) {
             is HeldRequest.ItemUse -> fields(h.itemId)?.contains(h.fieldId) == true
             is HeldRequest.ItemGet -> fields(h.itemId)?.let { have -> h.fieldIds?.all { it in have } ?: true } == true
+            is HeldRequest.ItemRun -> fields(h.itemId)?.contains(h.fieldId) == true
+            is HeldRequest.ItemProxy -> fields(h.itemId)?.contains(h.fieldId) == true
             HeldRequest.Catalog -> true
             else -> false
         }

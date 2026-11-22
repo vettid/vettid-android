@@ -160,6 +160,32 @@ class SocialManager internal constructor(
     private val pages = Mutex()
     private val storedFlow = MutableStateFlow(local.events)
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
+
+    /** Approvals a `pending.list` read showed otherwise than their event (AA8): deny only. Memory; cleared with the lists. */
+    private val mismatchFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Approvals a newer one `replaces` (§6.8 step 4): gone, also when a late copy arrives. Memory; cleared with the lists. */
+    private val replacedFlow = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * For [a] about to be stored: null when it was itself replaced (it is not stored); else the key of the approval it
+     * replaces, now remembered as gone, or "" when it replaces none. Under [localLock].
+     */
+    private fun takeReplaced(a: Approval): String? = when (a.key) {
+        in replacedFlow.value -> null
+        else -> replacedKey(a)?.also { r -> replacedFlow.update { it + r } } ?: ""
+    }
+
+    /** The approvals [entries] replace, remembered as gone (a list read). Under [localLock]. */
+    private fun noteReplaced(entries: List<PendingAsks.Entry>) {
+        val gone = entries.mapNotNull { e -> ApprovalParser.parse(e.type, e.body, now(), e.raw)?.let(::replacedKey) }
+        if (gone.isNotEmpty()) replacedFlow.update { it + gone }
+    }
+
+    /** The key of the approval [a] replaces, if it is a run or a proxy referred again. */
+    private fun replacedKey(a: Approval): String? = (a as? Approval.DeviceRequest)?.let { d ->
+        ((d.held as? HeldRequest.ItemRun)?.replaces ?: (d.held as? HeldRequest.ItemProxy)?.replaces)?.let { d.copy(id = it).key }
+    }
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
@@ -244,15 +270,28 @@ class SocialManager internal constructor(
     }
 
     private val listedApprovals: StateFlow<List<Approval>> =
-        combine(storedFlow, listedFlow, requestsFlow, connectionsFlow, nowFlow) { stored, listed, requests, cs, now ->
-            merge(stored, listed + requests, cs, now)
-        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        combine(
+            combine(storedFlow, listedFlow, requestsFlow, connectionsFlow, nowFlow) { stored, listed, requests, cs, now ->
+                merge(stored, listed + requests, cs, now)
+            },
+            mismatchFlow,
+            replacedFlow,
+        ) { l, differ, gone -> denyDiffering(l, differ).filterNot { it.key in gone } }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** AA8: an approval a `pending.list` read showed otherwise is deny only. */
+    private fun denyDiffering(l: List<Approval>, differ: Set<String>): List<Approval> =
+        if (differ.isEmpty()) {
+            l
+        } else {
+            l.map { a -> if (a is Approval.DeviceRequest && a.key in differ) a.copy(held = HeldRequest.Unshown) else a }
+        }
 
     /**
      * The asks as the vault's lists and events have them now, read at once (not through the flows): no entry made from a
      * feed item alone, so what it holds is what the vault said is waiting (owner decision a, 2026-11-15).
      */
-    internal fun listedNow(): List<Approval> = merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now())
+    internal fun listedNow(): List<Approval> =
+        denyDiffering(merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now()), mismatchFlow.value)
 
     /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
     private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
@@ -306,8 +345,9 @@ class SocialManager internal constructor(
 
     // --- local state (memory only; dropped with the open vault) ---
 
+    /** [raw]: [body] is the vault's own text, so it can be read strictly again (AA8); else a re-encoding, never strict. */
     @Serializable
-    private data class StoredEvent(val type: String, val body: String, val at: Long)
+    private data class StoredEvent(val type: String, val body: String, val at: Long, val raw: Boolean = false)
 
     /** The name a request showed (0.10.5: kept until a peer's decline can name it). */
     private data class StoredName(val name: String, val at: Long)
@@ -386,6 +426,8 @@ class SocialManager internal constructor(
             // "Not now" answers are memory only and not kept while held (the list is read again after the check).
             dismissedLocationFlow.value = emptySet()
             listedFlow.value = emptyList()
+            mismatchFlow.value = emptySet()
+            replacedFlow.value = emptySet()
             requestsFlow.value = emptyList()
         }
         endsFlow.value = emptyMap()
@@ -405,6 +447,8 @@ class SocialManager internal constructor(
         connectionsFlow.value = emptyList()
         authFlow.value = emptyMap()
         listedFlow.value = emptyList()
+        mismatchFlow.value = emptySet()
+        replacedFlow.value = emptySet()
         requestsFlow.value = emptyList()
         messagesFlow.value = emptyMap()
         loadedFlow.value = emptySet()
@@ -503,11 +547,12 @@ class SocialManager internal constructor(
             in ApprovalParser.TYPES -> {
                 // §10.4.2: a creation event not later than the last list is already reflected by it. Decided inside the
                 // store's edit, so that no list merge falls between the decision and the write.
-                val p = if (m.type in PendingAsks.LISTED_TYPES) ApprovalParser.parse(m.type, b, now()) else null
+                val raw = rawText(m.inner.body)
+                val p = if (m.type in PendingAsks.LISTED_TYPES) ApprovalParser.parse(m.type, b, now(), raw) else null
                 val admit = p?.let { a ->
                     { pending.acceptCreate(a.key, m.ts, (a as? Approval.DeviceRequest)?.deviceId, m.type == PendingAsks.SESSION) }
                 }
-                store(m.type, b, admit, m.ts)
+                store(m.type, b, admit, m.ts, raw = raw)
             }
             "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId) }
             "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId) }
@@ -547,6 +592,7 @@ class SocialManager internal constructor(
      * Keeps an event's approval. [readEpoch] and [readHold] are the epochs a caller took before the vault read the body came
      * from (`loadCriticalUse`); an event takes them where it came in. A lock or a hold since then keeps nothing of it.
      */
+    @Suppress("CyclomaticComplexMethod") // each check is one rule of what an event may add, in the order they apply
     private suspend fun store(
         type: String,
         body: JsonObject,
@@ -554,11 +600,13 @@ class SocialManager internal constructor(
         ts: Instant? = null,
         readEpoch: Int? = null,
         readHold: Int? = null,
+        raw: String? = null,
     ) {
-        val parsed = ApprovalParser.parse(type, body, now()) ?: return
+        val parsed = ApprovalParser.parse(type, body, now(), raw) ?: return
         val (epoch, hold) = epochsAt(readEpoch, readHold)
         val at = now().toEpochMilli()
-        val text = VaultJson.json.encodeToString(JsonObject.serializer(), body)
+        // An approval is kept as the vault wrote it, so a later reading is as strict as the first (AA8 "Fail closed").
+        val text = raw ?: VaultJson.json.encodeToString(JsonObject.serializer(), body)
         var kept = false
         edit { l ->
             if (stale(epoch, hold)) return@edit l // taken in before a lock or a hold: nothing of it stays
@@ -569,13 +617,18 @@ class SocialManager internal constructor(
             val older = sessionsOfSameDevice(l.events, parsed)
             if (ts != null && older.any { (k, e) -> (pending.createdTs(k) ?: Instant.ofEpochMilli(e.at)).isAfter(ts) }) return@edit l
             if (admit != null && !admit()) return@edit l
-            val others = l.events.filterNot { e -> keyOf(e) == parsed.key || older.any { (_, o) -> o === e } }
+            // A request referred again (§6.8 step 4): the approval it replaces goes, and never comes back.
+            val replaced = takeReplaced(parsed) ?: return@edit l
+            val others = l.events.filterNot { e ->
+                keyOf(e).let { k -> k == parsed.key || k == replaced } || older.any { (_, o) -> o === e }
+            }
             val merged = if (parsed is Approval.ShareDecision) mergeShare(l.events, parsed, body) else text
             kept = true
-            l.copy(events = others + StoredEvent(type, merged, at))
+            l.copy(events = others + StoredEvent(type, merged, at, raw = raw != null && merged === text))
         }
         // A batch the edit dropped as stale is not added to the listed question either.
         if (kept && parsed is Approval.ShareDecision) addBatch(parsed)
+        if (kept) replacedKey(parsed)?.let(::closeFeedKey)
     }
 
     /**
@@ -610,7 +663,32 @@ class SocialManager internal constructor(
     }
 
     private fun parsed(e: StoredEvent): Approval? =
-        parseBody(e.body)?.let { ApprovalParser.parse(e.type, it, Instant.ofEpochMilli(e.at)) }
+        parseBody(e.body)?.let { ApprovalParser.parse(e.type, it, Instant.ofEpochMilli(e.at), e.body.takeIf { e.raw }) }
+
+    /** [b] as text when it is strictly valid UTF-8, else null (it is then not read strictly at all). */
+    @Suppress("SwallowedException")
+    private fun rawText(b: ByteArray): String? = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(java.nio.ByteBuffer.wrap(b)).toString()
+    } catch (_: java.nio.charset.CharacterCodingException) {
+        null
+    }
+
+    /**
+     * AA8: an approval whose `pending.list` entry reads otherwise than the event shown for the same `approval_id` (what it
+     * asks, its flags, `previous_*`, `replaces` or `proxy`) is deny only, while the vault holds it. Under [localLock].
+     */
+    private fun noteMismatches(held: List<StoredEvent>, listed: List<PendingAsks.Entry>) {
+        val shown = held.mapNotNull { parsed(it) as? Approval.DeviceRequest }.associateBy { it.key }
+        val differ = listed.mapNotNull { e ->
+            val old = shown[e.key] ?: return@mapNotNull null
+            val now = ApprovalParser.parse(e.type, e.body, now(), e.raw) as? Approval.DeviceRequest ?: return@mapNotNull e.key
+            e.key.takeIf { old.held != now.held || old.role != now.role || old.requestType != now.requestType }
+        }
+        if (differ.isNotEmpty()) mismatchFlow.update { it + differ }
+    }
 
     private fun keyOf(e: StoredEvent): String? = parsed(e)?.key
 
@@ -1590,7 +1668,7 @@ class SocialManager internal constructor(
         try {
             val list = readWhole(page) ?: readWhole(page)
                 ?: throw VaultFailure(FailureKind.OTHER, "list_incomplete")
-            if (takeInPending(ticket, list.ts, list.asks) && pending.current(ticket)) pendingFailureFlow.value = null
+            if (takeInPending(ticket, list.ts, list.asks, list.rawBodies) && pending.current(ticket)) pendingFailureFlow.value = null
         } catch (e: VaultFailure) {
             // A read that is no longer current (a lock, or a later-started read merged) does not touch the notice.
             if (pending.current(ticket)) pendingFailureFlow.value = e
@@ -1602,15 +1680,17 @@ class SocialManager internal constructor(
     private suspend fun readWhole(page: suspend (after: String?) -> PendingPage): PendingPage? {
         val first = page(null)
         val asks = first.asks.toMutableList()
+        val raws = first.rawBodies.toMutableList()
         val seen = mutableSetOf<String>()
         var next = first.next
         while (next != null) {
             if (!seen.add(next) || seen.size > MAX_PENDING_PAGES) return null
             val p = page(next)
             asks += p.asks
+            raws += p.rawBodies
             next = p.next
         }
-        return PendingPage(asks, null, first.ts)
+        return PendingPage(asks, null, first.ts, raws)
     }
 
     /** Reads `pending.list` with [a]; a failure is noted and thrown. */
@@ -1625,12 +1705,14 @@ class SocialManager internal constructor(
         runCatching { readPending(vaultGuard { api() }) }
     }
 
-    private suspend fun takeInPending(ticket: Long, ts: Instant, asks: List<JsonObject>): Boolean {
-        val listed = asks.mapNotNull { a ->
-            val type = PendingAsks.TYPES[VaultJson.str(a, "kind")] ?: return@mapNotNull null // action, location, unknown: skipped
-            val body = a["body"] as? JsonObject ?: return@mapNotNull null
-            val p = ApprovalParser.parse(type, body, now()) ?: return@mapNotNull null
-            PendingAsks.Entry(type, body, p.key, (p as? Approval.DeviceRequest)?.deviceId)
+    @Suppress("CyclomaticComplexMethod") // the merge's steps under one hold of the lock, each a rule of §10.4.2 or AA8
+    private suspend fun takeInPending(ticket: Long, ts: Instant, asks: List<JsonObject>, raws: List<String?>): Boolean {
+        val listed = asks.mapIndexedNotNull { i, a ->
+            val type = PendingAsks.TYPES[VaultJson.str(a, "kind")] ?: return@mapIndexedNotNull null // action, location, unknown: skipped
+            val body = a["body"] as? JsonObject ?: return@mapIndexedNotNull null
+            val raw = raws.getOrNull(i)
+            val p = ApprovalParser.parse(type, body, now(), raw) ?: return@mapIndexedNotNull null
+            PendingAsks.Entry(type, body, p.key, (p as? Approval.DeviceRequest)?.deviceId, raw)
         }.distinctBy { it.key }
         var merged = false
         // The merge and its snapshot under one hold of [localLock]: no other read's merge, and no clear, comes between.
@@ -1646,9 +1728,13 @@ class SocialManager internal constructor(
                 }
                 val stillThere = kept.mapNotNull { keyOf(it) }.toSet()
                 val firstSeen = gone.mapNotNull { e -> keyOf(e)?.let { it to e.at } }.toMap()
+                // AA8: a listed approval that reads otherwise than the one shown for it makes it deny only, and one
+                // referred again replaces the approval it names.
+                noteMismatches(l.events, plan.entries)
+                noteReplaced(plan.entries)
                 l.copy(
                     events = kept + plan.entries.filter { it.key !in stillThere }
-                        .map { StoredEvent(it.type, enc(it.body), firstSeen[it.key] ?: at) },
+                        .map { StoredEvent(it.type, it.raw ?: enc(it.body), firstSeen[it.key] ?: at, raw = it.raw != null) },
                 )
             }
             if (merged) {
@@ -1915,7 +2001,7 @@ class SocialManager internal constructor(
     }
 
     private fun find(key: String): Approval? = approvals.value.firstOrNull { it.key == key }
-        ?: storedFlow.value.mapNotNull(::parsed).firstOrNull { it.key == key }
+        ?: denyDiffering(storedFlow.value.mapNotNull(::parsed), mismatchFlow.value).firstOrNull { it.key == key }
 
     private fun noteNotFound(key: String) = synchronized(notFoundKeys) {
         notFoundKeys += key

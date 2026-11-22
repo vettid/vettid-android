@@ -285,7 +285,7 @@ class DeviceApprovalsViewModelTest {
     @Test
     fun everythingTheAppCannotShowIsDenyOnly() = runTest {
         val unapprovable = listOf(
-            heldAsk(HeldRequest.Later("i1")),
+            heldAsk(heldRun("i1")),
             heldAsk(HeldRequest.DesktopStepUp),
             heldAsk(HeldRequest.Unshown),
             heldAsk(null),

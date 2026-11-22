@@ -86,8 +86,8 @@ class DeviceAsksTest {
     fun theRestIsDenyOnlyOrTheCatalog() {
         assertSame(HeldShow.Catalog, DeviceAsks.show(held(HeldRequest.Catalog), items))
         assertTrue(DeviceAsks.show(held(HeldRequest.Catalog), items).approvable)
-        assertEquals(HeldShow.Later("Bank PIN"), DeviceAsks.show(held(HeldRequest.Later("i1")), items))
-        assertEquals(HeldShow.Later(null), DeviceAsks.show(held(HeldRequest.Later("gone")), items))
+        assertEquals(HeldShow.Later("Bank PIN"), DeviceAsks.show(held(heldRun("i1")), items))
+        assertEquals(HeldShow.Later(null), DeviceAsks.show(held(heldRun("gone")), items))
         assertSame(HeldShow.Desktop, DeviceAsks.show(held(HeldRequest.DesktopStepUp), items))
         assertSame(HeldShow.Other, DeviceAsks.show(held(HeldRequest.Unshown), items))
         assertSame(HeldShow.Other, DeviceAsks.show(held(null), items))

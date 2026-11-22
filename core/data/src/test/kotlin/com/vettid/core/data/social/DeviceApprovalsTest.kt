@@ -649,4 +649,81 @@ class DeviceApprovalsTest {
         // The feed item is still there (a new unlock re-reads the feed); the ask is shown again until the list says.
         assertEquals(listOf("device:approval.pending:h1"), m.keys())
     }
+
+    // --- AA8: runs and proxies are read strictly, from the vault's own text ---
+
+    private val sha = "1a2b3c4d5e6f7a8b".repeat(4)
+    private fun runBody(argv: String = """["git","status"]""") =
+        """{"op":"item.run","item_id":"i1","field_id":"f1","program":"/usr/bin/git","sha256":"$sha","argv":$argv,"how":"env","name":"GH_TOKEN"}"""
+
+    private fun heldWith(id: String, body: String, top: String = "") =
+        """{"approval_id":"$id","device_id":"A","role":"agent","name":"Bot","type":"agent.request","body":$body,"exp":"2026-11-02T12:05:00.000Z"$top}"""
+
+    /** One `pending.list` page of approvals, each with its source text as a strict read gives it. */
+    private fun listed(vararg bodies: String) = PendingPage(
+        bodies.map { VaultJson.parseObject("""{"kind":"approval","body":$it}""".toByteArray()) },
+        null,
+        now,
+        bodies.toList(),
+    )
+
+    @Test
+    fun aRunEventIsReadStrictlyAndKeptAsTheVaultWroteIt() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        // A duplicate member: the lenient reading would keep the last one and look fine.
+        m.onEvent(event("approval.pending", heldWith("h2", runBody().replace(""""how":"env"""", """"how":"stdin","how":"env""""))))
+        runCurrent()
+        val run = req(m, "device:approval.pending:h1").held as HeldRequest.ItemRun
+        assertEquals(listOf("git", "status"), run.argv)
+        assertFalse("not approvable before AA8's screens", run.approvable)
+        // The approvals are made again from what was stored: still strict, so still deny only.
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h2").held)
+    }
+
+    @Test
+    fun aListedApprovalThatDiffersFromItsEventIsDenyOnly() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        m.onEvent(event("approval.pending", heldWith("h2", runBody())))
+        runCurrent()
+        m.refreshPendingFrom { listed(heldWith("h1", runBody()), heldWith("h2", runBody("""["git","push","--force"]"""))) }
+        runCurrent()
+        assertTrue("the same: still read", req(m, "device:approval.pending:h1").held is HeldRequest.ItemRun)
+        assertEquals("another argv: deny only", HeldRequest.Unshown, req(m, "device:approval.pending:h2").held)
+        // A lock forgets it with the lists.
+        m.forgetPending()
+        runCurrent()
+        m.onEvent(event("approval.pending", heldWith("h2", runBody())))
+        runCurrent()
+        assertTrue(req(m, "device:approval.pending:h2").held is HeldRequest.ItemRun)
+    }
+
+    @Test
+    fun aListedApprovalWithADuplicateIsDenyOnly() = runTest {
+        val m = manager()
+        val dup = heldWith("h1", runBody().replace(""""how":"env"""", """"how":"stdin","how":"env""""))
+        m.refreshPendingFrom { PendingPage(listed(dup).asks, null, now, listOf(null)) }
+        runCurrent()
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h1").held)
+    }
+
+    @Test
+    fun aRunReferredAgainReplacesTheOneItNamesForGood() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        runCurrent()
+        m.onEvent(event("approval.pending", heldWith("h2", runBody(), ""","replaces":"h1","flags":["program_unrecorded"]""")))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h2"), m.keys())
+        assertEquals("h1", (req(m, "device:approval.pending:h2").held as HeldRequest.ItemRun).replaces)
+        // A late copy of the old one does not bring it back.
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h2"), m.keys())
+        // Nor does a list that still has it, while the new one replaces it there too.
+        m.refreshPendingFrom { listed(heldWith("h1", runBody()), heldWith("h3", runBody(), ""","replaces":"h2"""")) }
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h3"), m.keys())
+    }
 }

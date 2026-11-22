@@ -499,6 +499,13 @@ object ScreenCatalog {
         "device.session.pending", "s2", if (fromFeed) null else "Build bot", if (fromFeed) null else "agent", null, t0, t0.plusSeconds(500),
         deviceId = "dev-a", seconds = seconds, fromFeed = fromFeed,
     )
+    /** An agent's run, read as AA8 says (deny only until its screens are built). */
+    private val sampleRun = com.vettid.core.data.social.HeldRequest.ItemRun(
+        itemId = "i1", fieldId = "f1", program = "/usr/bin/git", sha256 = "ab".repeat(32), argv = listOf("git", "status"),
+        cwd = null, how = com.vettid.core.data.social.SecretHow.ENV, name = "GH_TOKEN", env = emptyList(), flags = emptySet(),
+        previousSha256 = null, previousPath = null, replaces = null,
+    )
+
     private fun agentHeld(h: com.vettid.core.data.social.HeldRequest?, fromFeed: Boolean = false) = Approval.DeviceRequest(
         "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, t0.plusSeconds(270),
         deviceId = "dev-a", held = h, fromFeed = fromFeed,
@@ -1505,7 +1512,7 @@ object ScreenCatalog {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog)), DecisionActions())
         },
         "approvals.held_later" to {
-            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Later("i1"))), DecisionActions())
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun)), DecisionActions())
         },
         "approvals.held_desktop" to {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.DesktopStepUp).copy(role = "desktop")), DecisionActions())
