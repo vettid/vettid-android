@@ -161,6 +161,53 @@ class ItemWaysViewModelTest {
         assertNull(st(m).prompt)
     }
 
+    /** A widening's `credential_locked`: the prompt again, and the same save with the new password sent once more. */
+    @Test
+    fun aWideningLockedPromptsAndResendsOnce() = runTest(main.dispatcher) {
+        repo.answers += ItemWaysSave.NeedsPassword
+        repo.answers += ItemWaysSave.CredentialLocked
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(true)
+        m.confirm()
+        m.save()
+        advanceUntilIdle()
+        m.setPassword("pw")
+        m.submitPassword()
+        advanceUntilIdle()
+        assertTrue(st(m).prompt!!.resend)
+        assertEquals("", st(m).prompt!!.password)
+        m.setPassword("pw2")
+        m.submitPassword()
+        advanceUntilIdle()
+        assertEquals(listOf(null to false, "pw" to false, "pw2" to true), repo.saves.map { it.password to it.resent })
+        assertEquals(WaysNotice.Saved, st(m).notice)
+        assertNull(st(m).prompt)
+        assertTrue(repo.saves.map { it.next }.distinct().size == 1)
+    }
+
+    /** The page resends once only: a second `credential_locked`, whatever the repository says, is "locked again". */
+    @Test
+    fun aSecondCredentialLockedIsNotPromptedAgain() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        repo.answers += ItemWaysSave.CredentialLocked
+        repo.answers += ItemWaysSave.CredentialLocked
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        m.save()
+        advanceUntilIdle()
+        m.setPassword("pw")
+        m.submitPassword()
+        advanceUntilIdle()
+        assertEquals(2, repo.saves.size)
+        assertNull(st(m).prompt)
+        assertEquals(WaysNotice.LockedAgain, st(m).notice)
+        m.submitPassword()
+        advanceUntilIdle()
+        assertEquals("nothing more sent", 2, repo.saves.size)
+    }
+
     @Test
     fun aConflictReloadsAndNotFoundLeaves() = runTest(main.dispatcher) {
         repo.answers += ItemWaysSave.Conflict
@@ -236,6 +283,12 @@ class ItemWaysViewModelTest {
         m.setVariableInput("GH_HOST")
         m.addVariable()
         assertEquals(listOf("GH_HOST"), st(m).draft!!.run!!.programs[0].env)
+        // A name already listed is not added twice; the field empties as after any add.
+        m.setVariableInput("GH_HOST")
+        m.addVariable()
+        assertEquals(listOf("GH_HOST"), st(m).draft!!.run!!.programs[0].env)
+        assertEquals("", st(m).variableInput)
+        assertNull(st(m).variableProblem)
         m.removeVariable("GH_HOST")
         assertTrue(st(m).draft!!.run!!.programs[0].env.isEmpty())
         // Removing a program while another stays asks nothing.

@@ -422,7 +422,8 @@ class ItemWaysViewModel @Inject constructor(
             } finally {
                 local.update { it.copy(saving = false) }
             }
-            onSaved(r)
+            // One resend after `credential_locked`, whatever the repository answers (AA7 "Saving").
+            onSaved(if (resent && r == ItemWaysSave.CredentialLocked) ItemWaysSave.LockedAgain else r)
         }
     }
 

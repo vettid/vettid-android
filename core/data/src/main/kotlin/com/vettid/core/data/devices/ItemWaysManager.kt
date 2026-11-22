@@ -236,8 +236,8 @@ class ItemWaysManager(
         return send(body, cur.agentId to cur.itemId, resent = false, readOnly = true)
     }
 
-    @Suppress("ReturnCount")
     /** Sends [body]; an answer that is not the settings of [sent] (agent, item) is not taken as saved. */
+    @Suppress("ReturnCount")
     private suspend fun send(body: JsonObject, sent: Pair<String, String>, resent: Boolean, readOnly: Boolean): ItemWaysSave {
         val gen = synchronized(lock) { generation }
         val answer = try {

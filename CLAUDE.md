@@ -377,12 +377,12 @@ The A2 exit test:
   malformed value, and (until AA9) a non-empty `run.folders` make it read only (`ItemWaysRead.ways == null`); a read-only page saves
   only `withoutWay` (the way and its member taken out, everything else as read: built from the strict reading, numbers as written
   (`JsonUnquotedLiteral`), unknown members included; none when the answer did not read strictly (a duplicate member) or for another
-  agent's item, `ItemWaysRead.foreign`). The checks mirror
+  agent's item, `ItemWaysRead.foreign`; `ItemWaysRead` is not a value: two reads are never equal, compare its `ways`). The checks mirror
   vettid-vault's `itemspec` (`programProblem`, `programKey`, `duplicates`, `variableProblem` (the form only: the vault's refused names
   are not copied), `hostProblem`, `headerValid`, `prefixValid`), and `widens` mirrors its `Widens`. `ItemWaysManager`
   (`VaultManager.itemWays`, cleared with the devices list): a widening returns `NeedsPassword` without one, and with one opens the
   window through the app's own path every time (decision 4) and locks it after when it was closed (30 s margin); a narrowing is sent
-  without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend; a read-only save's is
+  without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend (the page also turns a resend's `CredentialLocked` into `LockedAgain`: one resend, whatever the repository says); a read-only save's is
   `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (the vault's `detail` text), the owner
   check, an alarm (`AlarmOpen`) and the prompt's own refusals (`PasswordRefused`); a lock that fails is `windowNotClosed`
   (**Close it now**, as AA4). Settings of another item or another `version` than the one read are judged a widening; an answer that is not the settings sent
