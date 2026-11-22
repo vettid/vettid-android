@@ -346,11 +346,15 @@ The A2 exit test:
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
 
 - How an agent may use an item (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11 "Ways to use a secret"), **data layer only so far**
-  (the screens are the next PR): `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
+  (the next PR brings the screens, and with them `sync.event{leash.item.changed}` (a re-read, the mid-edit notice, no `version`
+  meaning deleted, a pin recorded by an approval), the re-read on `share.rule.*`, and the `item_ways` capability gate (decision 17);
+  none of these is handled yet): `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
   (`VaultDevice.opRaw`) so `ItemWaysRules` (`:core:data` `devices/ItemWays.kt`) reads `item_ways` with `StrictJson` (duplicates
   refused). **Fail closed:** an unknown member at any level, an unknown way, `run`/`proxy` without its way or the reverse, any
   malformed value, and (until AA9) a non-empty `run.folders` make it read only (`ItemWaysRead.ways == null`); a read-only page saves
-  only `withoutWay` (the way and its member taken out, everything else as read, unknown members included). The checks mirror
+  only `withoutWay` (the way and its member taken out, everything else as read: built from the strict reading, numbers as written
+  (`JsonUnquotedLiteral`), unknown members included; none when the answer did not read strictly (a duplicate member) or for another
+  agent's item, `ItemWaysRead.foreign`). The checks mirror
   vettid-vault's `itemspec` (`programProblem`, `programKey`, `duplicates`, `variableProblem` (the form only: the vault's refused names
   are not copied), `hostProblem`, `headerValid`, `prefixValid`), and `widens` mirrors its `Widens`. `ItemWaysManager`
   (`VaultManager.itemWays`, cleared with the devices list): a widening returns `NeedsPassword` without one, and with one opens the
@@ -358,10 +362,11 @@ The A2 exit test:
   without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend; a read-only save's is
   `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (the vault's `detail` text), the owner
   check, an alarm (`AlarmOpen`) and the prompt's own refusals (`PasswordRefused`); a lock that fails is `windowNotClosed`
-  (**Close it now**, as AA4). Settings of another item than the one read are judged a widening. A list answer that is not a
+  (**Close it now**, as AA4). Settings of another item or another `version` than the one read are judged a widening; an answer that is not the settings sent
+  (another item, `{}`) is `unreadable_settings`, not saved; `BadRequest` prints no vault text. A list answer that is not a
   list of objects is `unreadable_settings` (never "no items"); a strict reading of another item than the lenient one, or of
   another agent, is read only. Program keys lowercase rune by rune as Go does. Memory only; a read answered after a
-  `clear()` is `voided_by_lock` (a generation, as the devices list). Tests: `ItemWaysTest`,
+  `clear()` is `voided_by_lock` (a generation, as the devices list); cleared at lock and hold as its own `PhaseSteps.ITEM_WAYS` step. Tests: `ItemWaysTest`,
   `ItemWaysManagerTest`.
 - An agent's permissions (ANDROID-PLAN 0.1.117 §4 AA3, decisions 3a, 7, 8; VAULT-MESSAGING 0.83.3 §10.11): on the agent's page,
   **Other permissions** = the agent's grants of `leash.grant.list{agent_id}` that are not `items.read` (`PermissionWire.permissions`;

@@ -1252,10 +1252,8 @@ class VaultManager(
                 // that may continue (ANDROID-PLAN 0.1.134); any other phase drops everything.
                 // Soft for Unreachable; nothing for a close reached after a newer opening ([OpeningSteps.clearFeed]).
                 clearFeed = { p -> openingSteps.clearFeed(p, openingAtPhase) },
-                clearDevices = {
-                    devices.clear()
-                    itemWays.clear()
-                },
+                clearDevices = { devices.clear() },
+                clearItemWays = { itemWays.clear() },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },

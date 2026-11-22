@@ -54,7 +54,10 @@ sealed interface ItemWaysSave {
     data object NotIncluded : ItemWaysSave
 
     /** `bad_request`: "These settings could not be saved. Your vault answered: <error text>." */
-    data class BadRequest(val message: String) : ItemWaysSave
+    data class BadRequest(val message: String) : ItemWaysSave {
+        /** The vault's text may carry vault data: never in a log (the owner's rule, 2026-10-23). */
+        override fun toString(): String = "BadRequest"
+    }
 
     /** `owner_check_required`: the owner-check screen. */
     data object OwnerCheck : ItemWaysSave
@@ -148,8 +151,9 @@ class ItemWaysManager(
     suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean = false): ItemWaysSave {
         // A read-only page saves only through turnOff: nothing is sent.
         val base = cur.ways ?: return ItemWaysSave.Failed(unreadable())
-        // Settings of another item can't be compared with these: judged a widening (AA7: when the app cannot tell).
-        val sameItem = next.agentId == base.agentId && next.itemId == base.itemId
+        // Settings of another item, or of another version than the one read, can't be compared with these: judged a
+        // widening (AA7: when the app cannot tell).
+        val sameItem = next.agentId == base.agentId && next.itemId == base.itemId && next.version == base.version
         if (password == null && (!sameItem || ItemWaysRules.widens(base, next))) return ItemWaysSave.NeedsPassword
         // Open only with a margin (clock skew): a borderline window may end before the save, which then opens its own.
         val toLock = password != null && windowUntil()?.isAfter(now().plusSeconds(WINDOW_MARGIN_SECONDS)) != true
@@ -163,7 +167,7 @@ class ItemWaysManager(
                     return unlockRefused(e)
                 }
             }
-            return send(next.setBody(), resent, readOnly = false)
+            return send(next.setBody(), next.agentId to next.itemId, resent, readOnly = false)
         } finally {
             if (opened) closeOpenedWindow()
         }
@@ -186,18 +190,19 @@ class ItemWaysManager(
      */
     suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave {
         val body = ItemWaysRules.withoutWay(cur, way) ?: return ItemWaysSave.Failed(unreadable())
-        return send(body, resent = false, readOnly = true)
+        return send(body, cur.agentId to cur.itemId, resent = false, readOnly = true)
     }
 
     @Suppress("ReturnCount")
-    private suspend fun send(body: JsonObject, resent: Boolean, readOnly: Boolean): ItemWaysSave {
+    /** Sends [body]; an answer that is not the settings of [sent] (agent, item) is not taken as saved. */
+    private suspend fun send(body: JsonObject, sent: Pair<String, String>, resent: Boolean, readOnly: Boolean): ItemWaysSave {
         val gen = synchronized(lock) { generation }
         val answer = try {
             vaultGuard { ops().set(body) }
         } catch (e: VaultFailure) {
             return refused(e, resent, readOnly)
         }
-        val read = ItemWaysRules.one(answer) ?: return ItemWaysSave.Failed(unreadable())
+        val read = ItemWaysRules.one(answer)?.takeIf { it.agentId to it.itemId == sent } ?: return ItemWaysSave.Failed(unreadable())
         synchronized(lock) {
             // Saved either way (the vault answered); only the list held from before a clear is not touched.
             if (gen == generation) {

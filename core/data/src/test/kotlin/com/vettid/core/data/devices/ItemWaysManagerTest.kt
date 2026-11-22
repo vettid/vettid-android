@@ -263,6 +263,29 @@ class ItemWaysManagerTest {
         assertTrue(w.calls.isEmpty())
     }
 
+    /** An answer that is not the settings sent (another item, or `{}`) is not taken as saved. */
+    @Test
+    fun anAnswerForAnotherItemIsNotSaved() = runTest {
+        for (a in listOf("""{"agent_id":"a1","item_id":"i2","version":2,"ways":["use"]}""", "{}")) {
+            val ops = Ops().apply { answer = a }
+            val r = manager(ops, Window()).save(useOnly, withReveal, "pw")
+            assertEquals(a, "unreadable_settings", (r as ItemWaysSave.Failed).failure.code)
+        }
+    }
+
+    /** Settings of another version than the one read can't be judged: a widening. */
+    @Test
+    fun anotherVersionIsJudgedAWidening() = runTest {
+        val cur = read("""{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}""")
+        val next = cur.ways!!.copy(version = 2, ways = setOf(ItemWay.USE))
+        assertEquals(ItemWaysSave.NeedsPassword, manager(Ops(), Window()).save(cur, next, null))
+    }
+
+    @Test
+    fun theVaultsTextIsNeverPrinted() {
+        assertEquals("BadRequest", ItemWaysSave.BadRequest("secret detail").toString())
+    }
+
     @Test
     fun theListIsHeldUntilCleared() = runTest {
         val m = manager(Ops(), Window())

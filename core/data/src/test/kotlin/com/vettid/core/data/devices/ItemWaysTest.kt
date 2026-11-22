@@ -94,6 +94,13 @@ class ItemWaysTest {
             "version 0" to item(""""version":0,"ways":["use"]"""),
             "string version" to item(""""version":"1","ways":["use"]"""),
             "duplicate member" to """{"agent_id":"a1","item_id":"i1","ways":["use"],"ways":["use"]}""",
+            "duplicate hosts" to item(""""ways":["use","proxy"],"proxy":{"hosts":["a.example.com","a.example.com:443"],"header":"X"}"""),
+            "duplicate variables" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","env":["A","A"]}],"each":true}"""),
+            "empty agent" to """{"agent_id":"","item_id":"i1","ways":["use"]}""",
+            "empty item" to """{"agent_id":"a1","item_id":"","ways":["use"]}""",
+            "malformed updated_at" to item(""""ways":["use"],"updated_at":"yesterday""""),
+            "pin path not absolute" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"$sha","path":"bin/git"}],"each":true}"""),
+            "17 programs" to item(""""ways":["use","run"],"run":{"programs":[${(1..17).joinToString(",") { "{\"program\":\"p$it\"}" }}],"each":true}"""),
         )
         for ((name, json) in cases) {
             val r = ItemWaysRules.one(json.toByteArray())
@@ -110,10 +117,41 @@ class ItemWaysTest {
         val body = ItemWaysRules.withoutWay(r, "run")!!
         assertEquals(JsonArray(listOf(JsonPrimitive("use"), JsonPrimitive("reveal"))), body["ways"])
         assertNull(body["run"])
-        assertEquals(r.raw["extra"], body["extra"])
+        assertEquals("{\"k\":1}", body["extra"].toString())
         assertEquals(JsonPrimitive(2), body["version"])
         assertNull(ItemWaysRules.withoutWay(r, "use"))
         assertNull(ItemWaysRules.withoutWay(r, "proxy"))
+    }
+
+    /** Unknown members go back as their exact source text: a number as written, a big integer whole. */
+    @Test
+    fun aTurnOffSendsUnknownValuesAsWritten() {
+        val r = ItemWaysRules.one(item(""""version":2,"ways":["use","reveal","x_way"],"x_way":{"n":1e2,"big":123456789012345678901234567890,"f":0.10}""").toByteArray())!!
+        val sent = String(VaultJson.bytes(ItemWaysRules.withoutWay(r, "reveal")!!))
+        assertTrue(sent, sent.contains("\"n\":1e2") && sent.contains("\"big\":123456789012345678901234567890") && sent.contains("\"f\":0.10"))
+        assertTrue(sent, sent.contains("\"ways\":[\"use\",\"x_way\"]"))
+    }
+
+    /** No turn-off when the vault's copy is not known (a duplicate member) or the item is another agent's. */
+    @Test
+    fun noTurnOffWithoutAStrictReadingOrForAnotherAgent() {
+        val dup = ItemWaysRules.one(item(""""ways":["use","run"],"run":{"programs":[],"each":true},"run":{"programs":[{"program":"git"}],"each":false}""").toByteArray())!!
+        assertTrue(dup.readOnly)
+        assertNull(ItemWaysRules.withoutWay(dup, "run"))
+        val foreign = ItemWaysRules.list("""{"items":[{"agent_id":"a2","item_id":"i1","ways":["use","reveal"]}]}""".toByteArray(), "a1")!!.single()
+        assertTrue(foreign.foreign && foreign.readOnly)
+        assertNull(ItemWaysRules.withoutWay(foreign, "reveal"))
+    }
+
+    /** AA9's widenings, as the vault's: a folder added, or its write turned on. */
+    @Test
+    fun foldersWiden() {
+        val cur = bound(RunProgram("git")).let { it.copy(run = it.run!!.copy(folders = listOf(RunFolder("/a", write = false)))) }
+        fun with(vararg f: RunFolder) = cur.copy(run = cur.run!!.copy(folders = f.toList()))
+        assertTrue(ItemWaysRules.widens(cur, with(RunFolder("/a", false), RunFolder("/b", false))))
+        assertTrue(ItemWaysRules.widens(cur, with(RunFolder("/a", true))))
+        assertFalse(ItemWaysRules.widens(cur, with()))
+        assertFalse(ItemWaysRules.widens(with(RunFolder("/a", true)), cur))
     }
 
     @Test

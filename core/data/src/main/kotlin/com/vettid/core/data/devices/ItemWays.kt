@@ -1,11 +1,17 @@
 package com.vettid.core.data.devices
 
+import com.vettid.core.crypto.json.JsonArray as StrictArray
 import com.vettid.core.crypto.json.JsonBool as StrictBool
+import com.vettid.core.crypto.json.JsonNull as StrictNull
 import com.vettid.core.crypto.json.JsonObject as StrictObject
 import com.vettid.core.crypto.json.JsonString as StrictString
 import com.vettid.core.crypto.json.JsonValue as StrictValue
 import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.vault.VaultJson
+import java.time.Instant
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonUnquotedLiteral
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -133,6 +139,10 @@ data class ItemWaysRead(
     val ways: ItemWays?,
     val raw: JsonObject,
     val rawWays: List<String>,
+    /** The strict reading of the answer, null when it did not read strictly (a duplicate member): nothing is turned off then. */
+    val strict: StrictObject? = null,
+    /** Listed for another agent than the one asked about: read only, and never turned off from this agent's page. */
+    val foreign: Boolean = false,
 ) {
     val readOnly: Boolean get() = ways == null
 
@@ -290,7 +300,10 @@ object ItemWaysRules {
         }
     }
 
-    /** Why [name] can't be added to [env] (the form only; the vault refuses named ones with `bad_request`). */
+    /**
+     * Why [name] can't be added to [env] (the form only; the vault refuses named ones with `bad_request`). A name already
+     * in [env] is no problem here: adding it again changes nothing, which the page sees to.
+     */
     fun variableProblem(env: List<String>, name: String): VariableProblem? = when {
         !ENV_NAME.matches(name) -> VariableProblem.FORM
         name !in env && env.size >= MAX_ENV -> VariableProblem.TOO_MANY
@@ -406,7 +419,7 @@ object ItemWaysRules {
         val strict = runCatching { StrictJson.parseObject(answer).array("items") }.getOrNull()?.takeIf { it.size == items.size }
         return items.mapIndexed { i, raw ->
             val r = read(raw, strict?.get(i) as? StrictObject)
-            if (agentId != null && r.agentId != agentId) r.copy(ways = null) else r
+            if (agentId != null && r.agentId != agentId) r.copy(ways = null, foreign = true) else r
         }
     }
 
@@ -423,7 +436,7 @@ object ItemWaysRules {
         val rawWays = (raw["ways"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
         // The strict reading counts only when it is of the same item the lenient one names.
         val ways = strict?.let { runCatching { parse(it) }.getOrNull() }?.takeIf { it.agentId == agent && it.itemId == item }
-        return ItemWaysRead(agent, item, ways, raw, rawWays)
+        return ItemWaysRead(agent, item, ways, raw, rawWays, strict)
     }
 
     private val TOP = setOf("agent_id", "item_id", "version", "ways", "run", "proxy", "updated_at")
@@ -454,7 +467,7 @@ object ItemWaysRules {
         val item = o.string("item_id")
         check(agent.isNotEmpty() && item.isNotEmpty())
         val version = o.optUint("version", 1, StrictJson.MAX_SAFE_INTEGER)
-        o.optString("updated_at")
+        o.optString("updated_at")?.let { check(runCatching { Instant.parse(it) }.isSuccess) }
         val wayList = o.array("ways").map { ItemWay.of(it.str()) ?: throw Unreadable() }
         val ways = wayList.toSet()
         check(ways.size == wayList.size && ItemWay.USE in ways)
@@ -517,18 +530,49 @@ object ItemWaysRules {
 
     /**
      * A read-only page's save of [way] turned off (AA7 "Fail closed"): the settings exactly as read, with the way taken
-     * out of `ways` and its member removed; every other member, unknown ones included, as read. It only narrows. Null
-     * when [way] can't be turned off (`use`, or `ways` that does not read as a list of strings).
+     * out of `ways` and its member removed; every other member, unknown ones included, as its exact source text (a number
+     * is sent as it was written). It only narrows. Null when [way] can't be turned off: `use`, a way not listed, `ways`
+     * that is not a list of strings, an answer that did not read strictly (a duplicate member: which copy the vault holds
+     * is not known), or another agent's item.
      */
+    @Suppress("ReturnCount")
     fun withoutWay(read: ItemWaysRead, way: String): JsonObject? {
-        val ways = read.raw["ways"] as? JsonArray
-        val listed = ways != null && ways.all { it is JsonPrimitive && it.isString }
-        if (way == ItemWay.USE.wire || way !in read.rawWays || !listed) return null
-        val out = read.raw.toMutableMap<String, JsonElement>()
-        out["ways"] = JsonArray(ways!!.filter { (it as JsonPrimitive).content != way })
-        // The way's own member (run, proxy, or an unknown way's), never one of the item's own members.
-        if (way !in TOP || way == ItemWay.RUN.wire || way == ItemWay.PROXY.wire) out.remove(way)
-        out.remove("updated_at")
+        val o = read.strict ?: return null
+        if (read.foreign || way == ItemWay.USE.wire) return null
+        val ways = listedWays(o) ?: return null
+        if (way !in ways) return null
+        val out = LinkedHashMap<String, JsonElement>()
+        for ((name, v) in o.members) {
+            when {
+                name == "updated_at" || name == way && ownMember(way) -> Unit
+                name == "ways" -> out[name] = JsonArray(ways.filter { it != way }.map { JsonPrimitive(it) })
+                else -> out[name] = exact(v)
+            }
+        }
         return JsonObject(out)
+    }
+
+    /** `ways` as a list of strings, or null when it is not one. */
+    private fun listedWays(o: StrictObject): List<String>? {
+        val items = (o.members["ways"] as? StrictArray)?.items.orEmpty()
+        val names = items.mapNotNull { (it as? StrictString)?.value }
+        return names.takeIf { o.members["ways"] is StrictArray && it.size == items.size }
+    }
+
+    /** The way's own member goes with it (run, proxy, or an unknown way's), never one of the item's own members. */
+    private fun ownMember(way: String): Boolean = way !in TOP || way == ItemWay.RUN.wire || way == ItemWay.PROXY.wire
+
+    /**
+     * [v] as it was written: numbers and strings as their source text (kotlinx would write a number back through a
+     * `Long` or `Double`: `1e2` as `100.0`, a big integer rounded), objects and arrays member by member.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun exact(v: StrictValue): JsonElement = when (v) {
+        is StrictObject -> JsonObject(v.members.mapValues { (_, m) -> exact(m) })
+        is StrictArray -> JsonArray(v.items.map { exact(it) })
+        is StrictString -> JsonPrimitive(v.value)
+        is StrictBool -> JsonPrimitive(v.value)
+        is StrictNull -> JsonNull
+        else -> JsonUnquotedLiteral(v.raw)
     }
 }
