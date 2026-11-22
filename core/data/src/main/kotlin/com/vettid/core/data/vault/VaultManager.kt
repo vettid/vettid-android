@@ -31,6 +31,8 @@ import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.devices.DevicesManager
+import com.vettid.core.data.devices.ItemWaysManager
+import com.vettid.core.data.devices.VaultItemWaysOps
 import com.vettid.core.data.devices.PairingManager
 import com.vettid.core.data.devices.VaultPairingOps
 import com.vettid.core.data.devices.VaultDevicesOps
@@ -1144,6 +1146,19 @@ class VaultManager(
         unlockTtl = { status().unlockTtlSeconds },
     )
 
+    /**
+     * How an agent may use its items (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11): `leash.item.list` and
+     * `leash.item.set`, a widening with the password through the app's own window path. Memory only, cleared with the
+     * devices list.
+     */
+    val itemWays = ItemWaysManager(
+        ops = { VaultItemWaysOps(openApi()) },
+        windowUntil = { windowFlow.value },
+        openWindow = { openUnlockWindow(it) },
+        closeWindow = { closeUnlockWindow() },
+        unlockTtl = { status().unlockTtlSeconds },
+    )
+
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
         OwnerCheckManager(
@@ -1237,7 +1252,10 @@ class VaultManager(
                 // that may continue (ANDROID-PLAN 0.1.134); any other phase drops everything.
                 // Soft for Unreachable; nothing for a close reached after a newer opening ([OpeningSteps.clearFeed]).
                 clearFeed = { p -> openingSteps.clearFeed(p, openingAtPhase) },
-                clearDevices = { devices.clear() },
+                clearDevices = {
+                    devices.clear()
+                    itemWays.clear()
+                },
                 clearVotes = { votes.clear() },
                 clearPresence = { presence.clear() },
                 clearLocation = { location.clear() },
@@ -1343,6 +1361,7 @@ class VaultManager(
                 if (now && !wasHeld) {
                     steps.step { feed.clear(endsOpening = false) } // the vault stays open: the opening goes on
                     steps.step { devices.clear() }
+                    steps.step { itemWays.clear() }
                     steps.step { votes.clear() }
                     steps.step { presence.clear() } // held or due: no presence is asked or shown
                     steps.step { location.clearReceived() } // held: no received position or incoming share is kept (L1b)
@@ -1890,6 +1909,7 @@ class VaultManager(
             steps.step { items.clear() }
             steps.step { feed.clear() }
             steps.step { devices.clear() }
+            steps.step { itemWays.clear() }
             steps.step { votes.clear() }
             if (forget) steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
             steps.step { presence.clear() }
@@ -3444,6 +3464,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { itemWays.clear() }
         steps.step { votes.clear() }
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
@@ -3517,6 +3538,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { itemWays.clear() }
         steps.step { votes.clear() }
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }
@@ -5478,6 +5500,7 @@ class VaultManager(
         steps.step { sharing.clear() }
         steps.step { feed.clear() }
         steps.step { devices.clear() }
+        steps.step { itemWays.clear() }
         steps.step { votes.clear() }
         steps.step { votes.forgetStored() } // the kept results attempts too (review 1, M1)
         steps.step { presence.clear() }

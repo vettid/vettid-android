@@ -49,3 +49,22 @@ data class LeashGrantRequest(
  * `credential_locked` outside the window; the caller sends `credential.unlock` first.
  */
 suspend fun VaultApi.leashGrantIssue(request: LeashGrantRequest): JsonObject = device.op("leash.grant.issue", request.body())
+
+/**
+ * `leash.item.list{agent_id, item_id?}` (VAULT-MESSAGING §10.11, ANDROID-PLAN 0.1.137 AA7): `{items: [<item_ways>]}`, each
+ * item the agent's rules include, as its exact bytes for the strict parser.
+ */
+suspend fun VaultApi.leashItemList(agentId: String, itemId: String? = null): ByteArray =
+    device.opRaw(
+        "leash.item.list",
+        buildJsonObject {
+            put("agent_id", agentId)
+            itemId?.let { put("item_id", it) }
+        },
+    )
+
+/**
+ * `leash.item.set{agent_id, item_id, version?, ways, run?, proxy?}` (§10.11): the `<item_ways>` saved, as its exact bytes.
+ * A widening outside the unlock window is `credential_locked`.
+ */
+suspend fun VaultApi.leashItemSet(body: JsonObject): ByteArray = device.opRaw("leash.item.set", body)

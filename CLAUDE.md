@@ -334,8 +334,8 @@ The A2 exit test:
   may receive the values of the items it uses, and its app may keep them in its history." (`core_ui_agent_ways_warning`). Texts in
   `strings_sharing.xml` (`items_agent_*`), `feature/devices/.../strings.xml` (`devices_rule*`, `pair_*`) are marked `draft` (the plan's, word
   for word; `AgentRuleTextsTest` in both modules holds them) or `new`; none is approved. The paired screen now offers **Choose what it
-  may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. Left to later PRs: how the agent may use each
-  item (AA7). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
+  may use** (the agent's page with the editor on top; the list when the id is unknown) and **Later**. How the agent may use each item is AA7
+  (below: "How an agent may use an item"). Dev stack: `AgentRulesDevStackTest` (skips without the stack; the
   full flow needs a `vaultctl` agent paired to the app's vault). Catalog: `items.agent_rule_new`, `items.agent_rule_new_ways`,
   `items.agent_rule_edit_auto`, `items.agent_rule_auto_no_ways`, `items.agent_rule_preview`, `items.agent_rule_more`, `items.agent_rule_invalid`,
   `items.agent_rule_password`, `items.agent_rule_password_wrong`, `items.agent_rule_password_backoff`, `items.agent_rule_password_alarm`,
@@ -345,6 +345,24 @@ The A2 exit test:
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
 
+- How an agent may use an item (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11 "Ways to use a secret"), **data layer only so far**
+  (the screens are the next PR): `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
+  (`VaultDevice.opRaw`) so `ItemWaysRules` (`:core:data` `devices/ItemWays.kt`) reads `item_ways` with `StrictJson` (duplicates
+  refused). **Fail closed:** an unknown member at any level, an unknown way, `run`/`proxy` without its way or the reverse, any
+  malformed value, and (until AA9) a non-empty `run.folders` make it read only (`ItemWaysRead.ways == null`); a read-only page saves
+  only `withoutWay` (the way and its member taken out, everything else as read, unknown members included). The checks mirror
+  vettid-vault's `itemspec` (`programProblem`, `programKey`, `duplicates`, `variableProblem` (the form only: the vault's refused names
+  are not copied), `hostProblem`, `headerValid`, `prefixValid`), and `widens` mirrors its `Widens`. `ItemWaysManager`
+  (`VaultManager.itemWays`, cleared with the devices list): a widening returns `NeedsPassword` without one, and with one opens the
+  window through the app's own path every time (decision 4) and locks it after when it was closed (30 s margin); a narrowing is sent
+  without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend; a read-only save's is
+  `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (the vault's `detail` text), the owner
+  check, an alarm (`AlarmOpen`) and the prompt's own refusals (`PasswordRefused`); a lock that fails is `windowNotClosed`
+  (**Close it now**, as AA4). Settings of another item than the one read are judged a widening. A list answer that is not a
+  list of objects is `unreadable_settings` (never "no items"); a strict reading of another item than the lenient one, or of
+  another agent, is read only. Program keys lowercase rune by rune as Go does. Memory only; a read answered after a
+  `clear()` is `voided_by_lock` (a generation, as the devices list). Tests: `ItemWaysTest`,
+  `ItemWaysManagerTest`.
 - An agent's permissions (ANDROID-PLAN 0.1.117 §4 AA3, decisions 3a, 7, 8; VAULT-MESSAGING 0.83.3 §10.11): on the agent's page,
   **Other permissions** = the agent's grants of `leash.grant.list{agent_id}` that are not `items.read` (`PermissionWire.permissions`;
   `DevicesRepository.permissions`, `refreshPermissions`, memory only, cleared with the list at lock and hold; an older answer never
