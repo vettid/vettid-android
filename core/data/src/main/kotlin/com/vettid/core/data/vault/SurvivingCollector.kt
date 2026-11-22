@@ -149,6 +149,9 @@ internal class PhaseSteps private constructor(
         const val SHARING = "sharing"
         const val FEED = "feed"
         const val DEVICES = "devices"
+
+        /** How agents may use their items (ANDROID-PLAN 0.1.137 AA7): cleared with the devices list, as its own step. */
+        const val ITEM_WAYS = "item ways"
         const val VOTES = "votes"
         const val PRESENCE = "presence"
         const val LOCATION = "location"
@@ -175,6 +178,7 @@ internal class PhaseSteps private constructor(
             /** Told the phase: [AppPhase.Unreachable] is no close, and the opening may continue (ANDROID-PLAN 0.1.134). */
             clearFeed: (AppPhase) -> Unit,
             clearDevices: () -> Unit,
+            clearItemWays: () -> Unit = {},
             clearVotes: () -> Unit,
             clearPresence: () -> Unit,
             clearLocation: () -> Unit,
@@ -190,6 +194,7 @@ internal class PhaseSteps private constructor(
                 SHARING to { _ -> clearSharing() },
                 FEED to clearFeed,
                 DEVICES to { _ -> clearDevices() },
+                ITEM_WAYS to { _ -> clearItemWays() },
                 VOTES to { _ -> clearVotes() },
                 PRESENCE to { _ -> clearPresence() },
                 LOCATION to { _ -> clearLocation() },

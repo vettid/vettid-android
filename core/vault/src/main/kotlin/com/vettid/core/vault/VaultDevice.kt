@@ -2229,6 +2229,18 @@ class VaultDevice private constructor(
         return r.body
     }
 
+    /**
+     * [op], returning the ok response's body as its exact bytes (`{}` when empty), for a caller that reads it with the
+     * strict parser (`:core:crypto` StrictJson: duplicate members refused, ANDROID-PLAN 0.1.137 AA7 "Fail closed").
+     */
+    suspend fun opRaw(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): ByteArray {
+        val r = request(type, body, timeout)
+        if (r.inner.status != Inner.STATUS_OK) {
+            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
+        }
+        return r.inner.body.takeIf { it.isNotEmpty() } ?: "{}".toByteArray(Charsets.UTF_8)
+    }
+
     // --- receiving ---
 
     /**
