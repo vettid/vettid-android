@@ -371,7 +371,7 @@ The A2 exit test:
   `devices.item_ways_read_only`, `devices.item_ways_program`, `devices.item_ways_pin_full`, `devices.item_ways_reveal_on`,
   `devices.item_ways_run_off`, `devices.item_ways_proxy_off`, `devices.item_ways_each_off`, `devices.item_ways_remove_last`,
   `devices.item_ways_forget_pin`, `devices.item_ways_password`, `devices.item_ways_alarm`, `devices.item_ways_program_refused`,
-  `devices.item_ways_host_refused`, `devices.item_ways_changed_elsewhere`, `devices.item_ways_not_included`. The data layer: `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
+  `devices.item_ways_host_refused`, `devices.item_ways_changed_elsewhere`, `devices.item_ways_not_included`, `devices.item_ways_bad_request`, `devices.item_ways_bad_request_fallback`. The data layer: `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
   (`VaultDevice.opRaw`) so `ItemWaysRules` (`:core:data` `devices/ItemWays.kt`) reads `item_ways` with `StrictJson` (duplicates
   refused). **Fail closed:** an unknown member at any level, an unknown way, `run`/`proxy` without its way or the reverse, any
   malformed value, and (until AA9) a non-empty `run.folders` make it read only (`ItemWaysRead.ways == null`); a read-only page saves
@@ -383,7 +383,7 @@ The A2 exit test:
   (`VaultManager.itemWays`, cleared with the devices list): a widening returns `NeedsPassword` without one, and with one opens the
   window through the app's own path every time (decision 4) and locks it after when it was closed (30 s margin); a narrowing is sent
   without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend (the page also turns a resend's `CredentialLocked` into `LockedAgain`: one resend, whatever the repository says); a read-only save's is
-  `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (the vault's `detail` text), the owner
+  `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (ANDROID-PLAN 0.1.138: a card on the page, the vault's `error.message` in a monospace span of the approved sentence when it is 1 to 200 bytes of printable ASCII (`VaultReason`), else the fallback text, `ways_bad_request_fallback`, new and not approved; cleared by the next edit or save), the owner
   check, an alarm (`AlarmOpen`) and the prompt's own refusals (`PasswordRefused`); a lock that fails is `windowNotClosed`
   (**Close it now**, as AA4). Settings of another item or another `version` than the one read are judged a widening; an answer that is not the settings sent
   (another item, `{}`) is `unreadable_settings`, not saved; `BadRequest` prints no vault text. A list answer that is not a

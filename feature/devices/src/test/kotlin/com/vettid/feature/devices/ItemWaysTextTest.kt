@@ -163,8 +163,23 @@ class ItemWaysTextTest {
         )
         assertEquals("These settings could not be saved. Your vault answered: bad env.", r.getString(R.string.ways_bad_request, "bad env"))
         assertEquals(
+            "These settings could not be saved: your vault refused one of them. Check the programs, the variables, the folders, the hosts, the header name and the prefix.",
+            r.getString(R.string.ways_bad_request_fallback),
+        )
+        assertEquals(
             "git can run other commands given in its arguments, so the agent could use it to run any command with your secret. Asking before each run is safer for it.",
             r.getString(R.string.ways_runs_commands, "git"),
         )
+    }
+
+    /** AA7 "Saving" (0.1.138): 1 to 200 bytes of printable ASCII are shown as they are; anything else is not. */
+    @Test
+    fun theVaultsReasonIsShownOnlyWhenPrintableAscii() {
+        assertEquals("run.programs[0].env[1]: VETTID_IN is reserved", VaultReason.shown("run.programs[0].env[1]: VETTID_IN is reserved"))
+        assertEquals("x".repeat(200), VaultReason.shown("x".repeat(200)))
+        assertEquals(" ~", VaultReason.shown(" ~"))
+        for (bad in listOf(null, "", "x".repeat(201), "a\tb", "a\nb", "caf\u00e9", "a\u007fb")) {
+            assertEquals(bad, null, VaultReason.shown(bad))
+        }
     }
 }

@@ -229,6 +229,35 @@ class ItemWaysViewModelTest {
         assertFalse(st(m).canSave)
     }
 
+    /** AA7 "Saving" (0.1.138): a message the vault gave that can't be shown is the fallback; an edit or a save clears it. */
+    @Test
+    fun aRefusalWithoutAShowableMessageIsTheFallback() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        repo.answers += ItemWaysSave.BadRequest("")
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        m.save()
+        advanceUntilIdle()
+        assertEquals("", st(m).refused)
+        repo.answers += ItemWaysSave.BadRequest("run: a\tb")
+        m.save()
+        advanceUntilIdle()
+        assertEquals("a control character is not shown", "", st(m).refused)
+        m.save()
+        advanceUntilIdle()
+        assertEquals(WaysNotice.Saved, st(m).notice)
+        assertNull("a save that went through clears it", st(m).refused)
+        repo.answers += ItemWaysSave.BadRequest("")
+        m.setReveal(true)
+        m.confirm()
+        m.save()
+        advanceUntilIdle()
+        assertEquals("", st(m).refused)
+        m.setReveal(false)
+        assertNull("an edit clears it", st(m).refused)
+    }
+
     @Test
     fun eachAnswerHasItsNotice() = runTest(main.dispatcher) {
         repo.answers += ItemWaysSave.BadRequest("program: refused name")
@@ -238,7 +267,8 @@ class ItemWaysViewModelTest {
         m.confirm()
         m.save()
         advanceUntilIdle()
-        assertEquals(WaysNotice.BadRequest("program: refused name"), st(m).notice)
+        assertEquals("program: refused name", st(m).refused)
+        assertNull("a card, not a passing notice", st(m).notice)
         assertTrue("the draft is kept", st(m).dirty)
         repo.answers += ItemWaysSave.NeedsPassword
         repo.answers += ItemWaysSave.AlarmOpen

@@ -179,7 +179,8 @@ class PhaseFollowTest {
     fun aFailedMissedCloseIsNotHiddenByTheOpening() = runTest {
         val steps = PhaseSteps.of(
             replay = {}, forgetOpenVault = {}, clearAttachments = {}, clearItems = { error("items") }, clearSharing = {},
-            clearFeed = {}, clearDevices = {}, clearItemWays = {}, clearVotes = {}, clearPresence = {}, clearLocation = {}, clearReleaseCheck = {},
+            clearFeed = {}, clearDevices = {}, clearItemWays = {}, clearVotes = {}, clearPresence = {},
+            clearLocation = {}, clearReleaseCheck = {},
             ownProfile = {},
         )
         val thrown = runCatching {

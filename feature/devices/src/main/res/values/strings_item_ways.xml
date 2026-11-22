@@ -109,6 +109,8 @@
     <string name="ways_conflict">Another device changed these settings. Here are the current ones.</string>
     <string name="ways_not_included">%1$s can no longer use this item: none of its rules includes it.</string>
     <string name="ways_bad_request">These settings could not be saved. Your vault answered: %1$s.</string>
+    <!-- new (plan 0.1.138, card GC #16477): the plan's NEW fallback, not in GC #16443's approval -->
+    <string name="ways_bad_request_fallback">These settings could not be saved: your vault refused one of them. Check the programs, the variables, the folders, the hosts, the header name and the prefix.</string>
     <string name="ways_alarm">Settings can\'t be widened while a credential alarm is open</string>
     <string name="ways_read_only">This item has settings this version of VettID can\'t show. Update VettID to change them.</string>
     <string name="ways_read_only_locked">Your vault asked for your credential password for this change, so it was not saved. Update VettID to change these settings.</string>

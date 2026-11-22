@@ -166,6 +166,8 @@ internal object DevicesCatalog {
         },
         "devices.item_ways_changed_elsewhere" to { Ways(ways(allWays) { it.copy(changedElsewhere = true) }) },
         "devices.item_ways_not_included" to { Ways(ways(allWays) { it.copy(notIncluded = true) }) },
+        "devices.item_ways_bad_request" to { Ways(ways(allWays) { it.copy(refused = "run.programs[0].env[1]: VETTID_IN is reserved") }) },
+        "devices.item_ways_bad_request_fallback" to { Ways(ways(allWays) { it.copy(refused = "") }) },
         "devices.page_agent_rules_none" to { Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true)) },
         "devices.page_agent_rules_failed" to { Page(DeviceUiState(device = agent, loaded = true, rulesError = FailureKind.NETWORK)) },
         "devices.page_agent_rules_limit" to {

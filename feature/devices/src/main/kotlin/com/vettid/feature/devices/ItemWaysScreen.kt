@@ -40,9 +40,11 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -204,12 +206,12 @@ private fun noticeText(n: WaysNotice): String = when (n) {
     WaysNotice.LockedAgain -> stringResource(R.string.ways_locked_again)
     WaysNotice.Conflict -> stringResource(R.string.ways_conflict)
     WaysNotice.ReadOnlyLocked -> stringResource(R.string.ways_read_only_locked)
-    is WaysNotice.BadRequest -> stringResource(R.string.ways_bad_request, n.message)
     is WaysNotice.Failed -> failureText(n.failure.kind.messageRes(), n.failure.kind.vaultCode(n.failure.shownCode))
 }
 
 @Composable
 private fun PageNotices(state: ItemWaysUiState, actions: ItemWaysActions) {
+    state.refused?.let { RefusedCard(it) }
     if (state.notIncluded) {
         NoticeCard(
             kind = NoticeKind.WARNING,
@@ -775,3 +777,33 @@ fun ShownStringBox(s: String, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * A save refused with `bad_request` (AA7 "Saving", 0.1.138): the vault's message as it is, in a monospace box, inside the
+ * approved sentence; or, when [message] is "" (none, or not one [VaultReason] shows), the fallback text.
+ */
+@Composable
+private fun RefusedCard(message: String) {
+    val colors = MaterialTheme.colorScheme
+    val text = if (message.isEmpty()) {
+        AnnotatedString(stringResource(R.string.ways_bad_request_fallback))
+    } else {
+        // The approved sentence around its argument; the argument drawn as code.
+        val (before, after) = stringResource(R.string.ways_bad_request, ARG).split(ARG, limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+        buildAnnotatedString {
+            append(before)
+            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = colors.surfaceVariant)) { append(message) }
+            append(after)
+        }
+    }
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, colors.error),
+        modifier = Modifier.fillMaxWidth().testTag("ways_refused").semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
+    }
+}
+
+/** Stands for the vault's message while the approved sentence is split around it; never shown. */
+private const val ARG = "\u0000"

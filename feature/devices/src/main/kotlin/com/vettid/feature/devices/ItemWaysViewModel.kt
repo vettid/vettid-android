@@ -57,7 +57,6 @@ sealed interface WaysNotice {
 
     data object ReadOnlyLocked : WaysNotice
 
-    data class BadRequest(val message: String) : WaysNotice
 
     data class Failed(val failure: VaultFailure) : WaysNotice
 }
@@ -115,6 +114,11 @@ data class ItemWaysUiState(
     val fullPin: String? = null,
     val windowNotClosed: WindowNotClosed? = null,
     val ownerCheck: Boolean = false,
+    /**
+     * The last save was refused with `bad_request` (AA7 "Saving"): the vault's message as shown ([VaultReason]), "" when it
+     * is shown by the fallback text; null when there is none. Kept on the page until the next save or edit.
+     */
+    val refused: String? = null,
 ) {
     val readOnly: Boolean get() = read != null && read.readOnly
 
@@ -201,7 +205,8 @@ class ItemWaysViewModel @Inject constructor(
         }
     }
 
-    private fun edit(change: (ItemWays) -> ItemWays) = local.update { s -> s.draft?.let { s.copy(draft = change(it)) } ?: s }
+    private fun edit(change: (ItemWays) -> ItemWays) =
+        local.update { s -> s.draft?.let { s.copy(draft = change(it), refused = null) } ?: s }
 
     // The switches.
 
@@ -415,7 +420,7 @@ class ItemWaysViewModel @Inject constructor(
         val s = local.value
         val cur = s.read ?: return
         val next = s.draft ?: return
-        local.update { it.copy(saving = true) }
+        local.update { it.copy(saving = true, refused = null) }
         viewModelScope.launch {
             val r = try {
                 repo.save(cur, next, password, resent)
@@ -429,7 +434,7 @@ class ItemWaysViewModel @Inject constructor(
 
     private fun turnOff(way: ItemWay) {
         val cur = local.value.read ?: return
-        local.update { it.copy(saving = true) }
+        local.update { it.copy(saving = true, refused = null) }
         viewModelScope.launch {
             val r = try {
                 repo.turnOff(cur, way.wire)
@@ -455,7 +460,7 @@ class ItemWaysViewModel @Inject constructor(
                 load()
             }
             ItemWaysSave.NotIncluded -> local.update { it.copy(prompt = null, notIncluded = true, leaving = true) }
-            is ItemWaysSave.BadRequest -> local.update { it.copy(prompt = null, notice = WaysNotice.BadRequest(r.message)) }
+            is ItemWaysSave.BadRequest -> local.update { it.copy(prompt = null, refused = VaultReason.shown(r.message).orEmpty()) }
             ItemWaysSave.OwnerCheck -> local.update { it.copy(prompt = null, ownerCheck = true) }
             ItemWaysSave.AlarmOpen -> local.update {
                 it.copy(prompt = (it.prompt ?: WaysPrompt()).copy(password = "", sending = false, error = FailureKind.CREDENTIAL_FROZEN))
