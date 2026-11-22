@@ -125,8 +125,12 @@ data class ItemWaysUiState(
     /** The draft differs from what was read. */
     val dirty: Boolean get() = draft != null && draft != read?.ways
 
+    /** The open program's text was changed in its field and not applied yet. */
+    val editPending: Boolean
+        get() = openProgram != null && draft?.run?.programs?.getOrNull(openProgram)?.program?.let { it != editInput } == true
+
     /** Whether the draft can be saved: changed, and every field the vault checks reads as it would accept it. */
-    val canSave: Boolean get() = dirty && !saving && !notIncluded && draftValid
+    val canSave: Boolean get() = (dirty || editPending) && !saving && !notIncluded && draftValid
 
     private val draftValid: Boolean
         get() {
@@ -136,7 +140,8 @@ data class ItemWaysUiState(
 
     /** The screen holds input the member would lose by leaving (the shell's `HoldsInput`). */
     val holdsInput: Boolean
-        get() = dirty || prompt != null || programInput.isNotEmpty() || variableInput.isNotEmpty() || hostInput.isNotEmpty()
+        get() = dirty || editPending || prompt != null || programInput.isNotEmpty() || variableInput.isNotEmpty() ||
+            hostInput.isNotEmpty()
 
     /** The open program's recorded pin was taken out in the draft: "Fingerprint forgotten when you save". */
     fun pinForgotten(p: RunProgram): Boolean {
@@ -160,6 +165,9 @@ class ItemWaysViewModel @Inject constructor(
     private val itemId: String = saved.get<String>(ItemWaysRoute.ITEM).orEmpty()
     private val local = MutableStateFlow(ItemWaysUiState())
 
+    /** The latest read started: an older one's answer is never applied (it may be of an older version). */
+    private var loads = 0
+
     val uiState: StateFlow<ItemWaysUiState> =
         combine(local, devices.devices, items.items, repo.windowNotClosed) { s, ds, its, w ->
             s.copy(
@@ -170,7 +178,7 @@ class ItemWaysViewModel @Inject constructor(
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ItemWaysUiState())
 
     init {
-        load()
+        load(force = true)
         viewModelScope.launch {
             devices.changes.collect { c ->
                 if (c is AgentChange.Item && c.agentId == agentId && c.itemId == itemId) onChanged(c.version)
@@ -179,29 +187,44 @@ class ItemWaysViewModel @Inject constructor(
     }
 
     /** On opening, Try again and **Show the current ones**: the vault's settings, the draft started again from them. */
-    fun load() {
+    fun load() = load(force = true)
+
+    /**
+     * Reads the settings. Only the latest read is applied. [force] (opening, Try again, Show the current ones, a
+     * conflict) starts the draft again from them; otherwise (an event's re-read of a clean page) a draft the member
+     * changed while the read was out is kept, with "Another device changed these settings." (AA7 "While the page is open").
+     */
+    private fun load(force: Boolean) {
+        val n = ++loads
+        val before = local.value.draft
         local.update { it.copy(loading = true, loadError = null) }
         viewModelScope.launch {
             try {
                 val r = repo.read(agentId, itemId)
                 local.update {
-                    if (r == null) {
-                        it.copy(loading = false, notIncluded = true)
-                    } else {
-                        it.copy(loading = false, read = r, draft = r.ways, changedElsewhere = false, openProgram = null, addingHost = false)
+                    when {
+                        n != loads -> it
+                        r == null -> it.copy(loading = false, notIncluded = true, prompt = null)
+                        !force && it.draft != before -> it.copy(loading = false, read = r, notIncluded = false, changedElsewhere = true)
+                        else -> it.copy(
+                            loading = false, read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
+                            openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
+                        )
                     }
                 }
             } catch (e: VaultFailure) {
-                local.update { it.copy(loading = false, loadError = e, ownerCheck = e.kind == FailureKind.OWNER_CHECK_REQUIRED) }
+                local.update {
+                    if (n != loads) it else it.copy(loading = false, loadError = e, ownerCheck = e.kind == FailureKind.OWNER_CHECK_REQUIRED)
+                }
             }
         }
     }
 
     private fun onChanged(version: Long?) {
         when {
-            version == null -> local.update { it.copy(notIncluded = true) }
+            version == null -> local.update { it.copy(notIncluded = true, prompt = null) }
             local.value.dirty -> local.update { it.copy(changedElsewhere = true) }
-            else -> load()
+            else -> load(force = false)
         }
     }
 
@@ -238,7 +261,12 @@ class ItemWaysViewModel @Inject constructor(
     }
 
     fun setEach(on: Boolean) {
-        if (on) edit { it.copy(run = it.run?.copy(each = true)) } else local.update { it.copy(confirm = WaysConfirm.EachOff) }
+        when {
+            on -> edit { it.copy(run = it.run?.copy(each = true)) }
+            // Off only with a program (AA7): the switch is disabled then, and the view model holds to it too.
+            local.value.draft?.run?.programs.isNullOrEmpty() -> Unit
+            else -> local.update { it.copy(confirm = WaysConfirm.EachOff) }
+        }
     }
 
     fun dismissConfirm() = local.update { it.copy(confirm = null) }
@@ -284,10 +312,14 @@ class ItemWaysViewModel @Inject constructor(
         local.update { it.copy(openProgram = index, editInput = p.program, editProblem = null, variableInput = "", variableProblem = null) }
     }
 
-    /** Back from the program's page: a changed program text is applied first (and stays when it is refused). */
+    /**
+     * Back from the program's page: a changed program text is applied first. When it is refused the page stays with the
+     * problem shown; Back again leaves and drops that text.
+     */
     fun closeProgram(): Boolean {
-        if (!applyEdit()) return false
-        local.update { it.copy(openProgram = null, variableInput = "", variableProblem = null) }
+        val refusedBefore = local.value.editProblem != null
+        if (!refusedBefore && !applyEdit()) return false
+        local.update { it.copy(openProgram = null, editInput = "", editProblem = null, variableInput = "", variableProblem = null) }
         return true
     }
 
@@ -407,7 +439,7 @@ class ItemWaysViewModel @Inject constructor(
     fun submitPassword() {
         val p = local.value.prompt ?: return
         if (p.password.isEmpty() || p.sending) return
-        local.update { it.copy(prompt = p.copy(sending = true)) }
+        local.update { it.copy(prompt = p.copy(password = "", sending = true)) }
         send(password = p.password, resent = p.resend)
     }
 
@@ -418,8 +450,10 @@ class ItemWaysViewModel @Inject constructor(
 
     private fun send(password: String?, resent: Boolean) {
         val s = local.value
-        val cur = s.read ?: return
-        val next = s.draft ?: return
+        val cur = s.read
+        val next = s.draft
+        // An item no longer included saves nothing (AA7), also from a prompt that was open when that was learnt.
+        if (cur == null || next == null || s.notIncluded) return
         local.update { it.copy(saving = true, refused = null) }
         viewModelScope.launch {
             val r = try {
@@ -428,12 +462,13 @@ class ItemWaysViewModel @Inject constructor(
                 local.update { it.copy(saving = false) }
             }
             // One resend after `credential_locked`, whatever the repository answers (AA7 "Saving").
-            onSaved(if (resent && r == ItemWaysSave.CredentialLocked) ItemWaysSave.LockedAgain else r)
+            onSaved(if (resent && r == ItemWaysSave.CredentialLocked) ItemWaysSave.LockedAgain else r, sent = next)
         }
     }
 
     private fun turnOff(way: ItemWay) {
         val cur = local.value.read ?: return
+        if (local.value.notIncluded) return
         local.update { it.copy(saving = true, refused = null) }
         viewModelScope.launch {
             val r = try {
@@ -445,11 +480,16 @@ class ItemWaysViewModel @Inject constructor(
         }
     }
 
+    /** [sent] is the draft the save sent: an edit made while it was out stays in the draft after a `Saved`. */
     @Suppress("CyclomaticComplexMethod")
-    private fun onSaved(r: ItemWaysSave) {
+    private fun onSaved(r: ItemWaysSave, sent: ItemWays? = null) {
         when (r) {
             is ItemWaysSave.Saved -> local.update {
-                it.copy(read = r.read, draft = r.read.ways, prompt = null, notice = WaysNotice.Saved, changedElsewhere = false)
+                val keep = sent != null && it.draft != sent
+                it.copy(
+                    read = r.read, draft = if (keep) it.draft else r.read.ways, prompt = null, notice = WaysNotice.Saved,
+                    changedElsewhere = false,
+                )
             }
             ItemWaysSave.NeedsPassword -> local.update { it.copy(prompt = WaysPrompt()) }
             ItemWaysSave.CredentialLocked -> local.update { it.copy(prompt = WaysPrompt(resend = true)) }

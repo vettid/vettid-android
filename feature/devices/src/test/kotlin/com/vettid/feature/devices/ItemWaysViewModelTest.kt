@@ -20,6 +20,7 @@ import com.vettid.core.data.votes.WindowNotClosed
 import com.vettid.core.testing.FakeDevices
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.vault.VaultJson
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -50,15 +51,21 @@ class ItemWaysViewModelTest {
         val offs = mutableListOf<String>()
         var reads = 0
 
+        /** Held until completed: a read's or a save's answer waits for it (one answer per gate). */
+        val readGates = ArrayDeque<CompletableDeferred<String?>>()
+        var saveGate: CompletableDeferred<Unit>? = null
+
         override suspend fun list(agentId: String): List<ItemWaysRead> = emptyList()
 
         override suspend fun read(agentId: String, itemId: String): ItemWaysRead? {
             reads++
-            return current?.let { ItemWaysRules.one(it.toByteArray()) }
+            val answer = readGates.removeFirstOrNull()?.await() ?: current
+            return answer?.let { ItemWaysRules.one(it.toByteArray()) }
         }
 
         override suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean): ItemWaysSave {
             saves += Sent(next, password, resent)
+            saveGate?.await()
             return answers.removeFirstOrNull() ?: ItemWaysSave.Saved(ItemWaysRules.one(VaultJson.bytes(next.setBody()))!!)
         }
 
@@ -292,9 +299,8 @@ class ItemWaysViewModelTest {
         advanceUntilIdle()
         m.setRun(true)
         assertTrue(st(m).draft!!.run!!.each)
-        m.setEach(false) // with no program it stays on (the switch is disabled); the page would not offer this
-        assertEquals(WaysConfirm.EachOff, st(m).confirm)
-        m.dismissConfirm()
+        m.setEach(false) // with no program it stays on: the switch is disabled, and the view model refuses it too
+        assertNull(st(m).confirm)
         m.setProgramInput("bin/git")
         m.addProgram()
         assertEquals(ProgramProblem.NOT_PATH_OR_NAME, st(m).programProblem)
@@ -430,10 +436,113 @@ class ItemWaysViewModelTest {
         devices.changes.emit(AgentChange.Item("a1", "i1", 3))
         advanceUntilIdle()
         assertTrue(st(m).changedElsewhere && st(m).dirty)
+        val reads = repo.reads
         devices.changes.emit(AgentChange.Item("a1", "other", 3))
+        advanceUntilIdle()
+        assertEquals("another item's change reads nothing", reads, repo.reads)
+        assertTrue(st(m).dirty)
         devices.changes.emit(AgentChange.Item("a1", "i1", null))
         advanceUntilIdle()
         assertTrue(st(m).notIncluded)
         assertFalse(st(m).canSave)
+    }
+
+    /** A save's answer keeps what the member changed while it was out (the draft is not the one sent). */
+    @Test
+    fun anEditDuringASaveIsKept() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal","proxy"],"proxy":{"hosts":["a.example.com","b.example.com"],"header":"Authorization","prefix":"Bearer "}}"""
+        repo.saveGate = CompletableDeferred()
+        val m = vm()
+        advanceUntilIdle()
+        m.removeHost("b.example.com")
+        m.save()
+        advanceUntilIdle()
+        m.setHeader("X-Api-Key")
+        repo.saveGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(WaysNotice.Saved, st(m).notice)
+        assertEquals("X-Api-Key", st(m).draft!!.proxy!!.header)
+        assertEquals(listOf("a.example.com"), st(m).draft!!.proxy!!.hosts)
+        assertTrue("still to be saved", st(m).dirty)
+    }
+
+    /** An event's re-read keeps an edit made while it was out; of two reads only the latest is applied. */
+    @Test
+    fun anEventsReadKeepsAnEditAndOnlyTheLatestApplies() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        val m = vm()
+        advanceUntilIdle()
+        val slow = CompletableDeferred<String?>()
+        repo.readGates += slow
+        devices.changes.emit(AgentChange.Item("a1", "i1", 2))
+        advanceUntilIdle()
+        m.setReveal(false)
+        slow.complete("""{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"]}""")
+        advanceUntilIdle()
+        assertEquals(2L, st(m).read!!.ways!!.version)
+        assertFalse("the edit is kept", ItemWay.REVEAL in st(m).draft!!.ways)
+        assertTrue(st(m).changedElsewhere)
+        // Show the current ones (a forced read) twice; the first answers last and is not applied.
+        val older = CompletableDeferred<String?>()
+        val newer = CompletableDeferred<String?>()
+        repo.readGates += older
+        repo.readGates += newer
+        m.load()
+        m.load()
+        advanceUntilIdle()
+        newer.complete("""{"agent_id":"a1","item_id":"i1","version":4,"ways":["use"]}""")
+        advanceUntilIdle()
+        older.complete("""{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","reveal"]}""")
+        advanceUntilIdle()
+        assertEquals(4L, st(m).read!!.ways!!.version)
+        assertEquals(setOf(ItemWay.USE), st(m).draft!!.ways)
+        assertFalse(st(m).changedElsewhere || st(m).loading)
+    }
+
+    /** No `version` closes the prompt and saves nothing; included again, the page is back. */
+    @Test
+    fun notIncludedSavesNothingUntilIncludedAgain() = runTest(main.dispatcher) {
+        repo.answers += ItemWaysSave.NeedsPassword
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(true)
+        m.confirm()
+        m.save()
+        advanceUntilIdle()
+        m.setPassword("pw")
+        devices.changes.emit(AgentChange.Item("a1", "i1", null))
+        advanceUntilIdle()
+        assertNull(st(m).prompt)
+        m.submitPassword()
+        m.save()
+        advanceUntilIdle()
+        assertEquals("only the first save went out", 1, repo.saves.size)
+        m.load()
+        advanceUntilIdle()
+        assertFalse(st(m).notIncluded)
+        m.setReveal(true)
+        m.confirm()
+        assertTrue("the page saves again", st(m).canSave)
+    }
+
+    /** A changed program text counts as a change; Back with a refused text stays once, then leaves without it. */
+    @Test
+    fun aTypedProgramTextIsAChangeAndBackDropsARefusedOne() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]},{"program":"git","env":[]}],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.openProgram(0)
+        m.setEditInput("curl")
+        assertTrue(st(m).canSave && st(m).holdsInput)
+        m.save()
+        advanceUntilIdle()
+        assertEquals(listOf("curl", "git"), repo.saves.single().next.run!!.programs.map { it.program })
+        m.openProgram(0)
+        m.setEditInput("GIT")
+        assertFalse("refused on Back", m.closeProgram())
+        assertEquals(ProgramProblem.DUPLICATE, st(m).editProblem)
+        assertTrue("Back again leaves", m.closeProgram())
+        assertNull(st(m).openProgram)
+        assertFalse(st(m).dirty)
     }
 }

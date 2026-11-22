@@ -3,6 +3,12 @@
 
 package com.vettid.feature.devices
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertTextEquals
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
@@ -187,5 +193,41 @@ class ItemWaysPageTest {
         rule.setContent { ShownStringBox("g" + rlo + "it") }
         rule.onNodeWithTag("shown_string").assertTextContains("U+202E", substring = true)
         rule.onNodeWithTag("shown_string", useUnmergedTree = true).assertContentDescriptionContains("escaped character U+202E", substring = true)
+    }
+
+    /** AA7 "Saving" (0.1.138): the vault's message inside the sentence, or the fallback; announced, on the page. */
+    @Test
+    fun aRefusedSaveShowsTheVaultsReasonOrTheFallback() {
+        var state by mutableStateOf(page(all) { it.copy(refused = "run.programs[0].env[1]: VETTID_IN is reserved") })
+        rule.setContent { ItemWaysScreen(state, ItemWaysActions()) }
+        rule.onNodeWithTag("ways_refused")
+            .assertTextEquals("These settings could not be saved. Your vault answered: run.programs[0].env[1]: VETTID_IN is reserved.")
+        state = state.copy(refused = "")
+        rule.onNodeWithTag("ways_refused").assertTextEquals(
+            "These settings could not be saved: your vault refused one of them. Check the programs, the variables, the folders, the hosts, the header name and the prefix.",
+        )
+        state = state.copy(refused = null)
+        rule.onNodeWithTag("ways_refused").assertDoesNotExist()
+    }
+
+    /** A read-only page whose answer has `run.folders`: "Stop runs" says the folders go too. */
+    @Test
+    fun readOnlyStopRunsNamesTheFolders() {
+        val folders = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true,"folders":[{"path":"/home/me/src","write":false}]}}"""
+        val r = ItemWaysRules.one(folders.toByteArray())!!
+        assertEquals("read only until AA9", null, r.ways)
+        show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", loading = false, read = r, confirm = WaysConfirm.RunOff))
+        rule.onNodeWithText("The programs you listed, their variables, their recorded fingerprints and the folders runs may use are removed.").assertExists()
+    }
+
+    /** A re-read that failed while settings are shown says so, with Try again. */
+    @Test
+    fun aFailedReloadIsShown() {
+        var retried = false
+        show(page(all) { it.copy(loadError = VaultFailure(FailureKind.NETWORK)) }, ItemWaysActions(onRetry = { retried = true }))
+        rule.onNodeWithTag("ways_reload_failed").assertExists()
+        rule.onNodeWithText("These settings could not be loaded.").assertExists()
+        rule.onNodeWithText("Try again").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(true, retried)
     }
 }

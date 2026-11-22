@@ -152,6 +152,9 @@ class ItemWaysRead(
     /** The vault's answer held `run.folders` (VAULT-MESSAGING 0.93.0): AA9's folders settings may be shown. */
     val foldersKnown: Boolean get() = ways?.run?.folders != null
 
+    /** The answer carries `run.folders`, read or not (a read-only page's "Stop runs" text says the folders go too). */
+    val answerHasFolders: Boolean get() = (raw["run"] as? JsonObject)?.containsKey("folders") == true
+
     /** The same read, listed for another agent than the one asked about: read only. */
     fun asForeign(): ItemWaysRead = ItemWaysRead(agentId, itemId, ways = null, raw, rawWays, strict, foreign = true)
 

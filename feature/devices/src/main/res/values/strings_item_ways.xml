@@ -3,7 +3,7 @@
     <!-- ANDROID-PLAN 0.1.137 §4 "How an agent may use an item (AA7)". Unless a line says otherwise, every string here is
          the plan's NEW text, approved by the owner 2026-11-22 (GC #16443: "the NEW texts as proposed", the seven open
          items included), word for word; "draft" marks AGENT-PLAN §11's drafts, as the plan gives them; "new (app)" marks
-         a text the plan does not give, not yet approved. ItemWaysTextsTest holds them. -->
+         a text the plan does not give, not yet approved. ItemWaysTextTest holds them. -->
 
     <!-- The agent's page -->
     <string name="ways_items_title">Items it may use</string>

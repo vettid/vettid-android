@@ -183,6 +183,16 @@ fun ItemWaysScreen(state: ItemWaysUiState, actions: ItemWaysActions, modifier: M
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(horizontal = Spacing.gutter).semantics { heading() }.testTag("ways_title"),
                 )
+                // A re-read that failed while settings are shown: they may be out of date (a conflict's reload, an event's).
+                if (e != null) {
+                    NoticeCard(
+                        kind = NoticeKind.WARNING,
+                        title = stringResource(R.string.ways_load_failed),
+                        body = failureText(e.kind.messageRes(), e.kind.vaultCode(e.shownCode)),
+                        modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("ways_reload_failed"),
+                        actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.ways_retry)) } },
+                    )
+                }
                 PageNotices(state, actions)
                 val d = state.draft
                 when {
@@ -544,7 +554,9 @@ private fun WaysDialogs(state: ItemWaysUiState, actions: ItemWaysActions) {
     when (val c = state.confirm) {
         WaysConfirm.RunOff -> ConfirmDialog(
             title = stringResource(R.string.ways_run_off_title, item),
-            text = stringResource(if (state.read?.foldersKnown == true) R.string.ways_run_off_body_folders else R.string.ways_run_off_body),
+            text = stringResource(
+                if (state.read?.answerHasFolders == true) R.string.ways_run_off_body_folders else R.string.ways_run_off_body,
+            ),
             confirmLabel = stringResource(R.string.ways_turn_off),
             onConfirm = actions.onConfirm,
             onDismiss = actions.onDismissConfirm,
@@ -799,7 +811,8 @@ private fun RefusedCard(message: String) {
     Surface(
         shape = MaterialTheme.shapes.medium,
         border = BorderStroke(1.dp, colors.error),
-        modifier = Modifier.fillMaxWidth().testTag("ways_refused").semantics { liveRegion = LiveRegionMode.Polite },
+        modifier = Modifier.fillMaxWidth().testTag("ways_refused")
+            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
     ) {
         Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp))
     }
