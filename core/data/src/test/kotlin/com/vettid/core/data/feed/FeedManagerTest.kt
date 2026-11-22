@@ -44,6 +44,9 @@ class FeedManagerTest {
         val known = mutableMapOf<String, FeedItem>()
         var counter = 100L
         var gate: CompletableDeferred<Unit>? = null
+
+        /** One gate per `list` call, in order, before [gate]: each read waits on its own. */
+        val gates = ArrayDeque<CompletableDeferred<Unit>>()
         var refuse = setOf<String>()
         var retention: Int? = null
         var failLists = 0
@@ -51,8 +54,11 @@ class FeedManagerTest {
         var deleteGate: CompletableDeferred<Unit>? = null
 
         override suspend fun list(afterSeq: Long, limit: Int): FeedPage {
-            synchronized(this) { lists += afterSeq }
-            gate?.await()
+            val own = synchronized(this) {
+                lists += afterSeq
+                gates.removeFirstOrNull()
+            }
+            (own ?: gate)?.await()
             if (synchronized(this) { failLists > 0 && failLists-- > 0 }) throw VaultOpException("feed.list", "internal")
             return synchronized(this) { pages.removeFirstOrNull() } ?: FeedPage(emptyList(), counter)
         }
@@ -1998,6 +2004,328 @@ class FeedManagerTest {
         m.onItem(g3, notify = true, wake = true, m = event(g3)) // new, above the mark
         assertEquals(listOf("g3"), arrived)
         settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("g3"), arrived)
+    }
+
+    /**
+     * A held event of a start no push caused (waiting for the read while the list is not loaded), then a new item's push
+     * above the mark: the push is notified at once, not behind the held event, even though the read then fails (which
+     * releases nothing and starts no other).
+     */
+    @Test
+    fun aNewPushIsNotHeldBehindAnEventWaitingForTheRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now) // not loaded until the lift's read
+        synchronized(ops) { ops.failLists = 1 } // that read fails
+        m.replay(event(item("x3", 3)), wake = false) // no push: waits for the read
+        val g4 = item("g4", 4)
+        m.replay(event(g4), wake = true) // a new item's push, above the mark
+        assertEquals(listOf("g4"), arrived)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("g4"), arrived)
+    }
+
+    /**
+     * The same, but the read then succeeds: the push is notified once (at once, not again at the read's end), and the held
+     * event after it, judged against the list.
+     */
+    @Test
+    fun aPushNotifiedAheadOfAnEventWaitingForTheReadIsNotNotifiedAgain() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        val x3 = item("x3", 3)
+        val g4 = item("g4", 4)
+        listOf(x3, g4).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), x3, g4), 4)
+        m.replay(event(x3), wake = false)
+        m.replay(event(g4), wake = true)
+        assertEquals(listOf("g4"), arrived)
+        settle { m.readsUnderWay == 0 && arrived.size >= 2 }
+        assertEquals(listOf("g4", "x3"), arrived)
+    }
+
+    /**
+     * Where the order matters it is kept: an event the release check held comes first, so a push that comes after the
+     * check (before its release), with the list not loaded, still waits behind it, and both come in order at the release.
+     */
+    @Test
+    fun aPushStillWaitsBehindWhatTheReleaseCheckHeld() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now) // not loaded until a read
+        val x3 = item("x3", 3)
+        val g4 = item("g4", 4)
+        listOf(x3, g4).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), x3, g4), 4)
+        m.replay(event(x3), wake = false) // held by the check
+        checking = false // the check is over; what it held is not released yet
+        m.replay(event(g4), wake = true)
+        assertEquals("the push overtook what the check held", emptyList<String>(), arrived)
+        m.releaseHeld()
+        settle { m.readsUnderWay == 0 && arrived.size >= 2 }
+        assertEquals(listOf("x3", "g4"), arrived)
+    }
+
+    /**
+     * Once a read has loaded the list, the order is the old one again: with another read still under way (what waited for
+     * the first is released at its end), a push keeps its place behind the held event (neither applied nor notified ahead
+     * of it), and is notified once, at that end.
+     */
+    @Test
+    fun aPushWaitsBehindTheHeldEventsOnceTheListIsLoaded() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        val x3 = item("x3", 3)
+        val g4 = item("g4", 4)
+        listOf(x3, g4).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), x3), 3)
+        ops.pages += FeedPage(listOf(g4), 4)
+        val first = CompletableDeferred<Unit>()
+        val second = CompletableDeferred<Unit>()
+        synchronized(ops) { ops.gates += first; ops.gates += second }
+        val before = ops.lists.size
+        m.replay(event(x3), wake = false) // waits for the read, and starts it: the full read, waiting
+        settle { ops.lists.size == before + 1 }
+        m.catchUp() // a second read, behind the first
+        settle { m.readsUnderWay == 2 }
+        first.complete(Unit)
+        settle { ops.lists.size == before + 2 && m.load.value == ListLoad.LOADED && m.readsUnderWay == 1 }
+        m.replay(event(g4), wake = true)
+        assertEquals("the push overtook the held event with the list loaded", emptyList<String>(), arrived)
+        assertTrue("the push was applied ahead of the held event", m.items.value.none { it.itemId == "g4" })
+        second.complete(Unit)
+        settle { m.readsUnderWay == 0 && "g4" in arrived }
+        assertEquals(1, arrived.count { it == "g4" })
+    }
+
+    /**
+     * An arrival queued behind an event that waits for the read waits for the read too: a push that comes next is notified
+     * at once, not behind either, though the read then fails.
+     */
+    @Test
+    fun aNewPushIsNotHeldBehindAnArrivalWaitingForTheRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, batchItem("b", 1, "r1", count = 3), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("x3", 3)), wake = false) // waits for the read
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3")) // b posted again: queued behind it
+        assertEquals(emptyList<String>(), arrived)
+        val g4 = item("g4", 4)
+        m.replay(event(g4), wake = true)
+        assertEquals(listOf("g4"), arrived)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("g4"), arrived)
+    }
+
+    /**
+     * An arrival the release check held comes before a push that comes after the check, with the list not loaded: the push
+     * waits behind it, and both come in order at the release.
+     */
+    @Test
+    fun aPushStillWaitsBehindAnArrivalTheReleaseCheckHeld() = runTest {
+        val ops = Ops()
+        var checking = true
+        val b = batchItem("b", 1, "r1", count = 3)
+        val m = openedEarlier(ops, b, item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        val g4 = item("g4", 4)
+        ops.known[g4.itemId] = g4
+        ops.pages += FeedPage(listOf(b, item("h2", 2), g4), 4)
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3")) // held by the check
+        checking = false
+        m.replay(event(g4), wake = true)
+        assertEquals("the push overtook what the check held", emptyList<String>(), arrived)
+        m.releaseHeld()
+        settle { m.readsUnderWay == 0 && arrived.size >= 2 }
+        assertEquals(listOf("b", "g4"), arrived)
+    }
+
+    /**
+     * A push held behind what the release check held, then the read its release starts fails: with a push held, one
+     * catch-up is made, whose read releases both in order.
+     */
+    @Test
+    fun aHeldPushIsRetriedOnceAfterAFailedReadOfAFeedNotLoaded() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        val x3 = item("x3", 3)
+        val g4 = item("g4", 4)
+        listOf(x3, g4).forEach { ops.known[it.itemId] = it }
+        ops.pages += FeedPage(listOf(item("i1", 1), item("h2", 2), x3, g4), 4)
+        synchronized(ops) { ops.failLists = 1 } // the release's read fails
+        m.replay(event(x3), wake = false) // held by the check
+        checking = false
+        val before = ops.lists.size
+        m.replay(event(g4), wake = true) // behind it; the check is over, so this starts the release's read
+        // (settle runs the virtual clock past the catch-up's wait.)
+        settle { m.readsUnderWay == 0 && arrived.size >= 2 }
+        assertEquals(listOf("x3", "g4"), arrived)
+        assertTrue("the release's read, then the catch-up", ops.lists.size >= before + 2)
+    }
+
+    /** The same with the catch-up failing too: no other read is started (no loop). */
+    @Test
+    fun aHeldPushsCatchUpIsMadeOnceThoughItFailsToo() = runTest {
+        val ops = Ops()
+        var checking = true
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 2 } // the release's read and the catch-up's
+        m.replay(event(item("x3", 3)), wake = false)
+        checking = false
+        val before = ops.lists.size
+        m.replay(event(item("g4", 4)), wake = true) // starts the release's read
+        // (settle runs the virtual clock past every wait: a loop would read again and again.)
+        settle { ops.lists.size >= before + 2 && m.readsUnderWay == 0 }
+        assertEquals("no loop: the release's read and one catch-up", before + 2, ops.lists.size)
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /**
+     * An event that waits for the read, then another start's event queued behind it (it waits for the read too), then a
+     * push: the push is not held behind either, though the read then fails.
+     */
+    @Test
+    fun aNewPushIsNotHeldBehindEventsQueuedBehindAReadWaitingOne() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("x3", 3)), wake = false) // waits for the read
+        m.replay(event(item("y4", 4)), wake = false) // queued behind it
+        m.replay(event(item("g5", 5)), wake = true)
+        assertEquals(listOf("g5"), arrived)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(listOf("g5"), arrived)
+    }
+
+    /**
+     * A push replayed late for an older change of an item whose newer change waits for the read (here: read on another
+     * device) waits behind it and is judged with it: it notifies nothing.
+     */
+    @Test
+    fun aLateOlderPushWaitsBehindANewerChangeOfItsItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("g3", 4, status = "read")), wake = false) // its newer change: waits for the read
+        m.replay(event(item("g3", 3)), wake = true) // the older copy's push
+        settle { m.readsUnderWay == 0 }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** The same at the same change (`seq`): the push waits behind it too, judged with it. */
+    @Test
+    fun aPushWaitsBehindTheSameChangeOfItsItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("g3", 3, status = "read")), wake = false) // read on another device, at that change
+        m.replay(event(item("g3", 3)), wake = true)
+        settle { m.readsUnderWay == 0 }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /**
+     * An arrival that waited for the read, then held again by a release check: it is what the check held now, so a push
+     * that comes after the check, with the list not loaded, waits behind it.
+     */
+    @Test
+    fun anArrivalTheCheckHeldAgainIsWaitedFor() = runTest {
+        val ops = Ops()
+        var checking = false
+        val m = openedEarlier(ops, batchItem("b", 1, "r1", count = 3), item("h2", 2), held = { checking })
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 2 }
+        m.replay(event(item("x3", 3)), wake = false) // waits for the read
+        m.askWithdrawn(withdrawn(2, "auth:r1", "auth:r2", "auth:r3")) // b, queued behind it: waits for the read too
+        checking = true
+        m.askWithdrawn(withdrawn(1, "auth:r1", "auth:r2")) // b again, now held by the check
+        checking = false
+        m.replay(event(item("g4", 4)), wake = true)
+        assertEquals("the push overtook what the check held", emptyList<String>(), arrived)
+    }
+
+    /**
+     * A push copy the opening already covered, kept while the list is not loaded, then the read fails: one catch-up is
+     * made, whose read judges the copy against the list (it notifies the item, active and listed).
+     */
+    @Test
+    fun aCoveredCopyIsRetriedOnceAfterAFailedRead() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 } // the read the push starts fails
+        ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2) // the catch-up's answer
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // (settle runs the virtual clock past the catch-up's wait.)
+        settle { m.readsUnderWay == 0 && arrived.isNotEmpty() }
+        assertEquals(listOf("y2"), arrived)
+    }
+
+    /** The same with the catch-up failing too: no other read is started (no loop), and the copy is not notified. */
+    @Test
+    fun aCoveredCopysCatchUpIsMadeOnceThoughItFailsToo() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 2 } // the push's read and the catch-up's
+        val before = ops.lists.size
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // (settle runs the virtual clock past every wait: a loop would read again and again.)
+        settle { ops.lists.size >= before + 2 && m.readsUnderWay == 0 }
+        assertEquals("no loop: the push's read and one catch-up", before + 2, ops.lists.size)
+        assertEquals(emptyList<String>(), arrived)
+    }
+
+    /** A push for a newer change of an item whose older change waits for the read is notified at once. */
+    @Test
+    fun aNewerPushIsNotHeldBehindAnOlderChangeOfItsItem() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("h2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 1 }
+        m.replay(event(item("g3", 3)), wake = false) // an older change, waiting for the read
+        m.replay(event(item("g3", 4)), wake = true)
         assertEquals(listOf("g3"), arrived)
     }
 
