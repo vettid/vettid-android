@@ -104,6 +104,9 @@ object ApprovalParser {
             Approval.DeviceRequest(
                 type, it, name(body), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
                 held = HeldRequests.of(body.s("role"), body.s("type"), body.o("body"), strict(raw)),
+                replaces = body.s("replaces")?.takeIf { r ->
+                    r.isNotEmpty() && body.s("role") == "agent" && body.o("body")?.s("op") in REFERRED_OPS
+                },
             )
         }
         "device.session.pending" -> body.s("request_id")?.let {
@@ -114,6 +117,9 @@ object ApprovalParser {
         }
         else -> null
     }
+
+    /** The ops an approval may be referred again for (§6.8 step 4). */
+    private val REFERRED_OPS = setOf("item.run", "item.proxy")
 
     /** [raw] read strictly; null when absent or when it does not read so (a duplicate member, nesting, encoding). */
     @Suppress("SwallowedException")

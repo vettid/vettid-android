@@ -538,6 +538,11 @@ sealed interface Approval {
         val seconds: Int? = null,
         /** What a held approval asks (AA5); null for a session request and for one known only from its feed item. */
         val held: HeldRequest? = null,
+        /**
+         * The approval an agent's `item.run` or `item.proxy` referred again `replaces` (§6.8 step 4), read from the
+         * envelope whatever [held] reads as: a deny-only one still replaces the approval it names.
+         */
+        val replaces: String? = null,
         /** Known only from its feed item (the process ended, `pending.list` not read): deny-only, or Allow for a session. */
         val fromFeed: Boolean = false,
     ) : Approval {

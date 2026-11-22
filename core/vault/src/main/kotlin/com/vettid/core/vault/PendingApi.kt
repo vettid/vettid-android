@@ -17,7 +17,11 @@ import java.time.Instant
  * each entry's `body` as its exact source text, by index, when the answer reads strictly (no duplicate member anywhere);
  * else every one is null (ANDROID-PLAN 0.1.138 AA8 "Fail closed": an agent's run, proxy and reveal are then deny only).
  */
-class PendingPage(val asks: List<JsonObject>, val next: String?, val ts: Instant, val rawBodies: List<String?> = asks.map { null })
+class PendingPage(val asks: List<JsonObject>, val next: String?, val ts: Instant, val rawBodies: List<String?> = asks.map { null }) {
+    init {
+        require(rawBodies.size == asks.size) { "rawBodies" }
+    }
+}
 
 /**
  * `pending.list{after?, limit?}` (`limit` 1-100): `{asks: [{kind, body}], next?}` with the response's `ts`, which the app
@@ -35,15 +39,19 @@ suspend fun VaultApi.pendingList(after: String? = null, limit: Int? = null): Pen
         val error = r.inner.error
         throw VaultOpException("pending.list", error?.code ?: "error", error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
     }
-    val listed = (r.body["asks"] as? JsonArray).orEmpty()
-    val strict = strictAsks(r.inner.body)?.takeIf { it.size == listed.size }
+    val (asks, raws) = pendingAsks(r.body, r.inner.body)
+    return PendingPage(asks, VaultJson.str(r.body, "next"), r.ts, raws)
+}
+
+/**
+ * The answer's object entries and, by the same index, each one's `body` as its exact source text from a strict reading
+ * of [answer]; every text is null when it does not read strictly. Entries that are not objects are left out of both.
+ */
+internal fun pendingAsks(lenient: JsonObject, answer: ByteArray): Pair<List<JsonObject>, List<String?>> {
+    val listed = (lenient["asks"] as? JsonArray).orEmpty()
+    val strict = strictAsks(answer)?.takeIf { it.size == listed.size }
     val kept = listed.indices.filter { listed[it] is JsonObject }
-    return PendingPage(
-        kept.map { listed[it] as JsonObject },
-        VaultJson.str(r.body, "next"),
-        r.ts,
-        kept.map { i -> ((strict?.get(i) as? StrictObject)?.get("body") as? StrictObject)?.raw },
-    )
+    return kept.map { listed[it] as JsonObject } to kept.map { i -> ((strict?.get(i) as? StrictObject)?.get("body") as? StrictObject)?.raw }
 }
 
 /** The answer's `asks`, read strictly; null when it does not read so. */

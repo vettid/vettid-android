@@ -183,9 +183,8 @@ class SocialManager internal constructor(
     }
 
     /** The key of the approval [a] replaces, if it is a run or a proxy referred again. */
-    private fun replacedKey(a: Approval): String? = (a as? Approval.DeviceRequest)?.let { d ->
-        ((d.held as? HeldRequest.ItemRun)?.replaces ?: (d.held as? HeldRequest.ItemProxy)?.replaces)?.let { d.copy(id = it).key }
-    }
+    private fun replacedKey(a: Approval): String? =
+        (a as? Approval.DeviceRequest)?.let { d -> d.replaces?.takeIf { it != d.id }?.let { d.copy(id = it).key } }
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val declinesFlow = MutableStateFlow<List<PeerDecline>>(emptyList())
@@ -292,6 +291,7 @@ class SocialManager internal constructor(
      */
     internal fun listedNow(): List<Approval> =
         denyDiffering(merge(storedFlow.value, listedFlow.value + requestsFlow.value, connectionsFlow.value, now()), mismatchFlow.value)
+            .filterNot { it.key in replacedFlow.value }
 
     /** Location requests the member answered "Not now" (memory only, dropped at lock and hold). */
     private val dismissedLocationFlow = MutableStateFlow<Set<String>>(emptySet())
@@ -684,8 +684,10 @@ class SocialManager internal constructor(
         val shown = held.mapNotNull { parsed(it) as? Approval.DeviceRequest }.associateBy { it.key }
         val differ = listed.mapNotNull { e ->
             val old = shown[e.key] ?: return@mapNotNull null
-            val now = ApprovalParser.parse(e.type, e.body, now(), e.raw) as? Approval.DeviceRequest ?: return@mapNotNull e.key
-            e.key.takeIf { !HeldRequests.same(old.held, now.held) || old.role != now.role || old.requestType != now.requestType }
+            val listed = ApprovalParser.parse(e.type, e.body, now(), e.raw) as? Approval.DeviceRequest ?: return@mapNotNull e.key
+            val same = HeldRequests.same(old.held, listed.held) && old.role == listed.role && old.requestType == listed.requestType &&
+                old.deviceName == listed.deviceName && old.replaces == listed.replaces
+            e.key.takeIf { !same }
         }
         if (differ.isNotEmpty()) mismatchFlow.update { it + differ }
     }
@@ -1074,7 +1076,7 @@ class SocialManager internal constructor(
                     val left = (o["items"] as? JsonArray).orEmpty().filter {
                         ((it as? JsonObject)?.get("item_id") as? JsonPrimitive)?.content !in ids
                     }
-                    if (left.isEmpty()) null else e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))))
+                    if (left.isEmpty()) null else e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))), raw = false)
                 },
             )
         }
@@ -1732,8 +1734,9 @@ class SocialManager internal constructor(
                 // referred again replaces the approval it names.
                 noteMismatches(l.events, plan.entries)
                 noteReplaced(plan.entries)
+                val replaced = replacedFlow.value
                 l.copy(
-                    events = kept + plan.entries.filter { it.key !in stillThere }
+                    events = kept.filter { keyOf(it) !in replaced } + plan.entries.filter { it.key !in stillThere && it.key !in replaced }
                         .map { StoredEvent(it.type, it.raw ?: enc(it.body), firstSeen[it.key] ?: at, raw = it.raw != null) },
                 )
             }
@@ -1940,7 +1943,7 @@ class SocialManager internal constructor(
         return when {
             left.isEmpty() -> null
             left.size == all.size -> e
-            else -> e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))))
+            else -> e.copy(body = enc(JsonObject(o + ("items" to JsonArray(left)))), raw = false)
         }
     }
 
@@ -2001,7 +2004,8 @@ class SocialManager internal constructor(
     }
 
     private fun find(key: String): Approval? = approvals.value.firstOrNull { it.key == key }
-        ?: denyDiffering(storedFlow.value.mapNotNull(::parsed), mismatchFlow.value).firstOrNull { it.key == key }
+        ?: denyDiffering(storedFlow.value.mapNotNull(::parsed), mismatchFlow.value)
+            .firstOrNull { it.key == key && it.key !in replacedFlow.value }
 
     private fun noteNotFound(key: String) = synchronized(notFoundKeys) {
         notFoundKeys += key

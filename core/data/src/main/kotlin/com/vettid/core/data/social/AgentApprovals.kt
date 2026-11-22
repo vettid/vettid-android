@@ -27,9 +27,6 @@ object AgentApprovals {
     /** `proxy`'s members (0.92.0). */
     private val PROXY_NOTE = setOf("host", "header", "prefix")
 
-    /** An `item.get` body's members. */
-    private val GET_BODY = setOf("op", "item_id", "fields")
-
     /** The members only a run of AA9 (member folders and files) carries: until AA9 is built such a run is deny only. */
     private val AA9_TOP = setOf("folders")
     private val AA9_BODY = setOf("inputs", "output")
@@ -48,10 +45,9 @@ object AgentApprovals {
     /** An `item.get`'s envelope: known members only, no `proxy` or `replaces`, and `flags` at most `history`. */
     @Suppress("ReturnCount") // each early false is one rule of AA8's list
     fun getShown(p: StrictObject): Boolean {
-        val body = p["body"] as? StrictObject ?: return false
+        if (p["body"] !is StrictObject) return false
         val flags = flags(p) ?: return false
-        return envelope(p, allowProxy = false, allowReplaces = false) && body.members.keys.all { it in GET_BODY } &&
-            flags.all { it == "history" } && noRunMembers(p)
+        return envelope(p, allowProxy = false, allowReplaces = false) && flags.all { it == "history" } && noRunMembers(p)
     }
 
     /** An `item.run`, or [HeldRequest.Unshown]. */

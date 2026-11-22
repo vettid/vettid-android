@@ -90,7 +90,7 @@ class HeldRequestsTest {
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","flags":["shell"]"""))
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","replaces":"a0""""))
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","proxy":{"host":"a.example.com","header":"X","prefix":""}"""))
-        assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1","extra":1}"""))
+        assertTrue("a body member is not judged for a reveal", held("""{"op":"item.get","item_id":"i1","extra":1}""") is HeldRequest.ItemGet)
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","what":1"""))
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1","item_id":"i2"}"""))
         assertTrue(held("""{"op":"item.get","item_id":"i1"}""", ""","flags":["history"]""") is HeldRequest.ItemGet)
@@ -365,7 +365,7 @@ class HeldRequestsTest {
             "seconds as a fraction" to held(PROXY_BODY.replace("3600", "900.0"), PROXY_NOTE),
             "seconds as a string" to held(PROXY_BODY.replace("3600", "\"900\""), PROXY_NOTE),
             "any flag" to held(PROXY_BODY, PROXY_NOTE + ""","flags":["shell"]"""),
-            "an empty flags list is no flag" to held(PROXY_BODY, PROXY_NOTE + ""","flags":[],"later":1"""),
+            "an unknown member beside an empty flags list" to held(PROXY_BODY, PROXY_NOTE + ""","flags":[],"later":1"""),
             "previous_* on a proxy" to held(PROXY_BODY, PROXY_NOTE + ""","previous_sha256":"$SHA2","previous_path":"/x""""),
             "folders on a proxy" to held(PROXY_BODY, PROXY_NOTE + ""","folders":{}"""),
             "an unknown body member" to held(PROXY_BODY.replace("}", ""","path":"/v1"}"""), PROXY_NOTE),

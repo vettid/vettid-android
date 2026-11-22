@@ -210,4 +210,37 @@ class AgentApprovalsFlowTest {
         runCurrent()
         assertEquals(listOf("device:approval.pending:h2"), m.keys())
     }
+
+    @Test
+    fun aDenyOnlyReferralStillReplacesTheOneItNames() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        m.onEvent(event("approval.pending", heldWith("h2", runBody(), ""","replaces":"h1","flags":["a_later_flag"]""")))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h2"), m.keys())
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h2").held)
+    }
+
+    @Test
+    fun aListThatStillHasAReplacedApprovalDoesNotBringItBack() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        m.onEvent(event("approval.pending", heldWith("h2", runBody(), ""","replaces":"h1"""")))
+        runCurrent()
+        m.refreshPendingFrom { listed(heldWith("h1", runBody()), heldWith("h2", runBody(), ""","replaces":"h1"""")) }
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h2"), m.listedNow().map { it.key })
+        val e = runCatching { m.declineDeviceRequest("device:approval.pending:h1") }.exceptionOrNull() as? VaultFailure
+        assertEquals(FailureKind.NOT_FOUND, e?.kind)
+    }
+
+    @Test
+    fun aListedApprovalWithAnotherNameIsDenyOnly() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        runCurrent()
+        m.refreshPendingFrom { listed(heldWith("h1", runBody()).replace(""""name":"Bot"""", """"name":"Other bot"""")) }
+        runCurrent()
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h1").held)
+    }
 }
