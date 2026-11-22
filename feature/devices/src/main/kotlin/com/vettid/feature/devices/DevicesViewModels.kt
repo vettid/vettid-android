@@ -8,7 +8,10 @@ import com.vettid.core.data.devices.AgentGrant
 import com.vettid.core.data.devices.AgentResumption
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.DevicesRepository
+import com.vettid.core.data.devices.ItemWay
+import com.vettid.core.data.devices.ItemWaysList
 import com.vettid.core.data.devices.PermissionRemoval
+import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
@@ -18,6 +21,7 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.checkCleared
 import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -30,7 +34,6 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
 
 /** Immutable UI state of the Devices & agents list (ANDROID-PLAN 0.1.53 AA1). */
 data class DevicesUiState(
@@ -147,6 +150,10 @@ data class DeviceUiState(
     val confirmGrant: AgentGrant? = null,
     /** "Permission removed", "Resumed" and the like, once. */
     val notice: PermissionNotice? = null,
+    /** AA7: the items the agent's rules include, with the ways each allows (`leash.item.list{agent_id}`); memory only. */
+    val wayItems: List<WayItemRow> = emptyList(),
+    val wayItemsLoaded: Boolean = false,
+    val wayItemsError: FailureKind? = null,
 ) {
     /** The agent has the most rules it can have (64, §10.12 `share_rules_subject`): no new one. */
     val atRuleLimit: Boolean get() = rules.size >= RULE_LIMIT
@@ -176,6 +183,8 @@ class DeviceViewModel @Inject constructor(
     private val repo: DevicesRepository,
     private val sharing: SharingRepository,
     private val connections: ConnectionsRepository,
+    private val itemWays: ItemWaysList,
+    private val items: ItemsRepository,
 ) : ViewModel() {
     private val id: String = saved.get<String>(DeviceRoute.ARG).orEmpty()
     private val local = MutableStateFlow(DeviceUiState())
@@ -185,6 +194,9 @@ class DeviceViewModel @Inject constructor(
 
     /** The same for the permissions read: only the latest read's failure is shown. */
     private var permissionsRead = 0
+
+    /** The same for the items read (AA7). */
+    private var wayItemsRead = 0
 
     private val base = combine(local, repo.devices, repo.load, sharing.ruleSaved) { s, list, load, saved ->
         s.copy(
@@ -200,12 +212,20 @@ class DeviceViewModel @Inject constructor(
     private val connectionsRead = MutableStateFlow(false)
 
     val uiState: StateFlow<DeviceUiState> =
-        combine(base, repo.permissions, connections.connections, connectionsRead) { s, perms, conns, read ->
+        combine(
+            base, repo.permissions, connections.connections, connectionsRead,
+            combine(itemWays.items, items.items, items.load) {
+                    ways, its, load ->
+                Triple(ways[id], its.associate { it.itemId to it.name }, load == ListLoad.LOADED)
+            },
+        ) { s, perms, conns, read, (ways, names, namesLoaded) ->
             val mine = perms[id]
             s.copy(
                 permissions = mine?.others.orEmpty(), permissionsLoaded = mine != null,
                 connectionNames = conns.associate { it.id to it.displayName },
                 connectionsLoaded = read,
+                wayItems = ways.orEmpty().map { WayItemRow(it.itemId, names[it.itemId], namesLoaded, shownWays(it.rawWays)) },
+                wayItemsLoaded = ways != null,
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, DeviceUiState())
 
@@ -228,6 +248,7 @@ class DeviceViewModel @Inject constructor(
                     readRules()
                     readPermissions()
                     readConnections()
+                    readWayItems()
                 }
         }
         // `sync.event`s of other devices: this agent's grants, its pause, and share rules (AA3, §10.1).
@@ -235,8 +256,12 @@ class DeviceViewModel @Inject constructor(
             repo.changes.collect { change ->
                 if (uiState.value.device?.isAgent != true || !change.concerns(id)) return@collect
                 readPermissions()
-                // A rule event carries only `rule_id`: the rules are read again with the grants.
-                if (change is AgentChange.Rule) readRules()
+                // A rule event carries only `rule_id`: the rules are read again with the grants, and the items (AA7).
+                if (change is AgentChange.Rule) {
+                    readRules()
+                    readWayItems()
+                }
+                if (change is AgentChange.Item) readWayItems()
             }
         }
     }
@@ -255,7 +280,28 @@ class DeviceViewModel @Inject constructor(
 
     /** The agent's share rules; on opening and on every return to the page (the editor may have changed them). */
     fun refreshRules() {
-        if (uiState.value.device?.isAgent == true) readRules()
+        if (uiState.value.device?.isAgent == true) {
+            readRules()
+            readWayItems()
+        }
+    }
+
+    /** AA7: the items the agent's rules include, only with a vault that lists `item_ways` (decision 17). */
+    fun refreshWayItems() {
+        if (uiState.value.device?.isAgent == true) readWayItems()
+    }
+
+    private fun readWayItems() {
+        if (!sharing.itemWays) return
+        val mine = ++wayItemsRead
+        viewModelScope.launch {
+            try {
+                itemWays.list(id)
+                if (mine == wayItemsRead) local.update { it.copy(wayItemsError = null) }
+            } catch (e: VaultFailure) {
+                if (mine == wayItemsRead) local.update { it.copy(wayItemsError = e.kind) }
+            }
+        }
     }
 
     /** The agent's other permissions; on opening, on every return to the page, on Retry. */
@@ -435,3 +481,8 @@ const val REMOVED_NOTICE_MS = 3_000L
 
 /** A vault holds at most 64 share rules per subject (§10.12 `share_rules_subject`). */
 private const val RULE_LIMIT = 64
+
+/** A row of "Items it may use" (AA7): the item's name from the cache (null when it does not resolve), and its ways. */
+data class WayItemRow(val itemId: String, val name: String?, val namesLoaded: Boolean, val ways: List<ItemWay>) {
+    override fun toString(): String = "WayItemRow"
+}

@@ -454,6 +454,7 @@ fun AppShell(
                                     onBack = back,
                                     onOpenHistory = { q -> navController.navigate(DeviceHistoryRoute(q)) { launchSingleTop = true } },
                                     onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                                    onOpenAlarm = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
                                 ),
                             )
                             credentialDestination(

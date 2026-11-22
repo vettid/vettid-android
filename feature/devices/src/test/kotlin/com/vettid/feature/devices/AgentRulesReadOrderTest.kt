@@ -1,3 +1,6 @@
+// Test data: long literal rows are clearer than wrapped ones.
+@file:Suppress("MaxLineLength")
+
 package com.vettid.feature.devices
 
 import androidx.lifecycle.SavedStateHandle
@@ -35,7 +38,7 @@ class AgentRulesReadOrderTest {
         val slow = CompletableDeferred<Unit>()
         sharing.agentRulesGates += slow
         // The first read starts in init and waits for its gate.
-        val vm = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to "a1")), devices, sharing, com.vettid.core.testing.FakeSocial())
+        val vm = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to "a1")), devices, sharing, com.vettid.core.testing.FakeSocial(), com.vettid.core.data.devices.NoItemWays, com.vettid.core.testing.FakeItems())
         assertEquals(1, sharing.calls.count { it == "agentRules" })
         sharing.rulesStored += rule("r3")
         vm.refreshRules()
@@ -50,7 +53,7 @@ class AgentRulesReadOrderTest {
         val devices = FakeDevices().apply { this.devices.value = listOf(DeviceInfo("a1", "agent", "Claude", null, null, null, null)) }
         val gate = CompletableDeferred<Unit>()
         sharing.agentRulesGates += gate
-        val vm = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to "a1")), devices, sharing, com.vettid.core.testing.FakeSocial())
+        val vm = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to "a1")), devices, sharing, com.vettid.core.testing.FakeSocial(), com.vettid.core.data.devices.NoItemWays, com.vettid.core.testing.FakeItems())
         gate.complete(Unit)
         assertEquals(listOf("r1"), vm.uiState.value.rules.map { it.ruleId })
     }

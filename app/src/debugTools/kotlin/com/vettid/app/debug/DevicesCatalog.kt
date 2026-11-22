@@ -28,6 +28,17 @@ import com.vettid.feature.devices.DevicePageScreen
 import com.vettid.feature.devices.DeviceUiState
 import com.vettid.feature.devices.DevicesScreen
 import com.vettid.feature.devices.DevicesUiState
+import com.vettid.core.data.devices.HostProblem
+import com.vettid.core.data.devices.ItemWay
+import com.vettid.core.data.devices.ItemWaysRules
+import com.vettid.core.data.devices.ProgramProblem
+import com.vettid.core.data.devices.RunSettings
+import com.vettid.feature.devices.ItemWaysActions
+import com.vettid.feature.devices.ItemWaysScreen
+import com.vettid.feature.devices.ItemWaysUiState
+import com.vettid.feature.devices.WayItemRow
+import com.vettid.feature.devices.WaysConfirm
+import com.vettid.feature.devices.WaysPrompt
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
@@ -55,6 +66,29 @@ internal object DevicesCatalog {
 
     @Composable
     private fun Page(s: DeviceUiState) = DevicePageScreen(s, DevicePageActions())
+
+    // AA7: how an agent may use an item (ANDROID-PLAN 0.1.137).
+    private const val SHA = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+    private val allWays = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run","proxy","reveal"],""" +
+        """"run":{"programs":[{"program":"/usr/bin/git","sha256":"$SHA","path":"/usr/bin/git","env":["GH_HOST"]},""" +
+        """{"program":"C:\\tools\\build.cmd","env":[]},{"program":"gh","env":[]}],"each":false},""" +
+        """"proxy":{"hosts":["api.github.com","uploads.github.com"],"header":"Authorization","prefix":"Bearer "}}"""
+    private const val NO_WAYS = """{"agent_id":"a1","item_id":"i1","ways":["use"]}"""
+    private const val UNKNOWN_WAYS = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal","stream"],"stream":{"rate":1}}"""
+
+    private fun ways(json: String, f: (ItemWaysUiState) -> ItemWaysUiState = { it }): ItemWaysUiState {
+        val r = ItemWaysRules.one(json.toByteArray())!!
+        return f(ItemWaysUiState(agentName = "Claude on work laptop", itemName = "GitHub token", loading = false, read = r, draft = r.ways))
+    }
+
+    @Composable
+    private fun Ways(s: ItemWaysUiState) = ItemWaysScreen(s, ItemWaysActions())
+
+    private val wayRows = listOf(
+        WayItemRow("i1", "GitHub token", true, listOf(ItemWay.USE, ItemWay.RUN, ItemWay.PROXY, ItemWay.REVEAL)),
+        WayItemRow("i2", "Staging database", true, listOf(ItemWay.USE)),
+        WayItemRow("i3", null, true, listOf(ItemWay.USE, ItemWay.RUN)),
+    )
 
     // AA4: the agent's share rules (ANDROID-PLAN 0.1.116).
     private val askRule = ShareRule(
@@ -105,6 +139,33 @@ internal object DevicesCatalog {
         "devices.page_agent_rules_warning" to {
             Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule, autoRule), rulesLoaded = true, itemWays = false))
         },
+        "devices.page_agent_items" to {
+            Page(DeviceUiState(device = agent, loaded = true, rules = listOf(askRule), rulesLoaded = true, itemWays = true, wayItems = wayRows, wayItemsLoaded = true))
+        },
+        "devices.page_agent_items_failed" to {
+            Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true, itemWays = true, wayItemsError = FailureKind.NETWORK))
+        },
+        "devices.item_ways" to { Ways(ways(allWays)) },
+        "devices.item_ways_none" to { Ways(ways(NO_WAYS)) },
+        "devices.item_ways_read_only" to { Ways(ways(UNKNOWN_WAYS)) },
+        "devices.item_ways_program" to { Ways(ways(allWays) { it.copy(openProgram = 0, editInput = "/usr/bin/git") }) },
+        "devices.item_ways_pin_full" to { Ways(ways(allWays) { it.copy(fullPin = SHA) }) },
+        "devices.item_ways_reveal_on" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.RevealOn) }) },
+        "devices.item_ways_run_off" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.RunOff) }) },
+        "devices.item_ways_proxy_off" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.ProxyOff) }) },
+        "devices.item_ways_each_off" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.EachOff) }) },
+        "devices.item_ways_remove_last" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.RemoveLastProgram(0)) }) },
+        "devices.item_ways_forget_pin" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.ForgetPin(0)) }) },
+        "devices.item_ways_password" to { Ways(ways(allWays) { it.copy(prompt = WaysPrompt()) }) },
+        "devices.item_ways_alarm" to { Ways(ways(allWays) { it.copy(prompt = WaysPrompt(error = FailureKind.CREDENTIAL_FROZEN)) }) },
+        "devices.item_ways_program_refused" to {
+            Ways(ways(NO_WAYS) { s -> s.copy(draft = s.draft?.copy(ways = s.draft!!.ways + ItemWay.RUN, run = RunSettings()), programInput = "bin/git", programProblem = ProgramProblem.NOT_PATH_OR_NAME) })
+        },
+        "devices.item_ways_host_refused" to {
+            Ways(ways(allWays) { it.copy(hostInput = "10.0.0.1", hostProblem = HostProblem.IP_ADDRESS) })
+        },
+        "devices.item_ways_changed_elsewhere" to { Ways(ways(allWays) { it.copy(changedElsewhere = true) }) },
+        "devices.item_ways_not_included" to { Ways(ways(allWays) { it.copy(notIncluded = true) }) },
         "devices.page_agent_rules_none" to { Page(DeviceUiState(device = agent, loaded = true, rulesLoaded = true)) },
         "devices.page_agent_rules_failed" to { Page(DeviceUiState(device = agent, loaded = true, rulesError = FailureKind.NETWORK)) },
         "devices.page_agent_rules_limit" to {

@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ANDROID-PLAN 0.1.137 §4 "How an agent may use an item (AA7)". Unless a line says otherwise, every string here is
+         the plan's NEW text, approved by the owner 2026-11-22 (GC #16443: "the NEW texts as proposed", the seven open
+         items included), word for word; "draft" marks AGENT-PLAN §11's drafts, as the plan gives them; "new (app)" marks
+         a text the plan does not give, not yet approved. ItemWaysTextsTest holds them. -->
+
+    <!-- The agent's page -->
+    <string name="ways_items_title">Items it may use</string>
+    <string name="ways_item_gone">An item you no longer have</string>
+    <string name="ways_item_loading">Loading…</string> <!-- new (app): as Approvals\' -->
+    <string name="ways_items_failed">These items could not be loaded.</string> <!-- new (app) -->
+    <string name="ways_short_use">Use without seeing it</string>
+    <string name="ways_short_run">Run programs</string>
+    <string name="ways_short_proxy">Send to an API</string>
+    <string name="ways_short_reveal">May be shown</string>
+    <string name="ways_short_join">" · "</string>
+
+    <!-- The item's page -->
+    <string name="ways_title">How %1$s may use %2$s</string>
+    <string name="ways_save">Save</string> <!-- the plan\'s "Save" -->
+    <string name="ways_use">Use without seeing it</string> <!-- draft -->
+    <string name="ways_use_note">Your vault uses the value for the agent and gives it only the result.</string>
+    <string name="ways_run">Run programs with it</string> <!-- draft -->
+    <string name="ways_proxy">Send it to an API for the agent</string> <!-- draft -->
+    <string name="ways_reveal">May be shown to agents</string> <!-- draft -->
+    <string name="ways_reveal_note">Off: the agent can use it without seeing it. On: the agent\'s app may keep the value in its history.</string> <!-- draft -->
+    <string name="ways_turn_off">Turn off</string>
+    <string name="ways_turn_on">Turn on</string>
+    <string name="ways_cancel">Cancel</string>
+    <string name="ways_run_off_title">Stop runs with %1$s?</string>
+    <string name="ways_run_off_body_folders">The programs you listed, their variables, their recorded fingerprints and the folders runs may use are removed.</string>
+    <string name="ways_run_off_body">The programs you listed, their variables and their recorded fingerprints are removed.</string>
+    <string name="ways_proxy_off_title">Stop sending %1$s to an API?</string>
+    <string name="ways_proxy_off_body">The hosts and the header you set are removed.</string>
+    <string name="ways_reveal_on_title">Let %1$s see %2$s?</string>
+    <string name="ways_reveal_on_body">You are asked each time before it sees the value. Once you approve, the value goes to the agent\'s app, which may keep it in its history or logs. It may also reach the AI service that the agent\'s app uses. VettID can\'t remove it from any of these places.</string>
+
+    <!-- Run settings -->
+    <string name="ways_programs_title">Programs it may run</string>
+    <string name="ways_programs_none">No programs listed. The agent may ask to run any program, and every run asks you.</string>
+    <string name="ways_program_no_variables">No variables</string>
+    <string name="ways_add_program">Add a program</string>
+    <string name="ways_program_field">Program</string>
+    <string name="ways_program_hint">A full path, such as /usr/bin/git or C:\\Program Files\\Git\\cmd\\git.exe, or a program name the connector finds on its own search path, such as git (on Windows, git.exe).</string>
+    <string name="ways_program_not_path">Give a full path or a program name.</string>
+    <string name="ways_program_characters">This can\'t hold a control or invisible character.</string>
+    <string name="ways_program_too_long">At most 4,096 bytes.</string>
+    <string name="ways_program_parts">A path can\'t hold an empty part, . or .., or a colon after the drive.</string>
+    <string name="ways_program_network">A network path (\\\\server\\…) can\'t be used.</string>
+    <string name="ways_program_tilde">Remove the ~ from the program\'s name; on Windows, give its full long name.</string>
+    <string name="ways_program_duplicate">This program is already in the list.</string>
+    <string name="ways_program_too_many">You can add at most 16 programs.</string>
+    <string name="ways_add">Add</string> <!-- new (app): the field\'s button -->
+    <string name="ways_variables_title">Variables it may receive</string>
+    <string name="ways_variables_none">None. The agent can\'t give this program any other variables.</string>
+    <string name="ways_remove">Remove</string>
+    <string name="ways_add_variable">Add a variable</string>
+    <string name="ways_variable_field">Variable name</string>
+    <string name="ways_variable_note">The agent can then give this program any value it chooses in this variable.</string>
+    <string name="ways_variable_form">Capital letters, digits and _ only, not starting with a digit, at most 64.</string>
+    <string name="ways_variable_too_many">At most 32 variables.</string>
+    <string name="ways_remove_program">Remove program</string>
+    <string name="ways_remove_last_title">Remove the last program?</string>
+    <string name="ways_remove_last_body">With no programs listed, %1$s may ask to run any program, and every run asks you.</string>
+    <string name="ways_change_program_note">Changing the program forgets its fingerprint.</string>
+    <string name="ways_pin_recorded">Fingerprint recorded: %1$s, at %2$s</string>
+    <string name="ways_pin_forget">Forget fingerprint</string>
+    <string name="ways_pin_none">No fingerprint yet. The first run asks you, and approving it records that file.</string>
+    <string name="ways_pin_forget_title">Forget this fingerprint?</string>
+    <string name="ways_pin_forget_body">The next run of %1$s asks you again, and approving it records the file then.</string>
+    <string name="ways_pin_forget_confirm">Forget</string>
+    <string name="ways_pin_forgotten">Fingerprint forgotten when you save</string>
+    <string name="ways_pin_close">Close</string> <!-- new (app): the full fingerprint\'s dialog -->
+    <string name="ways_each">Ask me before each run</string>
+    <string name="ways_each_needs_program">List a program to turn this off.</string>
+    <string name="ways_each_off_title">Stop asking before each run?</string>
+    <string name="ways_each_off_body">Runs of the listed programs then go ahead without asking you. %1$s chooses the arguments each time, and you won\'t see them.</string>
+    <string name="ways_each_off_help">A run of a listed program goes ahead without asking when its file matches the recorded fingerprint. A first or changed program, and runs in your folders or with files, still ask you every time. Shells, interpreters and launchers your vault recognizes by name still ask every time. Other programs that can run commands, such as git or npm, do not.</string>
+    <string name="ways_runs_commands">%1$s can run other commands given in its arguments, so the agent could use it to run any command with your secret. Asking before each run is safer for it.</string>
+    <string name="ways_batch_file">This is a Windows batch file. Its fingerprint covers this file only, not the programs it starts (for an npm tool, node and its packages).</string>
+
+    <!-- API settings -->
+    <string name="ways_hosts_title">Hosts it may be sent to</string>
+    <string name="ways_add_host">Add a host</string>
+    <string name="ways_host_field">Host</string>
+    <string name="ways_host_hint">A host name, such as api.example.com, with :port if it is not 443.</string>
+    <string name="ways_host_not_host">Give a host name, such as api.example.com.</string>
+    <string name="ways_host_ip">An IP address can\'t be used; give the host\'s name.</string>
+    <string name="ways_host_local">localhost and names without a dot can\'t be used.</string>
+    <string name="ways_host_wildcard">Wildcards can\'t be used.</string>
+    <string name="ways_host_duplicate">This host is already in the list.</string>
+    <string name="ways_host_too_many">You can add at most 8 hosts.</string>
+    <string name="ways_header_field">Header name</string>
+    <string name="ways_header_bad">This header can\'t carry the key.</string>
+    <string name="ways_prefix_field">Before the key</string>
+    <string name="ways_prefix_bad">At most 32 plain characters: letters, digits, spaces and punctuation.</string>
+    <string name="ways_sent_as">Sent as: %1$s: %2$s••••••••</string>
+    <string name="ways_sent_note">The key is sent only to these hosts, over a verified connection. The agent is not given the key.</string>
+
+    <!-- Saving -->
+    <string name="ways_password_body">Letting %1$s do more with %2$s needs your credential password, so only you can do it. Enter your credential password.</string>
+    <string name="ways_password_title">Confirm with your credential password</string> <!-- the unlock window prompt\'s, as AA4 -->
+    <string name="ways_password_label">Credential password</string> <!-- as AA4 -->
+    <string name="ways_password_confirm">Confirm</string> <!-- as AA4 -->
+    <string name="ways_alarm_open">Open the alarm</string> <!-- as AA4 -->
+    <string name="ways_saved">Saved</string>
+    <string name="ways_locked_again">Your credential locked again before the settings were saved. Try again.</string>
+    <string name="ways_conflict">Another device changed these settings. Here are the current ones.</string>
+    <string name="ways_not_included">%1$s can no longer use this item: none of its rules includes it.</string>
+    <string name="ways_bad_request">These settings could not be saved. Your vault answered: %1$s.</string>
+    <string name="ways_alarm">Settings can\'t be widened while a credential alarm is open</string>
+    <string name="ways_read_only">This item has settings this version of VettID can\'t show. Update VettID to change them.</string>
+    <string name="ways_read_only_locked">Your vault asked for your credential password for this change, so it was not saved. Update VettID to change these settings.</string>
+    <string name="ways_changed_elsewhere">Another device changed these settings.</string>
+    <string name="ways_show_current">Show the current ones</string>
+    <string name="ways_load_failed">These settings could not be loaded.</string> <!-- new (app) -->
+    <string name="ways_retry">Try again</string> <!-- new (app): as the other cards\' -->
+    <string name="ways_window_title">The unlock window may still be open</string> <!-- new (app): as the vote\'s and AA4\'s -->
+    <plurals name="ways_window_open">
+        <item quantity="one">VettID could not close the credential unlock window after saving these settings. It closes by itself once it has not been used for %1$d minute.</item> <!-- new (app) -->
+        <item quantity="other">VettID could not close the credential unlock window after saving these settings. It closes by itself once it has not been used for %1$d minutes.</item> <!-- new (app) -->
+    </plurals>
+    <string name="ways_window_plain">VettID could not close the credential unlock window after saving these settings. It closes by itself.</string> <!-- new (app) -->
+    <string name="ways_window_close">Close it now</string> <!-- new (app): as the vote\'s -->
+
+    <!-- How a string is shown (AA8, used here for the programs) -->
+    <string name="ways_string_empty">(empty)</string>
+    <string name="ways_string_escaped">escaped character %1$s</string>
+    <string name="ways_string_lookalike">Some characters here may look like others.</string>
+</resources>

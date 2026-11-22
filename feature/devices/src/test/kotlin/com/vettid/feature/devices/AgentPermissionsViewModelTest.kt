@@ -47,7 +47,7 @@ class AgentPermissionsViewModelTest {
     private val sharing = FakeSharing()
     private val social = FakeSocial().apply { seed(listOf(ConnectionInfo("c1", "sam", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee"))) }
 
-    private fun page(id: String = "a1") = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, social)
+    private fun page(id: String = "a1") = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, social, com.vettid.core.data.devices.NoItemWays, com.vettid.core.testing.FakeItems())
 
     @Test
     fun openingAnAgentReadsItsGrantsAndNamesTheConnections() = runTest {

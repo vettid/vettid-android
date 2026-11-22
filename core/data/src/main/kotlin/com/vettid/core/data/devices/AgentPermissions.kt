@@ -149,9 +149,16 @@ sealed interface AgentChange {
     /** `share.rule.changed` or `share.rule.deleted`: they carry only `rule_id` ([ruleId], null when the event has none). */
     data class Rule(val ruleId: String?) : AgentChange
 
+    /**
+     * `leash.item.changed` (ANDROID-PLAN 0.1.137 AA7): the ways [agentId] may use [itemId] changed; [version] is the new
+     * one, null when the settings were deleted (the item left every rule of the agent).
+     */
+    data class Item(val agentId: String, val itemId: String, val version: Long?) : AgentChange
+
     companion object {
         private val GRANT_KINDS = setOf("leash.grant.changed", "leash.grant.revoked", "leash.agent.suspended")
         private val RULE_KINDS = setOf("share.rule.changed", "share.rule.deleted")
+        private const val ITEM_KIND = "leash.item.changed"
 
         /** The change a `sync.event` announces, or null for one an agent's page does not read for. */
         fun of(m: VaultMessage): AgentChange? {
@@ -160,6 +167,11 @@ sealed interface AgentChange {
             return when (kind) {
                 in GRANT_KINDS -> VaultJson.str(m.body, "agent_id")?.takeIf { it.isNotEmpty() }?.let { Grants(it) }
                 in RULE_KINDS -> Rule(VaultJson.str(m.body, "rule_id")?.takeIf { it.isNotEmpty() })
+                ITEM_KIND -> {
+                    val agent = VaultJson.str(m.body, "agent_id")?.takeIf { it.isNotEmpty() }
+                    val item = VaultJson.str(m.body, "item_id")?.takeIf { it.isNotEmpty() }
+                    if (agent == null || item == null) null else Item(agent, item, VaultJson.long(m.body, "version"))
+                }
                 else -> null
             }
         }
@@ -173,6 +185,7 @@ sealed interface AgentChange {
     fun concerns(agentId: String): Boolean = when (this) {
         is Grants -> this.agentId == agentId
         is Rule -> true
+        is Item -> this.agentId == agentId
     }
 }
 

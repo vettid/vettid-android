@@ -248,7 +248,7 @@ object ItemWaysRules {
     }
 
     /** Lower case rune by rune with the simple mapping, as Go's `strings.ToLower` (no final sigma, `İ` one rune). */
-    private fun simpleLower(s: String): String {
+    fun simpleLower(s: String): String {
         val b = StringBuilder(s.length)
         var i = 0
         while (i < s.length) {
