@@ -151,9 +151,10 @@ sealed interface AgentChange {
 
     /**
      * `leash.item.changed` (ANDROID-PLAN 0.1.137 AA7): the ways [agentId] may use [itemId] changed; [version] is the new
-     * one, null when the settings were deleted (the item left every rule of the agent).
+     * one when it reads. [deleted]: the event has no `version` (the item left every rule of the agent); a `version` that does
+     * not read is not taken for a deletion (the page reads the settings again).
      */
-    data class Item(val agentId: String, val itemId: String, val version: Long?) : AgentChange
+    data class Item(val agentId: String, val itemId: String, val version: Long?, val deleted: Boolean = version == null) : AgentChange
 
     companion object {
         private val GRANT_KINDS = setOf("leash.grant.changed", "leash.grant.revoked", "leash.agent.suspended")
@@ -170,7 +171,11 @@ sealed interface AgentChange {
                 ITEM_KIND -> {
                     val agent = VaultJson.str(m.body, "agent_id")?.takeIf { it.isNotEmpty() }
                     val item = VaultJson.str(m.body, "item_id")?.takeIf { it.isNotEmpty() }
-                    if (agent == null || item == null) null else Item(agent, item, VaultJson.long(m.body, "version"))
+                    if (agent == null || item == null) {
+                        null
+                    } else {
+                        Item(agent, item, VaultJson.long(m.body, "version"), deleted = "version" !in m.body)
+                    }
                 }
                 else -> null
             }

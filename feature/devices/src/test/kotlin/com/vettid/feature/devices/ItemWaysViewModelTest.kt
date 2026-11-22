@@ -425,6 +425,125 @@ class ItemWaysViewModelTest {
         advanceUntilIdle()
         assertEquals(listOf("run", "reveal"), repo.offs)
         assertTrue(repo.saves.isEmpty())
+        assertTrue(st(m).canTurnOff)
+    }
+
+    /** A read-only turn-off the vault answers with `credential_locked` opens no prompt: it is said, nothing resent. */
+    @Test
+    fun aReadOnlyTurnOffThatIsLockedOpensNoPrompt() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"],"x":1}"""
+        repo.answers += ItemWaysSave.ReadOnlyLocked
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        advanceUntilIdle()
+        assertNull(st(m).prompt)
+        assertEquals(WaysNotice.ReadOnlyLocked, st(m).notice)
+        assertEquals(listOf("reveal"), repo.offs)
+    }
+
+    /** Another agent's item, or an answer that did not read strictly: no turn-off can be sent, so none is offered. */
+    @Test
+    fun aReadOnlyPageThatCannotTurnOffSaysSo() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"],"x":1,"x":2}"""
+        val m = vm()
+        advanceUntilIdle()
+        assertTrue(st(m).readOnly)
+        assertFalse(st(m).canTurnOff)
+    }
+
+    /** Turning Ask me before each run off asks first, with a program; without one it is refused. */
+    @Test
+    fun askMeOffAsksFirst() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setEach(false)
+        assertEquals(WaysConfirm.EachOff, st(m).confirm)
+        assertTrue("nothing changed before the answer", st(m).draft!!.run!!.each)
+        m.confirm()
+        assertFalse(st(m).draft!!.run!!.each)
+    }
+
+    /** A read again on returning that finds the item no longer included closes the password sheet. */
+    @Test
+    fun aReReadThatFindsTheItemGoneClosesThePrompt() = runTest(main.dispatcher) {
+        repo.answers += ItemWaysSave.NeedsPassword
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(true)
+        m.confirm()
+        m.save()
+        advanceUntilIdle()
+        assertTrue(st(m).prompt != null)
+        repo.current = null
+        m.load()
+        advanceUntilIdle()
+        assertTrue(st(m).notIncluded)
+        assertNull(st(m).prompt)
+    }
+
+    /** Back on the page with nothing unsaved, the settings are read again (this phone's own approval sends it no event). */
+    @Test
+    fun returningToTheCleanPageReadsAgain() = runTest(main.dispatcher) {
+        val m = vm()
+        advanceUntilIdle()
+        assertEquals(1, repo.reads)
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"]}"""
+        m.returned()
+        advanceUntilIdle()
+        assertEquals(2, repo.reads)
+        assertEquals(2L, st(m).read!!.ways!!.version)
+        m.setReveal(false)
+        m.returned()
+        advanceUntilIdle()
+        assertEquals("unsaved changes: not read", 2, repo.reads)
+    }
+
+    /** Try again after a failed read keeps what the member changed. */
+    @Test
+    fun tryAgainKeepsTheDraft() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"]}"""
+        m.retry()
+        advanceUntilIdle()
+        assertFalse(ItemWay.REVEAL in st(m).draft!!.ways)
+        assertTrue(st(m).changedElsewhere)
+    }
+
+    /** An event whose `version` does not read is not a deletion: the settings are read again. */
+    @Test
+    fun aMalformedEventVersionReadsAgain() = runTest(main.dispatcher) {
+        val m = vm()
+        advanceUntilIdle()
+        devices.changes.emit(AgentChange.Item("a1", "i1", null, deleted = false))
+        advanceUntilIdle()
+        assertFalse(st(m).notIncluded)
+        assertEquals(2, repo.reads)
+    }
+
+    /** The vault answering `folders: []` to a save that sent none is the same settings: no "changed elsewhere". */
+    @Test
+    fun anEmptyFoldersAnswerIsTheSameSave() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run","reveal"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}"""
+        repo.saveGate = CompletableDeferred()
+        repo.answers += ItemWaysSave.Saved(
+            ItemWaysRules.one("""{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]}],"each":true,"folders":[]}}""".toByteArray())!!,
+        )
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        m.save()
+        advanceUntilIdle()
+        m.setEach(false)
+        m.confirm()
+        repo.saveGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertFalse(st(m).changedElsewhere)
+        assertEquals(2L, st(m).draft!!.version)
     }
 
     /** `leash.item.changed` while open: reread when nothing is edited; kept with the notice when it is; deleted settings said. */
@@ -565,7 +684,7 @@ class ItemWaysViewModelTest {
         advanceUntilIdle()
         assertEquals(4L, st(m).read!!.ways!!.version)
         assertEquals(setOf(ItemWay.USE), st(m).draft!!.ways)
-        assertFalse(st(m).changedElsewhere || st(m).loading)
+        assertFalse(st(m).changedElsewhere)
     }
 
     /** No `version` closes the prompt and saves nothing; included again, the page is back. */

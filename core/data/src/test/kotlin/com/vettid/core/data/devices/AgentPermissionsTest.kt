@@ -178,6 +178,11 @@ class AgentPermissionsTest {
     fun itemEventsNameTheirAgentItemAndVersion() {
         assertEquals(AgentChange.Item("a1", "i1", 4), AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1","version":4}""")))
         assertEquals(AgentChange.Item("a1", "i1", null), AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1"}""")))
+        assertEquals(
+            "a version that does not read is no deletion",
+            AgentChange.Item("a1", "i1", null, deleted = false),
+            AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1","version":"x"}""")),
+        )
         assertNull(AgentChange.of(sync("""{"kind":"leash.item.changed","item_id":"i1","version":4}""")))
         assertTrue(AgentChange.Item("a1", "i1", 4).concerns("a1"))
         assertFalse(AgentChange.Item("a2", "i1", 4).concerns("a1"))

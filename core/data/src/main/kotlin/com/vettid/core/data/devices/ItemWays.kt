@@ -373,6 +373,11 @@ object ItemWaysRules {
 
     private fun isSha256(s: String): Boolean = s.length == SHA256_HEX && s.all { it in '0'..'9' || it in 'a'..'f' }
 
+    /** [a] and [b] are the same settings, a `run.folders` of `[]` counting as none (the vault may answer either way). */
+    fun sameSettings(a: ItemWays, b: ItemWays): Boolean = norm(a) == norm(b)
+
+    private fun norm(w: ItemWays): ItemWays = w.copy(run = w.run?.let { r -> r.copy(folders = r.folders?.takeIf { it.isNotEmpty() }) })
+
     /**
      * Whether [next] allows more than [cur] (VAULT-MESSAGING §10.11 "Widening needs the member", as vettid-vault's
      * `Widens`): a way, a program or a host added, programs emptied, a variable added to a program, Ask me before each run

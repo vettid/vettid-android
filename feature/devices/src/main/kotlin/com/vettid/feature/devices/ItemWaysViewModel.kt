@@ -22,7 +22,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.votes.WindowNotClosed
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.time.Instant
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -69,7 +68,6 @@ data class WaysPrompt(
     val resend: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
-    val retryUntil: Instant? = null,
 ) {
     val alarm: Boolean get() = error == FailureKind.CREDENTIAL_FROZEN || error == FailureKind.ROTATION_REQUIRED
 
@@ -83,7 +81,6 @@ data class WaysPrompt(
 data class ItemWaysUiState(
     val agentName: String = "",
     val itemName: String? = null,
-    val loading: Boolean = true,
     val loadError: VaultFailure? = null,
     val read: ItemWaysRead? = null,
     val draft: ItemWays? = null,
@@ -121,6 +118,12 @@ data class ItemWaysUiState(
     val refused: String? = null,
 ) {
     val readOnly: Boolean get() = read != null && read.readOnly
+
+    /** The draft or the open program's field holds something not saved. */
+    val holdsChanges: Boolean get() = dirty || editPending
+
+    /** A read-only page can send a turn-off: the answer read strictly, and for the agent asked about. */
+    val canTurnOff: Boolean get() = read != null && read.strict != null && !read.foreign
 
     /** The draft differs from what was read. */
     val dirty: Boolean get() = draft != null && draft != read?.ways
@@ -160,7 +163,7 @@ data class ItemWaysUiState(
         val base = copy(prompt = null, notice = WaysNotice.Saved)
         return when {
             sent == null || d == null || d == sent -> base.copy(read = saved, draft = now, changedElsewhere = false)
-            now != null && sent.copy(version = now.version) == now ->
+            now != null && ItemWaysRules.sameSettings(sent.copy(version = now.version), now) ->
                 base.copy(read = saved, draft = d.copy(version = now.version), changedElsewhere = false)
             else -> base.copy(changedElsewhere = true)
         }
@@ -198,49 +201,64 @@ class ItemWaysViewModel @Inject constructor(
         load(force = true)
         viewModelScope.launch {
             devices.changes.collect { c ->
-                if (c is AgentChange.Item && c.agentId == agentId && c.itemId == itemId) onChanged(c.version)
+                if (c is AgentChange.Item && c.agentId == agentId && c.itemId == itemId) onChanged(c.deleted)
             }
         }
     }
 
-    /** On opening, Try again and **Show the current ones**: the vault's settings, the draft started again from them. */
+    /** **Show the current ones**: the vault's settings, the draft started again from them. */
     fun load() = load(force = true)
+
+    /** Try again after a read failed: a draft the member changed is kept (with "changed elsewhere" if the settings did). */
+    fun retry() = if (local.value.dirty) load(force = false, keep = true) else load(force = true)
+
+    /**
+     * The page is shown again (ON_START after the first): read again when nothing is unsaved, since this phone's own
+     * approval of a run records a pin without a `leash.item.changed` to this phone (the vault skips the deciding device).
+     */
+    fun returned() {
+        val s = local.value
+        val idle = s.prompt == null && !s.saving
+        if (s.read != null && !s.holdsChanges && idle) load(force = false)
+    }
 
     /**
      * Reads the settings. Only the latest read is applied. [force] (opening, Try again, Show the current ones, a
      * conflict) starts the draft again from them; otherwise (an event's re-read of a clean page) a draft the member
      * changed while the read was out is kept, with "Another device changed these settings." (AA7 "While the page is open").
      */
-    private fun load(force: Boolean) {
+    private fun load(force: Boolean, keep: Boolean = false) {
         val n = ++loads
         val before = local.value.draft
-        local.update { it.copy(loading = true, loadError = null) }
+        local.update { it.copy(loadError = null) }
         viewModelScope.launch {
             try {
                 val r = repo.read(agentId, itemId)
                 local.update {
                     when {
                         n != loads -> it
-                        r == null -> it.copy(loading = false, notIncluded = true, prompt = null)
+                        r == null -> it.copy(notIncluded = true, prompt = null)
                         // The kept draft stays on the read it was made from: its save meets the vault's `conflict`, no prompt.
-                        !force && it.draft != before -> it.copy(loading = false, notIncluded = false, changedElsewhere = true)
+                        !force && it.draft != before -> it.copy(notIncluded = false, changedElsewhere = true)
+                        // Try again with unsaved changes: kept, on the read they were made from.
+                        keep -> it.copy(notIncluded = false, changedElsewhere = r.ways?.version != it.read?.ways?.version)
                         else -> it.copy(
-                            loading = false, read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
+                            read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
                             openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
                         )
                     }
                 }
             } catch (e: VaultFailure) {
                 local.update {
-                    if (n != loads) it else it.copy(loading = false, loadError = e, ownerCheck = e.kind == FailureKind.OWNER_CHECK_REQUIRED)
+                    if (n != loads) it else it.copy(loadError = e, ownerCheck = e.kind == FailureKind.OWNER_CHECK_REQUIRED)
                 }
             }
         }
     }
 
-    private fun onChanged(version: Long?) {
+    private fun onChanged(deleted: Boolean) {
         when {
-            version == null -> local.update { it.copy(notIncluded = true, prompt = null) }
+            deleted -> local.update { it.copy(notIncluded = true, prompt = null) }
             local.value.dirty -> local.update { it.copy(changedElsewhere = true) }
             else -> load(force = false)
         }
@@ -522,13 +540,7 @@ class ItemWaysViewModel @Inject constructor(
             }
             is ItemWaysSave.PasswordRefused -> local.update { s ->
                 val e = r.failure
-                val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
-                val until = if (backoff) Instant.now().plusSeconds(e.retryAfterSeconds) else null
-                s.copy(
-                    prompt = (s.prompt ?: WaysPrompt()).copy(
-                        password = "", sending = false, error = e.kind, errorCode = e.shownCode, retryUntil = until,
-                    ),
-                )
+                s.copy(prompt = (s.prompt ?: WaysPrompt()).copy(password = "", sending = false, error = e.kind, errorCode = e.shownCode))
             }
             is ItemWaysSave.Failed -> local.update { it.copy(prompt = null, notice = WaysNotice.Failed(r.failure)) }
         }

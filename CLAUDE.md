@@ -366,7 +366,7 @@ The A2 exit test:
   current ones**, one with no `version` says the item is no longer included and nothing is saved; `not_found` to a save says so and goes
   back. A read-only page shows its notice and offers only Turn off on the ways that are on. The page reports `HoldsInput` (it is on
   `ShellOverlayRulesTest`'s list) and its dialogs and sheet are the shell-aware ones. The text fields turn off autocorrect and
-  capitals. Tests: `ItemWaysViewModelTest`, `ItemWaysPageTest`, `ItemWaysTextTest`, `WayItemsPageViewModelTest`. Catalog:
+  capitals and are kept out of autofill (`excludeFromAutofill`). A read-only page whose turn-off could never be sent (no strict reading, another agent's item: `ItemWaysUiState.canTurnOff`) offers no switch. Back on the page with nothing unsaved it reads again (`returned()`: this phone's own approval of a run records a pin with no `leash.item.changed` to this phone); Try again after a failed read keeps unsaved changes (`retry()`); an event is a deletion only with no `version` (`AgentChange.Item.deleted`; one that does not read re-reads); a `run.folders` of `[]` is the same settings as none (`ItemWaysRules.sameSettings`); a program name or path inside a sentence goes by the string rule's inline form (`ShownString.inline`: isolated, `⟨U+XXXX⟩`, `·`). Tests: `ItemWaysViewModelTest`, `ItemWaysPageTest`, `ItemWaysTextTest`, `WayItemsPageViewModelTest`. Catalog:
   `devices.page_agent_items`, `devices.page_agent_items_failed`, `devices.item_ways`, `devices.item_ways_none`,
   `devices.item_ways_read_only`, `devices.item_ways_program`, `devices.item_ways_pin_full`, `devices.item_ways_reveal_on`,
   `devices.item_ways_run_off`, `devices.item_ways_proxy_off`, `devices.item_ways_each_off`, `devices.item_ways_remove_last`,

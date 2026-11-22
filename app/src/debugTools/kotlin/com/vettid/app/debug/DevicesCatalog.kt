@@ -78,7 +78,7 @@ internal object DevicesCatalog {
 
     private fun ways(json: String, f: (ItemWaysUiState) -> ItemWaysUiState = { it }): ItemWaysUiState {
         val r = ItemWaysRules.one(json.toByteArray())!!
-        return f(ItemWaysUiState(agentName = "Claude on work laptop", itemName = "GitHub token", loading = false, read = r, draft = r.ways))
+        return f(ItemWaysUiState(agentName = "Claude on work laptop", itemName = "GitHub token", read = r, draft = r.ways))
     }
 
     @Composable

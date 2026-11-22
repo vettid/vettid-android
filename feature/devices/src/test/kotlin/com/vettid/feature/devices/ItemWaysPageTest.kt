@@ -22,6 +22,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.ItemWay
+import com.vettid.core.data.devices.RunSettings
 import com.vettid.core.data.devices.ItemWaysRules
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -41,7 +42,7 @@ class ItemWaysPageTest {
 
     private fun page(json: String, f: (ItemWaysUiState) -> ItemWaysUiState = { it }): ItemWaysUiState {
         val r = ItemWaysRules.one(json.toByteArray())!!
-        return f(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", loading = false, read = r, draft = r.ways))
+        return f(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", read = r, draft = r.ways))
     }
 
     private fun show(state: ItemWaysUiState, actions: ItemWaysActions = ItemWaysActions()) =
@@ -88,9 +89,9 @@ class ItemWaysPageTest {
         rule.onNodeWithTag("ways_reveal_switch").assertIsOn()
         rule.onNodeWithTag("ways_program_0").performScrollTo().assertTextContains("GH_HOST", substring = true)
         // The fingerprint line is its own tap target (all 64 digits).
-        rule.onNodeWithText("Fingerprint recorded: 1a2b 3c4d 5e6f 7a8b, at /usr/bin/git").assertExists()
+        rule.onNodeWithText("Fingerprint recorded: 1a2b 3c4d 5e6f 7a8b, at ${ShownString.inline("/usr/bin/git")}").assertExists()
         // Ask me before each run is off: the #636 advice on git, the batch-file line on build.cmd.
-        rule.onNodeWithTag("ways_program_0").assertTextContains("git can run other commands given in its arguments", substring = true)
+        rule.onNodeWithTag("ways_program_0").assertTextContains("${ShownString.inline("git")} can run other commands given in its arguments", substring = true)
         rule.onNodeWithTag("ways_program_1").performScrollTo().assertTextContains("This is a Windows batch file.", substring = true)
             .assertTextContains("No fingerprint yet.", substring = true)
         rule.onNodeWithTag("ways_each_off_help").performScrollTo()
@@ -140,7 +141,7 @@ class ItemWaysPageTest {
     fun removeLastConfirm() = confirmShows(WaysConfirm.RemoveLastProgram(0), "Remove the last program?", "With no programs listed, Claude may ask to run any program")
 
     @Test
-    fun forgetPinConfirm() = confirmShows(WaysConfirm.ForgetPin(0), "Forget this fingerprint?", "The next run of git asks you again")
+    fun forgetPinConfirm() = confirmShows(WaysConfirm.ForgetPin(0), "Forget this fingerprint?", "The next run of ${ShownString.inline("git")} asks you again")
 
     private fun confirmShows(c: WaysConfirm, vararg texts: String) {
         show(page(all) { it.copy(confirm = c) })
@@ -216,7 +217,7 @@ class ItemWaysPageTest {
         val folders = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true,"folders":[{"path":"/home/me/src","write":false}]}}"""
         val r = ItemWaysRules.one(folders.toByteArray())!!
         assertEquals("read only until AA9", null, r.ways)
-        show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", loading = false, read = r, confirm = WaysConfirm.RunOff))
+        show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", read = r, confirm = WaysConfirm.RunOff))
         rule.onNodeWithText("The programs you listed, their variables, their recorded fingerprints and the folders runs may use are removed.").assertExists()
     }
 
@@ -229,5 +230,32 @@ class ItemWaysPageTest {
         rule.onNodeWithText("These settings could not be loaded.").assertExists()
         rule.onNodeWithText("Try again").performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(true, retried)
+    }
+
+    /** The #636 advice shows only while Ask me before each run is off; the switch is off-limits with no program. */
+    @Test
+    fun theAdviceAndTheAskMeSwitch() {
+        val git = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true}}"""
+        var state by mutableStateOf(page(git))
+        rule.setContent { ItemWaysScreen(state, ItemWaysActions()) }
+        rule.onNodeWithTag("ways_runs_commands", useUnmergedTree = true).assertDoesNotExist()
+        state = state.copy(draft = state.draft!!.copy(run = state.draft!!.run!!.copy(each = false)))
+        rule.onNodeWithTag("ways_runs_commands", useUnmergedTree = true).assertExists()
+        state = state.copy(draft = state.draft!!.copy(run = RunSettings(emptyList(), each = true)))
+        rule.onNodeWithTag("ways_each_switch").performScrollTo().assertIsNotEnabled()
+    }
+
+    /** A read-only page that cannot send a turn-off offers no switch. */
+    @Test
+    fun aReadOnlyPageThatCannotTurnOffOffersNoSwitch() {
+        val dup = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","reveal"],"x":1,"x":2}"""
+        show(page(dup) { it.copy(draft = null) })
+        rule.onNodeWithTag("ways_reveal_switch").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theFieldsTurnOffCapitalsAndAutocorrect() {
+        assertEquals(androidx.compose.ui.text.input.KeyboardCapitalization.None, PLAIN.capitalization)
+        assertEquals(false, PLAIN.autoCorrectEnabled)
     }
 }

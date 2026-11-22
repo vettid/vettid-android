@@ -182,4 +182,12 @@ class ItemWaysTextTest {
             assertEquals(bad, null, VaultReason.shown(bad))
         }
     }
+
+    /** The string rule inside a sentence: isolated and forced left to right, escapes as markers, spaces marked. */
+    @Test
+    fun theInlineFormOfTheStringRule() {
+        val rlo = "\u202E"
+        assertEquals("\u2066\u202Dgit\u202C\u2069", ShownString.inline("git"))
+        assertEquals("\u2066\u202Dg⟨U+202E⟩it·x\u202C\u2069", ShownString.inline("g" + rlo + "it x"))
+    }
 }

@@ -50,6 +50,23 @@ object ShownString {
      * [s] as pieces, in order. A combining mark at the start, right after a `/` or `\`, an escape or a marked space is
      * escaped too, so it cannot join the box's edge, a separator, an escape or a space mark.
      */
+    /**
+     * [s] by the string rule as plain text, for a string inside a sentence (a dialog's text, a line of advice): isolated
+     * and forced left to right (LRI LRO … PDF PDI), each escape as `⟨U+XXXX⟩` (the approval documents' markers) and each
+     * space as `·`. The box ([pieces]) is the full form; this one carries no highlight.
+     */
+    fun inline(s: String): String = buildString {
+        append('\u2066').append('\u202D')
+        pieces(s).forEach { p ->
+            when (p) {
+                is ShownPiece.Text -> append(p.text)
+                is ShownPiece.Escape -> append('⟨').append(p.label).append('⟩')
+                ShownPiece.Space -> append('·')
+            }
+        }
+        append('\u202C').append('\u2069')
+    }
+
     fun pieces(s: String): List<ShownPiece> {
         val out = mutableListOf<ShownPiece>()
         val run = StringBuilder()

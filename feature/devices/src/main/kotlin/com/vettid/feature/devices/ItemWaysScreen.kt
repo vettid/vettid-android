@@ -70,6 +70,7 @@ import com.vettid.core.ui.components.AlertDialog
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ModalBottomSheet
 import com.vettid.core.ui.components.NoticeCard
@@ -119,7 +120,8 @@ data class ItemWaysActions(
 )
 
 /** The fields of this page: what is typed is what is saved (no suggestions, autocorrection or capitals; AA7). */
-private val PLAIN = KeyboardOptions(autoCorrectEnabled = false, capitalization = KeyboardCapitalization.None, imeAction = ImeAction.Done)
+/** The fields' keyboard: no autocorrect, no capitals (AA7). Internal for its test. */
+internal val PLAIN = KeyboardOptions(autoCorrectEnabled = false, capitalization = KeyboardCapitalization.None, imeAction = ImeAction.Done)
 
 /** How long the page stays after `not_found` to a save before it goes back (the accessibility time of a notice). */
 private const val NOT_INCLUDED_MS = 4_000L
@@ -267,19 +269,22 @@ private fun MainPage(state: ItemWaysUiState, actions: ItemWaysActions) {
     // A read-only page shows the ways as read, and only Turn off on them.
     val on: (ItemWay) -> Boolean = { w -> d?.let { w in it.ways } ?: (w.wire in read.rawWays) }
     val ro = state.readOnly
+    // A read-only page whose turn-off could never be sent (no strict reading, or another agent's item) offers none.
+    val canTurnOff = !ro || state.canTurnOff
+    val may: (ItemWay) -> Boolean = { w -> !state.saving && canTurnOff && (!ro || on(w)) }
     DetailCard(Modifier.testTag("ways_card")) {
         WaySwitch(stringResource(R.string.ways_use), checked = true, enabled = false, onChange = {}, tag = "ways_use")
         Note(stringResource(R.string.ways_use_note))
         WaySwitch(
-            stringResource(R.string.ways_run), on(ItemWay.RUN), enabled = !state.saving && (!ro || on(ItemWay.RUN)),
+            stringResource(R.string.ways_run), on(ItemWay.RUN), enabled = may(ItemWay.RUN),
             onChange = actions.onRun, tag = "ways_run",
         )
         WaySwitch(
-            stringResource(R.string.ways_proxy), on(ItemWay.PROXY), enabled = !state.saving && (!ro || on(ItemWay.PROXY)),
+            stringResource(R.string.ways_proxy), on(ItemWay.PROXY), enabled = may(ItemWay.PROXY),
             onChange = actions.onProxy, tag = "ways_proxy",
         )
         WaySwitch(
-            stringResource(R.string.ways_reveal), on(ItemWay.REVEAL), enabled = !state.saving && (!ro || on(ItemWay.REVEAL)),
+            stringResource(R.string.ways_reveal), on(ItemWay.REVEAL), enabled = may(ItemWay.REVEAL),
             onChange = actions.onReveal, tag = "ways_reveal",
         )
         Note(stringResource(R.string.ways_reveal_note))
@@ -361,7 +366,7 @@ private fun ProgramAdviceLines(p: RunProgram, each: Boolean) {
     if (ProgramAdvice.batchFile(p.program)) Note(stringResource(R.string.ways_batch_file), Modifier.testTag("ways_batch_file"))
     if (!each && ProgramAdvice.runsCommands(p.program)) {
         Text(
-            stringResource(R.string.ways_runs_commands, ItemWaysRules.lastElement(p.program)),
+            stringResource(R.string.ways_runs_commands, ShownString.inline(ItemWaysRules.lastElement(p.program))),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("ways_runs_commands"),
@@ -375,7 +380,7 @@ private fun PinLine(state: ItemWaysUiState, p: RunProgram, onShow: (String?) -> 
     val sha = p.sha256
     when {
         sha != null && p.path != null -> Text(
-            stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), p.path.orEmpty()),
+            stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty())),
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.clickable(role = Role.Button) { onShow(sha) }.testTag("ways_pin"),
@@ -404,7 +409,7 @@ private fun ProgramPage(state: ItemWaysUiState, p: RunProgram, index: Int, actio
         val sha = p.sha256
         if (sha != null && p.path != null) {
             Text(
-                stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), p.path.orEmpty()),
+                stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty())),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier.clickable(role = Role.Button) { actions.onShowPin(sha) }.testTag("ways_pin"),
@@ -604,7 +609,8 @@ private fun WaysDialogs(state: ItemWaysUiState, actions: ItemWaysActions) {
             title = stringResource(R.string.ways_pin_forget_title),
             text = stringResource(
                 R.string.ways_pin_forget_body,
-                state.draft?.run?.programs?.getOrNull(c.index)?.program?.let { ItemWaysRules.lastElement(it) }.orEmpty(),
+                state.draft?.run?.programs?.getOrNull(c.index)?.program
+                    ?.let { ShownString.inline(ItemWaysRules.lastElement(it)) }.orEmpty(),
             ),
             confirmLabel = stringResource(R.string.ways_pin_forget_confirm),
             onConfirm = actions.onConfirm,
@@ -714,7 +720,7 @@ private fun PlainField(
         keyboardOptions = PLAIN,
         keyboardActions = KeyboardActions(onDone = { onDone() }),
         textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace, textDirection = TextDirection.Ltr),
-        modifier = modifier.fillMaxWidth().testTag(tag),
+        modifier = modifier.fillMaxWidth().excludeFromAutofill().testTag(tag),
     )
 }
 
