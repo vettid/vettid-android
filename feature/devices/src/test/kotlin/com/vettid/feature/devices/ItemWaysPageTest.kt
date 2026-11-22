@@ -89,9 +89,9 @@ class ItemWaysPageTest {
         rule.onNodeWithTag("ways_reveal_switch").assertIsOn()
         rule.onNodeWithTag("ways_program_0").performScrollTo().assertTextContains("GH_HOST", substring = true)
         // The fingerprint line is its own tap target (all 64 digits).
-        rule.onNodeWithText("Fingerprint recorded: 1a2b 3c4d 5e6f 7a8b, at ${ShownString.inline("/usr/bin/git")}").assertExists()
+        rule.onNodeWithText("Fingerprint recorded: 1a2b 3c4d 5e6f 7a8b, at ${ShownString.inline("/usr/bin/git", "(empty)")}").assertExists()
         // Ask me before each run is off: the #636 advice on git, the batch-file line on build.cmd.
-        rule.onNodeWithTag("ways_program_0").assertTextContains("${ShownString.inline("git")} can run other commands given in its arguments", substring = true)
+        rule.onNodeWithTag("ways_program_0").assertTextContains("${ShownString.inline("git", "(empty)")} can run other commands given in its arguments", substring = true)
         rule.onNodeWithTag("ways_program_1").performScrollTo().assertTextContains("This is a Windows batch file.", substring = true)
             .assertTextContains("No fingerprint yet.", substring = true)
         rule.onNodeWithTag("ways_each_off_help").performScrollTo()
@@ -141,7 +141,7 @@ class ItemWaysPageTest {
     fun removeLastConfirm() = confirmShows(WaysConfirm.RemoveLastProgram(0), "Remove the last program?", "With no programs listed, Claude may ask to run any program")
 
     @Test
-    fun forgetPinConfirm() = confirmShows(WaysConfirm.ForgetPin(0), "Forget this fingerprint?", "The next run of ${ShownString.inline("git")} asks you again")
+    fun forgetPinConfirm() = confirmShows(WaysConfirm.ForgetPin(0), "Forget this fingerprint?", "The next run of ${ShownString.inline("git", "(empty)")} asks you again")
 
     private fun confirmShows(c: WaysConfirm, vararg texts: String) {
         show(page(all) { it.copy(confirm = c) })
@@ -257,5 +257,14 @@ class ItemWaysPageTest {
     fun theFieldsTurnOffCapitalsAndAutocorrect() {
         assertEquals(androidx.compose.ui.text.input.KeyboardCapitalization.None, PLAIN.capitalization)
         assertEquals(false, PLAIN.autoCorrectEnabled)
+    }
+
+    /** Another agent's item: no turn-off can be sent for it, so no switch is offered. */
+    @Test
+    fun anotherAgentsItemOffersNoSwitch() {
+        val other = """{"items":[{"agent_id":"a2","item_id":"i1","version":3,"ways":["use","reveal"]}]}"""
+        val r = ItemWaysRules.list(other.toByteArray(), agentId = "a1")!!.single()
+        show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", read = r))
+        rule.onNodeWithTag("ways_reveal_switch").assertIsNotEnabled()
     }
 }

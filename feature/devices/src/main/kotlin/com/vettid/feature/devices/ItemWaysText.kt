@@ -47,26 +47,32 @@ object ShownString {
     }
 
     /**
-     * [s] as pieces, in order. A combining mark at the start, right after a `/` or `\`, an escape or a marked space is
-     * escaped too, so it cannot join the box's edge, a separator, an escape or a space mark.
-     */
-    /**
      * [s] by the string rule as plain text, for a string inside a sentence (a dialog's text, a line of advice): isolated
-     * and forced left to right (LRI LRO … PDF PDI), each escape as `⟨U+XXXX⟩` (the approval documents' markers) and each
-     * space as `·`. The box ([pieces]) is the full form; this one carries no highlight.
+     * and forced left to right (LRI LRO … PDF PDI), each space as `·`, and every code point outside printable ASCII as
+     * `⟨U+XXXX⟩` (the approval documents' markers), since nothing here is highlighted: so a look-alike, or a literal `·`,
+     * `⟨` or `⟩`, cannot pass for something else. An empty string is [empty]. The box ([pieces]) is the full form.
      */
-    fun inline(s: String): String = buildString {
+    fun inline(s: String, empty: String): String = buildString {
         append('\u2066').append('\u202D')
+        if (s.isEmpty()) append(empty)
         pieces(s).forEach { p ->
             when (p) {
-                is ShownPiece.Text -> append(p.text)
-                is ShownPiece.Escape -> append('⟨').append(p.label).append('⟩')
+                is ShownPiece.Text -> if (p.plain) append(p.text) else p.text.codePoints().forEach { marker(this, it) }
+                is ShownPiece.Escape -> marker(this, p.codePoint)
                 ShownPiece.Space -> append('·')
             }
         }
         append('\u202C').append('\u2069')
     }
 
+    private fun marker(b: StringBuilder, cp: Int) {
+        b.append('⟨').append("U+%04X".format(cp)).append('⟩')
+    }
+
+    /**
+     * [s] as pieces, in order. A combining mark at the start, right after a `/` or `\`, an escape or a marked space is
+     * escaped too, so it cannot join the box's edge, a separator, an escape or a space mark.
+     */
     fun pieces(s: String): List<ShownPiece> {
         val out = mutableListOf<ShownPiece>()
         val run = StringBuilder()

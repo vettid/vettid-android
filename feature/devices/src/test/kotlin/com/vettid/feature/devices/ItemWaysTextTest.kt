@@ -187,7 +187,18 @@ class ItemWaysTextTest {
     @Test
     fun theInlineFormOfTheStringRule() {
         val rlo = "\u202E"
-        assertEquals("\u2066\u202Dgit\u202C\u2069", ShownString.inline("git"))
-        assertEquals("\u2066\u202Dg⟨U+202E⟩it·x\u202C\u2069", ShownString.inline("g" + rlo + "it x"))
+        assertEquals("\u2066\u202Dgit\u202C\u2069", ShownString.inline("git", "(empty)"))
+        assertEquals("\u2066\u202Dg⟨U+202E⟩it·x\u202C\u2069", ShownString.inline("g" + rlo + "it x", "(empty)"))
+    }
+
+    /** Nothing is highlighted inline, so every character outside printable ASCII is a marker, a literal one included. */
+    @Test
+    fun theInlineFormMarksEverythingOutsideAscii() {
+        fun inner(s: String) = ShownString.inline(s, "(empty)").removePrefix("\u2066\u202D").removeSuffix("\u202C\u2069")
+        assertEquals("g⟨U+0456⟩t", inner("g\u0456t"))
+        assertEquals("a⟨U+00B7⟩b", inner("a\u00B7b"))
+        assertEquals("⟨U+27E8⟩U+202E⟨U+27E9⟩", inner("\u27E8U+202E\u27E9"))
+        assertEquals("caf⟨U+00E9⟩", inner("caf\u00E9"))
+        assertEquals("(empty)", inner(""))
     }
 }

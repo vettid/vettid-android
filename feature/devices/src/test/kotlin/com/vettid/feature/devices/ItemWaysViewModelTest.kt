@@ -16,6 +16,8 @@ import com.vettid.core.data.devices.ItemWaysSave
 import com.vettid.core.data.devices.ProgramProblem
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.Sensitivity
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.votes.WindowNotClosed
 import com.vettid.core.testing.FakeDevices
 import com.vettid.core.testing.FakeItems
@@ -35,6 +37,7 @@ import org.junit.Test
 
 /** ANDROID-PLAN 0.1.137 AA7: the item's page, its draft, its confirmations and its saves. */
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One class: every test shares the fake repository and the helpers below.
 class ItemWaysViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
@@ -51,6 +54,9 @@ class ItemWaysViewModelTest {
         val offs = mutableListOf<String>()
         var reads = 0
 
+        /** The next read fails with this (once). */
+        var failRead: VaultFailure? = null
+
         /** Held until completed: a read's or a save's answer waits for it (one answer per gate). */
         val readGates = ArrayDeque<CompletableDeferred<String?>>()
         var saveGate: CompletableDeferred<Unit>? = null
@@ -62,6 +68,7 @@ class ItemWaysViewModelTest {
 
         override suspend fun read(agentId: String, itemId: String): ItemWaysRead? {
             reads++
+            failRead?.let { failRead = null; throw it }
             val answer = readGates.removeFirstOrNull()?.await() ?: current
             return answer?.let { ItemWaysRules.one(it.toByteArray()) }
         }
@@ -467,7 +474,7 @@ class ItemWaysViewModelTest {
 
     /** A read again on returning that finds the item no longer included closes the password sheet. */
     @Test
-    fun aReReadThatFindsTheItemGoneClosesThePrompt() = runTest(main.dispatcher) {
+    fun aShowTheCurrentOnesReadThatFindsTheItemGoneClosesThePrompt() = runTest(main.dispatcher) {
         repo.answers += ItemWaysSave.NeedsPassword
         val m = vm()
         advanceUntilIdle()
@@ -507,6 +514,11 @@ class ItemWaysViewModelTest {
         val m = vm()
         advanceUntilIdle()
         m.setReveal(false)
+        repo.failRead = VaultFailure(FailureKind.NETWORK)
+        devices.changes.emit(AgentChange.Item("a1", "i1", 2))
+        m.retry() // a read that fails first: the card
+        advanceUntilIdle()
+        assertTrue(st(m).loadError != null)
         repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"]}"""
         m.retry()
         advanceUntilIdle()
@@ -732,5 +744,74 @@ class ItemWaysViewModelTest {
         assertTrue("Back again leaves", m.closeProgram())
         assertNull(st(m).openProgram)
         assertFalse(st(m).dirty)
+    }
+
+    /** Try again with only a typed program text: kept, with its open page. */
+    @Test
+    fun tryAgainKeepsATypedProgramText() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.openProgram(0)
+        m.setEditInput("curl")
+        m.retry()
+        advanceUntilIdle()
+        assertEquals(0, st(m).openProgram)
+        assertEquals("curl", st(m).editInput)
+    }
+
+    /** A re-read that answers the same version while the member began typing: the read is taken in, nothing else touched. */
+    @Test
+    fun aSameVersionReReadTouchesNothingTheMemberHolds() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        val slow = CompletableDeferred<String?>()
+        repo.readGates += slow
+        m.returned()
+        m.openProgram(0)
+        m.setEditInput("g")
+        slow.complete("""{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[{"program":"gh","sha256":"${sha}","path":"/usr/bin/gh","env":[]}],"each":true}}""")
+        advanceUntilIdle()
+        assertEquals(0, st(m).openProgram)
+        assertEquals("g", st(m).editInput)
+        assertFalse(st(m).changedElsewhere)
+        assertEquals("the recorded pin is taken in", sha, st(m).read!!.ways!!.run!!.programs[0].sha256)
+        assertEquals("a clean draft follows it", sha, st(m).draft!!.run!!.programs[0].sha256)
+    }
+
+    /** A new version while the member holds anything keeps it all, with the notice. */
+    @Test
+    fun aNewVersionWhileBusyKeepsEverything() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(true) // the warning is open: nothing changed yet
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use"]}"""
+        devices.changes.emit(AgentChange.Item("a1", "i1", 2))
+        advanceUntilIdle()
+        assertEquals(WaysConfirm.RevealOn, st(m).confirm)
+        assertTrue(st(m).changedElsewhere)
+    }
+
+    /** Coming back while a dialog, a program page or typed text is open reads nothing. */
+    @Test
+    fun returningWhileSomethingIsOpenReadsNothing() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","proxy"],"proxy":{"hosts":["a.example.com"],"header":"Authorization","prefix":""}}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setHostInput("b.exa")
+        m.returned()
+        advanceUntilIdle()
+        assertEquals(1, repo.reads)
+        m.setHostInput("")
+        m.setReveal(true)
+        m.returned()
+        advanceUntilIdle()
+        assertEquals(1, repo.reads)
+        m.dismissConfirm()
+        m.returned()
+        advanceUntilIdle()
+        assertEquals(2, repo.reads)
     }
 }

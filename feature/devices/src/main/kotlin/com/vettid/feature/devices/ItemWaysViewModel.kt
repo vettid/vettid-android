@@ -122,6 +122,9 @@ data class ItemWaysUiState(
     /** The draft or the open program's field holds something not saved. */
     val holdsChanges: Boolean get() = dirty || editPending
 
+    /** The member holds anything a fresh start of the page would lose: input, an open program, a dialog or a sheet. */
+    val busy: Boolean get() = holdsInput || openProgram != null || confirm != null || addingHost || fullPin != null
+
     /** A read-only page can send a turn-off: the answer read strictly, and for the agent asked about. */
     val canTurnOff: Boolean get() = read != null && read.strict != null && !read.foreign
 
@@ -209,23 +212,26 @@ class ItemWaysViewModel @Inject constructor(
     /** **Show the current ones**: the vault's settings, the draft started again from them. */
     fun load() = load(force = true)
 
-    /** Try again after a read failed: a draft the member changed is kept (with "changed elsewhere" if the settings did). */
-    fun retry() = if (local.value.dirty) load(force = false, keep = true) else load(force = true)
+    /** Try again after a read failed: whatever the member holds is kept (with "changed elsewhere" if the settings did). */
+    fun retry() = if (local.value.busy) load(force = false, keep = true) else load(force = true)
 
     /**
-     * The page is shown again (ON_START after the first): read again when nothing is unsaved, since this phone's own
-     * approval of a run records a pin without a `leash.item.changed` to this phone (the vault skips the deciding device).
+     * The page is shown (every ON_RESUME): read again when the member holds nothing (no change, no typed text, no open
+     * program, dialog or sheet), since this phone's own approval of a run records a pin without a `leash.item.changed` to
+     * this phone (the vault skips the deciding device). Before the first read has answered, nothing.
      */
     fun returned() {
         val s = local.value
-        val idle = s.prompt == null && !s.saving
-        if (s.read != null && !s.holdsChanges && idle) load(force = false)
+        if (s.read != null && !s.busy && !s.saving) load(force = false)
     }
 
     /**
-     * Reads the settings. Only the latest read is applied. [force] (opening, Try again, Show the current ones, a
-     * conflict) starts the draft again from them; otherwise (an event's re-read of a clean page) a draft the member
-     * changed while the read was out is kept, with "Another device changed these settings." (AA7 "While the page is open").
+     * Reads the settings. Only the latest read is applied. [force] (opening, Show the current ones, a conflict) starts the
+     * page again from them. Otherwise (an event's or a return's re-read, Try again with something held):
+     * - the same version is taken in quietly (a recorded pin), a clean draft following it, nothing else touched;
+     * - a new version while the member holds anything, or changed the draft while the read was out, or [keep], keeps all
+     *   of it with "Another device changed these settings." (AA7 "While the page is open");
+     * - else the page starts again from the new version.
      */
     private fun load(force: Boolean, keep: Boolean = false) {
         val n = ++loads
@@ -238,10 +244,10 @@ class ItemWaysViewModel @Inject constructor(
                     when {
                         n != loads -> it
                         r == null -> it.copy(notIncluded = true, prompt = null)
-                        // The kept draft stays on the read it was made from: its save meets the vault's `conflict`, no prompt.
-                        !force && it.draft != before -> it.copy(notIncluded = false, changedElsewhere = true)
-                        // Try again with unsaved changes: kept, on the read they were made from.
-                        keep -> it.copy(notIncluded = false, changedElsewhere = r.ways?.version != it.read?.ways?.version)
+                        !force && it.read != null && r.ways?.version == it.read.ways?.version ->
+                            it.copy(read = r, draft = if (it.draft == it.read.ways) r.ways else it.draft, notIncluded = false)
+                        // Kept, on the read it was made from: its save meets the vault's `conflict`, with no prompt.
+                        !force && (keep || it.busy || it.draft != before) -> it.copy(notIncluded = false, changedElsewhere = true)
                         else -> it.copy(
                             read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
                             openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,

@@ -119,8 +119,7 @@ data class ItemWaysActions(
     val onCloseWindowNow: () -> Unit = {},
 )
 
-/** The fields of this page: what is typed is what is saved (no suggestions, autocorrection or capitals; AA7). */
-/** The fields' keyboard: no autocorrect, no capitals (AA7). Internal for its test. */
+/** The fields of this page: what is typed is what is saved (no suggestions, autocorrection or capitals; AA7). Internal for its test. */
 internal val PLAIN = KeyboardOptions(autoCorrectEnabled = false, capitalization = KeyboardCapitalization.None, imeAction = ImeAction.Done)
 
 /** How long the page stays after `not_found` to a save before it goes back (the accessibility time of a notice). */
@@ -363,10 +362,11 @@ private fun ProgramRow(state: ItemWaysUiState, p: RunProgram, index: Int, each: 
 
 @Composable
 private fun ProgramAdviceLines(p: RunProgram, each: Boolean) {
+    val empty = stringResource(R.string.ways_string_empty)
     if (ProgramAdvice.batchFile(p.program)) Note(stringResource(R.string.ways_batch_file), Modifier.testTag("ways_batch_file"))
     if (!each && ProgramAdvice.runsCommands(p.program)) {
         Text(
-            stringResource(R.string.ways_runs_commands, ShownString.inline(ItemWaysRules.lastElement(p.program))),
+            stringResource(R.string.ways_runs_commands, ShownString.inline(ItemWaysRules.lastElement(p.program), empty)),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.testTag("ways_runs_commands"),
@@ -377,10 +377,11 @@ private fun ProgramAdviceLines(p: RunProgram, each: Boolean) {
 /** The fingerprint line: recorded (16 digits, a tap shows all 64), forgotten when saved, or none yet. */
 @Composable
 private fun PinLine(state: ItemWaysUiState, p: RunProgram, onShow: (String?) -> Unit) {
+    val empty = stringResource(R.string.ways_string_empty)
     val sha = p.sha256
     when {
         sha != null && p.path != null -> Text(
-            stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty())),
+            stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty(), empty)),
             style = MaterialTheme.typography.bodySmall,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.clickable(role = Role.Button) { onShow(sha) }.testTag("ways_pin"),
@@ -393,6 +394,7 @@ private fun PinLine(state: ItemWaysUiState, p: RunProgram, onShow: (String?) -> 
 /** A program's page: the program (changing it forgets the fingerprint), its variables, its fingerprint, Remove program. */
 @Composable
 private fun ProgramPage(state: ItemWaysUiState, p: RunProgram, index: Int, actions: ItemWaysActions) {
+    val empty = stringResource(R.string.ways_string_empty)
     val each = state.draft?.run?.each ?: true
     DetailCard(Modifier.testTag("ways_program_page")) {
         CardHeading(stringResource(R.string.ways_program_field))
@@ -409,7 +411,7 @@ private fun ProgramPage(state: ItemWaysUiState, p: RunProgram, index: Int, actio
         val sha = p.sha256
         if (sha != null && p.path != null) {
             Text(
-                stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty())),
+                stringResource(R.string.ways_pin_recorded, Fingerprints.short(sha), ShownString.inline(p.path.orEmpty(), empty)),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 modifier = Modifier.clickable(role = Role.Button) { actions.onShowPin(sha) }.testTag("ways_pin"),
@@ -556,6 +558,7 @@ private fun hostProblemText(p: HostProblem): String = stringResource(
 private fun WaysDialogs(state: ItemWaysUiState, actions: ItemWaysActions) {
     val item = itemName(state.itemName)
     val agent = state.agentName
+    val empty = stringResource(R.string.ways_string_empty)
     when (val c = state.confirm) {
         WaysConfirm.RunOff -> ConfirmDialog(
             title = stringResource(R.string.ways_run_off_title, item),
@@ -610,7 +613,7 @@ private fun WaysDialogs(state: ItemWaysUiState, actions: ItemWaysActions) {
             text = stringResource(
                 R.string.ways_pin_forget_body,
                 state.draft?.run?.programs?.getOrNull(c.index)?.program
-                    ?.let { ShownString.inline(ItemWaysRules.lastElement(it)) }.orEmpty(),
+                    ?.let { ShownString.inline(ItemWaysRules.lastElement(it), empty) }.orEmpty(),
             ),
             confirmLabel = stringResource(R.string.ways_pin_forget_confirm),
             onConfirm = actions.onConfirm,

@@ -3,7 +3,6 @@ package com.vettid.feature.devices
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -131,11 +130,8 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
 
 @Composable
 private fun ItemWaysContent(vm: ItemWaysViewModel, state: ItemWaysUiState, host: DevicesHost) {
-    // Back on the page (not the first showing, which reads already): read again if nothing is unsaved.
-    val shown = remember { BooleanArray(1) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        if (shown[0]) vm.returned() else shown[0] = true
-    }
+    // Shown again (from another screen or app): read again if the member holds nothing (the view model decides).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.returned() }
     LaunchedEffect(state.ownerCheck) {
         if (!state.ownerCheck) return@LaunchedEffect
         vm.ownerCheckShown()
