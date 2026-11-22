@@ -2298,6 +2298,23 @@ class FeedManagerTest {
         assertEquals(listOf("y2"), arrived)
     }
 
+    /** The same with the catch-up failing too: no other read is started (no loop), and the copy is not notified. */
+    @Test
+    fun aCoveredCopysCatchUpIsMadeOnceThoughItFailsToo() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2))
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.ownerCheckLifted(now)
+        synchronized(ops) { ops.failLists = 2 } // the push's read and the catch-up's
+        val before = ops.lists.size
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // (settle runs the virtual clock past every wait: a loop would read again and again.)
+        settle { ops.lists.size >= before + 2 && m.readsUnderWay == 0 }
+        assertEquals("no loop: the push's read and one catch-up", before + 2, ops.lists.size)
+        assertEquals(emptyList<String>(), arrived)
+    }
+
     /** A push for a newer change of an item whose older change waits for the read is notified at once. */
     @Test
     fun aNewerPushIsNotHeldBehindAnOlderChangeOfItsItem() = runTest {

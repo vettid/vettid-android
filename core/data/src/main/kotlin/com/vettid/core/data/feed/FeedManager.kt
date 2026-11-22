@@ -843,12 +843,13 @@ class FeedManager(
      * does.
      */
     private fun readEnded(ok: Boolean, ran: Boolean = true) {
-        // Counted out first: a push that comes from here on sees no read under way and starts one, and one that came before
-        // is in the queues retryOnce looks at.
+        // A reservation given back unrun read nothing: what the last read said of the feed stands. Whether the feed is
+        // behind is set before the read is counted out, so a push or event that comes once no read is under way sees it
+        // (and catches up before any release); the read is counted out before the retry looks, so a push that comes in
+        // between sees no read under way and starts one, and one that came before is in the queues retryOnce looks at.
+        if (ran) behind = !ok
         val left = readsRunning.decrementAndGet()
-        // A reservation given back unrun read nothing: what the last read said of the feed stands.
         if (ran) {
-            behind = !ok
             if (ok) retried = false else retryOnce()
         }
         if (left > 0 || !ok) return
