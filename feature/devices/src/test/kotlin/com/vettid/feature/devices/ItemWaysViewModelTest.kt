@@ -55,6 +55,9 @@ class ItemWaysViewModelTest {
         val readGates = ArrayDeque<CompletableDeferred<String?>>()
         var saveGate: CompletableDeferred<Unit>? = null
 
+        /** The vault's `Saved` carries the next version, as a real save does (else the version sent). */
+        var bump = false
+
         override suspend fun list(agentId: String): List<ItemWaysRead> = emptyList()
 
         override suspend fun read(agentId: String, itemId: String): ItemWaysRead? {
@@ -66,7 +69,8 @@ class ItemWaysViewModelTest {
         override suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean): ItemWaysSave {
             saves += Sent(next, password, resent)
             saveGate?.await()
-            return answers.removeFirstOrNull() ?: ItemWaysSave.Saved(ItemWaysRules.one(VaultJson.bytes(next.setBody()))!!)
+            val saved = if (bump) next.copy(version = (next.version ?: 0) + 1) else next
+            return answers.removeFirstOrNull() ?: ItemWaysSave.Saved(ItemWaysRules.one(VaultJson.bytes(saved.setBody()))!!)
         }
 
         override suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave {
@@ -466,6 +470,71 @@ class ItemWaysViewModelTest {
         assertTrue("still to be saved", st(m).dirty)
     }
 
+    /** The kept edit moves onto the saved version, so its own save goes out at once, at that version, with no prompt. */
+    @Test
+    fun aKeptEditSavesAtTheNewVersion() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal","proxy"],"proxy":{"hosts":["a.example.com","b.example.com"],"header":"Authorization","prefix":"Bearer "}}"""
+        repo.bump = true
+        repo.saveGate = CompletableDeferred()
+        val m = vm()
+        advanceUntilIdle()
+        m.removeHost("b.example.com")
+        m.save()
+        advanceUntilIdle()
+        m.setReveal(false)
+        repo.saveGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2L, st(m).read!!.ways!!.version)
+        assertEquals(2L, st(m).draft!!.version)
+        assertFalse(st(m).changedElsewhere)
+        m.save()
+        advanceUntilIdle()
+        assertEquals(listOf(1L, 2L), repo.saves.map { it.next.version })
+        assertNull("a narrowing: no prompt", st(m).prompt)
+        assertEquals(3L, st(m).read!!.ways!!.version)
+    }
+
+    /** The vault saved something other than what was sent: the edit stays on its own read, changed elsewhere. */
+    @Test
+    fun aKeptEditOverADifferentSaveIsChangedElsewhere() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        repo.saveGate = CompletableDeferred()
+        repo.answers += ItemWaysSave.Saved(ItemWaysRules.one("""{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}""".toByteArray())!!)
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        m.save()
+        advanceUntilIdle()
+        m.setReveal(true)
+        m.confirm()
+        repo.saveGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(st(m).changedElsewhere)
+        assertEquals("the read the edit was made from", 1L, st(m).read!!.ways!!.version)
+        assertTrue(ItemWay.REVEAL in st(m).draft!!.ways)
+    }
+
+    /** A re-read that started before a save answers after it: it is not applied over the saved read. */
+    @Test
+    fun aReadOlderThanASaveIsDropped() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        repo.bump = true
+        val m = vm()
+        advanceUntilIdle()
+        val slow = CompletableDeferred<String?>()
+        repo.readGates += slow
+        devices.changes.emit(AgentChange.Item("a1", "i1", 2))
+        advanceUntilIdle()
+        m.setReveal(false)
+        m.save()
+        advanceUntilIdle()
+        assertEquals(2L, st(m).read!!.ways!!.version)
+        slow.complete("""{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}""")
+        advanceUntilIdle()
+        assertEquals(2L, st(m).read!!.ways!!.version)
+        assertFalse(st(m).changedElsewhere)
+    }
+
     /** An event's re-read keeps an edit made while it was out; of two reads only the latest is applied. */
     @Test
     fun anEventsReadKeepsAnEditAndOnlyTheLatestApplies() = runTest(main.dispatcher) {
@@ -479,7 +548,7 @@ class ItemWaysViewModelTest {
         m.setReveal(false)
         slow.complete("""{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal"]}""")
         advanceUntilIdle()
-        assertEquals(2L, st(m).read!!.ways!!.version)
+        assertEquals("the edit stays on its own read", 1L, st(m).read!!.ways!!.version)
         assertFalse("the edit is kept", ItemWay.REVEAL in st(m).draft!!.ways)
         assertTrue(st(m).changedElsewhere)
         // Show the current ones (a forced read) twice; the first answers last and is not applied.

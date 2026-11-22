@@ -149,6 +149,23 @@ data class ItemWaysUiState(
         return read?.ways?.run?.programs?.any { it.program == p.program && it.sha256 != null } == true
     }
 
+    /**
+     * After a `Saved` of [sent]: the draft starts again from [saved], unless the member changed it while the save was out.
+     * Then the change is kept and moved onto the saved version when the vault saved exactly what was sent; otherwise it
+     * stays on the read it was made from, with "Another device changed these settings." (its save meets `conflict`).
+     */
+    internal fun afterSaved(saved: ItemWaysRead, sent: ItemWays?): ItemWaysUiState {
+        val d = draft
+        val now = saved.ways
+        val base = copy(prompt = null, notice = WaysNotice.Saved)
+        return when {
+            sent == null || d == null || d == sent -> base.copy(read = saved, draft = now, changedElsewhere = false)
+            now != null && sent.copy(version = now.version) == now ->
+                base.copy(read = saved, draft = d.copy(version = now.version), changedElsewhere = false)
+            else -> base.copy(changedElsewhere = true)
+        }
+    }
+
     override fun toString(): String = "ItemWaysUiState"
 }
 
@@ -205,7 +222,8 @@ class ItemWaysViewModel @Inject constructor(
                     when {
                         n != loads -> it
                         r == null -> it.copy(loading = false, notIncluded = true, prompt = null)
-                        !force && it.draft != before -> it.copy(loading = false, read = r, notIncluded = false, changedElsewhere = true)
+                        // The kept draft stays on the read it was made from: its save meets the vault's `conflict`, no prompt.
+                        !force && it.draft != before -> it.copy(loading = false, notIncluded = false, changedElsewhere = true)
                         else -> it.copy(
                             loading = false, read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
                             openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
@@ -484,12 +502,9 @@ class ItemWaysViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod")
     private fun onSaved(r: ItemWaysSave, sent: ItemWays? = null) {
         when (r) {
-            is ItemWaysSave.Saved -> local.update {
-                val keep = sent != null && it.draft != sent
-                it.copy(
-                    read = r.read, draft = if (keep) it.draft else r.read.ways, prompt = null, notice = WaysNotice.Saved,
-                    changedElsewhere = false,
-                )
+            is ItemWaysSave.Saved -> {
+                loads++ // a read started before this answer is older than it
+                local.update { it.afterSaved(r.read, sent) }
             }
             ItemWaysSave.NeedsPassword -> local.update { it.copy(prompt = WaysPrompt()) }
             ItemWaysSave.CredentialLocked -> local.update { it.copy(prompt = WaysPrompt(resend = true)) }
