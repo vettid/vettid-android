@@ -13,6 +13,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import com.vettid.core.data.items.FieldLabel
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.Sensitivity
@@ -62,7 +64,8 @@ class AgentWayScreenTest {
     private fun ask(h: HeldRequest, exp: Instant = now.plusSeconds(4 * 60)) =
         Approval.DeviceRequest("approval.pending", "h1", "Build bot", "agent", "agent.request", now, exp, deviceId = "A", held = h)
 
-    private fun state(a: Approval.DeviceRequest) = ApprovalDetailUiState(a.key, a, items = items)
+    /** As the view model has it once the item's settings allowed a run's `cwd` (see the view model's tests for the read). */
+    private fun state(a: Approval.DeviceRequest) = ApprovalDetailUiState(a.key, a, items = items, cwdAllowed = true)
 
     private fun show(h: HeldRequest, actions: DecisionActions = DecisionActions(), exp: Instant = now.plusSeconds(4 * 60)) =
         rule.setContent { ApprovalDetailScreen(state(ask(h, exp)), actions) }
@@ -85,6 +88,7 @@ class AgentWayScreenTest {
     @Test
     fun theFingerprintShowsAll64DigitsOnATap() {
         show(run())
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_pin"))
         rule.onNodeWithTag("agent_way_pin").performClick()
         rule.onNodeWithText("Fingerprint: " + sha.chunked(4).joinToString(" ")).assertExists()
     }
@@ -120,6 +124,13 @@ class AgentWayScreenTest {
         show(run(argv = listOf("/usr/bin/tool", "--key", "{secret_file}"), program = "/usr/bin/tool", how = SecretHow.FILE))
         rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_secret_file_1"))
         rule.onNodeWithText("(the secret file's path)").assertExists()
+    }
+
+    @Test
+    fun theSecretFileNoteIsOnlyForAFileRun() {
+        show(run(argv = listOf("/usr/bin/tool", "{secret_file}"), program = "/usr/bin/tool", how = SecretHow.ENV))
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_arg_0"))
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_secret_file_0").fetchSemanticsNodes().size)
     }
 
     @Test
@@ -205,5 +216,82 @@ class AgentWayScreenTest {
             ApprovalDetailScreen(state(ask(run())).copy(outcome = DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = true, item = "GitHub token")), DecisionActions())
         }
         rule.onNodeWithText("This program's fingerprint is now recorded for ⁨GitHub token⁩.").assertExists()
+    }
+
+    /** A real touch flagged obscured never reaches Approve (and says why); a plain one does; Deny always does. */
+    @Test
+    @Config(qualifiers = "w400dp-h2400dp")
+    fun anObscuredTouchOnApproveIsRefused() {
+        var approved = 0
+        var denied = 0
+        var view: android.view.View? = null
+        rule.setContent {
+            view = androidx.compose.ui.platform.LocalView.current
+            ApprovalDetailScreen(state(ask(run(argv = listOf("/usr/bin/git")))), DecisionActions(onApprove = { approved++ }, onDeny = { denied++ }))
+        }
+        rule.waitForIdle()
+        fun tap(tag: String, flags: Int) {
+            val b = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+            val x = b.center.x
+            val y = b.center.y
+            fun ev(action: Int) = MotionEvent.obtain(
+                0L, 0L, action, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }),
+                arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1f; size = 1f }),
+                0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, flags,
+            )
+            rule.runOnUiThread {
+                view!!.dispatchTouchEvent(ev(MotionEvent.ACTION_DOWN))
+                view!!.dispatchTouchEvent(ev(MotionEvent.ACTION_UP))
+            }
+            rule.waitForIdle()
+        }
+        rule.onNodeWithTag("agent_way_approve").assertIsEnabled()
+        tap("agent_way_approve", MotionEvent.FLAG_WINDOW_IS_OBSCURED)
+        assertEquals("an obscured tap approves nothing", 0, approved)
+        rule.onNodeWithTag("agent_way_obscured").assertExists()
+        tap("agent_way_approve", MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED)
+        assertEquals(0, approved)
+        tap("agent_way_deny", MotionEvent.FLAG_WINDOW_IS_OBSCURED)
+        assertEquals("Deny works while obscured", 1, denied)
+        tap("agent_way_approve", 0)
+        assertEquals("a plain tap approves", 1, approved)
+    }
+
+    /** What is shown changes while the end was reached: back to the top, and the end must be scrolled to again. */
+    @Test
+    fun aContentChangeReArmsTheGate() {
+        val args = listOf("/usr/bin/git") + (1..40).map { "arg-$it-" + "x".repeat(300) }
+        var h by androidx.compose.runtime.mutableStateOf<HeldRequest>(run(argv = args))
+        rule.setContent { ApprovalDetailScreen(state(ask(h)), DecisionActions()) }
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_end"))
+        rule.waitForIdle()
+        rule.onNodeWithTag("agent_way_approve").assertIsEnabled()
+        h = run(argv = args, flags = setOf(RunFlag.SHELL))
+        rule.waitForIdle()
+        rule.onNodeWithTag("agent_way_approve").assertIsNotEnabled()
+    }
+
+    @Test
+    fun theProgramThatRunsOtherCommandsLineShowsAtTheTopAndTheEnd() {
+        show(run()) // git
+        rule.onNodeWithText("This program can run other commands given in its arguments. Read every argument.", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_warning_end_0"))
+        rule.onNodeWithTag("agent_way_warning_end_0").assertExists()
+    }
+
+    @Test
+    fun anEmptyPrefixShowsNoMarkers() {
+        show(proxy(prefix = ""))
+        rule.onNodeWithText("Sent as: ${inline("Authorization")}: ••••••••").assertExists()
+    }
+
+    /** Expired while open: the screen says so, with no buttons (the view model calls it gone). */
+    @Test
+    fun anExpiredRunThatTheViewModelCallsGoneSaysSo() {
+        val a = ask(run(), exp = now.minusSeconds(1))
+        rule.setContent { ApprovalDetailScreen(state(a).copy(gone = true), DecisionActions()) }
+        rule.onNodeWithText("This request expired, so nothing was done.").assertExists()
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_approve").fetchSemanticsNodes().size)
     }
 }

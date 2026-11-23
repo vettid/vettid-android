@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.view.MotionEvent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,9 +31,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -80,48 +84,75 @@ internal fun AgentWayScreen(
     val contentKey = "${a.key}:${held.hashCode()}"
     var reached by rememberSaveable(contentKey) { mutableStateOf(false) }
     val list = rememberLazyListState()
+    val first = rememberSaveable(a.key) { arrayOf(contentKey) }
     LaunchedEffect(contentKey, list) {
+        // A change of what is shown (not the first showing, not a rotation) starts the reading again from the top, so
+        // the end must be scrolled to anew.
+        if (first[0] != contentKey) {
+            first[0] = contentKey
+            list.scrollToItem(0)
+        }
         snapshotFlow { atEnd(list) }.collect { if (it) reached = true }
     }
     var obscured by remember { mutableStateOf(false) }
     HideOverlays()
     val large = LocalDensity.current.fontScale >= LARGE_FONT
     DetailScaffold(onBackClick = actions.onBack, modifier = modifier.testTag("agent_way")) {
-        Column(Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = list,
-                modifier = Modifier.weight(1f).heightIn(min = MIN_SCROLL).fillMaxWidth().testTag("agent_way_content"),
-                verticalArrangement = Arrangement.spacedBy(Spacing.s),
-            ) {
-                if (expired) {
-                    item("expired") { Line(stringResource(R.string.approvals_way_expired), "agent_way_expired", warning = true) }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            // The buttons' panel never takes the list's last 120 dp; its lines scroll within it, the buttons never do.
+            val panelMax = (maxHeight - MIN_SCROLL).coerceAtLeast(0.dp)
+            Column(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    state = list,
+                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("agent_way_content"),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.s),
+                ) {
+                    if (expired) {
+                        item("expired") { Line(stringResource(R.string.approvals_way_expired), "agent_way_expired", warning = true) }
+                    }
+                    rows.forEach { (key, row) -> item(key) { Column(Modifier.padding(horizontal = Spacing.gutter)) { row() } } }
+                    item("end") { Text("", Modifier.testTag("agent_way_end")) }
                 }
-                rows.forEach { (key, row) -> item(key) { Column(Modifier.padding(horizontal = Spacing.gutter)) { row() } } }
-                item("end") { Text("", Modifier.testTag("agent_way_end")) }
-            }
-            if (!expired) {
-                Buttons(state, actions, enabled = reached && state.canApprove && !state.busy, large, obscured) { obscured = true }
+                if (!expired) {
+                    val gate = Gate(reached, enabled = reached && state.canApprove && !state.busy)
+                    Buttons(state, actions, gate, large, obscured, panelMax) { obscured = true }
+                }
             }
         }
     }
 }
 
-/** The buttons, fixed below the content: Deny always; Approve after the end, refusing touches made through an overlay. */
+/** Whether the end was reached, and whether Approve is offered (also loaded, not busy). */
+private class Gate(val reached: Boolean, val enabled: Boolean)
+
+/**
+ * The buttons, fixed below the content: Deny always; Approve after the end. A touch Android marks as seen through another
+ * app's window is taken from Approve in the first pass, before the button sees it, for every event of the gesture.
+ */
 @Composable
-@OptIn(ExperimentalComposeUiApi::class)
+@Suppress("LongParameterList")
 private fun Buttons(
     state: ApprovalDetailUiState,
     actions: DecisionActions,
-    enabled: Boolean,
+    gate: Gate,
     large: Boolean,
     obscured: Boolean,
+    panelMax: androidx.compose.ui.unit.Dp,
     onObscured: () -> Unit,
 ) {
     val hint = stringResource(R.string.approvals_way_scroll_hint)
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
-        if (obscured) Line(stringResource(R.string.approvals_way_obscured), "agent_way_obscured", warning = true)
-        state.error?.let { Line(failureText(it, state.retryUntil, state.limit, state.errorCode), "failure", warning = true) }
-        if (!enabled && large) Line(hint, "agent_way_hint")
+    Column(
+        Modifier.fillMaxWidth().heightIn(max = panelMax).navigationBarsPadding().padding(Spacing.gutter),
+        verticalArrangement = Arrangement.spacedBy(Spacing.s),
+    ) {
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Spacing.s),
+        ) {
+            if (obscured) Line(stringResource(R.string.approvals_way_obscured), "agent_way_obscured", warning = true)
+            state.error?.let { Line(failureText(it, state.retryUntil, state.limit, state.errorCode), "failure", warning = true) }
+            if (!gate.reached && large) Line(hint, "agent_way_hint")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
             SecondaryButton(
                 label = stringResource(R.string.approvals_deny),
@@ -129,17 +160,28 @@ private fun Buttons(
                 enabled = !state.busy,
                 modifier = Modifier.weight(1f).testTag("agent_way_deny"),
             )
-            PrimaryButton(
-                label = stringResource(R.string.approvals_approve),
-                onClick = actions.onApprove,
-                enabled = enabled,
-                modifier = Modifier.weight(1f)
-                    .pointerInteropFilter { e -> obscuredTouch(e).also { if (it) onObscured() } }
-                    .semantics { if (!enabled) stateDescription = hint }
-                    .testTag("agent_way_approve"),
-            )
+            Box(
+                Modifier.weight(1f).pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                            if (e.motionEvent?.let(::obscuredTouch) == true) {
+                                e.changes.forEach { it.consume() }
+                                onObscured()
+                            }
+                        }
+                    }
+                },
+            ) {
+                PrimaryButton(
+                    label = stringResource(R.string.approvals_approve),
+                    onClick = actions.onApprove,
+                    enabled = gate.enabled,
+                    modifier = Modifier.semantics { if (!gate.reached) stateDescription = hint }.testTag("agent_way_approve"),
+                )
+            }
         }
-        if (!enabled && !large) Line(hint, "agent_way_hint")
+        if (!gate.reached && !large) Line(hint, "agent_way_hint")
     }
 }
 
@@ -314,14 +356,17 @@ private fun proxyRows(a: Approval.DeviceRequest, h: HeldShow.Proxy, who: String)
     rows += "title" to {
         Title(stringResource(R.string.approvals_proxy_title, who, AccountNames.isolate(h.item), host, proxyLength(p.seconds)))
     }
-    rows += "body" to { Line(stringResource(R.string.approvals_proxy_body, host), "agent_way_proxy_body") }
+    rows += "body" to {
+        Line(stringResource(R.string.approvals_proxy_body, host), "agent_way_proxy_body")
+        Line(stringResource(R.string.approvals_proxy_ends_sooner, deviceSentenceInline(a)), "agent_way_ends_sooner")
+    }
     rows += "host" to { ShownStringBox(p.host, Modifier.testTag("agent_way_host")) }
     rows += "field" to { Line(stringResource(R.string.approvals_way_field, AccountNames.isolate(h.field)), "agent_way_field") }
     rows += "sent_as" to {
         val header = ShownString.inline(p.header, empty)
-        Line(stringResource(R.string.approvals_proxy_sent_as, header, ShownString.inline(p.prefix, "")), "agent_way_sent_as")
+        val prefix = if (p.prefix.isEmpty()) "" else ShownString.inline(p.prefix, "")
+        Line(stringResource(R.string.approvals_proxy_sent_as, header, prefix), "agent_way_sent_as")
     }
-    rows += "sooner" to { Line(stringResource(R.string.approvals_proxy_ends_sooner, deviceSentenceInline(a)), "agent_way_ends_sooner") }
     return rows
 }
 

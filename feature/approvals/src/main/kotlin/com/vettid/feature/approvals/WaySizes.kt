@@ -19,14 +19,20 @@ internal object WaySizes {
         r.argv.sumOf { utf8(it) } + r.env.sumOf { (k, v) -> utf8(k) + utf8(v) }
 
     /** Bytes below 1 KB; else KB below 1 MB; else MB. One decimal below 10 of the unit, else whole. */
-    fun unit(bytes: Long): Size = when {
-        bytes < K -> Size.Bytes(bytes)
-        bytes < K * K -> Size.Kb(number(bytes.toDouble() / K))
-        else -> Size.Mb(number(bytes.toDouble() / (K * K)))
+    fun unit(bytes: Long): Size {
+        if (bytes < K) return Size.Bytes(bytes)
+        val kb = rounded(bytes.toDouble() / K)
+        // Judged after rounding, so 1,048,000 bytes is "1.0 MB", not "1024 KB".
+        return if (kb < K) Size.Kb(number(kb)) else Size.Mb(number(rounded(bytes.toDouble() / (K * K))))
     }
+
+    /** One decimal below 10, whole from 10 (as shown). */
+    private fun rounded(x: Double): Double = if (x < TEN - HALF_TENTH) Math.round(x * TEN) / TEN else Math.round(x).toDouble()
 
     private fun number(x: Double): String =
         if (x < TEN) String.format(Locale.getDefault(), "%.1f", x) else String.format(Locale.getDefault(), "%.0f", x)
+
+    private const val HALF_TENTH = 0.05
 
     private fun utf8(s: String): Long = s.toByteArray(Charsets.UTF_8).size.toLong()
 

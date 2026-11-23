@@ -483,6 +483,13 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         WithdrawnScreen(a, state, actions, modifier)
         return
     }
+    // AA8 "Refused or expired": a run or a proxy that expired while open says so on its own screen, with no buttons.
+    val way = state.heldShow?.takeIf { it is HeldShow.Run || it is HeldShow.Proxy }
+    val expiredWay = a is Approval.DeviceRequest && state.gone && state.outcome == null && a.expiredAt(java.time.Instant.now())
+    if (expiredWay && way != null) {
+        AgentWayScreen(a as Approval.DeviceRequest, way, state, actions, modifier)
+        return
+    }
     if (a == null || state.gone) {
         GoneScreen(a, state, actions, modifier)
         return

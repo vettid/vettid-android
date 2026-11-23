@@ -559,4 +559,33 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertTrue(ways.reads.isEmpty())
     }
+
+    /** A bare-name binding records the run's file at its path: the pin is said from the path. */
+    @Test
+    fun aPinOfABareNameBindingIsSaid() = runTest {
+        val run = heldRun("i1").copy(flags = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED))
+        val bare = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"${run.sha256}","path":"/usr/bin/git","env":[]}],"each":true}}"""
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val m = vm(heldAsk(run), ways = Ways(bare))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = true, item = "Bank PIN"), m.uiState.value.outcome)
+    }
+
+    /** A run with a `cwd` and no `member_folder` is deny only until the item's settings allow it, read when it opens. */
+    @Test
+    fun aRunsCwdIsDenyOnlyUntilTheSettingsAllowIt() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val allowing = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","env":[]}],"each":true}}"""
+        val m = vm(heldAsk(run), ways = Ways(allowing))
+        runCurrent()
+        assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+        val withFolders = vm(heldAsk(run), ways = Ways(allowing.replace(""""each":true""", """"each":true,"folders":[]""")))
+        runCurrent()
+        assertEquals(HeldShow.Other, withFolders.uiState.value.heldShow)
+        val failing = vm(heldAsk(run))
+        runCurrent()
+        assertEquals("a failed read: deny only", HeldShow.Other, failing.uiState.value.heldShow)
+    }
 }

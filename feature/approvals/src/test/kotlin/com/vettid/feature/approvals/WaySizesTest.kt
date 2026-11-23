@@ -11,6 +11,8 @@ class WaySizesTest {
         assertEquals(WaySizes.Size.Kb("1.0"), WaySizes.unit(1_024))
         assertEquals(WaySizes.Size.Kb("32"), WaySizes.unit(32_768))
         assertEquals(WaySizes.Size.Mb("1.5"), WaySizes.unit(1_572_864))
+        assertEquals("after rounding", WaySizes.Size.Mb("1.0"), WaySizes.unit(1_048_500))
+        assertEquals(WaySizes.Size.Kb("10"), WaySizes.unit(10_230))
     }
 
     @Test
