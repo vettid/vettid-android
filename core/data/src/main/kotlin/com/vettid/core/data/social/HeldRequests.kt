@@ -34,8 +34,8 @@ sealed interface HeldRequest {
     /**
      * `agent.request{op: "item.run"}` as ANDROID-PLAN 0.1.138 AA8 shows it, read strictly from `approval.pending` ("Fail
      * closed"; [AgentApprovals]). Everything is the vault's (`body`, `flags`, `previous_*`, `replaces`), never the app's copy
-     * of the item's settings. [env] keeps the body's order. [hasCwd]: a `cwd`, here always without `member_folder`, which a vault
-     * that carries `run.folders` never sends (AA8: judged against the item's settings before it may be approved).
+     * of the item's settings. [env] keeps the body's order. AA9: [cwdEntry] is the `folders.cwd` entry of a `member_folder`
+     * run, [inputs] and [output] a `member_files` run's (with `folders.output` as [RunOutput.entry]), all from the approval.
      */
     data class ItemRun(
         val itemId: String,
@@ -51,8 +51,15 @@ sealed interface HeldRequest {
         val previousSha256: String?,
         val previousPath: String?,
         val replaces: String?,
+        val cwdEntry: com.vettid.core.data.devices.RunFolder? = null,
+        val inputs: List<RunInput> = emptyList(),
+        val output: RunOutput? = null,
     ) : HeldRequest {
-        val hasCwd: Boolean get() = cwd != null
+        /**
+         * A `cwd` without `member_folder`, which a vault that carries `run.folders` never sends: judged against the item's
+         * settings before it may be approved (AA8). A `member_folder` run's folder is the approval's own [cwdEntry] (AA9).
+         */
+        val hasCwd: Boolean get() = cwd != null && cwdEntry == null
 
         override fun toString(): String = "ItemRun"
     }
@@ -81,6 +88,24 @@ sealed interface HeldRequest {
 
     /** Whether the request can be approved here: only what the app shows in full (a run and a proxy on AA8's screens). */
     val approvable: Boolean get() = this is ItemUse || this is ItemGet || this is Catalog || this is ItemRun || this is ItemProxy
+}
+
+/** A file a run is handed (AA9, `body.inputs`): its path on the computer and its size; it is named by its last element. */
+data class RunInput(val path: String, val size: Long) {
+    val name: String get() = com.vettid.core.data.devices.ItemWaysRules.lastElement(path)
+
+    /** The folder it comes from: the path without its last element, a root keeping its separator (`/`, `C:\\`). */
+    val folder: String get() {
+        val dir = path.substring(0, path.length - name.length - 1)
+        return if (dir.isEmpty() || dir.endsWith(':')) path.substring(0, dir.length + 1) else dir
+    }
+
+    override fun toString(): String = "RunInput"
+}
+
+/** Where a run's files are copied back (AA9, `body.output`), with the matched entry (`folders.output`). */
+data class RunOutput(val folder: String, val names: List<String>, val entry: com.vettid.core.data.devices.RunFolder) {
+    override fun toString(): String = "RunOutput"
 }
 
 /** How a run gets the secret (`body.how`). */
