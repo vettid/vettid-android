@@ -208,6 +208,8 @@ import com.vettid.feature.settings.SettingsUiState
 import com.vettid.feature.settings.VaultStatusContent
 import com.vettid.feature.settings.CredentialKeyUi
 import java.time.Instant
+import com.vettid.feature.approvals.AgentWay
+import com.vettid.core.data.social.RunFlag as RF
 
 /** No-op actions for the catalog. */
 private object NoOnboarding : OnboardingActions {
@@ -506,8 +508,11 @@ object ScreenCatalog {
         previousSha256 = null, previousPath = null, replaces = null,
     )
 
+    private fun runWith(f: RF) = sampleRun.copy(flags = setOf(f))
+
     private fun agentHeld(h: com.vettid.core.data.social.HeldRequest?, fromFeed: Boolean = false) = Approval.DeviceRequest(
-        "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, t0.plusSeconds(270),
+        // Waiting for 4 more minutes whenever the catalog is opened (a fixed time would open every entry as expired).
+        "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, java.time.Instant.now().plusSeconds(270),
         deviceId = "dev-a", held = h, fromFeed = fromFeed,
     )
     private fun agentState(a: Approval.DeviceRequest, listed: Boolean = true, outcome: DeviceOutcome? = null) =
@@ -1511,8 +1516,45 @@ object ScreenCatalog {
         "approvals.held_catalog" to {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Catalog)), DecisionActions())
         },
-        "approvals.held_later" to {
-            ApprovalDetailScreen(agentState(agentHeld(sampleRun)), DecisionActions())
+        "approvals.held_run" to { ApprovalDetailScreen(agentState(agentHeld(sampleRun)), DecisionActions()) },
+        "approvals.held_run_shell" to { ApprovalDetailScreen(agentState(agentHeld(runWith(RF.SHELL))), DecisionActions()) },
+        "approvals.held_run_inline_code" to { ApprovalDetailScreen(agentState(agentHeld(runWith(RF.INLINE_CODE))), DecisionActions()) },
+        "approvals.held_run_unbound" to { ApprovalDetailScreen(agentState(agentHeld(runWith(RF.UNBOUND_PROGRAM))), DecisionActions()) },
+        "approvals.held_run_unrecorded" to { ApprovalDetailScreen(agentState(agentHeld(runWith(RF.PROGRAM_UNRECORDED))), DecisionActions()) },
+        "approvals.held_run_changed" to {
+            ApprovalDetailScreen(agentState(agentHeld(runWith(RF.PROGRAM_CHANGED).copy(previousSha256 = "9f8e7d6c5b4a3928".repeat(4), previousPath = "/usr/bin/git"))), DecisionActions())
+        },
+        "approvals.held_run_moved" to {
+            ApprovalDetailScreen(agentState(agentHeld(runWith(RF.PROGRAM_CHANGED).copy(previousSha256 = "9f8e7d6c5b4a3928".repeat(4), previousPath = "/opt/git/bin/git"))), DecisionActions())
+        },
+        "approvals.held_run_batch_file" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun.copy(program = "C:/tools/build.cmd", argv = listOf("C:/tools/build.cmd", "release")))), DecisionActions())
+        },
+        "approvals.held_run_strings" to {
+            ApprovalDetailScreen(
+                agentState(agentHeld(sampleRun.copy(argv = listOf("/usr/bin/git", "commit", "-m", "fix \u202Eevil\u200B", "  two  spaces  ", ""), env = listOf("GIT_DIR" to "/home/me/gіt")))),
+                DecisionActions(),
+            )
+        },
+        "approvals.held_run_asked_again" to { ApprovalDetailScreen(agentState(agentHeld(sampleRun.copy(replaces = "h1"))), DecisionActions()) },
+        "approvals.held_proxy" to {
+            ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.ItemProxy("i1", "f1", "api.example.com", "Authorization", "Bearer ", 900, null))), DecisionActions())
+        },
+        "approvals.held_run_expired" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun).copy(exp = t0.minusSeconds(1))), DecisionActions())
+        },
+        "approvals.held_run_referred" to { ApprovalDetailScreen(agentState(agentHeld(sampleRun), outcome = DeviceOutcome.Referred), DecisionActions()) },
+        "approvals.held_run_pin_recorded" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun), outcome = DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = true, item = "Bank PIN")), DecisionActions())
+        },
+        "approvals.held_run_refused" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun), outcome = DeviceOutcome.Approved("program_not_allowed", AgentWay.RUN)), DecisionActions())
+        },
+        "approvals.held_run_gone" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun), outcome = DeviceOutcome.Approved("not_found", AgentWay.RUN)), DecisionActions())
+        },
+        "approvals.held_run_forbidden" to {
+            ApprovalDetailScreen(agentState(agentHeld(sampleRun), outcome = DeviceOutcome.Approved("forbidden", AgentWay.RUN)), DecisionActions())
         },
         "approvals.held_desktop" to {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.DesktopStepUp).copy(role = "desktop")), DecisionActions())

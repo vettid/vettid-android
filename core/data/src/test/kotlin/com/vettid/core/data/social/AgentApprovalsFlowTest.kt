@@ -79,7 +79,11 @@ class AgentApprovalsFlowTest {
         deviceOps = { ops },
         itemCache = { cache },
         deviceListed = { it in listedDevices },
+        runCwdAllowed = { agent, item -> cwdAllowed && agent == "A" && item == "i1" },
     )
+
+    /** What the item's settings say of a run's `cwd` (AA8): allowed only when they carry `run` without `folders`. */
+    private var cwdAllowed = false
 
     /** The item cache and the devices `device.list` names, as the manager reads them. */
     private var cache = listOf(
@@ -127,7 +131,7 @@ class AgentApprovalsFlowTest {
         runCurrent()
         val run = req(m, "device:approval.pending:h1").held as HeldRequest.ItemRun
         assertEquals(listOf("git", "status"), run.argv)
-        assertFalse("not approvable before AA8's screens", run.approvable)
+        assertTrue(run.approvable)
         // The approvals are made again from what was stored: still strict, so still deny only.
         assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h2").held)
     }
@@ -274,5 +278,37 @@ class AgentApprovalsFlowTest {
         m.refreshPendingFrom { listed(heldWith("h1", runBody()).replace(""""device_id":"A"""", """"device_id":"B"""")) }
         runCurrent()
         assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h1").held)
+    }
+
+    @Test
+    fun aRunIsApprovedWithApprovalDecide() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        runCurrent()
+        m.approveDeviceRequest("device:approval.pending:h1", null)
+        assertEquals(listOf("approval.decide:h1:true"), ops.calls)
+    }
+
+    @Test
+    fun aRunWithACwdAndNoMemberFolderNeedsTheSettingsToAllowIt() = runTest {
+        val m = manager()
+        val withCwd = runBody().replace(""""how":"env"""", """"cwd":"/home/me","how":"env"""")
+        m.onEvent(event("approval.pending", heldWith("h1", withCwd)))
+        runCurrent()
+        val refused = runCatching { m.approveDeviceRequest("device:approval.pending:h1", null) }.exceptionOrNull() as? VaultFailure
+        assertEquals(FailureKind.NOT_SUPPORTED, refused?.kind)
+        assertTrue("nothing sent", ops.calls.isEmpty())
+        cwdAllowed = true
+        m.approveDeviceRequest("device:approval.pending:h1", null)
+        assertEquals(listOf("approval.decide:h1:true"), ops.calls)
+    }
+
+    @Test
+    fun aRunForAnItemOrFieldNotInTheCacheIsNotApproved() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody().replace(""""field_id":"f1"""", """"field_id":"f9""""))))
+        runCurrent()
+        val refused = runCatching { m.approveDeviceRequest("device:approval.pending:h1", null) }.exceptionOrNull() as? VaultFailure
+        assertEquals(FailureKind.NOT_SUPPORTED, refused?.kind)
     }
 }

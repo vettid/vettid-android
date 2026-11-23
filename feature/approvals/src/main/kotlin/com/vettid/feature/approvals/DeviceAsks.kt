@@ -40,7 +40,21 @@ internal sealed interface HeldShow {
         override val approvable get() = false
     }
 
-    /** `item.run` and `item.proxy` (decision 15), an item named when known. */
+    /** `item.run` (AA8): the run as the vault holds it, the item's and the field's names from the cache. */
+    data class Run(val run: HeldRequest.ItemRun, val item: String, val field: String) : HeldShow {
+        override val approvable get() = true
+
+        override fun toString(): String = "Run"
+    }
+
+    /** `item.proxy` (AA8): the proxy as the vault's note has it, the item's and the field's names from the cache. */
+    data class Proxy(val proxy: HeldRequest.ItemProxy, val item: String, val field: String) : HeldShow {
+        override val approvable get() = true
+
+        override fun toString(): String = "Proxy"
+    }
+
+    /** An op this version shows by a later one (no longer used for a run or a proxy), an item named when known. */
     data class Later(val item: String?, val loading: Boolean = false) : HeldShow {
         override val approvable get() = false
 
@@ -120,12 +134,20 @@ internal object DeviceAsks {
                 }
             }
             HeldRequest.Catalog -> HeldShow.Catalog
-            // Read as AA8 says, and deny only until its screens are built.
-            is HeldRequest.ItemRun -> HeldShow.Later(AccountNames.cleaned(item(h.itemId)?.name))
-            is HeldRequest.ItemProxy -> HeldShow.Later(AccountNames.cleaned(item(h.itemId)?.name))
+            is HeldRequest.ItemRun -> named(item(h.itemId), h.fieldId)
+                ?.let { (n, f) -> HeldShow.Run(h, n, f) } ?: HeldShow.NoItem(use = true)
+            is HeldRequest.ItemProxy -> named(item(h.itemId), h.fieldId)
+                ?.let { (n, f) -> HeldShow.Proxy(h, n, f) } ?: HeldShow.NoItem(use = true)
             HeldRequest.DesktopStepUp -> HeldShow.Desktop
             HeldRequest.Unshown, null -> HeldShow.Other
         }
+    }
+
+    /** The item's and the field's names as the cache has them, cleaned; null when either does not name. */
+    private fun named(i: ItemSummary?, fieldId: String): Pair<String, String>? {
+        val name = AccountNames.cleaned(i?.name)
+        val label = AccountNames.cleaned(i?.fieldLabels?.firstOrNull { it.fieldId == fieldId }?.label)
+        return if (name != null && label != null) name to label else null
     }
 
     /** [a] with the name and role of its device when it is known only from its feed item (the name is from `device.list`). */
@@ -151,11 +173,26 @@ sealed interface DeviceOutcome {
     /** `device.session.approve` answered: access until [until], or null when the answer gave no `expires_at`. */
     data class Allowed(val until: java.time.Instant?) : DeviceOutcome
 
-    /** `approval.decide{approve: true}` answered [result] (`ok`, or the code the held request was answered with). */
-    data class Approved(val result: String?) : DeviceOutcome
+    /**
+     * `approval.decide{approve: true}` answered [result] (`ok`, or the code the held request was answered with). [way]: a run
+     * or a proxy (AA8 has its own texts); [pinRecorded]: after an `ok` that records a fingerprint, the item's settings read
+     * since show it (AA8 "Approving and the pin"), for [item].
+     */
+    data class Approved(
+        val result: String?,
+        val way: AgentWay? = null,
+        val pinRecorded: Boolean = false,
+        val item: String? = null,
+    ) : DeviceOutcome
+
+    /** `{result: "referred"}` (§6.8 step 4): not done yet; the new approval is a new entry, to be opened anew. */
+    data object Referred : DeviceOutcome
 
     data object Denied : DeviceOutcome
 
     /** The vault answered an error (replaced, decided elsewhere, dropped): "This request is no longer waiting." */
     data object NoLongerWaiting : DeviceOutcome
 }
+
+/** The two ways an agent uses a secret that AA8's screens show. */
+enum class AgentWay { RUN, PROXY }

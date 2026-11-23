@@ -208,10 +208,8 @@ class DeviceAsksScreenTest {
     }
 
     @Test
-    fun runAndProxyCanOnlyBeDenied() {
-        show(state(held(heldRun("i1"))))
-        rule.onNodeWithText("$bot wants to use ⁨Bank PIN⁩ in a way this version of VettID can't show").assertExists()
-        rule.onNodeWithText("Update VettID to see the details. Until then you can only deny it.").assertExists()
+    fun aRunOfAnItemThePhoneNoLongerHasCanOnlyBeDenied() {
+        show(state(held(heldRun("gone"))))
         assertEquals(false, has("Approve"))
         rule.onNodeWithText("Deny").assertExists()
     }

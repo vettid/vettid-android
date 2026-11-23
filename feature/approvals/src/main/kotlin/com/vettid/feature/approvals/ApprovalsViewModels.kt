@@ -302,6 +302,11 @@ data class ApprovalDetailUiState(
     val sessionSeconds: Int? = null,
     /** (AA5) How the decision on a device request ended; the screen says so before it closes. */
     val outcome: DeviceOutcome? = null,
+    /**
+     * AA8 "Fail closed": for a run with a `cwd` and no `member_folder`, whether the item's settings, read when the detail
+     * opened, allow it (they carry `run` without `folders`); null until they answer. Deny only until true.
+     */
+    val cwdAllowed: Boolean? = null,
     /** (AA5) The device of a request known only from its feed item is in `device.list` (the list was read). */
     val deviceListed: Boolean = false,
     /** (AA5) A pairing is held on this phone (`PairingStage.Compare`): its comparison opens from the entry. */
@@ -356,6 +361,7 @@ data class ApprovalDetailUiState(
     /** (AA5) What a held request shows, or null for another kind of approval. */
     internal val heldShow: HeldShow?
         get() = (approval as? Approval.DeviceRequest)?.takeIf { it.isHeld }?.let { DeviceAsks.show(it, items, itemsLoaded) }
+            ?.let { h -> if (h is HeldShow.Run && h.run.hasCwd && cwdAllowed != true) HeldShow.Other else h }
 
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -419,6 +425,8 @@ class ApprovalDetailViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     private val pairing: PairingRepository,
     private val location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
+    /** AA8: the item's settings, read after an approval that records a fingerprint (the vault sends this phone no event). */
+    private val itemWays: com.vettid.core.data.devices.ItemWaysRepository = com.vettid.core.data.devices.NoItemWays,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val settled = ItemsSettled()
@@ -430,6 +438,8 @@ class ApprovalDetailViewModel @Inject constructor(
         viewModelScope.launch {
             repo.approvals.collect { l ->
                 l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } }
+                // An approval listed after the detail opened (a cold start, an unlock): its run's cwd rule is read then.
+                readCwdRule()
                 // A request that comes to name another document fetches it again.
                 loadDocument()
             }
@@ -763,15 +773,79 @@ class ApprovalDetailViewModel @Inject constructor(
     /** Allow (a session request, for [seconds]) or Approve (a held approval); the answer is kept for the screen to say. */
     private suspend fun approveDevice(a: Approval.DeviceRequest, seconds: Int) {
         val d = repo.approveDeviceRequest(a.key, if (a.isSession) seconds else null)
-        val outcome = if (!a.isSession && d.result == "not_found") {
-            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved".
-            DeviceOutcome.NoLongerWaiting
-        } else if (a.isSession) {
-            DeviceOutcome.Allowed(d.expiresAt)
-        } else {
-            DeviceOutcome.Approved(d.result)
+        val shown = uiState.value.heldShow
+        val way = when (a.held) {
+            is com.vettid.core.data.social.HeldRequest.ItemRun -> AgentWay.RUN
+            is com.vettid.core.data.social.HeldRequest.ItemProxy -> AgentWay.PROXY
+            else -> null
+        }
+        val item = (shown as? HeldShow.Run)?.item ?: (shown as? HeldShow.Proxy)?.item
+        val outcome = when {
+            a.isSession -> DeviceOutcome.Allowed(d.expiresAt)
+            // AA8 "Referred again": not done; the new approval is listed as a new decision.
+            way != null && d.result == "referred" -> DeviceOutcome.Referred
+            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved". A run's or a proxy's has its own text.
+            way == null && d.result == "not_found" -> DeviceOutcome.NoLongerWaiting
+            else -> DeviceOutcome.Approved(d.result, way, pinRecorded = d.result == "ok" && pinNowRecorded(a), item = item)
         }
         local.update { it.copy(outcome = outcome) }
+    }
+
+    /** The cwd rule's read was started (once per detail). */
+    private var cwdRead = false
+
+    /** The waits between tries of a failed cwd read. */
+    private val cwdRetries = listOf(2_000L, 5_000L, 15_000L)
+
+    /** AA8 "Fail closed": a run's `cwd` without `member_folder` is shown only once the item's settings allow it. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount")
+    private fun readCwdRule() {
+        if (cwdRead) return
+        val a = local.value.approval as? Approval.DeviceRequest ?: return
+        val run = a.held as? com.vettid.core.data.social.HeldRequest.ItemRun ?: return
+        val agent = a.deviceId ?: return
+        if (!run.hasCwd) return
+        cwdRead = true
+        viewModelScope.launch {
+            // A read that fails is tried again a few times (deny only meanwhile, AA8 "until that answer comes").
+            for (wait in cwdRetries) {
+                val ok = try {
+                    val r = itemWays.read(agent, run.itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
+                    r != null && !r.containsKey("folders")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (ok != null) {
+                    local.update { it.copy(cwdAllowed = ok) }
+                    return@launch
+                }
+                kotlinx.coroutines.delay(wait)
+            }
+            local.update { it.copy(cwdAllowed = false) }
+        }
+    }
+
+    /**
+     * AA8 "Approving and the pin": approving a run flagged `program_unrecorded` or `program_changed` records its
+     * fingerprint; it is said only when the item's settings, read now, show the matched entry with this run's `sha256` and
+     * `program`. A read that fails says nothing.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount")
+    private suspend fun pinNowRecorded(a: Approval.DeviceRequest): Boolean {
+        val run = a.held as? com.vettid.core.data.social.HeldRequest.ItemRun ?: return false
+        val pins = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED, com.vettid.core.data.social.RunFlag.PROGRAM_CHANGED)
+        if (run.flags.none { it in pins }) return false
+        val agent = a.deviceId ?: return false
+        return try {
+            // The matched entry records the run's file at its `path` (a bare-name entry's `program` is only its name).
+            itemWays.read(agent, run.itemId)?.ways?.run?.programs?.any { it.path == run.program && it.sha256 == run.sha256 } == true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

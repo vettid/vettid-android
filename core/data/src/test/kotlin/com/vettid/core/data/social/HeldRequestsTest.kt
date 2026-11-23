@@ -78,10 +78,10 @@ class HeldRequestsTest {
     }
 
     @Test
-    fun theCatalogIsApprovableAndRunAndProxyAreReadButNotYetApprovable() {
+    fun theCatalogARunAndAProxyAreApprovable() {
         assertEquals(HeldRequest.Catalog, held("""{"op":"catalog"}"""))
-        assertFalse(held(RUN).approvable)
-        assertFalse(held(PROXY_BODY, PROXY_NOTE).approvable)
+        assertTrue(held(RUN).approvable)
+        assertTrue(held(PROXY_BODY, PROXY_NOTE).approvable)
     }
 
     @Test

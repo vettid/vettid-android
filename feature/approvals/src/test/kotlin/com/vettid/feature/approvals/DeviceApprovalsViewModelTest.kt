@@ -19,6 +19,7 @@ import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakePairing
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -61,10 +62,28 @@ class DeviceApprovalsViewModelTest {
             deviceId = "A", held = h, fromFeed = fromFeed,
         )
 
-    private fun vm(a: Approval.DeviceRequest, list: List<DeviceInfo> = listOf(agent())): ApprovalDetailViewModel {
+    private fun vm(
+        a: Approval.DeviceRequest,
+        list: List<DeviceInfo> = listOf(agent()),
+        ways: com.vettid.core.data.devices.ItemWaysRepository = com.vettid.core.data.devices.NoItemWays,
+    ): ApprovalDetailViewModel {
         social.approvals.value = listOf(a)
         devices.devices.value = list
-        return ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, pairing)
+        return ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, pairing, itemWays = ways,
+        )
+    }
+
+    /** The item's settings as `leash.item.list` answers them after an approval (AA8 "Approving and the pin"). */
+    private class Ways(private val answer: String?, private val gate: CompletableDeferred<Unit>? = null) :
+        com.vettid.core.data.devices.ItemWaysRepository by com.vettid.core.data.devices.NoItemWays {
+        val reads = mutableListOf<Pair<String, String>>()
+
+        override suspend fun read(agentId: String, itemId: String): com.vettid.core.data.devices.ItemWaysRead? {
+            reads += agentId to itemId
+            gate?.await()
+            return answer?.let { com.vettid.core.data.devices.ItemWaysRules.one(it.toByteArray()) }
+        }
     }
 
     // --- an access request ---
@@ -285,7 +304,8 @@ class DeviceApprovalsViewModelTest {
     @Test
     fun everythingTheAppCannotShowIsDenyOnly() = runTest {
         val unapprovable = listOf(
-            heldAsk(heldRun("i1")),
+            // A run of an item the phone no longer has.
+            heldAsk(heldRun("gone")),
             heldAsk(HeldRequest.DesktopStepUp),
             heldAsk(HeldRequest.Unshown),
             heldAsk(null),
@@ -488,5 +508,133 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertTrue("rejectPairingRequest" in social.calls)
         assertEquals(p.key, social.lastPairingReject)
+    }
+
+    // --- AA8: runs and proxies ---
+
+    @Test
+    fun aReferredRunIsNotApproved() = runTest {
+        social.deviceDecision = DeviceDecision(result = "referred")
+        val m = vm(heldAsk(heldRun("i1")))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Referred, m.uiState.value.outcome)
+    }
+
+    @Test
+    fun aRunsNotFoundResultIsItsOwnText() = runTest {
+        social.deviceDecision = DeviceDecision(result = "not_found")
+        val m = vm(heldAsk(heldRun("i1")))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("not_found", AgentWay.RUN, item = "Bank PIN"), m.uiState.value.outcome)
+    }
+
+    @Test
+    fun aPinIsSaidOnlyOnceTheSettingsShowIt() = runTest {
+        val run = heldRun("i1").copy(flags = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED))
+        val recorded = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","sha256":"${run.sha256}","path":"/usr/bin/git","env":[]}],"each":true}}"""
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val ways = Ways(recorded)
+        val m = vm(heldAsk(run), ways = ways)
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(listOf("A" to "i1"), ways.reads)
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = true, item = "Bank PIN"), m.uiState.value.outcome)
+        // Not yet recorded: nothing said.
+        val other = vm(heldAsk(run), ways = Ways(recorded.replace(run.sha256, "0".repeat(64))))
+        runCurrent()
+        other.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = false, item = "Bank PIN"), other.uiState.value.outcome)
+    }
+
+    @Test
+    fun aRunWithoutAPinFlagReadsNothing() = runTest {
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val ways = Ways(null)
+        val m = vm(heldAsk(heldRun("i1")), ways = ways)
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertTrue(ways.reads.isEmpty())
+    }
+
+    /** A bare-name binding records the run's file at its path: the pin is said from the path. */
+    @Test
+    fun aPinOfABareNameBindingIsSaid() = runTest {
+        val run = heldRun("i1").copy(flags = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED))
+        val bare = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"${run.sha256}","path":"/usr/bin/git","env":[]}],"each":true}}"""
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val m = vm(heldAsk(run), ways = Ways(bare))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = true, item = "Bank PIN"), m.uiState.value.outcome)
+    }
+
+    /** A run with a `cwd` and no `member_folder` is deny only until the item's settings allow it, read when it opens. */
+    @Test
+    fun aRunsCwdIsDenyOnlyUntilTheSettingsAllowIt() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val allowing = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","env":[]}],"each":true}}"""
+        val m = vm(heldAsk(run), ways = Ways(allowing))
+        runCurrent()
+        assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+        val withFolders = vm(heldAsk(run), ways = Ways(allowing.replace(""""each":true""", """"each":true,"folders":[]""")))
+        runCurrent()
+        assertEquals(HeldShow.Other, withFolders.uiState.value.heldShow)
+        val failing = vm(heldAsk(run))
+        runCurrent()
+        assertEquals("a failed read: deny only", HeldShow.Other, failing.uiState.value.heldShow)
+    }
+
+    /** An approval listed only after the detail opened still has its run's cwd rule read. */
+    @Test
+    fun theCwdRuleIsReadWhenTheApprovalIsListedLater() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val allowing = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","env":[]}],"each":true}}"""
+        val ways = Ways(allowing)
+        social.approvals.value = emptyList()
+        devices.devices.value = listOf(agent())
+        val a = heldAsk(run)
+        val m = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, pairing, itemWays = ways,
+        )
+        runCurrent()
+        assertTrue(ways.reads.isEmpty())
+        social.approvals.value = listOf(a)
+        runCurrent()
+        assertEquals(listOf("A" to "i1"), ways.reads)
+        assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+    }
+
+    /** While the cwd read has not answered, and when the answer has no `run`, the run is deny only. */
+    @Test
+    fun aRunsCwdIsDenyOnlyWhileUnreadAndWithoutARun() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val gate = CompletableDeferred<Unit>()
+        val pending = vm(heldAsk(run), ways = Ways("""{"agent_id":"A","item_id":"i1","version":2,"ways":["use"]}""", gate))
+        runCurrent()
+        assertEquals("not answered yet", HeldShow.Other, pending.uiState.value.heldShow)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("no run member", HeldShow.Other, pending.uiState.value.heldShow)
+    }
+
+    /** The pin is said only when the entry's path is the run's program, not its name alone. */
+    @Test
+    fun aPinAtAnotherPathIsNotSaid() = runTest {
+        val run = heldRun("i1").copy(flags = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED))
+        val elsewhere = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","sha256":"${run.sha256}","path":"/opt/git","env":[]}],"each":true}}"""
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val m = vm(heldAsk(run), ways = Ways(elsewhere))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = false, item = "Bank PIN"), m.uiState.value.outcome)
     }
 }

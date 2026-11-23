@@ -61,6 +61,7 @@ import com.vettid.core.data.devices.HostProblem
 import com.vettid.core.data.devices.ItemWay
 import com.vettid.core.data.devices.ItemWays
 import com.vettid.core.data.devices.ItemWaysRules
+import com.vettid.core.data.devices.ProgramAdvice
 import com.vettid.core.data.devices.ProgramProblem
 import com.vettid.core.data.devices.RunProgram
 import com.vettid.core.data.devices.VariableProblem
@@ -70,7 +71,6 @@ import com.vettid.core.ui.components.AlertDialog
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
-import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ModalBottomSheet
 import com.vettid.core.ui.components.NoticeCard
@@ -78,7 +78,11 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PrimaryButton
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.ShownStringBox
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.format.failureText
+import com.vettid.core.ui.text.Fingerprints
+import com.vettid.core.ui.text.ShownString
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.delay
 
@@ -362,7 +366,7 @@ private fun ProgramRow(state: ItemWaysUiState, p: RunProgram, index: Int, each: 
 
 @Composable
 private fun ProgramAdviceLines(p: RunProgram, each: Boolean) {
-    val empty = stringResource(R.string.ways_string_empty)
+    val empty = stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)
     if (ProgramAdvice.batchFile(p.program)) Note(stringResource(R.string.ways_batch_file), Modifier.testTag("ways_batch_file"))
     if (!each && ProgramAdvice.runsCommands(p.program)) {
         Text(
@@ -377,7 +381,7 @@ private fun ProgramAdviceLines(p: RunProgram, each: Boolean) {
 /** The fingerprint line: recorded (16 digits, a tap shows all 64), forgotten when saved, or none yet. */
 @Composable
 private fun PinLine(state: ItemWaysUiState, p: RunProgram, onShow: (String?) -> Unit) {
-    val empty = stringResource(R.string.ways_string_empty)
+    val empty = stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)
     val sha = p.sha256
     when {
         sha != null && p.path != null -> Text(
@@ -394,7 +398,7 @@ private fun PinLine(state: ItemWaysUiState, p: RunProgram, onShow: (String?) -> 
 /** A program's page: the program (changing it forgets the fingerprint), its variables, its fingerprint, Remove program. */
 @Composable
 private fun ProgramPage(state: ItemWaysUiState, p: RunProgram, index: Int, actions: ItemWaysActions) {
-    val empty = stringResource(R.string.ways_string_empty)
+    val empty = stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)
     val each = state.draft?.run?.each ?: true
     DetailCard(Modifier.testTag("ways_program_page")) {
         CardHeading(stringResource(R.string.ways_program_field))
@@ -558,7 +562,7 @@ private fun hostProblemText(p: HostProblem): String = stringResource(
 private fun WaysDialogs(state: ItemWaysUiState, actions: ItemWaysActions) {
     val item = itemName(state.itemName)
     val agent = state.agentName
-    val empty = stringResource(R.string.ways_string_empty)
+    val empty = stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)
     when (val c = state.confirm) {
         WaysConfirm.RunOff -> ConfirmDialog(
             title = stringResource(R.string.ways_run_off_title, item),
@@ -727,77 +731,6 @@ private fun PlainField(
     )
 }
 
-/** Left-to-right isolate and override (AA8: the box's text in its logical order, kept from reordering what is around it). */
-private const val LRI = '⁦'
-private const val LRO = '‭'
-private const val PDF = '‬'
-private const val PDI = '⁩'
-
-/**
- * A string as AA8 "How a string is shown" draws it: in full in a monospace box, left to right and isolated, escapes in
- * a highlighted box, spaces marked, other than printable ASCII highlighted with the look-alike line under it.
- */
-@Composable
-fun ShownStringBox(s: String, modifier: Modifier = Modifier) {
-    val pieces = remember(s) { ShownString.pieces(s) }
-    val colors = MaterialTheme.colorScheme
-    val escapedWord = stringResource(R.string.ways_string_escaped, "%s")
-    val empty = stringResource(R.string.ways_string_empty)
-    val shown: AnnotatedString = buildAnnotatedString {
-        append(LRI)
-        append(LRO)
-        if (pieces.isEmpty()) {
-            withStyle(SpanStyle(background = colors.tertiaryContainer, color = colors.onTertiaryContainer)) { append(empty) }
-        }
-        pieces.forEach { p ->
-            when (p) {
-                is ShownPiece.Text -> if (p.plain) {
-                    append(p.text)
-                } else {
-                    withStyle(SpanStyle(background = colors.secondaryContainer, color = colors.onSecondaryContainer)) { append(p.text) }
-                }
-                is ShownPiece.Escape ->
-                    withStyle(SpanStyle(background = colors.tertiaryContainer, color = colors.onTertiaryContainer)) { append(p.label) }
-                ShownPiece.Space -> withStyle(SpanStyle(color = colors.outline)) { append('·') }
-            }
-        }
-        append(PDF)
-        append(PDI)
-    }
-    // What a screen reader says: the text, each escape as "escaped character U+202E".
-    val spoken = if (pieces.isEmpty()) {
-        empty
-    } else {
-        pieces.joinToString("") {
-            when (it) {
-                is ShownPiece.Text -> it.text
-                is ShownPiece.Escape -> " ${escapedWord.replace("%s", it.label)} "
-                ShownPiece.Space -> " "
-            }
-        }
-    }
-    Column(modifier) {
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Surface(
-                shape = MaterialTheme.shapes.small,
-                border = BorderStroke(1.dp, colors.outline),
-                color = colors.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    shown,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodyMedium.copy(textDirection = TextDirection.Ltr),
-                    softWrap = true,
-                    modifier = Modifier.padding(Spacing.s).semantics { contentDescription = spoken }.testTag("shown_string"),
-                )
-            }
-        }
-        if (ShownString.lookalike(pieces)) {
-            Note(stringResource(R.string.ways_string_lookalike), Modifier.testTag("shown_string_lookalike"))
-        }
-    }
-}
 
 /**
  * A save refused with `bad_request` (AA7 "Saving", 0.1.138): the vault's message as it is, in a monospace box, inside the
