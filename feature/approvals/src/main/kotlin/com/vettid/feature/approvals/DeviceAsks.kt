@@ -86,10 +86,7 @@ internal object DeviceAsks {
         // The item cache is still being read: what it cannot name yet is "Loading…", not "an item you no longer have".
         return when (shown) {
             is HeldShow.NoItem -> shown.copy(loading = true)
-            is HeldShow.Later -> {
-                val named = (a.held as? HeldRequest.Later)?.itemId != null
-                if (named && shown.item == null) shown.copy(loading = true) else shown
-            }
+            is HeldShow.Later -> if (shown.item == null) shown.copy(loading = true) else shown
             else -> shown
         }
     }
@@ -123,7 +120,9 @@ internal object DeviceAsks {
                 }
             }
             HeldRequest.Catalog -> HeldShow.Catalog
-            is HeldRequest.Later -> HeldShow.Later(AccountNames.cleaned(h.itemId?.let { id -> item(id)?.name }))
+            // Read as AA8 says, and deny only until its screens are built.
+            is HeldRequest.ItemRun -> HeldShow.Later(AccountNames.cleaned(item(h.itemId)?.name))
+            is HeldRequest.ItemProxy -> HeldShow.Later(AccountNames.cleaned(item(h.itemId)?.name))
             HeldRequest.DesktopStepUp -> HeldShow.Desktop
             HeldRequest.Unshown, null -> HeldShow.Other
         }

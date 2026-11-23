@@ -18,7 +18,8 @@ import java.time.Instant
 @Suppress("TooManyFunctions")
 internal class PendingAsks {
     /** A listed ask the app shows: the event [type] it repeats, its parsed [key] and the requesting device. */
-    class Entry(val type: String, val body: JsonObject, val key: String, val deviceId: String?)
+    /** [raw] is the body's source text when the list was read strictly (AA8 "Fail closed"), else null. */
+    class Entry(val type: String, val body: JsonObject, val key: String, val deviceId: String?, val raw: String? = null)
 
     /** What a merge keeps: the listed [entries], and which kept events of the listed types stay ([keepEvent]). */
     class Plan(val entries: List<Entry>, private val newer: Set<String>) {

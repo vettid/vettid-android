@@ -53,9 +53,13 @@ object ApprovalParser {
         }
     }
 
-    /** One approval from an event of [type] received at [at]. */
+    /**
+     * One approval from an event of [type] received at [at]. [raw] is the body's source text: an `approval.pending` is
+     * then also read strictly, which an agent's `item.run`, `item.proxy` and `item.get` need (AA8 "Fail closed": without
+     * it, or with a duplicate member, they are deny only).
+     */
     @Suppress("CyclomaticComplexMethod")
-    fun parse(type: String, body: JsonObject, at: Instant): Approval? = when (type) {
+    fun parse(type: String, body: JsonObject, at: Instant, raw: String? = null): Approval? = when (type) {
         "connection.request.pending" -> incoming(body, at)
         "connection.request.outgoing" -> outgoing(body, at)
         "connection.authenticate.pending" -> {
@@ -99,7 +103,10 @@ object ApprovalParser {
         "approval.pending" -> body.s("approval_id")?.let {
             Approval.DeviceRequest(
                 type, it, name(body), body.s("role"), body.s("type"), at, instant(body.s("exp")), deviceId = body.s("device_id"),
-                held = HeldRequests.of(body.s("role"), body.s("type"), body.o("body")),
+                held = HeldRequests.of(body.s("role"), body.s("type"), body.o("body"), strict(raw)),
+                replaces = body.s("replaces")?.takeIf { r ->
+                    r.isNotEmpty() && body.s("role") == "agent" && body.o("body")?.s("op") in REFERRED_OPS
+                },
             )
         }
         "device.session.pending" -> body.s("request_id")?.let {
@@ -109,6 +116,19 @@ object ApprovalParser {
             )
         }
         else -> null
+    }
+
+    /** The ops an approval may be referred again for (§6.8 step 4). */
+    private val REFERRED_OPS = setOf("item.run", "item.proxy")
+
+    /** [raw] read strictly; null when absent or when it does not read so (a duplicate member, nesting, encoding). */
+    @Suppress("SwallowedException")
+    private fun strict(raw: String?): com.vettid.core.crypto.json.JsonObject? = raw?.let {
+        try {
+            com.vettid.core.crypto.json.StrictJson.parseObject(it)
+        } catch (_: CryptoException) {
+            null
+        }
     }
 
     /**

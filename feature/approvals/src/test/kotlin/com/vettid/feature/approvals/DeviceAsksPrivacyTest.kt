@@ -27,7 +27,7 @@ class DeviceAsksPrivacyTest {
             a.toString(),
             DeviceAsks.show(a, items).toString(),
             DeviceAsks.show(a.copy(held = HeldRequest.ItemGet("item-id-7", listOf("fld-9"))), items).toString(),
-            DeviceAsks.show(a.copy(held = HeldRequest.Later("item-id-7")), items).toString(),
+            DeviceAsks.show(a.copy(held = heldRun("item-id-7")), items).toString(),
             HeldRequest.ItemUse("item-id-7", "fld-9", "payload-data".toByteArray()).toString(),
             DeviceOutcome.Denied.toString(),
         )

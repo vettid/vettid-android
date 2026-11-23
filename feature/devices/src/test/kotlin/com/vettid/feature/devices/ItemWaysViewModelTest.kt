@@ -829,4 +829,23 @@ class ItemWaysViewModelTest {
         assertNull("the read the draft was made from", st(m).read!!.ways!!.run!!.programs[0].sha256)
         assertFalse(st(m).pinForgotten(st(m).draft!!.run!!.programs[0]))
     }
+
+    /** Try again after a failed read that answers the same, unchanged settings: the edit is kept, with no notice. */
+    @Test
+    fun tryAgainOnAnUnchangedReReadKeepsTheEditQuietly() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","reveal"]}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        repo.failRead = VaultFailure(FailureKind.NETWORK)
+        m.retry()
+        advanceUntilIdle()
+        assertTrue(st(m).loadError != null)
+        m.retry()
+        advanceUntilIdle()
+        assertNull(st(m).loadError)
+        assertFalse("the edit is kept", ItemWay.REVEAL in st(m).draft!!.ways)
+        assertTrue(st(m).dirty)
+        assertFalse("nothing changed elsewhere", st(m).changedElsewhere)
+    }
 }
