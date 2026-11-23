@@ -243,4 +243,16 @@ class AgentApprovalsFlowTest {
         runCurrent()
         assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h1").held)
     }
+
+    @Test
+    fun aReplayAfterAReferralDoesNotBringBackTheOldApproval() = runTest {
+        val m = manager()
+        m.refreshPendingFrom { listed(heldWith("h1", runBody())) }
+        runCurrent()
+        // Newer than the list, so it is taken in (one not later is already reflected by the list).
+        m.onEvent(event("approval.pending", heldWith("h2", runBody(), ""","replaces":"h1""""), ts = now.plusSeconds(1)))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h2"), m.keys())
+        assertEquals(emptyList<String>(), m.firstListedSince(0)?.map { it.key })
+    }
 }

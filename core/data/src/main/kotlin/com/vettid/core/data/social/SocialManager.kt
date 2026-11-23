@@ -258,7 +258,8 @@ class SocialManager internal constructor(
     internal fun firstListedSince(mark: Long): List<Approval>? = synchronized(localLock) {
         if (!pendingListedSince(mark)) return@synchronized null
         val after = maxOf(mark, pending.resetAt)
-        mergedLists.filter { it.first > after }.minByOrNull { it.first }?.second
+        // A replay never brings back an approval replaced since that list was merged (§6.8 step 4).
+        mergedLists.filter { it.first > after }.minByOrNull { it.first }?.second?.filterNot { it.key in replacedFlow.value }
     }
 
     private val feedClosedFlow = MutableStateFlow(FeedOnlyAsks.Closed())
