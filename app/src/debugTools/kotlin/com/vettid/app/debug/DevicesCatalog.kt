@@ -78,7 +78,7 @@ internal object DevicesCatalog {
     private const val UNKNOWN_WAYS = """{"agent_id":"a1","item_id":"i1","version":2,"ways":["use","reveal","stream"],"stream":{"rate":1}}"""
 
     /** AA9: a binding whose vault answers with `run.folders` (one read only, one that may change files). */
-    private val folderWays = """{"agent_id":"a1","item_id":"i1","version":5,"ways":["use","run"],""" +
+    private const val FOLDER_WAYS = """{"agent_id":"a1","item_id":"i1","version":5,"ways":["use","run"],""" +
         """"run":{"programs":[{"program":"/usr/bin/git","env":[]}],"each":true,""" +
         """"folders":[{"path":"/home/you/project","write":false},{"path":"C:\\Users\\you\\reports","write":true}]}}"""
 
@@ -155,10 +155,10 @@ internal object DevicesCatalog {
         "devices.item_ways_none" to { Ways(ways(NO_WAYS)) },
         "devices.item_ways_read_only" to { Ways(ways(UNKNOWN_WAYS)) },
         "devices.item_ways_program" to { Ways(ways(allWays) { it.copy(openProgram = 0, editInput = "/usr/bin/git") }) },
-        "devices.item_ways_folders" to { Ways(ways(folderWays)) },
-        "devices.item_ways_folder" to { Ways(ways(folderWays) { it.copy(openFolder = 0) }) },
+        "devices.item_ways_folders" to { Ways(ways(FOLDER_WAYS)) },
+        "devices.item_ways_folder" to { Ways(ways(FOLDER_WAYS) { it.copy(openFolder = 0) }) },
         "devices.item_ways_folder_refused" to {
-            Ways(ways(folderWays) { it.copy(folderInput = "/home/you/project/src", folderProblem = FolderProblem.NESTED) })
+            Ways(ways(FOLDER_WAYS) { it.copy(folderInput = "/home/you/project/src", folderProblem = FolderProblem.NESTED) })
         },
         "devices.item_ways_pin_full" to { Ways(ways(allWays) { it.copy(fullPin = SHA) }) },
         "devices.item_ways_reveal_on" to { Ways(ways(allWays) { it.copy(confirm = WaysConfirm.RevealOn) }) },

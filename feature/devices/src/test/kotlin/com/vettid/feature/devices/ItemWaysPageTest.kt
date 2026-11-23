@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
@@ -339,5 +340,16 @@ class ItemWaysPageTest {
         rule.onNodeWithTag("ways_folder_write_switch").assertIsOff().performClick()
         assertEquals(0 to true, write)
         rule.onNodeWithTag("ways_folder_page_remove").assertExists()
+    }
+
+    /** Back on a folder's page closes the page, not the screen. */
+    @Test
+    fun backOnAFoldersPageClosesIt() {
+        var closed = 0
+        var left = 0
+        show(page(withFolders) { it.copy(openFolder = 1) }, ItemWaysActions(onCloseFolder = { closed++ }, onBack = { left++ }))
+        rule.onNodeWithContentDescription("Back", useUnmergedTree = true).performClick()
+        assertEquals(1, closed)
+        assertEquals(0, left)
     }
 }

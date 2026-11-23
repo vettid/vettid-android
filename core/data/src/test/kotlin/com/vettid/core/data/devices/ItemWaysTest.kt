@@ -161,6 +161,8 @@ class ItemWaysTest {
         assertTrue(ItemWaysRules.widens(cur, with(RunFolder("/a", true))))
         assertFalse(ItemWaysRules.widens(cur, with()))
         assertFalse(ItemWaysRules.widens(with(RunFolder("/a", true)), cur))
+        // A path changed only in case is another folder to the vault (it compares exactly): adding it widens.
+        assertTrue(ItemWaysRules.widens(cur, with(RunFolder("/A", false))))
     }
 
     @Test

@@ -71,63 +71,16 @@ object RunFolders {
         return parts.mapIndexed { i, e -> if (i == 0 && e.isEmpty()) "/" else elementKey(e) }
     }
 
-    /** `NFD(fold(upper(NFD(e))))`, trailing dots and spaces dropped. */
+    /** `NFD(fold(upper(NFD(e))))`, trailing dots and spaces dropped; `fold(upper(r))` is Go's own ([FolderFold]). */
     fun elementKey(e: String): String {
         val d = Normalizer.normalize(e, Normalizer.Form.NFD)
         val b = StringBuilder(d.length)
         var i = 0
         while (i < d.length) {
             val cp = d.codePointAt(i)
-            b.appendCodePoint(CaseOrbits.fold(Character.toUpperCase(cp)))
+            b.appendCodePoint(FolderFold.key(cp))
             i += Character.charCount(cp)
         }
         return Normalizer.normalize(b, Normalizer.Form.NFD).trimEnd('.', ' ')
-    }
-}
-
-/**
- * Go's `unicode.SimpleFold` orbits, each rune mapped to the smallest of its orbit (VAULT-MESSAGING 0.93.2 `fold`). An orbit
- * is the set of runes simple case folding (CaseFolding.txt C and S) makes equal; it is built here from the simple upper,
- * lower and title case mappings, which join the same runes (U+0345 with Ι, ι and U+1FBE; ſ with S and s; K with the Kelvin
- * sign). Built once, on the first rune outside ASCII.
- */
-internal object CaseOrbits {
-    private const val ASCII = 0x80
-
-    private val smallest: Map<Int, Int> by lazy { build() }
-
-    fun fold(cp: Int): Int = when {
-        cp < ASCII -> if (cp in 'a'.code..'z'.code) cp - ('a' - 'A') else cp
-        else -> smallest[cp] ?: cp
-    }
-
-    private fun build(): Map<Int, Int> {
-        val orbits = Orbits()
-        for (cp in 0..Character.MAX_CODE_POINT) {
-            if (!Character.isDefined(cp)) continue
-            orbits.join(cp, Character.toUpperCase(cp))
-            orbits.join(cp, Character.toLowerCase(cp))
-            orbits.join(cp, Character.toTitleCase(cp))
-        }
-        return orbits.smallest()
-    }
-
-    /** A union-find over runes whose root is always the smallest rune of its set. */
-    private class Orbits {
-        private val parent = HashMap<Int, Int>()
-
-        private fun root(x: Int): Int {
-            var r = x
-            while (true) r = parent[r] ?: return r
-        }
-
-        fun join(a: Int, b: Int) {
-            if (a == b) return
-            val ra = root(a)
-            val rb = root(b)
-            if (ra < rb) parent[rb] = ra else if (rb < ra) parent[ra] = rb
-        }
-
-        fun smallest(): Map<Int, Int> = parent.keys.associateWith { root(it) }
     }
 }

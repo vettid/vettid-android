@@ -299,7 +299,10 @@ class ItemWaysViewModel @Inject constructor(
 
     fun setRun(on: Boolean) {
         if (on) {
-            edit { it.copy(ways = it.ways + ItemWay.RUN, run = RunSettings()) }
+            // A vault whose answer carried `run.folders` keeps the list (empty) when Run is turned back on (AA9: only a
+            // run binding's first creation learns it from the answer).
+            val folders = if (local.value.read?.foldersKnown == true) emptyList<RunFolder>() else null
+            edit { it.copy(ways = it.ways + ItemWay.RUN, run = RunSettings(folders = folders)) }
         } else {
             local.update { it.copy(confirm = WaysConfirm.RunOff) }
         }

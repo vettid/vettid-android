@@ -942,4 +942,21 @@ class ItemWaysViewModelTest {
         m.closeFolder()
         assertFalse(st(m).busy && st(m).openFolder != null)
     }
+
+    /** A fresh read closes an open folder's page; Run turned off and on again keeps an (empty) folders list. */
+    @Test
+    fun aReadClosesTheFolderAndRunKeepsItsFolders() = runTest(main.dispatcher) {
+        repo.current = withFolders
+        val m = vm()
+        advanceUntilIdle()
+        m.openFolder(0)
+        m.load()
+        advanceUntilIdle()
+        assertNull(st(m).openFolder)
+        m.setRun(false)
+        m.confirm()
+        assertNull(st(m).draft!!.run)
+        m.setRun(true)
+        assertEquals(emptyList<RunFolder>(), st(m).draft!!.run!!.folders)
+    }
 }

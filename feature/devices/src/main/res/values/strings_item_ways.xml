@@ -126,8 +126,6 @@
     <string name="ways_window_plain">VettID could not close the credential unlock window after saving these settings. It closes by itself.</string> <!-- new (app) -->
     <string name="ways_window_close">Close it now</string> <!-- new (app): as the vote\'s -->
 
-    <!-- How a string is shown (AA8, used here for the programs) -->
-
     <!-- ANDROID-PLAN 0.1.138 §4 AA9 "Member folders and files on a run": the plan's NEW texts, approved by the owner with
          the plan (0.1.135, GC #15870; the heading as renamed in 0.1.137, GC #16443; the dots-and-spaces text in 0.1.138,
          GC #16519), word for word. ItemWaysTextTest holds them. -->

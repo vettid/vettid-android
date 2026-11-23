@@ -1,8 +1,10 @@
 package com.vettid.core.data.devices
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** AA9's folder rules, as VAULT-MESSAGING 0.93.2 §10.11 "Member folders for runs" has them. */
@@ -41,6 +43,13 @@ class RunFoldersTest {
             assertNull(ok, RunFolders.problem(ok))
         }
         assertNull(RunFolders.problem("/" + "a".repeat(4095)))
+        // The cap is in bytes of UTF-8, not characters: 2,048 two-byte characters and the slash are 4,097 bytes.
+        assertEquals(FolderProblem.NOT_FULL_PATH, RunFolders.problem("/" + cp(0xE9).repeat(2048)))
+        assertNull(RunFolders.problem("/" + cp(0xE9).repeat(2047)))
+        // Line and paragraph separators, and a lone surrogate.
+        assertEquals(FolderProblem.NOT_FULL_PATH, RunFolders.problem("/a" + cp(0x2028)))
+        assertEquals(FolderProblem.NOT_FULL_PATH, RunFolders.problem("/a" + cp(0x2029)))
+        assertEquals(FolderProblem.NOT_FULL_PATH, RunFolders.problem("/a" + Char(0xD800)))
     }
 
     @Test
@@ -91,11 +100,30 @@ class RunFoldersTest {
 
     @Test
     fun validListsAreTheVaultsToo() {
-        assert(RunFolders.valid(emptyList()))
-        assert(RunFolders.valid(listOf(RunFolder("/a", false), RunFolder("/b", true))))
-        assert(!RunFolders.valid(listOf(RunFolder("/a", false), RunFolder("/A", true))))
-        assert(!RunFolders.valid(listOf(RunFolder("/a/b", false), RunFolder("/a", true))))
-        assert(!RunFolders.valid(listOf(RunFolder("/", false))))
-        assert(!RunFolders.valid((1..17).map { RunFolder("/f$it", false) }))
+        assertTrue(RunFolders.valid(emptyList()))
+        assertTrue(RunFolders.valid(listOf(RunFolder("/a", false), RunFolder("/b", true))))
+        assertFalse(RunFolders.valid(listOf(RunFolder("/a", false), RunFolder("/A", true))))
+        assertFalse(RunFolders.valid(listOf(RunFolder("/a/b", false), RunFolder("/a", true))))
+        assertFalse(RunFolders.valid(listOf(RunFolder("/", false))))
+        assertFalse(RunFolders.valid((1..17).map { RunFolder("/f$it", false) }))
+    }
+
+    /** The per-rune step is Go's own table (Unicode 15.0), not the phone's: the same on Android 12's older tables. */
+    @Test
+    fun theFoldIsGosTable() {
+        assertEquals(1455, FolderFold.ENTRIES)
+        // Vithkuqi (Unicode 14): a pair Android 12 does not know.
+        assertEquals(0x10570, FolderFold.key(0x10597))
+        assertEquals(0x10570, FolderFold.key(0x10570))
+        assertEquals(RunFolders.elementKey("x" + cp(0x10570)), RunFolders.elementKey("x" + cp(0x10597)))
+        // Latin A7C0/A7C1 (Unicode 14).
+        assertEquals(0xA7C0, FolderFold.key(0xA7C1))
+        // Go keeps İ apart (it never reaches the fold: NFD makes it I + U+0307 first); ı upper-cases to I.
+        assertEquals(0x130, FolderFold.key(0x130))
+        assertEquals('I'.code, FolderFold.key(0x131))
+        assertEquals(0x345, FolderFold.key(0x3B9))
+        assertEquals('A'.code, FolderFold.key('a'.code))
+        assertEquals('A'.code, FolderFold.key('A'.code))
+        assertEquals('1'.code, FolderFold.key('1'.code))
     }
 }
