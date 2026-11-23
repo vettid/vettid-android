@@ -6,6 +6,7 @@ package com.vettid.feature.devices
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.devices.AgentChange
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.devices.FolderProblem
 import com.vettid.core.data.devices.HostProblem
 import com.vettid.core.data.devices.ItemWay
 import com.vettid.core.data.devices.ItemWays
@@ -14,6 +15,7 @@ import com.vettid.core.data.devices.ItemWaysRepository
 import com.vettid.core.data.devices.ItemWaysRules
 import com.vettid.core.data.devices.ItemWaysSave
 import com.vettid.core.data.devices.ProgramProblem
+import com.vettid.core.data.devices.RunFolder
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
@@ -847,5 +849,114 @@ class ItemWaysViewModelTest {
         assertFalse("the edit is kept", ItemWay.REVEAL in st(m).draft!!.ways)
         assertTrue(st(m).dirty)
         assertFalse("nothing changed elsewhere", st(m).changedElsewhere)
+    }
+
+    // AA9: the run binding's folders.
+
+    private val withFolders =
+        """{"agent_id":"a1","item_id":"i1","version":4,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true,"folders":[{"path":"/home/al/work","write":false}]}}"""
+
+    /** No folders section, and nothing added, without the vault's `run.folders`; a new run binding has none either. */
+    @Test
+    fun foldersOnlyWhenTheVaultSentThem() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run"],"run":{"programs":[],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        assertNull(st(m).draft!!.run!!.folders)
+        m.setFolderInput("/home/al/work")
+        m.addFolder()
+        assertNull(st(m).draft!!.run!!.folders)
+        assertFalse(st(m).dirty)
+
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use"]}"""
+        val n = vm()
+        advanceUntilIdle()
+        n.setRun(true)
+        assertNull(st(n).draft!!.run!!.folders)
+    }
+
+    /** A folder is added read only; adding it widens (the password at Save), removing it narrows. */
+    @Test
+    fun aFolderIsAddedReadOnly() = runTest(main.dispatcher) {
+        repo.current = withFolders
+        val m = vm()
+        advanceUntilIdle()
+        assertEquals(listOf(RunFolder("/home/al/work", false)), st(m).draft!!.run!!.folders)
+        m.setFolderInput("/home/al/docs")
+        assertTrue(st(m).holdsInput)
+        m.addFolder()
+        val s = st(m)
+        assertEquals(RunFolder("/home/al/docs", write = false), s.draft!!.run!!.folders!!.last())
+        assertEquals("", s.folderInput)
+        assertTrue(ItemWaysRules.widens(s.read!!.ways, s.draft!!))
+        m.save()
+        advanceUntilIdle()
+        assertEquals(2, repo.saves.single().next.run!!.folders!!.size)
+
+        m.removeFolder(1)
+        assertFalse(ItemWaysRules.widens(st(m).read!!.ways, st(m).draft!!))
+    }
+
+    /** Each refusal keeps the typed text and adds nothing. */
+    @Test
+    fun aRefusedFolderIsNotAdded() = runTest(main.dispatcher) {
+        repo.current = withFolders
+        val m = vm()
+        advanceUntilIdle()
+        for ((path, problem) in listOf(
+            "home/al" to FolderProblem.NOT_FULL_PATH,
+            "/" to FolderProblem.WHOLE_DRIVE,
+            "/home/al/Work" to FolderProblem.DUPLICATE,
+            "/home/al/work/sub" to FolderProblem.NESTED,
+            "/home/al/..." to FolderProblem.DOTS_ONLY,
+        )) {
+            m.setFolderInput(path)
+            m.addFolder()
+            assertEquals(path, problem, st(m).folderProblem)
+            assertEquals(path, st(m).folderInput)
+            assertEquals(1, st(m).draft!!.run!!.folders!!.size)
+            m.setFolderInput("")
+            assertNull(st(m).folderProblem)
+        }
+    }
+
+    /** The folder's page: its switch turns write on (a widening) and off; Remove closes the page; it counts as busy. */
+    @Test
+    fun theFoldersPage() = runTest(main.dispatcher) {
+        repo.current = withFolders
+        val m = vm()
+        advanceUntilIdle()
+        m.openFolder(5)
+        assertNull(st(m).openFolder)
+        m.openFolder(0)
+        assertEquals(0, st(m).openFolder)
+        assertTrue(st(m).busy)
+        m.setFolderWrite(0, true)
+        assertTrue(st(m).draft!!.run!!.folders!![0].write)
+        assertTrue(ItemWaysRules.widens(st(m).read!!.ways, st(m).draft!!))
+        m.setFolderWrite(0, false)
+        assertFalse(st(m).dirty)
+        m.removeFolder(0)
+        assertNull(st(m).openFolder)
+        assertEquals(emptyList<RunFolder>(), st(m).draft!!.run!!.folders)
+        m.closeFolder()
+        assertFalse(st(m).busy && st(m).openFolder != null)
+    }
+
+    /** A fresh read closes an open folder's page; Run turned off and on again keeps an (empty) folders list. */
+    @Test
+    fun aReadClosesTheFolderAndRunKeepsItsFolders() = runTest(main.dispatcher) {
+        repo.current = withFolders
+        val m = vm()
+        advanceUntilIdle()
+        m.openFolder(0)
+        m.load()
+        advanceUntilIdle()
+        assertNull(st(m).openFolder)
+        m.setRun(false)
+        m.confirm()
+        assertNull(st(m).draft!!.run)
+        m.setRun(true)
+        assertEquals(emptyList<RunFolder>(), st(m).draft!!.run!!.folders)
     }
 }

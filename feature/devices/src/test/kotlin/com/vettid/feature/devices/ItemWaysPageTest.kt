@@ -14,11 +14,14 @@ import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import com.vettid.core.data.devices.DeviceInfo
+import com.vettid.core.data.devices.FolderProblem
 import com.vettid.core.data.devices.ItemWay
 import com.vettid.core.data.devices.ItemWaysRules
 import com.vettid.core.data.devices.RunSettings
@@ -41,6 +44,8 @@ class ItemWaysPageTest {
 
     private val sha = "1a2b3c4d5e6f7a8b" + "0".repeat(48)
     private val all = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run","proxy","reveal"],"run":{"programs":[{"program":"/usr/bin/git","sha256":"$sha","path":"/usr/bin/git","env":["GH_HOST"]},{"program":"C:/tools/build.cmd","env":[]}],"each":false},"proxy":{"hosts":["api.example.com"],"header":"Authorization","prefix":"Bearer "}}"""
+
+    private val withFolders = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true,"folders":[{"path":"/home/me/src","write":false},{"path":"/home/me/out","write":true}]}}"""
 
     private fun page(json: String, f: (ItemWaysUiState) -> ItemWaysUiState = { it }): ItemWaysUiState {
         val r = ItemWaysRules.one(json.toByteArray())!!
@@ -213,13 +218,10 @@ class ItemWaysPageTest {
         rule.onNodeWithTag("ways_refused").assertDoesNotExist()
     }
 
-    /** A read-only page whose answer has `run.folders`: "Stop runs" says the folders go too. */
+    /** An answer with `run.folders`: "Stop runs" says the folders go too. */
     @Test
-    fun readOnlyStopRunsNamesTheFolders() {
-        val folders = """{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[{"program":"git","env":[]}],"each":true,"folders":[{"path":"/home/me/src","write":false}]}}"""
-        val r = ItemWaysRules.one(folders.toByteArray())!!
-        assertEquals("read only until AA9", null, r.ways)
-        show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", read = r, confirm = WaysConfirm.RunOff))
+    fun stopRunsNamesTheFolders() {
+        show(page(withFolders) { it.copy(confirm = WaysConfirm.RunOff) })
         rule.onNodeWithText("The programs you listed, their variables, their recorded fingerprints and the folders runs may use are removed.").assertExists()
     }
 
@@ -268,5 +270,86 @@ class ItemWaysPageTest {
         val r = ItemWaysRules.list(other.toByteArray(), agentId = "a1")!!.single()
         show(ItemWaysUiState(agentName = "Claude", itemName = "GitHub token", read = r))
         rule.onNodeWithTag("ways_reveal_switch").assertIsNotEnabled()
+    }
+
+    /** AA9: the folders under the programs, each Read only or Can change files, with Remove and "Add a folder". */
+    @Test
+    fun theFoldersCard() {
+        var removed = -1
+        var opened = -1
+        show(page(withFolders), ItemWaysActions(onRemoveFolder = { removed = it }, onOpenFolder = { opened = it }))
+        rule.onNodeWithTag("ways_folders_card").performScrollTo()
+        rule.onNodeWithText("Folders for runs with this item").assertExists()
+        rule.onNodeWithText("The agent can run these programs only in the folders listed here", substring = true).assertExists()
+        rule.onNodeWithTag("ways_folder_0").assertTextContains("Read only")
+        rule.onNodeWithTag("ways_folder_1").assertTextContains("Can change files")
+        rule.onNodeWithTag("ways_folder_remove_1").performScrollTo().performClick()
+        assertEquals(1, removed)
+        rule.onNodeWithTag("ways_folder_0").performScrollTo().performClick()
+        assertEquals(0, opened)
+        rule.onNodeWithText("Folder path on your computer").assertExists()
+        rule.onNodeWithText("A full path, exactly as your computer shows it", substring = true).assertExists()
+    }
+
+    /** No folders section without the vault's `run.folders`. */
+    @Test
+    fun noFoldersCardWithoutRunFolders() {
+        show(page(all))
+        rule.onNodeWithTag("ways_folders_card").assertDoesNotExist()
+    }
+
+    /** Each refusal's text under the field. */
+    @Test
+    fun aRefusedFolderSaysWhy() {
+        val texts = mapOf(
+            FolderProblem.NOT_FULL_PATH to "Give a full path.",
+            FolderProblem.WHOLE_DRIVE to "Pick a folder, not a whole drive.",
+            FolderProblem.DUPLICATE to "This folder is already in the list.",
+            FolderProblem.NESTED to "This folder is inside another folder in the list, or has one inside it. List only one of them.",
+            FolderProblem.TOO_MANY to "You can add at most 16 folders.",
+            FolderProblem.DOTS_ONLY to "A part of this path is only dots and spaces. Give the folder's real name.",
+        )
+        var state by mutableStateOf(page(withFolders))
+        rule.setContent { ItemWaysScreen(state, ItemWaysActions()) }
+        for ((p, text) in texts) {
+            state = page(withFolders) { it.copy(folderInput = "/x", folderProblem = p) }
+            rule.onNodeWithTag("ways_folder_input").performScrollTo()
+            rule.onNodeWithText(text).assertExists()
+        }
+    }
+
+    /** At 16 folders the field gives way to the limit's line. */
+    @Test
+    fun sixteenFoldersAddNoMore() {
+        val sixteen = (1..16).joinToString(",") { """{"path":"/f$it","write":false}""" }
+        show(page("""{"agent_id":"a1","item_id":"i1","version":3,"ways":["use","run"],"run":{"programs":[],"each":true,"folders":[$sixteen]}}"""))
+        rule.onNodeWithTag("ways_folder_15").assertExists()
+        rule.onNodeWithTag("ways_folder_input").assertDoesNotExist()
+        rule.onNodeWithText("You can add at most 16 folders.").assertExists()
+    }
+
+    /** A folder's page: the switch (off for a read-only folder), its line, what it covers, Remove. */
+    @Test
+    fun aFoldersPage() {
+        var write: Pair<Int, Boolean>? = null
+        show(page(withFolders) { it.copy(openFolder = 0) }, ItemWaysActions(onFolderWrite = { i, w -> write = i to w }))
+        rule.onNodeWithTag("ways_folder_page").assertExists()
+        rule.onNodeWithTag("ways_folders_card").assertDoesNotExist()
+        rule.onNodeWithText("Also covers every folder inside it.").assertExists()
+        rule.onNodeWithText("A program run here could change or delete files in this folder", substring = true).assertExists()
+        rule.onNodeWithTag("ways_folder_write_switch").assertIsOff().performClick()
+        assertEquals(0 to true, write)
+        rule.onNodeWithTag("ways_folder_page_remove").assertExists()
+    }
+
+    /** Back on a folder's page closes the page, not the screen. */
+    @Test
+    fun backOnAFoldersPageClosesIt() {
+        var closed = 0
+        var left = 0
+        show(page(withFolders) { it.copy(openFolder = 1) }, ItemWaysActions(onCloseFolder = { closed++ }, onBack = { left++ }))
+        rule.onNodeWithContentDescription("Back", useUnmergedTree = true).performClick()
+        assertEquals(1, closed)
+        assertEquals(0, left)
     }
 }

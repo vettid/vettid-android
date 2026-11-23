@@ -173,6 +173,12 @@ private fun ItemWaysContent(vm: ItemWaysViewModel, state: ItemWaysUiState, host:
             onOpenAlarm = host.onOpenAlarm,
             onNoticeShown = vm::noticeShown,
             onCloseWindowNow = vm::closeWindowNow,
+            onFolderInput = vm::setFolderInput,
+            onAddFolder = vm::addFolder,
+            onOpenFolder = vm::openFolder,
+            onCloseFolder = vm::closeFolder,
+            onFolderWrite = vm::setFolderWrite,
+            onRemoveFolder = vm::removeFolder,
         ),
     )
 }
