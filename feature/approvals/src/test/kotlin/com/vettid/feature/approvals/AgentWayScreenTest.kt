@@ -414,4 +414,13 @@ class AgentWayScreenTest {
         tap(0)
         assertEquals(0, rule.onAllNodesWithTag("agent_way_obscured").fetchSemanticsNodes().size)
     }
+
+    /** The re-arm key changes when only a proxy's prefix changes. */
+    @Test
+    fun theReArmKeyFollowsTheProxyPrefix() {
+        val a = HeldShow.Proxy(proxy(prefix = "Bearer "), "GitHub token", "Token")
+        assertTrue(WayKey.of(a) != WayKey.of(a.copy(proxy = proxy(prefix = "Token "))))
+        assertTrue(WayKey.of(a) != WayKey.of(a.copy(proxy = proxy(prefix = ""))))
+        assertEquals(WayKey.of(a), WayKey.of(HeldShow.Proxy(proxy(prefix = "Bearer "), "GitHub token", "Token")))
+    }
 }

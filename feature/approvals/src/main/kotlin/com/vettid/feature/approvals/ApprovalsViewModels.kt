@@ -794,7 +794,7 @@ class ApprovalDetailViewModel @Inject constructor(
     /** The cwd rule's read was started (once per detail). */
     private var cwdRead = false
 
-    /** The waits between tries of a failed cwd read. */
+    /** The wait after each failed cwd read; there are as many reads as waits. */
     private val cwdRetries = listOf(2_000L, 5_000L, 15_000L)
 
     /** AA8 "Fail closed": a run's `cwd` without `member_folder` is shown only once the item's settings allow it. */
@@ -807,11 +807,11 @@ class ApprovalDetailViewModel @Inject constructor(
         if (!run.hasCwd) return
         cwdRead = true
         viewModelScope.launch {
-            // A read that fails is tried again a few times (deny only meanwhile, AA8 "until that answer comes").
+            // Three reads, each failure followed by a wait (2, 5, 15 s), deny only meanwhile (AA8 "until that answer
+            // comes"); after the third failure's wait the run stays deny only for good.
             for (wait in cwdRetries) {
                 val ok = try {
-                    val r = itemWays.read(agent, run.itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
-                    r != null && !r.containsKey("folders")
+                    com.vettid.core.data.devices.ItemWaysRules.runCwdAllowed(itemWays.read(agent, run.itemId))
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {

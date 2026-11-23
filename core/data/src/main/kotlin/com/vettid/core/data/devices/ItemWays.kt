@@ -373,6 +373,13 @@ object ItemWaysRules {
 
     private fun isSha256(s: String): Boolean = s.length == SHA256_HEX && s.all { it in '0'..'9' || it in 'a'..'f' }
 
+    /**
+     * AA8 "Fail closed": whether a run's `cwd` without `member_folder` may be approved, from the item's settings as read:
+     * only when they carry `run` without `folders` (a vault that carries `run.folders` never sends such a `cwd`). Read
+     * leniently ([ItemWaysRead.raw]), so settings the page shows read only judge the same way. No read: not allowed.
+     */
+    fun runCwdAllowed(read: ItemWaysRead?): Boolean = (read?.raw?.get("run") as? JsonObject)?.containsKey("folders") == false
+
     /** [a] and [b] are the same settings, a `run.folders` of `[]` counting as none (the vault may answer either way). */
     fun sameSettings(a: ItemWays, b: ItemWays): Boolean = norm(a) == norm(b)
 

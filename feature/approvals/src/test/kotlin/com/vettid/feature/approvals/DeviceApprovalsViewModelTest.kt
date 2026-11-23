@@ -21,6 +21,7 @@ import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -75,12 +76,16 @@ class DeviceApprovalsViewModelTest {
     }
 
     /** The item's settings as `leash.item.list` answers them after an approval (AA8 "Approving and the pin"). */
-    private class Ways(private val answer: String?, private val gate: CompletableDeferred<Unit>? = null) :
-        com.vettid.core.data.devices.ItemWaysRepository by com.vettid.core.data.devices.NoItemWays {
+    private class Ways(
+        private val answer: String?,
+        private val gate: CompletableDeferred<Unit>? = null,
+        private val fails: Int = 0,
+    ) : com.vettid.core.data.devices.ItemWaysRepository by com.vettid.core.data.devices.NoItemWays {
         val reads = mutableListOf<Pair<String, String>>()
 
         override suspend fun read(agentId: String, itemId: String): com.vettid.core.data.devices.ItemWaysRead? {
             reads += agentId to itemId
+            if (reads.size <= fails) throw VaultFailure(FailureKind.NETWORK)
             gate?.await()
             return answer?.let { com.vettid.core.data.devices.ItemWaysRules.one(it.toByteArray()) }
         }
@@ -636,5 +641,30 @@ class DeviceApprovalsViewModelTest {
         m.approve()
         runCurrent()
         assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = false, item = "Bank PIN"), m.uiState.value.outcome)
+    }
+
+    /** Three failed reads of the settings end with the run deny only; a read that works on a retry allows it. */
+    @Test
+    fun exhaustedCwdReadsEndDenyOnly() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val allowing = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[],"each":true}}"""
+        val ways = Ways(allowing, fails = 3)
+        val m = vm(heldAsk(run), ways = ways)
+        runCurrent()
+        // Deny only while the reads are tried again.
+        assertEquals(1, ways.reads.size)
+        assertNull(m.uiState.value.cwdAllowed)
+        assertEquals(HeldShow.Other, m.uiState.value.heldShow)
+        advanceUntilIdle()
+        assertEquals(3, ways.reads.size)
+        assertEquals(false, m.uiState.value.cwdAllowed)
+        assertEquals(HeldShow.Other, m.uiState.value.heldShow)
+
+        val retried = Ways(allowing, fails = 2)
+        val n = vm(heldAsk(run), ways = retried)
+        advanceUntilIdle()
+        assertEquals(3, retried.reads.size)
+        assertEquals(true, n.uiState.value.cwdAllowed)
+        assertTrue(n.uiState.value.heldShow is HeldShow.Run)
     }
 }
