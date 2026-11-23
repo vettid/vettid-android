@@ -1166,8 +1166,7 @@ class VaultManager(
      */
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
     private suspend fun runCwdAllowed(agentId: String, itemId: String): Boolean = try {
-        val run = itemWays.read(agentId, itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
-        run != null && !run.containsKey("folders")
+        com.vettid.core.data.devices.ItemWaysRules.runCwdAllowed(itemWays.read(agentId, itemId))
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {

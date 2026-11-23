@@ -356,4 +356,17 @@ class ItemWaysTest {
         assertFalse(ItemWaysRules.sameSettings(a, a.copy(run = a.run!!.copy(each = false))))
         assertFalse(ItemWaysRules.sameSettings(a, a.copy(version = 2)))
     }
+
+    /** AA8: a run's plain `cwd` is allowed only by settings that carry `run` without `folders`. */
+    @Test
+    fun runCwdAllowedOnlyWithRunAndNoFolders() {
+        fun r(json: String) = ItemWaysRules.one(item(json).toByteArray())
+        assertTrue(ItemWaysRules.runCwdAllowed(r(""""ways":["use","run"],"run":{"programs":[],"each":true}""")))
+        assertFalse("folders, even empty", ItemWaysRules.runCwdAllowed(r(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[]}""")))
+        assertFalse("no run", ItemWaysRules.runCwdAllowed(r(""""ways":["use"]""")))
+        assertFalse("run not an object", ItemWaysRules.runCwdAllowed(r(""""ways":["use","run"],"run":[]""")))
+        assertFalse("no read", ItemWaysRules.runCwdAllowed(null))
+        // Settings shown read only (an unknown member) judge the same way: the rule reads the answer as it is.
+        assertTrue(ItemWaysRules.runCwdAllowed(r(""""ways":["use","run"],"run":{"programs":[],"each":true},"later":1""")))
+    }
 }

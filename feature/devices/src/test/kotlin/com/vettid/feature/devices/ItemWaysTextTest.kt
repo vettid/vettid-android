@@ -58,6 +58,15 @@ class ItemWaysTextTest {
         assertEquals(ShownPiece.Escape(acute), ShownString.pieces(cp(0x200B, acute))[1])
         // After a letter it stays with it, highlighted (not printable ASCII).
         assertEquals(listOf(ShownPiece.Text("e", true), ShownPiece.Text(cp(acute), false)), ShownString.pieces("e" + cp(acute)))
+        // An enclosing mark (U+20DD, which can draw a circle around the letter): in a box it is highlighted with the
+        // look-alike line; in a sentence's inline form it is the marker U+20DD, never drawn around the letter.
+        val circle = 0x20DD
+        val p = ShownString.pieces("a" + cp(circle))
+        assertEquals(listOf(ShownPiece.Text("a", true), ShownPiece.Text(cp(circle), false)), p)
+        assertTrue(ShownString.lookalike(p))
+        assertEquals("\u2066\u202Da\u27E8U+20DD\u27E9\u202C\u2069", ShownString.inline("a" + cp(circle), "(empty)"))
+        // At an edge it is escaped in the box too.
+        assertEquals(ShownPiece.Escape(circle), ShownString.pieces(cp(circle) + "a").first())
     }
 
     /** Right-to-left letters and look-alikes are shown in their order, highlighted, with the look-alike line. */
