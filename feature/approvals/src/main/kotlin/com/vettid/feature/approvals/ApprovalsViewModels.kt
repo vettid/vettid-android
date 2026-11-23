@@ -361,7 +361,7 @@ data class ApprovalDetailUiState(
     /** (AA5) What a held request shows, or null for another kind of approval. */
     internal val heldShow: HeldShow?
         get() = (approval as? Approval.DeviceRequest)?.takeIf { it.isHeld }?.let { DeviceAsks.show(it, items, itemsLoaded) }
-            ?.let { h -> if (h is HeldShow.Run && h.run.cwdUnflagged && cwdAllowed != true) HeldShow.Other else h }
+            ?.let { h -> if (h is HeldShow.Run && h.run.hasCwd && cwdAllowed != true) HeldShow.Other else h }
 
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -438,12 +438,13 @@ class ApprovalDetailViewModel @Inject constructor(
         viewModelScope.launch {
             repo.approvals.collect { l ->
                 l.firstOrNull { it.key == key }?.let { a -> local.update { s -> if (s.approval == a) s else s.copy(approval = a) } }
+                // An approval listed after the detail opened (a cold start, an unlock): its run's cwd rule is read then.
+                readCwdRule()
                 // A request that comes to name another document fetches it again.
                 loadDocument()
             }
         }
         viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
-        readCwdRule()
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         // A session request: whether it renews a live session comes from the device list, read now (§6.8 step 3). The
         // read never holds the request back: if it fails the request is shown as a first request.
@@ -790,13 +791,18 @@ class ApprovalDetailViewModel @Inject constructor(
         local.update { it.copy(outcome = outcome) }
     }
 
+    /** The cwd rule's read was started (once per detail). */
+    private var cwdRead = false
+
     /** AA8 "Fail closed": a run's `cwd` without `member_folder` is shown only once the item's settings allow it. */
     @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount")
     private fun readCwdRule() {
+        if (cwdRead) return
         val a = local.value.approval as? Approval.DeviceRequest ?: return
         val run = a.held as? com.vettid.core.data.social.HeldRequest.ItemRun ?: return
         val agent = a.deviceId ?: return
-        if (!run.cwdUnflagged) return
+        if (!run.hasCwd) return
+        cwdRead = true
         viewModelScope.launch {
             val ok = try {
                 val r = itemWays.read(agent, run.itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject

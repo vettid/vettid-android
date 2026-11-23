@@ -588,4 +588,24 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertEquals("a failed read: deny only", HeldShow.Other, failing.uiState.value.heldShow)
     }
+
+    /** An approval listed only after the detail opened still has its run's cwd rule read. */
+    @Test
+    fun theCwdRuleIsReadWhenTheApprovalIsListedLater() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val allowing = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","env":[]}],"each":true}}"""
+        val ways = Ways(allowing)
+        social.approvals.value = emptyList()
+        devices.devices.value = listOf(agent())
+        val a = heldAsk(run)
+        val m = ApprovalDetailViewModel(
+            SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items, devices, vault, social, pairing, itemWays = ways,
+        )
+        runCurrent()
+        assertTrue(ways.reads.isEmpty())
+        social.approvals.value = listOf(a)
+        runCurrent()
+        assertEquals(listOf("A" to "i1"), ways.reads)
+        assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+    }
 }

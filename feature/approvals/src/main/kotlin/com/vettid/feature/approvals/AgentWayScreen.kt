@@ -100,7 +100,9 @@ internal fun AgentWayScreen(
     DetailScaffold(onBackClick = actions.onBack, modifier = modifier.testTag("agent_way")) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             // The buttons' panel never takes the list's last 120 dp; its lines scroll within it, the buttons never do.
-            val panelMax = (maxHeight - MIN_SCROLL).coerceAtLeast(0.dp)
+            // The panel's text lines never take the list's last 120 dp; the button row itself is never capped, so in a
+            // window too small for both Deny still shows whole.
+            val linesMax = (maxHeight - MIN_SCROLL - MIN_PANEL).coerceAtLeast(0.dp)
             Column(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = list,
@@ -115,7 +117,7 @@ internal fun AgentWayScreen(
                 }
                 if (!expired) {
                     val gate = Gate(reached, enabled = reached && state.canApprove && !state.busy)
-                    Buttons(state, actions, gate, large, obscured, panelMax) { obscured = true }
+                    Buttons(state, actions, gate, large, obscured, linesMax) { obscured = true }
                 }
             }
         }
@@ -137,16 +139,16 @@ private fun Buttons(
     gate: Gate,
     large: Boolean,
     obscured: Boolean,
-    panelMax: androidx.compose.ui.unit.Dp,
+    linesMax: androidx.compose.ui.unit.Dp,
     onObscured: () -> Unit,
 ) {
     val hint = stringResource(R.string.approvals_way_scroll_hint)
     Column(
-        Modifier.fillMaxWidth().heightIn(max = panelMax).navigationBarsPadding().padding(Spacing.gutter),
+        Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.gutter),
         verticalArrangement = Arrangement.spacedBy(Spacing.s),
     ) {
         Column(
-            Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            Modifier.heightIn(max = linesMax).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(Spacing.s),
         ) {
             if (obscured) Line(stringResource(R.string.approvals_way_obscured), "agent_way_obscured", warning = true)
@@ -418,3 +420,6 @@ private const val LARGE_FONT = 1.5f
 
 /** The least height the scrolled content keeps (AA8, at the largest font scale). */
 private val MIN_SCROLL = 120.dp
+
+/** What the button row, its padding and a navigation bar take, kept out of the lines' share. */
+private val MIN_PANEL = 96.dp

@@ -4,6 +4,7 @@
 package com.vettid.feature.approvals
 
 import android.view.MotionEvent
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -266,10 +267,34 @@ class AgentWayScreenTest {
         rule.setContent { ApprovalDetailScreen(state(ask(h)), DecisionActions()) }
         rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_end"))
         rule.waitForIdle()
+        rule.onNodeWithTag("agent_way_no_env").assertIsDisplayed()
         rule.onNodeWithTag("agent_way_approve").assertIsEnabled()
         h = run(argv = args, flags = setOf(RunFlag.SHELL))
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
         rule.waitForIdle()
         rule.onNodeWithTag("agent_way_approve").assertIsNotEnabled()
+        // Back at the top: the end is no longer on screen.
+        rule.onNodeWithTag("agent_way_title").assertIsDisplayed()
+    }
+
+    /** A change that adds no row (another value in a row): still back to the top, and the end must be reached again. */
+    @Test
+    fun aChangeOfAValueAloneReArmsTheGate() {
+        val args = listOf("/usr/bin/git") + (1..40).map { "arg-$it-" + "x".repeat(300) }
+        var h by androidx.compose.runtime.mutableStateOf<HeldRequest>(run(argv = args, env = listOf("A" to "1")))
+        rule.setContent { ApprovalDetailScreen(state(ask(h)), DecisionActions()) }
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_end"))
+        rule.waitForIdle()
+        rule.onNodeWithTag("agent_way_env_0").assertIsDisplayed()
+        rule.onNodeWithTag("agent_way_approve").assertIsEnabled()
+        h = run(argv = args, env = listOf("A" to "2"))
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
+        rule.waitForIdle()
+        rule.onNodeWithTag("agent_way_approve").assertIsNotEnabled()
+        // Back at the top: the end is no longer on screen.
+        rule.onNodeWithTag("agent_way_title").assertIsDisplayed()
     }
 
     @Test

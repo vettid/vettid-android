@@ -2327,7 +2327,7 @@ class SocialManager internal constructor(
         val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
         // A run with a `cwd` and no `member_folder` only on a vault that does not carry `run.folders` (AA8).
         val run = req.held as? HeldRequest.ItemRun
-        val cwdRefused = run != null && run.cwdUnflagged && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
+        val cwdRefused = run != null && run.hasCwd && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
         val refused = unshown || unknownDevice || cwdRefused
         if (req.isPairing || refused) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         var decision = DeviceDecision()
