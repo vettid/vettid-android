@@ -64,6 +64,9 @@ class RunFoldersTest {
         // Element by element, never as a text prefix.
         assertNull(RunFolders.addProblem(list, "/home/al/Work2"))
         assertNull(RunFolders.addProblem(list, "/home/al/Wor"))
+        // A deeper path elsewhere is neither under nor above an entry: the whole prefix counts, not the root.
+        assertNull(RunFolders.addProblem(list, "/home/bob/x/y/z"))
+        assertNull(RunFolders.addProblem(list, "C:${bs}Users${bs}bob${bs}x"))
         val full = (1..16).map { RunFolder("/f$it", false) }
         assertEquals(FolderProblem.TOO_MANY, RunFolders.addProblem(full, "/g"))
         // The path's own problem comes first.
