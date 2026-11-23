@@ -97,6 +97,12 @@ class SocialManager internal constructor(
     private val itemCache: () -> List<com.vettid.core.data.items.ItemSummary> = { emptyList() },
     /** Whether [deviceId] is in a `device.list` that was read (not this phone's own entry): a feed-only session request needs it. */
     private val deviceListed: (String) -> Boolean = { false },
+    /**
+     * AA8 "Fail closed": whether a run of [itemId] with a `cwd` and no `member_folder` may be approved for [agentId], from
+     * the item's settings read now: only when they read and carry `run` without `folders` (a vault that carries
+     * `run.folders` never sends such a run). Anything else, a failed read included, is no.
+     */
+    private val runCwdAllowed: suspend (agentId: String, itemId: String) -> Boolean = { _, _ -> false },
     /** One `message.list` page, newest first, or the one [before] a position (a seam for tests; the vault client in the app). */
     private val readPage: suspend (connectionId: String, limit: Int, before: String?) -> com.vettid.core.vault.MessagePage =
         { id, limit, before -> api().messagePage(id, limit, before) },
@@ -2319,9 +2325,11 @@ class SocialManager internal constructor(
         val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true || !HeldRequests.nameable(req.held, itemCache()))
         // A session request known only from its feed item is allowed only for a device the list names.
         val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
-        if (req.isPairing || unshown || unknownDevice) {
-            throw VaultFailure(FailureKind.NOT_SUPPORTED)
-        }
+        // A run with a `cwd` and no `member_folder` only on a vault that does not carry `run.folders` (AA8).
+        val run = req.held as? HeldRequest.ItemRun
+        val cwdRefused = run != null && run.cwdUnflagged && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
+        val refused = unshown || unknownDevice || cwdRefused
+        if (req.isPairing || refused) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         var decision = DeviceDecision()
         deviceDecide(key) { ops ->
             decision = if (req.isSession) {

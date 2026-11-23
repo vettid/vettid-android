@@ -79,11 +79,8 @@ sealed interface HeldRequest {
     /** Any other type or op, or a body that does not read: deny-only. */
     data object Unshown : HeldRequest
 
-    /**
-     * Whether the request can be approved here: only what the app shows in full. A run and a proxy are read (AA8's rules)
-     * but not yet approved: their screens come with the next step, so they stay deny-only until then.
-     */
-    val approvable: Boolean get() = this is ItemUse || this is ItemGet || this is Catalog
+    /** Whether the request can be approved here: only what the app shows in full (a run and a proxy on AA8's screens). */
+    val approvable: Boolean get() = this is ItemUse || this is ItemGet || this is Catalog || this is ItemRun || this is ItemProxy
 }
 
 /** How a run gets the secret (`body.how`). */

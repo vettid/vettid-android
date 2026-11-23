@@ -995,6 +995,7 @@ class VaultManager(
         feedWithdrawn = { feed.askWithdrawn(it) },
         itemCache = { items.items.value },
         deviceListed = { id -> devices.load.value == ListLoad.LOADED && devices.devices.value.any { it.id == id && !it.thisPhone } },
+        runCwdAllowed = { agent, item -> runCwdAllowed(agent, item) },
     )
 
     /**
@@ -1158,6 +1159,20 @@ class VaultManager(
         closeWindow = { closeUnlockWindow() },
         unlockTtl = { status().unlockTtlSeconds },
     )
+
+    /**
+     * AA8 "Fail closed": a run with a `cwd` and no `member_folder` may be approved only when the item's settings, read now,
+     * carry `run` without `folders` (a vault that carries `run.folders` never sends such a run). No, on any failure.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun runCwdAllowed(agentId: String, itemId: String): Boolean = try {
+        val run = itemWays.read(agentId, itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
+        run != null && !run.containsKey("folders")
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
+    }
 
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
