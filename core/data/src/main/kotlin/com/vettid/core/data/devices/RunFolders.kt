@@ -71,7 +71,12 @@ object RunFolders {
         return parts.mapIndexed { i, e -> if (i == 0 && e.isEmpty()) "/" else elementKey(e) }
     }
 
-    /** `NFD(fold(upper(NFD(e))))`, trailing dots and spaces dropped; `fold(upper(r))` is Go's own ([FolderFold]). */
+    /**
+     * `NFD(fold(upper(NFD(e))))`, trailing dots and spaces dropped; `fold(upper(r))` is Go's own ([FolderFold]). The NFD
+     * steps and the character classes ([ItemWaysRules.showable]) are the phone's: on Android 12 (Unicode 13) marks added in
+     * Unicode 14 and 15 may order differently than the vault orders them, so the app can accept a folder the vault refuses
+     * as a duplicate. That fails safe: the vault refuses the save and its message is shown.
+     */
     fun elementKey(e: String): String {
         val d = Normalizer.normalize(e, Normalizer.Form.NFD)
         val b = StringBuilder(d.length)

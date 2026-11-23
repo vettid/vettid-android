@@ -114,7 +114,11 @@ class RunFoldersTest {
     /** The per-rune step is Go's own table (Unicode 15.0), not the phone's: the same on Android 12's older tables. */
     @Test
     fun theFoldIsGosTable() {
-        assertEquals(1455, FolderFold.ENTRIES)
+        // The generated data, pinned: 1,455 runes, Go 1.26's tables (Unicode 15.0.0).
+        assertEquals(1455, FolderFold.size)
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(FolderFold.data().toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        assertEquals("9b24f7b602e22b0a25b5cca5794dbcf91dc2b028037bcb1be819d0bf51890626", sha)
         // Vithkuqi (Unicode 14): a pair Android 12 does not know.
         assertEquals(0x10570, FolderFold.key(0x10597))
         assertEquals(0x10570, FolderFold.key(0x10570))

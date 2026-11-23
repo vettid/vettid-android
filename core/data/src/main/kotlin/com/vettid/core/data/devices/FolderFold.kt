@@ -14,8 +14,11 @@ package com.vettid.core.data.devices
  * ```
  */
 internal object FolderFold {
-    /** The table's size, for its test. */
-    const val ENTRIES = 1455
+    /** The table's text, for its test (its SHA-256 pins the generated data). */
+    internal fun data(): String = DATA
+
+    /** The parsed table's size, for its test. */
+    internal val size: Int get() = table.size
 
     private val table: Map<Int, Int> by lazy {
         DATA.split(',').associate { p -> p.substringBefore(':').toInt(16) to p.substringAfter(':').toInt(16) }
