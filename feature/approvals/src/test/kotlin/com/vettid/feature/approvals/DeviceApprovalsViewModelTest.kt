@@ -667,4 +667,19 @@ class DeviceApprovalsViewModelTest {
         assertEquals(true, n.uiState.value.cwdAllowed)
         assertTrue(n.uiState.value.heldShow is HeldShow.Run)
     }
+
+    /** AA9: a run in a member folder is judged by the approval's own `folders.cwd`, not by a read of the settings. */
+    @Test
+    fun aMemberFolderRunIsShownWithoutASettingsRead() = runTest {
+        val run = heldRun("i1").copy(
+            cwd = "/home/me/work",
+            flags = setOf(com.vettid.core.data.social.RunFlag.MEMBER_FOLDER),
+            cwdEntry = com.vettid.core.data.devices.RunFolder("/home/me/work", false),
+        )
+        val ways = Ways(null)
+        val m = vm(heldAsk(run), ways = ways)
+        runCurrent()
+        assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+        assertTrue(ways.reads.isEmpty())
+    }
 }

@@ -4,7 +4,10 @@ import com.vettid.core.crypto.json.JsonArray as StrictArray
 import com.vettid.core.crypto.json.JsonObject as StrictObject
 import com.vettid.core.crypto.json.JsonString as StrictString
 import com.vettid.core.crypto.json.JsonValue as StrictValue
+import com.vettid.core.crypto.json.JsonBool as StrictBool
 import com.vettid.core.data.devices.ItemWaysRules
+import com.vettid.core.data.devices.RunFolder
+import com.vettid.core.data.devices.RunFolders
 
 /**
  * An agent's `item.run`, `item.proxy` and `item.get` held for approval, read as ANDROID-PLAN 0.1.138 AA8 "Fail closed" says:
@@ -27,10 +30,18 @@ object AgentApprovals {
     /** `proxy`'s members (0.92.0). */
     private val PROXY_NOTE = setOf("host", "header", "prefix")
 
-    /** The members only a run of AA9 (member folders and files) carries: until AA9 is built such a run is deny only. */
-    private val AA9_TOP = setOf("folders")
-    private val AA9_BODY = setOf("inputs", "output")
-    private val AA9_FLAGS = setOf(RunFlag.MEMBER_FOLDER, RunFlag.MEMBER_FILES)
+    /** AA9: `folders`' members, an entry's, an input's and `output`'s (VAULT-MESSAGING 0.93.2 §10.11). */
+    private val FOLDERS = setOf("cwd", "output")
+    private val ENTRY = setOf("path", "write")
+    private val INPUT = setOf("path", "size")
+    private val OUTPUT = setOf("folder", "names")
+
+    /** `inputs` and `output.names`: at most 16 each; a file at most 16 MiB, all of them 64 MiB; the input paths 16,384 bytes. */
+    private const val MAX_FILES = 16
+    private const val MAX_FILE = 16_777_216L
+    private const val MAX_FILES_TOTAL = 67_108_864L
+    private const val MAX_INPUT_PATHS = 16_384
+    private const val MAX_NAME_BYTES = 255
 
     /** A run's program is unbound, unrecorded or changed: never two of these. */
     private val PIN_STATES = setOf(RunFlag.UNBOUND_PROGRAM, RunFlag.PROGRAM_UNRECORDED, RunFlag.PROGRAM_CHANGED)
@@ -67,7 +78,6 @@ object AgentApprovals {
         if (!body.members.keys.all { it in RUN_BODY }) return HeldRequest.Unshown
         val wire = flags(p) ?: return HeldRequest.Unshown
         val flags = wire.map { RunFlag.of(it) ?: return HeldRequest.Unshown }.toSet()
-        if (aa9(flags, p, body)) return HeldRequest.Unshown
         // Flags that contradict: at most one of unbound, unrecorded and changed.
         if (flags.count { it in PIN_STATES } > 1) return HeldRequest.Unshown
         val changed = RunFlag.PROGRAM_CHANGED in flags
@@ -92,7 +102,11 @@ object AgentApprovals {
         val prevPath = if (p.has("previous_path")) str(p, "previous_path") ?: return HeldRequest.Unshown else null
         if (changed != (prevSha != null) || changed != (prevPath != null)) return HeldRequest.Unshown
         if (!replacesOk(p)) return HeldRequest.Unshown
-        return HeldRequest.ItemRun(item, field, program, sha, argv, cwd, how, name, env, flags, prevSha, prevPath, str(p, "replaces"))
+        val files = places(flags, p, body, cwd) ?: return HeldRequest.Unshown
+        return HeldRequest.ItemRun(
+            item, field, program, sha, argv, cwd, how, name, env, flags, prevSha, prevPath, str(p, "replaces"),
+            files.cwdEntry, files.inputs, files.output,
+        )
     }
 
     /** An `item.proxy`, or [HeldRequest.Unshown]. */
@@ -132,9 +146,126 @@ object AgentApprovals {
         return names?.map { it!!.value }?.takeIf { it.toSet().size == it.size }
     }
 
-    /** Until AA9 (#15812) is built, a run with member folders or files is not shown. */
-    private fun aa9(flags: Set<RunFlag>, p: StrictObject, body: StrictObject): Boolean =
-        flags.any { it in AA9_FLAGS } || p.members.keys.any { it in AA9_TOP } || body.members.keys.any { it in AA9_BODY }
+    private class Places(val cwdEntry: RunFolder?, val inputs: List<RunInput>, val output: RunOutput?)
+
+    /**
+     * AA9: a run's folder and files, or null (deny only). `member_folder` is exactly a `cwd` with `folders.cwd`, and
+     * `member_files` exactly non-empty `inputs` or an `output` with `folders.output`, which can change files; `folders` comes
+     * with one of the flags and only then. The `cwd` and the output folder lie in their entries (the vault's comparison:
+     * element by element, exactly), the names are flat and not reserved, the sizes within the vault's caps. The vault
+     * refuses all of these before it holds a run; the checks only refuse more.
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
+    private fun places(flags: Set<RunFlag>, p: StrictObject, body: StrictObject, cwd: String?): Places? {
+        val inputs = if (body.has("inputs")) inputs(body["inputs"]) ?: return null else emptyList()
+        val output = if (body.has("output")) body["output"] as? StrictObject ?: return null else null
+        val memberFolder = RunFlag.MEMBER_FOLDER in flags
+        val memberFiles = RunFlag.MEMBER_FILES in flags
+        if (memberFiles != (inputs.isNotEmpty() || output != null)) return null
+        // A member folder's `cwd` is clean and absolute, as the vault requires (a `..` could leave its entry).
+        if (memberFolder && (cwd == null || RunFolders.problem(cwd) != null)) return null
+        if (!memberFolder && !memberFiles) return if (p.has("folders")) null else Places(null, emptyList(), null)
+        // From a vault that carries `run.folders`, every `cwd` is a member folder.
+        if (cwd != null && !memberFolder) return null
+        val folders = p["folders"] as? StrictObject ?: return null
+        if (!folders.members.keys.all { it in FOLDERS }) return null
+        val cwdEntry = if (folders.has("cwd")) entry(folders["cwd"]) ?: return null else null
+        if (memberFolder != (cwdEntry != null)) return null
+        if (cwdEntry != null && !within(cwd!!, cwdEntry.path)) return null
+        val outEntry = if (folders.has("output")) entry(folders["output"]) ?: return null else null
+        if ((output != null) != (outEntry != null)) return null
+        val out = output?.let { o -> output(o, outEntry!!) ?: return null }
+        return Places(cwdEntry, inputs, out)
+    }
+
+    /** A `folders` entry: `{path, write}`, both there, the path one the vault accepts in a binding. */
+    @Suppress("ReturnCount")
+    private fun entry(v: StrictValue?): RunFolder? {
+        val o = v as? StrictObject ?: return null
+        if (o.members.keys != ENTRY) return null
+        val path = str(o, "path")?.takeIf { RunFolders.problem(it) == null } ?: return null
+        val write = (o["write"] as? StrictBool)?.value ?: return null
+        return RunFolder(path, write)
+    }
+
+    /** `inputs`: 1–16 of `{path, size}`, each path clean and absolute with a flat last name, the names distinct. */
+    @Suppress("ReturnCount")
+    private fun inputs(v: StrictValue?): List<RunInput>? {
+        val items = (v as? StrictArray)?.items ?: return null
+        // ANDROID-PLAN 0.1.138 AA8 "Fail closed": `inputs` without `member_files` is deny only, an empty list included.
+        if (items.isEmpty() || items.size > MAX_FILES) return null
+        val out = items.map { i ->
+            val o = i as? StrictObject ?: return null
+            if (o.members.keys != INPUT) return null
+            val path = str(o, "path")?.takeIf { RunFolders.problem(it) == null } ?: return null
+            val size = size(o["size"]) ?: return null
+            RunInput(path, size)
+        }
+        if (out.sumOf { it.size } > MAX_FILES_TOTAL) return null
+        if (out.sumOf { it.path.toByteArray(Charsets.UTF_8).size } > MAX_INPUT_PATHS) return null
+        return out.takeIf { names(it.map { f -> f.name }) }
+    }
+
+    /** `output`: `{folder, names}`, 1–16 flat names, distinct; the folder in its entry, which can change files. */
+    @Suppress("ReturnCount")
+    private fun output(o: StrictObject, entry: RunFolder): RunOutput? {
+        if (o.members.keys != OUTPUT || !entry.write) return null
+        val folder = str(o, "folder")?.takeIf { RunFolders.problem(it) == null && within(it, entry.path) } ?: return null
+        val names = (o["names"] as? StrictArray)?.items?.map { (it as? StrictString)?.value ?: return null } ?: return null
+        if (names.size !in 1..MAX_FILES || !names(names)) return null
+        return RunOutput(folder, names, entry)
+    }
+
+    /** Flat names (§10.11), distinct on the folder key ("No entry may be equal to, under or above another"). */
+    private fun names(names: List<String>): Boolean =
+        names.all { flatName(it) } && names.map { RunFolders.elementKey(it) }.toSet().size == names.size
+
+    /**
+     * A flat name: 1–255 bytes of UTF-8, no control, Cf, Zl or Zp character, no `/`, `\` or `:`, not `.` or `..`, no
+     * trailing dot or space, and not a reserved Windows name ([reserved]).
+     */
+    fun flatName(n: String): Boolean =
+        n.toByteArray(Charsets.UTF_8).size in 1..MAX_NAME_BYTES && ItemWaysRules.showable(n) &&
+            n.none { it == '/' || it == '\\' || it == ':' } && n != "." && n != ".." &&
+            !n.endsWith('.') && !n.endsWith(' ') && !reserved(n)
+
+    /** §10.11's reserved names, wider than Microsoft's: judged up to the first dot, trailing spaces dropped, upper-cased. */
+    private val RESERVED: Set<String> = buildSet {
+        addAll(listOf("CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"))
+        for (d in listOf("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u00B9", "\u00B2", "\u00B3")) {
+            add("COM$d")
+            add("LPT$d")
+        }
+    }
+
+    /**
+     * Whether [n] is a reserved name: its part before the first dot, trailing spaces dropped, upper-cased rune by rune by
+     * the simple mapping (Go's `strings.ToUpper`, locale-independent), is one of [RESERVED].
+     */
+    fun reserved(n: String): Boolean {
+        val base = n.substringBefore('.').trimEnd(' ')
+        val up = StringBuilder(base.length)
+        var i = 0
+        while (i < base.length) {
+            val cp = base.codePointAt(i)
+            up.appendCodePoint(Character.toUpperCase(cp))
+            i += Character.charCount(cp)
+        }
+        return up.toString() in RESERVED
+    }
+
+    /** [path] equals [entry] or lies under it: element by element, exactly (`/` and `\` both separate), never as a text prefix. */
+    private fun within(path: String, entry: String): Boolean {
+        val a = path.split('/', '\\')
+        val e = entry.split('/', '\\')
+        return a.size >= e.size && a.subList(0, e.size) == e
+    }
+
+    /** A file's size: a whole number as JSON writes it (no sign, fraction or exponent), at most 16 MiB. */
+    private fun size(v: StrictValue?): Long? = (v as? com.vettid.core.crypto.json.JsonNumber)?.raw
+        ?.takeIf { WHOLE_SIZE.matches(it) }?.toLong()?.takeIf { it <= MAX_FILE }
+
+    private val WHOLE_SIZE = Regex("0|[1-9][0-9]{0,7}")
 
     private fun hex64(o: StrictObject, name: String): String? = str(o, name)?.takeIf { HEX64.matches(it) }
 

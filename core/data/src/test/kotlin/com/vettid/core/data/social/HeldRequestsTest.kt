@@ -254,6 +254,7 @@ class HeldRequestsTest {
         const val SHA2 = "9f8e7d6c5b4a39281f8e7d6c5b4a39281f8e7d6c5b4a39281f8e7d6c5b4a3928"
         const val RUN = """{"op":"item.run","item_id":"i1","field_id":"f1","program":"/usr/bin/git","sha256":"$SHA","argv":["git","push","origin"],"how":"env","name":"GH_TOKEN","env":{"GIT_DIR":"/tmp/x","A":"b"}}"""
         const val PROXY_BODY = """{"op":"item.proxy","item_id":"i1","field_id":"f1","host":"api.example.com","seconds":3600}"""
+        const val BS = "\\"
         const val PROXY_NOTE = ""","proxy":{"host":"api.example.com","header":"Authorization","prefix":"Bearer "}"""
     }
 
@@ -326,8 +327,6 @@ class HeldRequestsTest {
             "member_folder alone" to run(top = ""","flags":["member_folder"]"""),
             "member_files alone" to run(top = ""","flags":["member_files"]"""),
             "previous_* without program_changed" to run(top = ""","previous_sha256":"$SHA2","previous_path":"/x""""),
-            "member_folder (AA9 not built)" to run(top = ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home","write":false}}"""),
-            "member_files (AA9 not built)" to run({ it.replace(""""how":"env"""", """"inputs":[{"path":"/a"}],"how":"env"""") }, ""","flags":["member_files"],"folders":{}"""),
             "folders without a flag" to run(top = ""","folders":{}"""),
             "inputs without member_files" to run({ it.replace(""""how":"env"""", """"inputs":[],"how":"env"""") }),
             "output without member_files" to run({ it.replace(""""how":"env"""", """"output":{"names":["a"]},"how":"env"""") }),
@@ -412,5 +411,146 @@ class HeldRequestsTest {
         // Without its strict envelope: deny only.
         assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(u)))
         assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(cat)))
+    }
+
+    // --- AA9: a run's member folder and files, read strictly ---
+
+    private val inFolder = ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work","write":false}}"""
+
+    private fun withCwd(cwd: String): (String) -> String = { it.replace(""""how":"env"""", """"cwd":"$cwd","how":"env"""") }
+
+    private fun withFiles(inputs: String? = null, output: String? = null): (String) -> String = { b ->
+        val extra = listOfNotNull(inputs?.let { """"inputs":$it""" }, output?.let { """"output":$it""" }).joinToString(",")
+        b.replace(""""how":"env"""", """$extra,"how":"env"""")
+    }
+
+    private val oneInput = """[{"path":"/home/me/docs/report.pdf","size":2048}]"""
+    private val anOutput = """{"folder":"/home/me/out/run1","names":["result.csv"]}"""
+    private val outEntry = ""","output":{"path":"/home/me/out","write":true}"""
+
+    @Test
+    fun aRunInAMemberFolderReadsItsEntry() {
+        val r = run(withCwd("/home/me/work/src"), inFolder) as HeldRequest.ItemRun
+        assertEquals(com.vettid.core.data.devices.RunFolder("/home/me/work", write = false), r.cwdEntry)
+        assertEquals("/home/me/work/src", r.cwd)
+        assertFalse("judged by the approval's own entry, not the settings", r.hasCwd)
+        val same = run(withCwd("/home/me/work"), inFolder) as HeldRequest.ItemRun
+        assertEquals("/home/me/work", same.cwd)
+    }
+
+    @Test
+    fun aRunWithFilesReadsTheInputsAndTheOutput() {
+        val r = run(withFiles(oneInput, anOutput), ""","flags":["member_files"],"folders":{$outEntry}""".replace("{,", "{")) as HeldRequest.ItemRun
+        assertEquals(listOf(RunInput("/home/me/docs/report.pdf", 2048)), r.inputs)
+        assertEquals("report.pdf", r.inputs[0].name)
+        assertEquals("/home/me/docs", r.inputs[0].folder)
+        assertEquals(RunOutput("/home/me/out/run1", listOf("result.csv"), com.vettid.core.data.devices.RunFolder("/home/me/out", true)), r.output)
+        assertNull(r.cwdEntry)
+        // Inputs only: `folders` is {} and no output.
+        val i = run(withFiles(oneInput), ""","flags":["member_files"],"folders":{}""") as HeldRequest.ItemRun
+        assertEquals(1, i.inputs.size)
+        assertNull(i.output)
+        // An empty `inputs` is deny only (AA8 "Fail closed"), flagged or not.
+        assertEquals(HeldRequest.Unshown, run(withFiles("[]")))
+        assertEquals(HeldRequest.Unshown, run(withFiles("[]", anOutput), ""","flags":["member_files"],"folders":{$outEntry}""".replace("{,", "{")))
+        // Both flags, a folder and files.
+        val both = run(
+            { withFiles(oneInput, anOutput)(withCwd("/home/me/work")(it)) },
+            ""","flags":["member_folder","member_files"],"folders":{"cwd":{"path":"/home/me/work","write":false}$outEntry}""",
+        ) as HeldRequest.ItemRun
+        assertEquals("/home/me/work", both.cwdEntry!!.path)
+        assertEquals("/home/me/out", both.output!!.entry.path)
+    }
+
+    /** ANDROID-PLAN 0.1.138 AA9: each malformed or contradicting case is deny only. */
+    @Test
+    fun aRunsFoldersAndFilesFailClosed() {
+        val files = ""","flags":["member_files"],"folders":{$outEntry}""".replace("{,", "{")
+        val cases = mapOf(
+            "member_folder without cwd" to run(top = inFolder),
+            "member_folder without folders" to run(withCwd("/home/me/work"), ""","flags":["member_folder"]"""),
+            "member_folder without folders.cwd" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{}"""),
+            "folders.cwd without member_folder" to run(withFiles(oneInput), ""","flags":["member_files"],"folders":{"cwd":{"path":"/home/me/work","write":false}}"""),
+            "a cwd outside its entry" to run(withCwd("/home/me/other"), inFolder),
+            "a cwd beside its entry by text prefix" to run(withCwd("/home/me/work2"), inFolder),
+            "a cwd differing by case" to run(withCwd("/home/me/Work"), inFolder),
+            "a cwd with a dot-dot" to run(withCwd("/home/me/work/../../etc"), inFolder),
+            "a cwd with a trailing separator" to run(withCwd("/home/me/work/"), inFolder),
+            "a cwd with an empty element" to run(withCwd("/home/me/work//x"), inFolder),
+            "a cwd that is not absolute" to run(withCwd("${BS}${BS}home${BS}${BS}me${BS}${BS}work"), inFolder),
+            "folders.cwd on a plain run" to run(top = ""","folders":{"cwd":{"path":"/home/me/work","write":false}}"""),
+            "input paths over 16,384 bytes" to run(withFiles("[" + (1..5).joinToString(",") { """{"path":"/home/me/${"d".repeat(3300)}/f$it","size":1}""" } + "]"), ""","flags":["member_files"],"folders":{}"""),
+            "a cwd without member_folder beside files" to run({ withFiles(oneInput)(withCwd("/home/me/work")(it)) }, ""","flags":["member_files"],"folders":{}"""),
+            "an entry without write" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work"}}"""),
+            "an entry with a string write" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work","write":"no"}}"""),
+            "an entry at the root" to run(withCwd("/home"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/","write":false}}"""),
+            "an unknown entry member" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work","write":false,"x":1}}"""),
+            "an unknown folders member" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work","write":false},"x":{}}"""),
+            "member_files without files" to run(top = ""","flags":["member_files"],"folders":{}"""),
+            "files without member_files" to run(withFiles(oneInput), ""","folders":{}"""),
+            "member_files without folders" to run(withFiles(oneInput), ""","flags":["member_files"]"""),
+            "an output without folders.output" to run(withFiles(output = anOutput), ""","flags":["member_files"],"folders":{}"""),
+            "folders.output without an output" to run(withFiles(oneInput), files),
+            "an output entry that is read only" to run(withFiles(output = anOutput), ""","flags":["member_files"],"folders":{"output":{"path":"/home/me/out","write":false}}"""),
+            "an output folder outside its entry" to run(withFiles(output = """{"folder":"/home/me/elsewhere","names":["a"]}"""), files),
+            "no output names" to run(withFiles(output = """{"folder":"/home/me/out","names":[]}"""), files),
+            "17 output names" to run(withFiles(output = """{"folder":"/home/me/out","names":[${(1..17).joinToString(",") { "\"f$it\"" }}]}"""), files),
+            "an output name with a slash" to run(withFiles(output = """{"folder":"/home/me/out","names":["a/b"]}"""), files),
+            "a reserved output name" to run(withFiles(output = """{"folder":"/home/me/out","names":["con.log"]}"""), files),
+            "an output name ending in a dot" to run(withFiles(output = """{"folder":"/home/me/out","names":["a."]}"""), files),
+            "the same output name twice by case" to run(withFiles(output = """{"folder":"/home/me/out","names":["A.txt","a.TXT"]}"""), files),
+            "an unknown output member" to run(withFiles(output = """{"folder":"/home/me/out","names":["a"],"x":1}"""), files),
+            "an input without size" to run(withFiles("""[{"path":"/home/me/a.txt"}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "a negative size" to run(withFiles("""[{"path":"/home/me/a.txt","size":-1}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "a fraction size" to run(withFiles("""[{"path":"/home/me/a.txt","size":1.5}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "an exponent size" to run(withFiles("""[{"path":"/home/me/a.txt","size":1e3}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "a file over 16 MiB" to run(withFiles("""[{"path":"/home/me/a.txt","size":16777217}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "over 64 MiB in all" to run(withFiles("[" + (1..5).joinToString(",") { """{"path":"/home/me/f$it","size":16777216}""" } + "]"), ""","flags":["member_files"],"folders":{}"""),
+            "17 inputs" to run(withFiles("[" + (1..17).joinToString(",") { """{"path":"/home/me/f$it","size":1}""" } + "]"), ""","flags":["member_files"],"folders":{}"""),
+            "a relative input" to run(withFiles("""[{"path":"me/a.txt","size":1}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "a reserved input name" to run(withFiles("""[{"path":"/home/me/NUL .txt","size":1}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "two inputs of one name" to run(withFiles("""[{"path":"/home/me/a/x.txt","size":1},{"path":"/home/me/b/X.txt","size":1}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "an unknown input member" to run(withFiles("""[{"path":"/home/me/a.txt","size":1,"x":1}]"""), ""","flags":["member_files"],"folders":{}"""),
+            "inputs not a list" to run(withFiles("""{"path":"/home/me/a.txt","size":1}"""), ""","flags":["member_files"],"folders":{}"""),
+        )
+        cases.forEach { (why, h) -> assertEquals(why, HeldRequest.Unshown, h) }
+    }
+
+    /** §10.11's reserved names, judged up to the first dot, trailing spaces dropped, upper-cased rune by rune. */
+    @Test
+    fun reservedNames() {
+        val sup1 = String(intArrayOf(0xB9), 0, 1)
+        val dotless = String(intArrayOf(0x131), 0, 1)
+        for (n in listOf("CON", "con", "Con.txt", "CON .txt", "nul  .log", "COM0", "lpt9.x", "COM$sup1", "conin$", "CONOUT$.txt")) {
+            assertTrue(n, AgentApprovals.reserved(n))
+        }
+        for (n in listOf("CONSOLE", "COM10", "a.CON", " CON", "LPT", "CONIN")) assertFalse(n, AgentApprovals.reserved(n))
+        assertTrue("conın$ upper-cases to CONIN$", AgentApprovals.reserved("con" + dotless + "n$"))
+        assertFalse(AgentApprovals.flatName("."))
+        assertFalse(AgentApprovals.flatName("a b "))
+        assertFalse(AgentApprovals.flatName("x".repeat(256)))
+        assertTrue(AgentApprovals.flatName("x".repeat(255)))
+        assertFalse(AgentApprovals.flatName("a" + String(intArrayOf(0x202E), 0, 1)))
+        assertTrue(AgentApprovals.flatName(".hidden"))
+    }
+
+    /** `\\` separates as `/` does, also in drive paths; the 16 MiB file and a root input's folder. */
+    @Test
+    fun separatorsSizesAndRoots() {
+        val drive = run(withCwd("C:/work/x"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"C:${BS}${BS}work","write":true}}""") as HeldRequest.ItemRun
+        assertEquals("C:${BS}work", drive.cwdEntry!!.path)
+        val back = run(withCwd("/home/me/work${BS}${BS}src"), inFolder) as HeldRequest.ItemRun
+        assertEquals("/home/me/work${BS}src", back.cwd)
+        assertEquals(HeldRequest.Unshown, run(withCwd("C:/other"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"C:${BS}${BS}work","write":true}}"""))
+        val max = run(withFiles("""[{"path":"/home/me/a.bin","size":16777216}]"""), ""","flags":["member_files"],"folders":{}""") as HeldRequest.ItemRun
+        assertEquals(16_777_216L, max.inputs[0].size)
+        assertEquals("/", RunInput("/a.txt", 1).folder)
+        assertEquals("C:$BS", RunInput("C:${BS}a.txt", 1).folder)
+        assertEquals("/home/me", RunInput("/home/me/a.txt", 1).folder)
+        // A pending.list entry that differs only in its files is another request.
+        val a = run(withFiles(oneInput), ""","flags":["member_files"],"folders":{}""")
+        val b = run(withFiles(oneInput.replace("2048", "2049")), ""","flags":["member_files"],"folders":{}""")
+        assertFalse(HeldRequests.same(a, b))
+        assertTrue(HeldRequests.same(a, run(withFiles(oneInput), ""","flags":["member_files"],"folders":{}""")))
     }
 }

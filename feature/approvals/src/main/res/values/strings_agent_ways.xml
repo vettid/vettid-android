@@ -85,4 +85,14 @@
     <string name="approvals_proxy_not_found">Approved, but the item or its field is gone, so the key was not sent.</string>
     <string name="approvals_way_forbidden">Approved, but your vault refused it, so nothing was done. %1$s may no longer have a permission that covers it, may be paused, or this request was asked again too many times.</string>
     <string name="approvals_way_expired">This request expired, so nothing was done.</string>
+
+    <!-- ANDROID-PLAN 0.1.138 §4 AA9 "In a run's approval": the plan's NEW texts, approved by the owner with the plan (0.1.135,
+         GC #15870), word for word. "new (app)" marks the app's own layout of the plan's "<name> · <size>". -->
+    <string name="approvals_run_folder_read_only">Folder: %1$s · Read only</string>
+    <string name="approvals_run_folder_can_change">Folder: %1$s · Can change files</string>
+    <string name="approvals_run_warn_member_folder">This runs in a folder of yours. The agent can change what is in it, and the program runs what it finds there.</string>
+    <string name="approvals_run_copied_in">Copied in, read only:</string>
+    <string name="approvals_run_input">%1$s · %2$s</string> <!-- new (app): the plan's "<name> · <size>" -->
+    <string name="approvals_run_copied_back">Copied back to %1$s when it ends:</string>
+    <string name="approvals_run_warn_member_files">Files saved to %1$s are new copies; nothing there is overwritten. A file that held the secret is changed before it is copied back.</string>
 </resources>

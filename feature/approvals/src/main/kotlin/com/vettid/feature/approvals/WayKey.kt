@@ -12,7 +12,13 @@ internal object WayKey {
             is HeldShow.Run -> held.run.let { r ->
                 listOf("run", held.item, held.field, r.itemId, r.fieldId, r.program, r.sha256, r.cwd, r.how.wire, r.name,
                     r.previousSha256, r.previousPath, r.replaces) +
-                    r.argv.map { "argv:$it" } + r.env.flatMap { (k, v) -> listOf("env:$k", v) } + r.flags.map { "flag:${it.wire}" }.sorted()
+                    r.argv.map { "argv:$it" } + r.env.flatMap { (k, v) -> listOf("env:$k", v) } +
+                    r.flags.map { "flag:${it.wire}" }.sorted() +
+                    // AA9: the folder entry, the inputs and the output.
+                    listOf("cwd_entry", r.cwdEntry?.path, r.cwdEntry?.write?.toString()) +
+                    r.inputs.flatMap { listOf("input", it.path, it.size.toString()) } +
+                    listOf("output", r.output?.folder, r.output?.entry?.path, r.output?.entry?.write?.toString()) +
+                    r.output?.names.orEmpty().map { "output_name:$it" }
             }
             is HeldShow.Proxy -> held.proxy.let { p ->
                 listOf("proxy", held.item, held.field, p.itemId, p.fieldId, p.host, p.header, p.prefix, p.seconds.toString(), p.replaces)

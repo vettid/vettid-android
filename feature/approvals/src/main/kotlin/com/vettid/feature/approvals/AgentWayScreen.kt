@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.devices.ProgramAdvice
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.devices.RunFolder
 import com.vettid.core.data.social.HeldRequest
 import com.vettid.core.data.social.RunFlag
 import com.vettid.core.data.social.SecretHow
@@ -273,7 +274,10 @@ private fun runRows(h: HeldShow.Run, who: String): List<Pair<String, @Composable
         Heading(stringResource(R.string.approvals_run_runs_in))
         r.cwd?.let { ShownStringBox(it, Modifier.testTag("agent_way_cwd")) }
             ?: Line(stringResource(R.string.approvals_run_new_folder), "agent_way_new_folder")
+        // AA9: the matched entry, from the approval's `folders.cwd`.
+        r.cwdEntry?.let { e -> Line(folderLine(e, empty), "agent_way_folder") }
     }
+    rows += filesRows(r, empty)
     rows += "how" to {
         Heading(stringResource(R.string.approvals_run_secret_given))
         val name = ShownString.inline(r.name.orEmpty(), empty)
@@ -312,6 +316,37 @@ private fun runRows(h: HeldShow.Run, who: String): List<Pair<String, @Composable
     return rows
 }
 
+/** "Folder: <path> · Read only" or "· Can change files" (AA9), the entry's path by the string rule's inline form. */
+@Composable
+private fun folderLine(e: RunFolder, empty: String): String = stringResource(
+    if (e.write) R.string.approvals_run_folder_can_change else R.string.approvals_run_folder_read_only,
+    ShownString.inline(e.path, empty),
+)
+
+/**
+ * AA9's files, from the approval: "Copied in, read only:" and each input's name (escaped as an argument is), size and the
+ * folder it comes from; "Copied back to <folder> when it ends:" with the output folder's entry and the names.
+ */
+@Composable
+private fun filesRows(r: HeldRequest.ItemRun, empty: String): List<Pair<String, @Composable () -> Unit>> {
+    val rows = mutableListOf<Pair<String, @Composable () -> Unit>>()
+    if (r.inputs.isNotEmpty()) rows += "copied_in" to { Heading(stringResource(R.string.approvals_run_copied_in)) }
+    r.inputs.forEachIndexed { i, f ->
+        rows += "input_$i" to {
+            Line(stringResource(R.string.approvals_run_input, ShownString.inline(f.name, empty), sizeText(f.size)), "agent_way_input_$i")
+            ShownStringBox(f.folder, Modifier.testTag("agent_way_input_folder_$i"))
+        }
+    }
+    r.output?.let { o ->
+        rows += "copied_back" to {
+            Heading(stringResource(R.string.approvals_run_copied_back, ShownString.inline(o.folder, empty)))
+            Line(folderLine(o.entry, empty), "agent_way_output_entry")
+        }
+        o.names.forEachIndexed { i, n -> rows += "output_$i" to { ShownStringBox(n, Modifier.testTag("agent_way_output_$i")) } }
+    }
+    return rows
+}
+
 /** A warning's text and the part of it that is stressed ("moved to <path>"), if any. */
 private class Warning(val text: String, val stress: String? = null)
 
@@ -335,6 +370,9 @@ private fun runWarnings(r: HeldRequest.ItemRun, empty: String): List<Warning> = 
         }
     }
     if (ProgramAdvice.runsCommands(r.program)) add(Warning(stringResource(R.string.approvals_run_runs_commands)))
+    // AA9: a run in a member folder; files copied back (its warning names the output folder).
+    if (RunFlag.MEMBER_FOLDER in r.flags) add(Warning(stringResource(R.string.approvals_run_warn_member_folder)))
+    r.output?.let { add(Warning(stringResource(R.string.approvals_run_warn_member_files, ShownString.inline(it.folder, empty)))) }
 }
 
 /** "<N> arguments, <M> variables, <size> in all" (`argv` after the first; the bytes of all of `argv` and `env`). */

@@ -311,4 +311,15 @@ class AgentApprovalsFlowTest {
         val refused = runCatching { m.approveDeviceRequest("device:approval.pending:h1", null) }.exceptionOrNull() as? VaultFailure
         assertEquals(FailureKind.NOT_SUPPORTED, refused?.kind)
     }
+
+    /** AA9: a run in a member folder is approved on the approval's own `folders.cwd`, with no settings read. */
+    @Test
+    fun aMemberFolderRunNeedsNoSettingsRead() = runTest {
+        val m = manager()
+        val body = runBody().replace(""""how":"env"""", """"cwd":"/home/me/work","how":"env"""")
+        m.onEvent(event("approval.pending", heldWith("h1", body, ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work","write":false}}""")))
+        runCurrent()
+        m.approveDeviceRequest("device:approval.pending:h1", null)
+        assertEquals(listOf("approval.decide:h1:true"), ops.calls)
+    }
 }

@@ -1530,6 +1530,40 @@ object ScreenCatalog {
         "approvals.held_run_batch_file" to {
             ApprovalDetailScreen(agentState(agentHeld(sampleRun.copy(program = "C:/tools/build.cmd", argv = listOf("C:/tools/build.cmd", "release")))), DecisionActions())
         },
+        // AA9: a run in a member folder, and one that hands files in and out.
+        "approvals.held_run_folder" to {
+            ApprovalDetailScreen(
+                agentState(
+                    agentHeld(
+                        sampleRun.copy(
+                            cwd = "/home/you/project/src", flags = setOf(RF.MEMBER_FOLDER),
+                            cwdEntry = com.vettid.core.data.devices.RunFolder("/home/you/project", write = false),
+                        ),
+                    ),
+                ),
+                DecisionActions(),
+            )
+        },
+        "approvals.held_run_files" to {
+            ApprovalDetailScreen(
+                agentState(
+                    agentHeld(
+                        sampleRun.copy(
+                            flags = setOf(RF.MEMBER_FILES),
+                            inputs = listOf(
+                                com.vettid.core.data.social.RunInput("/home/you/project/report.pdf", 2_458_000),
+                                com.vettid.core.data.social.RunInput("/home/you/project/notes.txt", 900),
+                            ),
+                            output = com.vettid.core.data.social.RunOutput(
+                                "/home/you/reports/out", listOf("summary.csv"),
+                                com.vettid.core.data.devices.RunFolder("/home/you/reports", write = true),
+                            ),
+                        ),
+                    ),
+                ),
+                DecisionActions(),
+            )
+        },
         "approvals.held_run_strings" to {
             ApprovalDetailScreen(
                 agentState(agentHeld(sampleRun.copy(argv = listOf("/usr/bin/git", "commit", "-m", "fix \u202Eevil\u200B", "  two  spaces  ", ""), env = listOf("GIT_DIR" to "/home/me/gіt")))),

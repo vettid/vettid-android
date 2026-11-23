@@ -10,10 +10,12 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -422,5 +424,100 @@ class AgentWayScreenTest {
         assertTrue(WayKey.of(a) != WayKey.of(a.copy(proxy = proxy(prefix = "Token "))))
         assertTrue(WayKey.of(a) != WayKey.of(a.copy(proxy = proxy(prefix = ""))))
         assertEquals(WayKey.of(a), WayKey.of(HeldShow.Proxy(proxy(prefix = "Bearer "), "GitHub token", "Token")))
+    }
+
+    // AA9: a run's member folder and files, from the approval.
+
+    private val workEntry = com.vettid.core.data.devices.RunFolder("/home/me/work", write = false)
+    private val outEntry = com.vettid.core.data.devices.RunFolder("/home/me/out", write = true)
+
+    /** A program with no advice of its own (git would add the #636 line first). */
+    private val plain = "/usr/local/bin/report"
+
+    private fun folderRun() =
+        run(argv = listOf(plain), program = plain, cwd = "/home/me/work/src", flags = setOf(RunFlag.MEMBER_FOLDER)).copy(cwdEntry = workEntry)
+
+    private fun filesRun(output: Boolean = true) = run(argv = listOf(plain), program = plain, flags = setOf(RunFlag.MEMBER_FILES)).copy(
+        inputs = listOf(com.vettid.core.data.social.RunInput("/home/me/docs/report.pdf", 2048)),
+        output = if (output) com.vettid.core.data.social.RunOutput("/home/me/out/run1", listOf("result.csv"), outEntry) else null,
+    )
+
+    @Test
+    @Config(qualifiers = "w400dp-h2400dp")
+    fun aRunInAMemberFolderShowsItsEntryAndWarning() {
+        show(folderRun())
+        val warn = "This runs in a folder of yours. The agent can change what is in it, and the program runs what it finds there."
+        rule.onNodeWithTag("agent_way_folder").assertTextEquals("Folder: ${inline("/home/me/work")} · Read only")
+        rule.onNodeWithTag("agent_way_warning_top_0").assertTextEquals(warn)
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_warning_end_0"))
+        rule.onNodeWithTag("agent_way_warning_end_0").assertTextEquals(warn)
+    }
+
+    /** The text a string box with [tag] draws: LRI LRO … PDF PDI. */
+    private fun box(tag: String) =
+        rule.onNode(hasTestTag("shown_string") and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
+
+    private fun boxed(s: String) = "\u2066\u202D$s\u202C\u2069"
+
+    private val twoFiles = run(argv = listOf("/usr/local/bin/report"), program = "/usr/local/bin/report", flags = setOf(RunFlag.MEMBER_FILES)).copy(
+        inputs = listOf(
+            com.vettid.core.data.social.RunInput("/home/me/docs/report.pdf", 2048),
+            com.vettid.core.data.social.RunInput("/home/me/data/notes.txt", 900),
+        ),
+        output = com.vettid.core.data.social.RunOutput("/home/me/out/run1", listOf("result.csv", "log.txt"), outEntry),
+    )
+
+    @Test
+    @Config(qualifiers = "w400dp-h3000dp")
+    fun aRunWithFilesShowsWhatIsCopiedInAndBack() {
+        show(twoFiles)
+        val warn = "Files saved to ${inline("/home/me/out/run1")} are new copies; nothing there is overwritten. A file that held the secret is changed before it is copied back."
+        rule.onNodeWithTag("agent_way_warning_top_0").assertTextEquals(warn)
+        rule.onNodeWithText("Copied in, read only:").assertExists()
+        // Every input, each with its own name, size and folder.
+        rule.onNodeWithTag("agent_way_input_0").assertTextEquals("${inline("report.pdf")} · 2.0 KB")
+        box("agent_way_input_folder_0").assertTextEquals(boxed("/home/me/docs"))
+        rule.onNodeWithTag("agent_way_input_1").assertTextEquals("${inline("notes.txt")} · 900 bytes")
+        box("agent_way_input_folder_1").assertTextEquals(boxed("/home/me/data"))
+        rule.onNodeWithText("Copied back to ${inline("/home/me/out/run1")} when it ends:").assertExists()
+        rule.onNodeWithTag("agent_way_output_entry").assertTextEquals("Folder: ${inline("/home/me/out")} · Can change files")
+        // Every name to be copied back.
+        box("agent_way_output_0").assertTextEquals(boxed("result.csv"))
+        box("agent_way_output_1").assertTextEquals(boxed("log.txt"))
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_input_2").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_output_2").fetchSemanticsNodes().size)
+        rule.onNodeWithTag("agent_way_warning_end_0").assertTextEquals(warn)
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_folder").fetchSemanticsNodes().size)
+    }
+
+    /** Inputs only: nothing is copied back, so neither that line nor its warning. */
+    @Test
+    @Config(qualifiers = "w400dp-h3000dp")
+    fun inputsOnlyHaveNoCopyBack() {
+        show(filesRun(output = false))
+        rule.onNodeWithTag("agent_way_input_0").assertExists()
+        assertEquals(0, rule.onAllNodesWithText("when it ends:", substring = true).fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_warning_top_0").fetchSemanticsNodes().size)
+    }
+
+    /** The gate's key follows AA9's parts too. */
+    @Test
+    fun theReArmKeyFollowsTheFoldersAndFiles() {
+        val a = HeldShow.Run(filesRun(), "GitHub token", "Token")
+        val r = filesRun()
+        val changes = listOf(
+            r.copy(inputs = listOf(com.vettid.core.data.social.RunInput("/home/me/docs/report.pdf", 2049))),
+            r.copy(inputs = listOf(com.vettid.core.data.social.RunInput("/home/me/docs/other.pdf", 2048))),
+            r.copy(output = r.output!!.copy(names = listOf("result2.csv"))),
+            r.copy(output = r.output!!.copy(folder = "/home/me/out/run2")),
+            r.copy(output = r.output!!.copy(entry = outEntry.copy(path = "/home/me"))),
+            r.copy(cwdEntry = workEntry),
+            r.copy(cwdEntry = workEntry.copy(write = true)),
+        )
+        // Only the folder entry's path.
+        val withEntry = a.copy(run = r.copy(cwdEntry = workEntry))
+        assertTrue(WayKey.of(withEntry) != WayKey.of(a.copy(run = r.copy(cwdEntry = workEntry.copy(path = "/home/me/other")))))
+        changes.forEach { assertTrue(WayKey.of(a) != WayKey.of(a.copy(run = it))) }
+        assertEquals(WayKey.of(a), WayKey.of(HeldShow.Run(filesRun(), "GitHub token", "Token")))
     }
 }
