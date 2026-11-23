@@ -5,6 +5,10 @@ package com.vettid.feature.devices
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.vettid.core.data.devices.ProgramAdvice
+import com.vettid.core.ui.text.Fingerprints
+import com.vettid.core.ui.text.ShownPiece
+import com.vettid.core.ui.text.ShownString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -150,8 +154,8 @@ class ItemWaysTextTest {
             R.string.ways_read_only_locked to "Your vault asked for your credential password for this change, so it was not saved. Update VettID to change these settings.",
             R.string.ways_changed_elsewhere to "Another device changed these settings.",
             R.string.ways_show_current to "Show the current ones",
-            R.string.ways_string_empty to "(empty)",
-            R.string.ways_string_lookalike to "Some characters here may look like others.",
+            com.vettid.core.ui.R.string.core_ui_string_empty to "(empty)",
+            com.vettid.core.ui.R.string.core_ui_string_lookalike to "Some characters here may look like others.",
         )
         for ((id, want) in texts) assertEquals(want, r.getString(id))
         assertEquals("How Claude may use GitHub token", r.getString(R.string.ways_title, "Claude", "GitHub token"))

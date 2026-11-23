@@ -101,4 +101,8 @@
          the unlock screen, Finish the move, the release update, and "Lock and unlock now" in Settings and the open app's banner. -->
     <string name="unlock_stuck_title">This phone cannot open your vault</string>
     <string name="unlock_stuck_body">This phone no longer holds your vault\'s keys. Before you erase VettID here, check on your account site that your vault can be recovered, and start the recovery there. When it is ready, erase VettID and choose \"I lost my phone: recover my vault\".</string>
+    <!-- ANDROID-PLAN 0.1.137 AA8 "How a string is shown", owner-approved 2026-11-22 (GC #16443), moved from :feature:devices -->
+    <string name="core_ui_string_empty">(empty)</string>
+    <string name="core_ui_string_escaped">escaped character %1$s</string>
+    <string name="core_ui_string_lookalike">Some characters here may look like others.</string>
 </resources>

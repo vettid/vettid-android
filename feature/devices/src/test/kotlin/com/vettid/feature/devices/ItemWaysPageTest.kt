@@ -6,30 +6,32 @@ package com.vettid.feature.devices
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertTextEquals
-import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.VaultFailure
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import com.vettid.core.data.devices.DeviceInfo
 import com.vettid.core.data.devices.ItemWay
-import com.vettid.core.data.devices.RunSettings
 import com.vettid.core.data.devices.ItemWaysRules
+import com.vettid.core.data.devices.RunSettings
+import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.ui.components.ShownStringBox
+import com.vettid.core.ui.text.ShownString
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import java.time.Instant
 
 /** What AA7 draws: the agent page's items, the item's page in each of its states, the confirmations. */
 @RunWith(RobolectricTestRunner::class)

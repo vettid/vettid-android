@@ -127,7 +127,4 @@
     <string name="ways_window_close">Close it now</string> <!-- new (app): as the vote\'s -->
 
     <!-- How a string is shown (AA8, used here for the programs) -->
-    <string name="ways_string_empty">(empty)</string>
-    <string name="ways_string_escaped">escaped character %1$s</string>
-    <string name="ways_string_lookalike">Some characters here may look like others.</string>
 </resources>
