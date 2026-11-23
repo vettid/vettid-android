@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -452,18 +453,39 @@ class AgentWayScreenTest {
         rule.onNodeWithTag("agent_way_warning_end_0").assertTextEquals(warn)
     }
 
+    /** The text a string box with [tag] draws: LRI LRO … PDF PDI. */
+    private fun box(tag: String) =
+        rule.onNode(hasTestTag("shown_string") and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
+
+    private fun boxed(s: String) = "\u2066\u202D$s\u202C\u2069"
+
+    private val twoFiles = run(argv = listOf("/usr/local/bin/report"), program = "/usr/local/bin/report", flags = setOf(RunFlag.MEMBER_FILES)).copy(
+        inputs = listOf(
+            com.vettid.core.data.social.RunInput("/home/me/docs/report.pdf", 2048),
+            com.vettid.core.data.social.RunInput("/home/me/data/notes.txt", 900),
+        ),
+        output = com.vettid.core.data.social.RunOutput("/home/me/out/run1", listOf("result.csv", "log.txt"), outEntry),
+    )
+
     @Test
     @Config(qualifiers = "w400dp-h3000dp")
     fun aRunWithFilesShowsWhatIsCopiedInAndBack() {
-        show(filesRun())
+        show(twoFiles)
         val warn = "Files saved to ${inline("/home/me/out/run1")} are new copies; nothing there is overwritten. A file that held the secret is changed before it is copied back."
         rule.onNodeWithTag("agent_way_warning_top_0").assertTextEquals(warn)
         rule.onNodeWithText("Copied in, read only:").assertExists()
+        // Every input, each with its own name, size and folder.
         rule.onNodeWithTag("agent_way_input_0").assertTextEquals("${inline("report.pdf")} · 2.0 KB")
-        rule.onNodeWithTag("agent_way_input_folder_0").assertExists()
+        box("agent_way_input_folder_0").assertTextEquals(boxed("/home/me/docs"))
+        rule.onNodeWithTag("agent_way_input_1").assertTextEquals("${inline("notes.txt")} · 900 bytes")
+        box("agent_way_input_folder_1").assertTextEquals(boxed("/home/me/data"))
         rule.onNodeWithText("Copied back to ${inline("/home/me/out/run1")} when it ends:").assertExists()
         rule.onNodeWithTag("agent_way_output_entry").assertTextEquals("Folder: ${inline("/home/me/out")} · Can change files")
-        rule.onNodeWithTag("agent_way_output_0").assertExists()
+        // Every name to be copied back.
+        box("agent_way_output_0").assertTextEquals(boxed("result.csv"))
+        box("agent_way_output_1").assertTextEquals(boxed("log.txt"))
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_input_2").fetchSemanticsNodes().size)
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_output_2").fetchSemanticsNodes().size)
         rule.onNodeWithTag("agent_way_warning_end_0").assertTextEquals(warn)
         assertEquals(0, rule.onAllNodesWithTag("agent_way_folder").fetchSemanticsNodes().size)
     }
@@ -492,6 +514,9 @@ class AgentWayScreenTest {
             r.copy(cwdEntry = workEntry),
             r.copy(cwdEntry = workEntry.copy(write = true)),
         )
+        // Only the folder entry's path.
+        val withEntry = a.copy(run = r.copy(cwdEntry = workEntry))
+        assertTrue(WayKey.of(withEntry) != WayKey.of(a.copy(run = r.copy(cwdEntry = workEntry.copy(path = "/home/me/other")))))
         changes.forEach { assertTrue(WayKey.of(a) != WayKey.of(a.copy(run = it))) }
         assertEquals(WayKey.of(a), WayKey.of(HeldShow.Run(filesRun(), "GitHub token", "Token")))
     }

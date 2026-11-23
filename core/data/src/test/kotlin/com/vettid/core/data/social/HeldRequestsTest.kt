@@ -328,6 +328,7 @@ class HeldRequestsTest {
             "member_files alone" to run(top = ""","flags":["member_files"]"""),
             "previous_* without program_changed" to run(top = ""","previous_sha256":"$SHA2","previous_path":"/x""""),
             "folders without a flag" to run(top = ""","folders":{}"""),
+            "inputs without member_files" to run({ it.replace(""""how":"env"""", """"inputs":[],"how":"env"""") }),
             "output without member_files" to run({ it.replace(""""how":"env"""", """"output":{"names":["a"]},"how":"env"""") }),
             "proxy on a run" to run(top = PROXY_NOTE),
             "an empty replaces" to run(top = ""","replaces":"""""),
@@ -449,9 +450,9 @@ class HeldRequestsTest {
         val i = run(withFiles(oneInput), ""","flags":["member_files"],"folders":{}""") as HeldRequest.ItemRun
         assertEquals(1, i.inputs.size)
         assertNull(i.output)
-        // An empty `inputs` is none: not flagged, nothing to show.
-        val none = run(withFiles("[]")) as HeldRequest.ItemRun
-        assertTrue(none.inputs.isEmpty())
+        // An empty `inputs` is deny only (AA8 "Fail closed"), flagged or not.
+        assertEquals(HeldRequest.Unshown, run(withFiles("[]")))
+        assertEquals(HeldRequest.Unshown, run(withFiles("[]", anOutput), ""","flags":["member_files"],"folders":{$outEntry}""".replace("{,", "{")))
         // Both flags, a folder and files.
         val both = run(
             { withFiles(oneInput, anOutput)(withCwd("/home/me/work")(it)) },
@@ -477,7 +478,7 @@ class HeldRequestsTest {
             "a cwd with a trailing separator" to run(withCwd("/home/me/work/"), inFolder),
             "a cwd with an empty element" to run(withCwd("/home/me/work//x"), inFolder),
             "a cwd that is not absolute" to run(withCwd("${BS}${BS}home${BS}${BS}me${BS}${BS}work"), inFolder),
-            "folders on a plain run" to run(withFiles("[]"), ""","folders":{}"""),
+            "folders.cwd on a plain run" to run(top = ""","folders":{"cwd":{"path":"/home/me/work","write":false}}"""),
             "input paths over 16,384 bytes" to run(withFiles("[" + (1..5).joinToString(",") { """{"path":"/home/me/${"d".repeat(3300)}/f$it","size":1}""" } + "]"), ""","flags":["member_files"],"folders":{}"""),
             "a cwd without member_folder beside files" to run({ withFiles(oneInput)(withCwd("/home/me/work")(it)) }, ""","flags":["member_files"],"folders":{}"""),
             "an entry without write" to run(withCwd("/home/me/work"), ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home/me/work"}}"""),

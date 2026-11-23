@@ -188,11 +188,12 @@ object AgentApprovals {
         return RunFolder(path, write)
     }
 
-    /** `inputs`: 0–16 of `{path, size}`, each path clean and absolute with a flat last name, the names distinct. */
+    /** `inputs`: 1–16 of `{path, size}`, each path clean and absolute with a flat last name, the names distinct. */
     @Suppress("ReturnCount")
     private fun inputs(v: StrictValue?): List<RunInput>? {
         val items = (v as? StrictArray)?.items ?: return null
-        if (items.size > MAX_FILES) return null
+        // ANDROID-PLAN 0.1.138 AA8 "Fail closed": `inputs` without `member_files` is deny only, an empty list included.
+        if (items.isEmpty() || items.size > MAX_FILES) return null
         val out = items.map { i ->
             val o = i as? StrictObject ?: return null
             if (o.members.keys != INPUT) return null
