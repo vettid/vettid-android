@@ -127,4 +127,24 @@
     <string name="ways_window_close">Close it now</string> <!-- new (app): as the vote\'s -->
 
     <!-- How a string is shown (AA8, used here for the programs) -->
+
+    <!-- ANDROID-PLAN 0.1.138 §4 AA9 "Member folders and files on a run": the plan's NEW texts, approved by the owner with
+         the plan (0.1.135, GC #15870; the heading as renamed in 0.1.137, GC #16443; the dots-and-spaces text in 0.1.138,
+         GC #16519), word for word. ItemWaysTextTest holds them. -->
+    <string name="ways_folders_title">Folders for runs with this item</string>
+    <string name="ways_folders_body">The agent can run these programs only in the folders listed here, and can read and save files only in them. To run a program in a folder, you also have to share that folder on your computer with vettid-agent share; reading and saving files needs no sharing. A program run there can reach every folder shared with this computer\'s connector, not only the ones listed here: this list decides where it starts and where files are copied. Nothing is listed until you add a folder.</string>
+    <string name="ways_folder_read_only">Read only</string>
+    <string name="ways_folder_can_change">Can change files</string>
+    <string name="ways_add_folder">Add a folder</string>
+    <string name="ways_folder_field">Folder path on your computer</string>
+    <string name="ways_folder_hint">A full path, exactly as your computer shows it, capitals included, such as /home/you/project or C:\\Users\\you\\project. Pick the one folder the agent needs, not your whole home folder or a drive.</string>
+    <string name="ways_folder_not_full">Give a full path.</string>
+    <string name="ways_folder_whole_drive">Pick a folder, not a whole drive.</string>
+    <string name="ways_folder_duplicate">This folder is already in the list.</string>
+    <string name="ways_folder_too_many">You can add at most 16 folders.</string>
+    <string name="ways_folder_nested">This folder is inside another folder in the list, or has one inside it. List only one of them.</string>
+    <string name="ways_folder_dots">A part of this path is only dots and spaces. Give the folder\'s real name.</string>
+    <string name="ways_folder_write">Let the agent change files in this folder</string>
+    <string name="ways_folder_write_note">A program run here could change or delete files in this folder and everything below it. Turn this on only if the agent needs to save files here.</string>
+    <string name="ways_folder_below">Also covers every folder inside it.</string>
 </resources>

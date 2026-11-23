@@ -478,8 +478,8 @@ object ItemWaysRules {
 
     /**
      * The settings when the app understands all of them (AA7 "Fail closed"), else [Unreadable]: an unknown member at any
-     * level, a way the app does not know, `run` or `proxy` present without its way or the reverse, a malformed value,
-     * and (a version without AA9) a non-empty `run.folders`.
+     * level, a way the app does not know, `run` or `proxy` present without its way or the reverse, a malformed value
+     * (folders the vault would refuse included).
      */
     @Suppress("CyclomaticComplexMethod")
     private fun parse(o: StrictObject): ItemWays {
@@ -526,15 +526,18 @@ object ItemWaysRules {
         )
         val each = if (r.has("each")) (r["each"] as? StrictBool)?.value ?: throw Unreadable() else true
         check(each || programs.isNotEmpty())
+        return RunSettings(programs, each, runFolders(r))
+    }
+
+    /** AA9: `run.folders` as the vault accepts them (at most 16, each well formed, none equal to, under or above another). */
+    private fun runFolders(r: StrictObject): List<RunFolder>? {
         val folders = r.optArray("folders")?.map { v ->
             val f = v as? StrictObject ?: throw Unreadable()
             f.only(FOLDER)
             RunFolder(f.string("path"), (f["write"] as? StrictBool)?.value ?: throw Unreadable())
         }
-        // A version without AA9 (ANDROID-PLAN 0.1.137 AA7 "Fail closed"): a folder it can't show is read only; an empty
-        // list is sent back as read.
-        check(folders.isNullOrEmpty())
-        return RunSettings(programs, each, folders)
+        check(folders == null || RunFolders.valid(folders))
+        return folders
     }
 
     private fun proxySettings(p: StrictObject): ProxySettings {

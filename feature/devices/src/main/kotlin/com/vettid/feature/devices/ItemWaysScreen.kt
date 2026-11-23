@@ -57,12 +57,14 @@ import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.devices.FolderProblem
 import com.vettid.core.data.devices.HostProblem
 import com.vettid.core.data.devices.ItemWay
 import com.vettid.core.data.devices.ItemWays
 import com.vettid.core.data.devices.ItemWaysRules
 import com.vettid.core.data.devices.ProgramAdvice
 import com.vettid.core.data.devices.ProgramProblem
+import com.vettid.core.data.devices.RunFolder
 import com.vettid.core.data.devices.RunProgram
 import com.vettid.core.data.devices.VariableProblem
 import com.vettid.core.data.vault.messageRes
@@ -121,6 +123,12 @@ data class ItemWaysActions(
     val onOpenAlarm: () -> Unit = {},
     val onNoticeShown: () -> Unit = {},
     val onCloseWindowNow: () -> Unit = {},
+    val onFolderInput: (String) -> Unit = {},
+    val onAddFolder: () -> Unit = {},
+    val onOpenFolder: (Int) -> Unit = {},
+    val onCloseFolder: () -> Unit = {},
+    val onFolderWrite: (Int, Boolean) -> Unit = { _, _ -> },
+    val onRemoveFolder: (Int) -> Unit = {},
 )
 
 /** The fields of this page: what is typed is what is saved (no suggestions, autocorrection or capitals; AA7). Internal for its test. */
@@ -152,9 +160,17 @@ fun ItemWaysScreen(state: ItemWaysUiState, actions: ItemWaysActions, modifier: M
         actions.onBack()
     }
     val program = state.openProgram
+    val folder = state.openFolder
     BackHandler(enabled = program != null) { actions.onCloseProgram() }
+    BackHandler(enabled = program == null && folder != null) { actions.onCloseFolder() }
     DetailScaffold(
-        onBackClick = { if (program != null) actions.onCloseProgram() else actions.onBack() },
+        onBackClick = {
+            when {
+                program != null -> actions.onCloseProgram()
+                folder != null -> actions.onCloseFolder()
+                else -> actions.onBack()
+            }
+        },
         modifier = modifier,
         actions = {
             if (!state.readOnly && state.draft != null) {
@@ -203,6 +219,7 @@ fun ItemWaysScreen(state: ItemWaysUiState, actions: ItemWaysActions, modifier: M
                 when {
                     state.notIncluded -> Unit
                     program != null && d != null -> d.run?.programs?.getOrNull(program)?.let { ProgramPage(state, it, program, actions) }
+                    folder != null && d != null -> d.run?.folders?.getOrNull(folder)?.let { FolderPage(state, it, folder, actions) }
                     else -> MainPage(state, actions)
                 }
             }
@@ -294,6 +311,7 @@ private fun MainPage(state: ItemWaysUiState, actions: ItemWaysActions) {
     }
     if (d != null) {
         d.run?.let { RunCard(state, d, actions) }
+        d.run?.folders?.let { FoldersCard(state, it, actions) }
         d.proxy?.let { ProxyCard(state, d, actions) }
     }
 }
@@ -465,6 +483,103 @@ private fun ProgramPage(state: ItemWaysUiState, p: RunProgram, index: Int, actio
         )
     }
 }
+
+/**
+ * The run binding's folders (AA9), under the programs: shown only when the vault's answer carried `run.folders`. Each row
+ * is the path as typed (by the string rule), Read only or Can change files, and Remove; a tap opens its page.
+ */
+@Composable
+private fun FoldersCard(state: ItemWaysUiState, folders: List<RunFolder>, actions: ItemWaysActions) {
+    DetailCard(Modifier.testTag("ways_folders_card")) {
+        CardHeading(stringResource(R.string.ways_folders_title))
+        Note(stringResource(R.string.ways_folders_body))
+        folders.forEachIndexed { i, f ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = Spacing.touchTarget)
+                    .clickable(role = Role.Button) { actions.onOpenFolder(i) }
+                    .padding(vertical = Spacing.xs)
+                    .testTag("ways_folder_$i"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    ShownStringBox(f.path)
+                    Text(
+                        stringResource(if (f.write) R.string.ways_folder_can_change else R.string.ways_folder_read_only),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (f.write) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(
+                    onClick = { actions.onRemoveFolder(i) },
+                    enabled = !state.saving,
+                    modifier = Modifier.testTag("ways_folder_remove_$i"),
+                ) { Text(stringResource(R.string.ways_remove)) }
+            }
+        }
+        if (folders.size < ItemWaysRules.MAX_FOLDERS) {
+            Spacer(Modifier.heightIn(min = Spacing.s))
+            Text(stringResource(R.string.ways_add_folder), style = MaterialTheme.typography.titleSmall)
+            PlainField(
+                value = state.folderInput,
+                onValue = actions.onFolderInput,
+                label = stringResource(R.string.ways_folder_field),
+                supporting = stringResource(R.string.ways_folder_hint),
+                error = state.folderProblem?.let { folderProblemText(it) },
+                onDone = actions.onAddFolder,
+                tag = "ways_folder_input",
+            )
+            SecondaryButton(
+                stringResource(R.string.ways_add),
+                actions.onAddFolder,
+                enabled = state.folderInput.isNotEmpty(),
+                modifier = Modifier.testTag("ways_folder_add"),
+            )
+        } else {
+            Note(stringResource(R.string.ways_folder_too_many))
+        }
+    }
+}
+
+/** A folder's page (AA9 "Read only first"): its path, the write switch with its line, what it covers, Remove. */
+@Composable
+private fun FolderPage(state: ItemWaysUiState, f: RunFolder, index: Int, actions: ItemWaysActions) {
+    DetailCard(Modifier.testTag("ways_folder_page")) {
+        CardHeading(stringResource(R.string.ways_folder_field))
+        ShownStringBox(f.path)
+        Note(stringResource(R.string.ways_folder_below), Modifier.testTag("ways_folder_below"))
+        WaySwitch(
+            stringResource(R.string.ways_folder_write),
+            f.write,
+            enabled = !state.saving,
+            onChange = { actions.onFolderWrite(index, it) },
+            tag = "ways_folder_write",
+        )
+        Note(stringResource(R.string.ways_folder_write_note))
+    }
+    Box(Modifier.padding(horizontal = Spacing.gutter)) {
+        PrimaryButton(
+            stringResource(R.string.ways_remove),
+            { actions.onRemoveFolder(index) },
+            destructive = true,
+            enabled = !state.saving,
+            modifier = Modifier.testTag("ways_folder_page_remove"),
+        )
+    }
+}
+
+@Composable
+private fun folderProblemText(p: FolderProblem): String = stringResource(
+    when (p) {
+        FolderProblem.NOT_FULL_PATH -> R.string.ways_folder_not_full
+        FolderProblem.WHOLE_DRIVE -> R.string.ways_folder_whole_drive
+        FolderProblem.DUPLICATE -> R.string.ways_folder_duplicate
+        FolderProblem.NESTED -> R.string.ways_folder_nested
+        FolderProblem.TOO_MANY -> R.string.ways_folder_too_many
+        FolderProblem.DOTS_ONLY -> R.string.ways_folder_dots
+    },
+)
 
 @Composable
 private fun ProxyCard(state: ItemWaysUiState, d: ItemWays, actions: ItemWaysActions) {

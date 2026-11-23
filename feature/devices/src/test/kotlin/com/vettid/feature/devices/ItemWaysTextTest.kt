@@ -105,6 +105,31 @@ class ItemWaysTextTest {
     }
 
     /** The plan's texts, word for word (owner-approved 2026-11-22, GC #16443); a changed text is the owner's to approve. */
+    /** AA9's texts (0.1.135; 0.1.137's heading; 0.1.138's dots-and-spaces text), word for word. */
+    @Test
+    fun theFoldersWordsAreThePlans() {
+        val r = ApplicationProvider.getApplicationContext<Context>().resources
+        val texts = listOf(
+            R.string.ways_folders_title to "Folders for runs with this item",
+            R.string.ways_folders_body to "The agent can run these programs only in the folders listed here, and can read and save files only in them. To run a program in a folder, you also have to share that folder on your computer with vettid-agent share; reading and saving files needs no sharing. A program run there can reach every folder shared with this computer's connector, not only the ones listed here: this list decides where it starts and where files are copied. Nothing is listed until you add a folder.",
+            R.string.ways_folder_read_only to "Read only",
+            R.string.ways_folder_can_change to "Can change files",
+            R.string.ways_add_folder to "Add a folder",
+            R.string.ways_folder_field to "Folder path on your computer",
+            R.string.ways_folder_hint to "A full path, exactly as your computer shows it, capitals included, such as /home/you/project or C:\\Users\\you\\project. Pick the one folder the agent needs, not your whole home folder or a drive.",
+            R.string.ways_folder_not_full to "Give a full path.",
+            R.string.ways_folder_whole_drive to "Pick a folder, not a whole drive.",
+            R.string.ways_folder_duplicate to "This folder is already in the list.",
+            R.string.ways_folder_too_many to "You can add at most 16 folders.",
+            R.string.ways_folder_nested to "This folder is inside another folder in the list, or has one inside it. List only one of them.",
+            R.string.ways_folder_dots to "A part of this path is only dots and spaces. Give the folder's real name.",
+            R.string.ways_folder_write to "Let the agent change files in this folder",
+            R.string.ways_folder_write_note to "A program run here could change or delete files in this folder and everything below it. Turn this on only if the agent needs to save files here.",
+            R.string.ways_folder_below to "Also covers every folder inside it.",
+        )
+        for ((id, text) in texts) assertEquals(text, r.getString(id))
+    }
+
     @Test
     fun thePlansWordsAreUnchanged() {
         val r = ApplicationProvider.getApplicationContext<Context>().resources

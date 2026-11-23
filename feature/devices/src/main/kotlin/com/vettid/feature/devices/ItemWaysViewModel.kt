@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.devices.AgentChange
 import com.vettid.core.data.devices.DevicesRepository
+import com.vettid.core.data.devices.FolderProblem
 import com.vettid.core.data.devices.HostProblem
 import com.vettid.core.data.devices.ItemWay
 import com.vettid.core.data.devices.ItemWays
@@ -14,6 +15,8 @@ import com.vettid.core.data.devices.ItemWaysRules
 import com.vettid.core.data.devices.ItemWaysSave
 import com.vettid.core.data.devices.ProgramProblem
 import com.vettid.core.data.devices.ProxySettings
+import com.vettid.core.data.devices.RunFolder
+import com.vettid.core.data.devices.RunFolders
 import com.vettid.core.data.devices.RunProgram
 import com.vettid.core.data.devices.RunSettings
 import com.vettid.core.data.devices.VariableProblem
@@ -105,6 +108,10 @@ data class ItemWaysUiState(
     val variableProblem: VariableProblem? = null,
     val hostInput: String = "",
     val hostProblem: HostProblem? = null,
+    /** The folder whose page is open (its index in the draft's `run.folders`), or null (AA9). */
+    val openFolder: Int? = null,
+    val folderInput: String = "",
+    val folderProblem: FolderProblem? = null,
     /** "Add a host" was opened by turning the API switch on (`proxy` needs one host): its field takes focus. */
     val addingHost: Boolean = false,
     /** The fingerprint shown in full (all 64 digits), or null. */
@@ -123,7 +130,7 @@ data class ItemWaysUiState(
     val holdsChanges: Boolean get() = dirty || editPending
 
     /** The member holds anything a fresh start of the page would lose: input, an open program, a dialog or a sheet. */
-    val busy: Boolean get() = holdsInput || openProgram != null || confirm != null || addingHost || fullPin != null
+    val busy: Boolean get() = holdsInput || openProgram != null || openFolder != null || confirm != null || addingHost || fullPin != null
 
     /** A read-only page can send a turn-off: the answer read strictly, and for the agent asked about. */
     val canTurnOff: Boolean get() = read != null && read.strict != null && !read.foreign
@@ -147,7 +154,7 @@ data class ItemWaysUiState(
     /** The screen holds input the member would lose by leaving (the shell's `HoldsInput`). */
     val holdsInput: Boolean
         get() = dirty || editPending || prompt != null || programInput.isNotEmpty() || variableInput.isNotEmpty() ||
-            hostInput.isNotEmpty()
+            hostInput.isNotEmpty() || folderInput.isNotEmpty()
 
     /** The open program's recorded pin was taken out in the draft: "Fingerprint forgotten when you save". */
     fun pinForgotten(p: RunProgram): Boolean {
@@ -188,7 +195,7 @@ data class ItemWaysUiState(
             !force && (keep || busy || draft != before) -> copy(notIncluded = false, changedElsewhere = true)
             else -> copy(
                 read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
-                openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
+                openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null, openFolder = null,
             )
         }
     }
@@ -452,6 +459,45 @@ class ItemWaysViewModel @Inject constructor(
     fun removeVariable(name: String) {
         val i = local.value.openProgram ?: return
         editProgram(i) { it.copy(env = it.env - name) }
+    }
+
+    // Folders (AA9): shown only when the vault's answer carried `run.folders` (a new run binding learns it from the answer).
+
+    fun setFolderInput(v: String) = local.update { it.copy(folderInput = v, folderProblem = null) }
+
+    /** Adds the typed folder, read only (AA9 "Read only first"); a widening, so Save asks for the password. */
+    fun addFolder() {
+        val s = local.value
+        val folders = s.draft?.run?.folders ?: return
+        val path = s.folderInput
+        val problem = RunFolders.addProblem(folders, path)
+        if (problem != null) {
+            local.update { it.copy(folderProblem = problem) }
+            return
+        }
+        edit { it.copy(run = it.run?.copy(folders = folders + RunFolder(path, write = false))) }
+        local.update { it.copy(folderInput = "", folderProblem = null) }
+    }
+
+    fun openFolder(index: Int) {
+        if (local.value.draft?.run?.folders?.getOrNull(index) == null) return
+        local.update { it.copy(openFolder = index) }
+    }
+
+    fun closeFolder() = local.update { it.copy(openFolder = null) }
+
+    /** Turning write on is a widening (the password at Save), off a narrowing. */
+    fun setFolderWrite(index: Int, write: Boolean) = edit { w ->
+        val r = w.run ?: return@edit w
+        w.copy(run = r.copy(folders = r.folders?.mapIndexed { j, f -> if (j == index) f.copy(write = write) else f }))
+    }
+
+    fun removeFolder(index: Int) {
+        edit { w ->
+            val r = w.run ?: return@edit w
+            w.copy(run = r.copy(folders = r.folders?.filterIndexed { j, _ -> j != index }))
+        }
+        local.update { it.copy(openFolder = null) }
     }
 
     // The API settings.

@@ -75,10 +75,19 @@ class ItemWaysTest {
             "proxy without way" to item(""""ways":["use"],"proxy":{"hosts":["a.example.com"],"header":"X"}"""),
             "unknown run member" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"x":1}"""),
             "unknown program member" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","x":1}],"each":true}"""),
-            // Any folder is read only until AA9, so this row can't yet be told from the next one.
             "unknown folder member" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b","write":false,"x":1}]}"""),
             "unknown proxy member" to item(""""ways":["use","proxy"],"proxy":{"hosts":["a.example.com"],"header":"X","x":1}"""),
-            "folders (no AA9 yet)" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b","write":false}]}"""),
+            "folder without write" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b"}]}"""),
+            "string write" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b","write":"true"}]}"""),
+            "relative folder" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"a/b","write":false}]}"""),
+            "root folder" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/","write":false}]}"""),
+            "drive root folder" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"C:\\","write":false}]}"""),
+            "dots folder" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/...","write":false}]}"""),
+            "dot-dot folder" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/../b","write":false}]}"""),
+            "trailing separator" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b/","write":false}]}"""),
+            "same folder by case" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/Work","write":false},{"path":"/a/work","write":true}]}"""),
+            "nested folders" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/a","write":false},{"path":"/a/b","write":false}]}"""),
+            "17 folders" to item(""""ways":["use","run"],"run":{"programs":[],"each":true,"folders":[${(1..17).joinToString(",") { "{\"path\":\"/f$it\",\"write\":false}" }}]}"""),
             "sha without path" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"$sha"}],"each":true}"""),
             "capital sha" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"${sha.uppercase()}","path":"/usr/bin/git"}],"each":true}"""),
             "63-digit sha" to item(""""ways":["use","run"],"run":{"programs":[{"program":"git","sha256":"${sha.drop(1)}","path":"/usr/bin/git"}],"each":true}"""),
@@ -112,7 +121,7 @@ class ItemWaysTest {
     /** A read-only page turns a way off: the rest exactly as read, unknown members included; never `use`. */
     @Test
     fun aReadOnlyPageTurnsAWayOffAndSendsTheRestAsRead() {
-        val r = ItemWaysRules.one(item(""""version":2,"ways":["use","run","reveal"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b","write":true}]},"extra":{"k":1}""").toByteArray())!!
+        val r = ItemWaysRules.one(item(""""version":2,"ways":["use","run","reveal"],"run":{"programs":[],"each":true,"folders":[{"path":"/a/b","write":true},{"path":"/a/b/c","write":false}]},"extra":{"k":1}""").toByteArray())!!
         assertTrue(r.readOnly)
         val body = ItemWaysRules.withoutWay(r, "run")!!
         assertEquals(JsonArray(listOf(JsonPrimitive("use"), JsonPrimitive("reveal"))), body["ways"])
@@ -368,5 +377,18 @@ class ItemWaysTest {
         assertFalse("no read", ItemWaysRules.runCwdAllowed(null))
         // Settings shown read only (an unknown member) judge the same way: the rule reads the answer as it is.
         assertTrue(ItemWaysRules.runCwdAllowed(r(""""ways":["use","run"],"run":{"programs":[],"each":true},"later":1""")))
+    }
+
+    /** AA9: folders the vault would accept are read, and sent back as read (path as typed, write). */
+    @Test
+    fun wellFormedFoldersAreEditable() {
+        val r = ItemWaysRules.one(
+            item(""""version":3,"ways":["use","run"],"run":{"programs":[],"each":true,"folders":[{"path":"/home/me/Work","write":false},{"path":"C:\\Users\\me","write":true}]}""").toByteArray(),
+        )!!
+        assertFalse(r.readOnly)
+        assertTrue(r.foldersKnown)
+        assertEquals(listOf(RunFolder("/home/me/Work", false), RunFolder("C:\\Users\\me", true)), r.ways!!.run!!.folders)
+        val sent = (r.ways!!.setBody()["run"] as JsonObject)["folders"].toString()
+        assertEquals("""[{"path":"/home/me/Work","write":false},{"path":"C:\\Users\\me","write":true}]""", sent)
     }
 }
