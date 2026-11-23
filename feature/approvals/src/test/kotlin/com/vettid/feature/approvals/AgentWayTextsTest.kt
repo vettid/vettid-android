@@ -44,6 +44,7 @@ class AgentWayTextsTest {
             R.string.approvals_run_now to "Now",
             R.string.approvals_run_batch_file to "This is a Windows batch file. Its fingerprint covers this file only, not the programs it starts (for an npm tool, node and its packages).",
             R.string.approvals_run_runs_commands to "This program can run other commands given in its arguments. Read every argument.",
+            R.string.approvals_way_approved to "Approved.",
             R.string.approvals_run_pin_recorded to "This program's fingerprint is now recorded for %1${"$"}s.",
             R.string.approvals_proxy_title to "%1${"$"}s wants to use %2${"$"}s with %3${"$"}s for %4${"$"}s.",
             R.string.approvals_proxy_body to "The agent will not see it; the key is sent only to %1${"$"}s.",

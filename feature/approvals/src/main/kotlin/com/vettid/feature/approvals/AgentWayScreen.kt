@@ -81,7 +81,7 @@ internal fun AgentWayScreen(
     val who = deviceSentenceStart(a)
     val rows = wayRows(a, held, who)
     // The gate re-arms when what is shown changes (not by the member's own taps), and on a new opening; a rotation keeps it.
-    val contentKey = "${a.key}:${held.hashCode()}"
+    val contentKey = "${a.key}:${WayKey.of(held)}"
     var reached by rememberSaveable(contentKey) { mutableStateOf(false) }
     val list = rememberLazyListState()
     val first = rememberSaveable(a.key) { arrayOf(contentKey) }
@@ -117,7 +117,7 @@ internal fun AgentWayScreen(
                 }
                 if (!expired) {
                     val gate = Gate(reached, enabled = reached && state.canApprove && !state.busy)
-                    Buttons(state, actions, gate, large, obscured, linesMax) { obscured = true }
+                    Buttons(state, actions, gate, large, obscured, linesMax) { obscured = it }
                 }
             }
         }
@@ -140,7 +140,8 @@ private fun Buttons(
     large: Boolean,
     obscured: Boolean,
     linesMax: androidx.compose.ui.unit.Dp,
-    onObscured: () -> Unit,
+    /** True for a touch seen through another app's window, false for a clean one (the line goes). */
+    onObscured: (Boolean) -> Unit,
 ) {
     val hint = stringResource(R.string.approvals_way_scroll_hint)
     Column(
@@ -169,7 +170,9 @@ private fun Buttons(
                             val e = awaitPointerEvent(PointerEventPass.Initial)
                             if (e.motionEvent?.let(::obscuredTouch) == true) {
                                 e.changes.forEach { it.consume() }
-                                onObscured()
+                                onObscured(true)
+                            } else if (e.type == androidx.compose.ui.input.pointer.PointerEventType.Press) {
+                                onObscured(false)
                             }
                         }
                     }
@@ -197,7 +200,9 @@ private fun HideOverlays() {
     val window = LocalContext.current.activity()?.window
     DisposableEffect(window) {
         // Without the permission (it is in this module's manifest) Approve still refuses obscured touches.
-        val hidden = runCatching { window?.setHideOverlayWindows(true) }.isSuccess
+        val hidden = runCatching { window?.setHideOverlayWindows(true) }
+            .onFailure { android.util.Log.w(TAG, "overlays not hidden: ${it.javaClass.simpleName}") }
+            .isSuccess
         onDispose { if (hidden) runCatching { window?.setHideOverlayWindows(false) } }
     }
 }
@@ -212,8 +217,12 @@ private tailrec fun Context.activity(): Activity? = when (this) {
 internal fun atEnd(list: LazyListState): Boolean {
     val info = list.layoutInfo
     val last = info.visibleItemsInfo.lastOrNull() ?: return false
-    return last.index == info.totalItemsCount - 1 && last.offset + last.size <= info.viewportEndOffset
+    return endReached(last.index, info.totalItemsCount, last.offset, last.size, info.viewportEndOffset)
 }
+
+/** Pure: the last item of [total] is laid out ([lastIndex]) and its bottom edge ([offset] + [size]) is inside the list. */
+internal fun endReached(lastIndex: Int, total: Int, offset: Int, size: Int, viewportEnd: Int): Boolean =
+    lastIndex == total - 1 && offset + size <= viewportEnd
 
 /** The rows of a run or a proxy, in the plan's order, each with a stable key. */
 @Composable
@@ -411,6 +420,8 @@ private fun Line(text: String, tag: String, warning: Boolean = false, mono: Bool
         modifier = Modifier.testTag(tag),
     )
 }
+
+private const val TAG = "AgentWayScreen"
 
 /** `{secret_file}`, the argument a `file` run puts the secret file's path in. */
 private const val SECRET_FILE = "{secret_file}"

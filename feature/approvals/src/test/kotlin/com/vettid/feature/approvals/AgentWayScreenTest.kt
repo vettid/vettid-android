@@ -6,6 +6,7 @@ package com.vettid.feature.approvals
 import android.view.MotionEvent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -318,5 +319,99 @@ class AgentWayScreenTest {
         rule.setContent { ApprovalDetailScreen(state(a).copy(gone = true), DecisionActions()) }
         rule.onNodeWithText("This request expired, so nothing was done.").assertExists()
         assertEquals(0, rule.onAllNodesWithTag("agent_way_approve").fetchSemanticsNodes().size)
+    }
+
+    /** The box's text is isolated and forced left to right: LRI LRO … PDF PDI, as drawn. */
+    @Test
+    fun theProgramsBoxIsIsolatedAndForcedLeftToRight() {
+        show(run())
+        rule.onAllNodesWithTag("shown_string", useUnmergedTree = true)[0]
+            .assertTextEquals("\u2066\u202D/usr/bin/git\u202C\u2069")
+    }
+
+    /** "Asked for as" shows argv[0] when it differs from the program, and not otherwise. */
+    @Test
+    fun askedForAsShowsOnlyWhenArgv0Differs() {
+        show(run(argv = listOf("git", "status")))
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_asked_as"))
+        rule.onNodeWithTag("agent_way_asked_as").assertExists()
+    }
+
+    @Test
+    fun askedForAsIsAbsentWhenArgv0IsTheProgram() {
+        show(run())
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_asked_as").fetchSemanticsNodes().size)
+    }
+
+    /** `{secret_file}` is matched exactly, not inside another argument. */
+    @Test
+    fun theSecretFileNoteNeedsTheExactArgument() {
+        show(run(argv = listOf("/usr/bin/tool", "x{secret_file}"), program = "/usr/bin/tool", how = SecretHow.FILE))
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_arg_0"))
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_secret_file_0").fetchSemanticsNodes().size)
+    }
+
+    /** A program with a look-alike character gets the look-alike line under its box. */
+    @Test
+    fun aLookAlikeGetsItsLine() {
+        show(run(program = "/usr/bin/g\u0456t", argv = listOf("/usr/bin/g\u0456t")))
+        rule.onNodeWithTag("agent_way_content").performScrollToNode(hasTestTag("agent_way_program"))
+        rule.onAllNodesWithTag("shown_string_lookalike", useUnmergedTree = true)[0].assertExists()
+        rule.onNodeWithText("Some characters here may look like others.", useUnmergedTree = true).assertExists()
+    }
+
+    /** Each half of the end: the last item laid out, and its bottom edge inside the list. */
+    @Test
+    fun theEndNeedsTheLastItemWhollyInside() {
+        assertTrue(endReached(lastIndex = 9, total = 10, offset = 400, size = 50, viewportEnd = 450))
+        assertFalse("half shown", endReached(lastIndex = 9, total = 10, offset = 420, size = 50, viewportEnd = 450))
+        assertFalse("not the last item", endReached(lastIndex = 8, total = 10, offset = 0, size = 50, viewportEnd = 450))
+    }
+
+    /** The gate's key follows the content's value: any change shown changes it, the same content keeps it. */
+    @Test
+    fun theReArmKeyFollowsWhatIsShown() {
+        val a = HeldShow.Run(run(), "GitHub token", "Token")
+        assertEquals(WayKey.of(a), WayKey.of(HeldShow.Run(run(), "GitHub token", "Token")))
+        val changes = listOf(
+            a.copy(run = run(argv = listOf("/usr/bin/git", "push", "origin2"))),
+            a.copy(run = run(env = listOf("A" to "1"))),
+            a.copy(run = run(flags = setOf(RunFlag.SHELL))),
+            a.copy(run = run(cwd = "/x")),
+            a.copy(item = "Another"),
+            a.copy(run = run(argv = listOf("/usr/bin/git", "pushorigin"))),
+        )
+        changes.forEach { assertTrue(WayKey.of(a) != WayKey.of(it)) }
+        assertTrue("argument boundaries count", WayKey.of(a.copy(run = run(argv = listOf("a", "bc")))) != WayKey.of(a.copy(run = run(argv = listOf("ab", "c")))))
+    }
+
+    /** A clean tap after an obscured one takes the overlay line away. */
+    @Test
+    @Config(qualifiers = "w400dp-h2400dp")
+    fun aCleanTouchClearsTheOverlayLine() {
+        var view: android.view.View? = null
+        rule.setContent {
+            view = androidx.compose.ui.platform.LocalView.current
+            ApprovalDetailScreen(state(ask(run(argv = listOf("/usr/bin/git")))), DecisionActions())
+        }
+        rule.waitForIdle()
+        val b = rule.onNodeWithTag("agent_way_approve").fetchSemanticsNode().boundsInRoot
+        fun tap(flags: Int) {
+            fun ev(action: Int) = MotionEvent.obtain(
+                0L, 0L, action, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }),
+                arrayOf(MotionEvent.PointerCoords().apply { x = b.center.x; y = b.center.y; pressure = 1f; size = 1f }),
+                0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, flags,
+            )
+            rule.runOnUiThread {
+                view!!.dispatchTouchEvent(ev(MotionEvent.ACTION_DOWN))
+                view!!.dispatchTouchEvent(ev(MotionEvent.ACTION_UP))
+            }
+            rule.waitForIdle()
+        }
+        tap(MotionEvent.FLAG_WINDOW_IS_OBSCURED)
+        rule.onNodeWithTag("agent_way_obscured").assertExists()
+        tap(0)
+        assertEquals(0, rule.onAllNodesWithTag("agent_way_obscured").fetchSemanticsNodes().size)
     }
 }

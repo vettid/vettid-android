@@ -382,7 +382,7 @@ private fun wayResult(o: DeviceOutcome.Approved, who: String): String {
     val run = o.way == AgentWay.RUN
     return when (val r = o.result) {
         null -> stringResource(R.string.approvals_held_no_result)
-        "ok" -> stringResource(R.string.approvals_held_approved)
+        "ok" -> stringResource(R.string.approvals_way_approved)
         "not_found" -> stringResource(if (run) R.string.approvals_run_not_found else R.string.approvals_proxy_not_found)
         "forbidden" -> stringResource(R.string.approvals_way_forbidden, who)
         "program_not_allowed" -> stringResource(R.string.approvals_run_program_not_allowed)

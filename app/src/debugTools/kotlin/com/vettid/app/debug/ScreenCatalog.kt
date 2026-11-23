@@ -511,7 +511,8 @@ object ScreenCatalog {
     private fun runWith(f: RF) = sampleRun.copy(flags = setOf(f))
 
     private fun agentHeld(h: com.vettid.core.data.social.HeldRequest?, fromFeed: Boolean = false) = Approval.DeviceRequest(
-        "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, t0.plusSeconds(270),
+        // Waiting for 4 more minutes whenever the catalog is opened (a fixed time would open every entry as expired).
+        "approval.pending", "h2", if (fromFeed) null else "Build bot", "agent", "agent.request", t0, java.time.Instant.now().plusSeconds(270),
         deviceId = "dev-a", held = h, fromFeed = fromFeed,
     )
     private fun agentState(a: Approval.DeviceRequest, listed: Boolean = true, outcome: DeviceOutcome? = null) =

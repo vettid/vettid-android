@@ -19,6 +19,7 @@ import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakePairing
 import com.vettid.core.testing.FakeSocial
 import com.vettid.core.testing.FakeVault
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -74,11 +75,13 @@ class DeviceApprovalsViewModelTest {
     }
 
     /** The item's settings as `leash.item.list` answers them after an approval (AA8 "Approving and the pin"). */
-    private class Ways(private val answer: String?) : com.vettid.core.data.devices.ItemWaysRepository by com.vettid.core.data.devices.NoItemWays {
+    private class Ways(private val answer: String?, private val gate: CompletableDeferred<Unit>? = null) :
+        com.vettid.core.data.devices.ItemWaysRepository by com.vettid.core.data.devices.NoItemWays {
         val reads = mutableListOf<Pair<String, String>>()
 
         override suspend fun read(agentId: String, itemId: String): com.vettid.core.data.devices.ItemWaysRead? {
             reads += agentId to itemId
+            gate?.await()
             return answer?.let { com.vettid.core.data.devices.ItemWaysRules.one(it.toByteArray()) }
         }
     }
@@ -607,5 +610,31 @@ class DeviceApprovalsViewModelTest {
         runCurrent()
         assertEquals(listOf("A" to "i1"), ways.reads)
         assertTrue(m.uiState.value.heldShow is HeldShow.Run)
+    }
+
+    /** While the cwd read has not answered, and when the answer has no `run`, the run is deny only. */
+    @Test
+    fun aRunsCwdIsDenyOnlyWhileUnreadAndWithoutARun() = runTest {
+        val run = heldRun("i1").copy(cwd = "/home/me")
+        val gate = CompletableDeferred<Unit>()
+        val pending = vm(heldAsk(run), ways = Ways("""{"agent_id":"A","item_id":"i1","version":2,"ways":["use"]}""", gate))
+        runCurrent()
+        assertEquals("not answered yet", HeldShow.Other, pending.uiState.value.heldShow)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals("no run member", HeldShow.Other, pending.uiState.value.heldShow)
+    }
+
+    /** The pin is said only when the entry's path is the run's program, not its name alone. */
+    @Test
+    fun aPinAtAnotherPathIsNotSaid() = runTest {
+        val run = heldRun("i1").copy(flags = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED))
+        val elsewhere = """{"agent_id":"A","item_id":"i1","version":2,"ways":["use","run"],"run":{"programs":[{"program":"/usr/bin/git","sha256":"${run.sha256}","path":"/opt/git","env":[]}],"each":true}}"""
+        social.deviceDecision = DeviceDecision(result = "ok")
+        val m = vm(heldAsk(run), ways = Ways(elsewhere))
+        runCurrent()
+        m.approve()
+        runCurrent()
+        assertEquals(DeviceOutcome.Approved("ok", AgentWay.RUN, pinRecorded = false, item = "Bank PIN"), m.uiState.value.outcome)
     }
 }

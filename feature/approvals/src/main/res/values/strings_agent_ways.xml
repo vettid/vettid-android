@@ -54,6 +54,7 @@
     <string name="approvals_run_now">Now</string>
     <string name="approvals_run_batch_file">This is a Windows batch file. Its fingerprint covers this file only, not the programs it starts (for an npm tool, node and its packages).</string>
     <string name="approvals_run_runs_commands">This program can run other commands given in its arguments. Read every argument.</string>
+    <string name="approvals_way_approved">Approved.</string>
     <string name="approvals_run_pin_recorded">This program\'s fingerprint is now recorded for %1$s.</string>
 
     <!-- A proxy -->

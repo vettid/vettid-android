@@ -794,6 +794,9 @@ class ApprovalDetailViewModel @Inject constructor(
     /** The cwd rule's read was started (once per detail). */
     private var cwdRead = false
 
+    /** The waits between tries of a failed cwd read. */
+    private val cwdRetries = listOf(2_000L, 5_000L, 15_000L)
+
     /** AA8 "Fail closed": a run's `cwd` without `member_folder` is shown only once the item's settings allow it. */
     @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount")
     private fun readCwdRule() {
@@ -804,15 +807,23 @@ class ApprovalDetailViewModel @Inject constructor(
         if (!run.hasCwd) return
         cwdRead = true
         viewModelScope.launch {
-            val ok = try {
-                val r = itemWays.read(agent, run.itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
-                r != null && !r.containsKey("folders")
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                false
+            // A read that fails is tried again a few times (deny only meanwhile, AA8 "until that answer comes").
+            for (wait in cwdRetries) {
+                val ok = try {
+                    val r = itemWays.read(agent, run.itemId)?.raw?.get("run") as? kotlinx.serialization.json.JsonObject
+                    r != null && !r.containsKey("folders")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (ok != null) {
+                    local.update { it.copy(cwdAllowed = ok) }
+                    return@launch
+                }
+                kotlinx.coroutines.delay(wait)
             }
-            local.update { it.copy(cwdAllowed = ok) }
+            local.update { it.copy(cwdAllowed = false) }
         }
     }
 
