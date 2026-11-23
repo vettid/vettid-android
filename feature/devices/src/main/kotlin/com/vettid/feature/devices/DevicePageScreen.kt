@@ -96,6 +96,9 @@ data class DevicePageActions(
     val onOpenRule: (String) -> Unit = {},
     val onRetryRules: () -> Unit = {},
     val onRuleSavedShown: () -> Unit = {},
+    /** AA7: Items it may use (an item id), and Try again. */
+    val onOpenWayItem: (String) -> Unit = {},
+    val onRetryWayItems: () -> Unit = {},
     /** AA3: Other permissions (a grant id) and the paused banner. */
     val onRemovePermission: (String) -> Unit = {},
     val onRetryPermissions: () -> Unit = {},
@@ -235,8 +238,7 @@ private fun PageContent(state: DeviceUiState, d: DeviceInfo, actions: DevicePage
         }
         state.failure?.let { f -> FailureNotice(state, f, DeviceText.sentenceName(d), actions.onDismissFailure) }
         AccessCard(d, now, busy = state.busy, onEndAccess = actions.onEndAccess, acting = acting)
-        if (acting && d.isAgent) RulesCard(state, actions)
-        if (acting && d.isAgent) PermissionsCard(state, actions)
+        if (acting && d.isAgent) AgentCards(state, actions)
         DetailCard(Modifier.testTag("about_card")) {
             CardTitle(stringResource(R.string.devices_about))
             InfoLine(stringResource(R.string.devices_role), DeviceText.role(d))
@@ -362,6 +364,51 @@ private fun RulesCard(state: DeviceUiState, actions: DevicePageActions) {
             enabled = !state.atRuleLimit,
             modifier = Modifier.testTag("rule_add"),
         )
+    }
+}
+
+/** An agent's cards: What it may use (AA4), Items it may use (AA7, only with a vault that lists `item_ways`), Other permissions (AA3). */
+@Composable
+private fun AgentCards(state: DeviceUiState, actions: DevicePageActions) {
+    RulesCard(state, actions)
+    if (state.itemWays) WayItemsCard(state, actions)
+    PermissionsCard(state, actions)
+}
+
+/**
+ * "Items it may use" (ANDROID-PLAN 0.1.137 AA7): one row per item the agent's rules include, its name from the item cache
+ * and the ways it allows; a tap opens the item's page.
+ */
+@Composable
+private fun WayItemsCard(state: DeviceUiState, actions: DevicePageActions) {
+    DetailCard(Modifier.testTag("way_items_card")) {
+        CardTitle(stringResource(R.string.ways_items_title))
+        if (state.wayItemsError != null) {
+            Text(stringResource(R.string.ways_items_failed), modifier = Modifier.testTag("way_items_failed"))
+            TextButton(onClick = actions.onRetryWayItems) { Text(stringResource(R.string.devices_retry)) }
+        }
+        state.wayItems.forEach { row ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = Spacing.touchTarget)
+                    .clickable(role = Role.Button) { actions.onOpenWayItem(row.itemId) }
+                    .semantics(mergeDescendants = true) {}
+                    .padding(vertical = Spacing.xs)
+                    .testTag("way_item_${row.itemId}"),
+            ) {
+                Text(
+                    row.name ?: stringResource(if (row.namesLoaded) R.string.ways_item_gone else R.string.ways_item_loading),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    row.ways.map { stringResource(WaysText.shortRes(it)) }.joinToString(stringResource(R.string.ways_short_join)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

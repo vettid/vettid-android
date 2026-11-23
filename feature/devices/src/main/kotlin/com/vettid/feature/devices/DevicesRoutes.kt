@@ -37,6 +37,15 @@ data class PairRoute(val held: Boolean = false, val desktop: Boolean = false) {
     }
 }
 
+/** How an agent may use one item (ANDROID-PLAN 0.1.137 AA7), by the agent's `device_id` and the item's id. */
+@Serializable
+data class ItemWaysRoute(val agentId: String, val itemId: String) {
+    companion object {
+        const val AGENT = "agentId"
+        const val ITEM = "itemId"
+    }
+}
+
 /** What the Devices & agents destinations need from the app shell. */
 data class DevicesHost(
     val navigate: (Any) -> Unit,
@@ -45,6 +54,8 @@ data class DevicesHost(
     val onOpenHistory: (String) -> Unit,
     /** The daily owner check (a refused pairing request says it is due). */
     val onOwnerCheck: () -> Unit = {},
+    /** The credential alarm (AA7: a widening refused while an alarm is open). */
+    val onOpenAlarm: () -> Unit = {},
 )
 
 /** Registers the list and a device's page. */
@@ -75,6 +86,11 @@ fun NavGraphBuilder.devicesDestination(chrome: ShellChrome, host: DevicesHost) {
         val state by vm.uiState.collectAsStateWithLifecycle()
         DevicePageContent(vm, state, host)
     }
+    composable<ItemWaysRoute> {
+        val vm: ItemWaysViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        ItemWaysContent(vm, state, host)
+    }
 }
 
 @Composable
@@ -100,6 +116,8 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onOpenRule = { rule -> state.device?.let { host.navigate(AgentRuleRoute(it.id, rule)) } },
             onRetryRules = vm::refreshRules,
             onRuleSavedShown = vm::ruleSavedShown,
+            onOpenWayItem = { item -> state.device?.let { host.navigate(ItemWaysRoute(it.id, item)) } },
+            onRetryWayItems = vm::refreshWayItems,
             onRemovePermission = vm::askRemovePermission,
             onRetryPermissions = vm::refreshPermissions,
             onResume = vm::resume,
@@ -107,6 +125,55 @@ private fun DevicePageContent(vm: DeviceViewModel, state: DeviceUiState, host: D
             onRemovedNoticeShown = vm::removedNoticeShown,
         ),
         now = rememberNow(),
+    )
+}
+
+@Composable
+private fun ItemWaysContent(vm: ItemWaysViewModel, state: ItemWaysUiState, host: DevicesHost) {
+    // Shown again (from another screen or app): read again if the member holds nothing (the view model decides).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.returned() }
+    LaunchedEffect(state.ownerCheck) {
+        if (!state.ownerCheck) return@LaunchedEffect
+        vm.ownerCheckShown()
+        host.onOwnerCheck()
+    }
+    ItemWaysScreen(
+        state,
+        ItemWaysActions(
+            onBack = host.onBack,
+            onSave = vm::save,
+            onRetry = vm::retry,
+            onShowCurrent = vm::load,
+            onRun = vm::setRun,
+            onProxy = vm::setProxy,
+            onReveal = vm::setReveal,
+            onEach = vm::setEach,
+            onConfirm = vm::confirm,
+            onDismissConfirm = vm::dismissConfirm,
+            onProgramInput = vm::setProgramInput,
+            onAddProgram = vm::addProgram,
+            onOpenProgram = vm::openProgram,
+            onCloseProgram = { vm.closeProgram() },
+            onEditInput = vm::setEditInput,
+            onApplyEdit = { vm.applyEdit() },
+            onRemoveProgram = vm::removeProgram,
+            onForgetPin = vm::forgetPin,
+            onShowPin = vm::showFullPin,
+            onVariableInput = vm::setVariableInput,
+            onAddVariable = vm::addVariable,
+            onRemoveVariable = vm::removeVariable,
+            onHostInput = vm::setHostInput,
+            onAddHost = vm::addHost,
+            onRemoveHost = vm::removeHost,
+            onHeader = vm::setHeader,
+            onPrefix = vm::setPrefix,
+            onPassword = vm::setPassword,
+            onSubmitPassword = vm::submitPassword,
+            onDismissPrompt = vm::dismissPrompt,
+            onOpenAlarm = host.onOpenAlarm,
+            onNoticeShown = vm::noticeShown,
+            onCloseWindowNow = vm::closeWindowNow,
+        ),
     )
 }
 

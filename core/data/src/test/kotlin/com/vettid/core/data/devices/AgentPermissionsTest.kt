@@ -173,6 +173,21 @@ class AgentPermissionsTest {
         assertEquals(AgentChange.Rule(null), AgentChange.of(sync("""{"kind":"share.rule.deleted"}""")))
     }
 
+    /** AA7: `leash.item.changed` names its agent and item; no `version` means the settings were deleted. */
+    @Test
+    fun itemEventsNameTheirAgentItemAndVersion() {
+        assertEquals(AgentChange.Item("a1", "i1", 4), AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1","version":4}""")))
+        assertEquals(AgentChange.Item("a1", "i1", null), AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1"}""")))
+        assertEquals(
+            "a version that does not read is no deletion",
+            AgentChange.Item("a1", "i1", null, deleted = false),
+            AgentChange.of(sync("""{"kind":"leash.item.changed","agent_id":"a1","item_id":"i1","version":"x"}""")),
+        )
+        assertNull(AgentChange.of(sync("""{"kind":"leash.item.changed","item_id":"i1","version":4}""")))
+        assertTrue(AgentChange.Item("a1", "i1", 4).concerns("a1"))
+        assertFalse(AgentChange.Item("a2", "i1", 4).concerns("a1"))
+    }
+
     @Test
     fun otherEventsAndOtherMessagesAreNotTriggers() {
         assertNull(AgentChange.of(sync("""{"kind":"device.session","device_id":"a1"}""")))

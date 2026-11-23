@@ -73,6 +73,49 @@ sealed interface ItemWaysSave {
 }
 
 /**
+ * What an agent's page reads of how the agent may use its items (AA7): the list, never a save, so the page holds nothing
+ * that signs or opens the unlock window.
+ */
+interface ItemWaysList {
+    /** The items each agent's rules include, as last read (agent id to its list); memory only. */
+    val items: StateFlow<Map<String, List<ItemWaysRead>>>
+
+    suspend fun list(agentId: String): List<ItemWaysRead>
+}
+
+/** What the item's page knows of how an agent may use its items (ANDROID-PLAN 0.1.137 AA7); [NoItemWays] by default. */
+interface ItemWaysRepository : ItemWaysList {
+    /** A save opened the window and could not lock it again (the votes' notice, with **Close it now**). */
+    val windowNotClosed: StateFlow<WindowNotClosed?>
+
+    suspend fun read(agentId: String, itemId: String): ItemWaysRead?
+
+    suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean = false): ItemWaysSave
+
+    suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave
+
+    suspend fun closeWindowNow()
+}
+
+/** No vault: nothing listed, nothing read or saved. */
+object NoItemWays : ItemWaysRepository {
+    override val items: StateFlow<Map<String, List<ItemWaysRead>>> = MutableStateFlow(emptyMap())
+    override val windowNotClosed: StateFlow<WindowNotClosed?> = MutableStateFlow(null)
+
+    override suspend fun list(agentId: String): List<ItemWaysRead> = throw VaultFailure(FailureKind.OTHER, "no_vault")
+
+    override suspend fun read(agentId: String, itemId: String): ItemWaysRead? = throw VaultFailure(FailureKind.OTHER, "no_vault")
+
+    override suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean): ItemWaysSave =
+        ItemWaysSave.Failed(VaultFailure(FailureKind.OTHER, "no_vault"))
+
+    override suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave =
+        ItemWaysSave.Failed(VaultFailure(FailureKind.OTHER, "no_vault"))
+
+    override suspend fun closeWindowNow() = Unit
+}
+
+/**
  * How an agent may use its items (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11): `leash.item.list` and
  * `leash.item.set`. The list is held in memory only, per agent, and cleared at lock and at the hold ([clear]). A save that
  * widens ([ItemWaysRules.widens]) asks for the password every time and opens the unlock window with it (decision 4, as
@@ -88,7 +131,7 @@ class ItemWaysManager(
     /** The window's length, for the notice of a lock that failed. */
     private val unlockTtl: suspend () -> Int? = { null },
     private val now: () -> Instant = Instant::now,
-) {
+) : ItemWaysRepository {
     private val lock = Any()
     private val held = MutableStateFlow<Map<String, List<ItemWaysRead>>>(emptyMap())
     private val notClosed = MutableStateFlow<WindowNotClosed?>(null)
@@ -97,10 +140,10 @@ class ItemWaysManager(
     private var generation = 0
 
     /** The items each agent's rules include, as last read (agent id to its list). */
-    val items: StateFlow<Map<String, List<ItemWaysRead>>> = held.asStateFlow()
+    override val items: StateFlow<Map<String, List<ItemWaysRead>>> = held.asStateFlow()
 
     /** A save opened the window and could not lock it again (the votes' notice, with **Close it now**). */
-    val windowNotClosed: StateFlow<WindowNotClosed?> = notClosed.asStateFlow()
+    override val windowNotClosed: StateFlow<WindowNotClosed?> = notClosed.asStateFlow()
 
     /** At lock, the hold and a wipe: nothing is kept, and nothing read before it is kept after it. */
     fun clear() {
@@ -111,13 +154,13 @@ class ItemWaysManager(
     }
 
     /** **Close it now**: locks the window; the notice goes only when that went through. */
-    suspend fun closeWindowNow() {
+    override suspend fun closeWindowNow() {
         withContext(NonCancellable) { closeWindow() }
         notClosed.value = null
     }
 
     /** Reads the items [agentId]'s rules include (`leash.item.list{agent_id}`) and holds them. */
-    suspend fun list(agentId: String): List<ItemWaysRead> {
+    override suspend fun list(agentId: String): List<ItemWaysRead> {
         val gen = synchronized(lock) { generation }
         val read = ItemWaysRules.list(vaultGuard(resend = true) { ops().list(agentId, null) }, agentId) ?: throw unreadable()
         synchronized(lock) {
@@ -128,7 +171,7 @@ class ItemWaysManager(
     }
 
     /** Reads one item's settings (`leash.item.list{agent_id, item_id}`): null when no rule of the agent includes it. */
-    suspend fun read(agentId: String, itemId: String): ItemWaysRead? {
+    override suspend fun read(agentId: String, itemId: String): ItemWaysRead? {
         val gen = synchronized(lock) { generation }
         val answer = vaultGuard(resend = true) { ops().list(agentId, itemId) }
         val read = (ItemWaysRules.list(answer, agentId) ?: throw unreadable()).firstOrNull { it.itemId == itemId }
@@ -148,7 +191,7 @@ class ItemWaysManager(
      * narrowing is sent without one. [resent] is true when this request follows one prompt after `credential_locked`.
      */
     @Suppress("ReturnCount", "NestedBlockDepth") // each early answer is one of the plan's outcomes
-    suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean = false): ItemWaysSave {
+    override suspend fun save(cur: ItemWaysRead, next: ItemWays, password: String?, resent: Boolean): ItemWaysSave {
         // A read-only page saves only through turnOff: nothing is sent.
         val base = cur.ways ?: return ItemWaysSave.Failed(unreadable())
         // Settings of another item, or of another version than the one read, can't be compared with these: judged a
@@ -188,13 +231,13 @@ class ItemWaysManager(
      * A read-only page's save (AA7 "Fail closed"): [way] turned off, everything else as read. It only narrows, so it is
      * never followed by the password prompt: `credential_locked` is [ItemWaysSave.ReadOnlyLocked] and nothing is resent.
      */
-    suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave {
+    override suspend fun turnOff(cur: ItemWaysRead, way: String): ItemWaysSave {
         val body = ItemWaysRules.withoutWay(cur, way) ?: return ItemWaysSave.Failed(unreadable())
         return send(body, cur.agentId to cur.itemId, resent = false, readOnly = true)
     }
 
-    @Suppress("ReturnCount")
     /** Sends [body]; an answer that is not the settings of [sent] (agent, item) is not taken as saved. */
+    @Suppress("ReturnCount")
     private suspend fun send(body: JsonObject, sent: Pair<String, String>, resent: Boolean, readOnly: Boolean): ItemWaysSave {
         val gen = synchronized(lock) { generation }
         val answer = try {

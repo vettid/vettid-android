@@ -32,6 +32,7 @@ class PhaseFollowTest {
             clearSharing = { ran += PhaseSteps.SHARING },
             clearFeed = { ran += PhaseSteps.FEED },
             clearDevices = { ran += PhaseSteps.DEVICES },
+            clearItemWays = { ran += PhaseSteps.ITEM_WAYS },
             clearVotes = { ran += PhaseSteps.VOTES },
             clearPresence = { ran += PhaseSteps.PRESENCE },
             clearLocation = { ran += PhaseSteps.LOCATION },
@@ -79,7 +80,7 @@ class PhaseFollowTest {
         // Not the feed's or the release check's: the opening reset both for itself (and may be in a blip already).
         val clears = listOf(
             PhaseSteps.SOCIAL, PhaseSteps.ATTACHMENTS, PhaseSteps.ITEMS, PhaseSteps.SHARING, PhaseSteps.DEVICES,
-            PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION,
+            PhaseSteps.ITEM_WAYS, PhaseSteps.VOTES, PhaseSteps.PRESENCE, PhaseSteps.LOCATION,
         )
         // The lock's clears and the profile's forget, then the opening's steps, its reads due again; no replay for Locked.
         assertEquals(
@@ -178,7 +179,8 @@ class PhaseFollowTest {
     fun aFailedMissedCloseIsNotHiddenByTheOpening() = runTest {
         val steps = PhaseSteps.of(
             replay = {}, forgetOpenVault = {}, clearAttachments = {}, clearItems = { error("items") }, clearSharing = {},
-            clearFeed = {}, clearDevices = {}, clearVotes = {}, clearPresence = {}, clearLocation = {}, clearReleaseCheck = {},
+            clearFeed = {}, clearDevices = {}, clearItemWays = {}, clearVotes = {}, clearPresence = {},
+            clearLocation = {}, clearReleaseCheck = {},
             ownProfile = {},
         )
         val thrown = runCatching {

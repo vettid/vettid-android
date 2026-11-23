@@ -348,4 +348,12 @@ class ItemWaysTest {
         assertTrue(ItemWaysRules.widens(null, bound()))
         assertFalse(ItemWaysRules.widens(null, ItemWays("a1", "i1")))
     }
+
+    @Test
+    fun emptyFoldersAreTheSameSettingsAsNone() {
+        val a = ItemWays("a1", "i1", 1, setOf(ItemWay.USE, ItemWay.RUN), RunSettings(listOf(RunProgram("gh"))))
+        assertTrue(ItemWaysRules.sameSettings(a, a.copy(run = a.run!!.copy(folders = emptyList()))))
+        assertFalse(ItemWaysRules.sameSettings(a, a.copy(run = a.run!!.copy(each = false))))
+        assertFalse(ItemWaysRules.sameSettings(a, a.copy(version = 2)))
+    }
 }

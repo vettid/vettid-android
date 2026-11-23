@@ -132,8 +132,11 @@ data class ItemWays(
  * closed"); [readOnly] otherwise. [raw] is the answer as read (decoded leniently), which a read-only page's narrowing
  * save sends back with one way taken out ([ItemWaysRules.withoutWay]); [rawWays] are the ways it lists, as wire strings,
  * so such a page can still offer to turn each off.
+ *
+ * Not a value: two reads are never equal, even of the same answer (it holds the strict tree, which compares by identity).
+ * Compare [ways] (or [agentId] and [itemId]) instead.
  */
-data class ItemWaysRead(
+class ItemWaysRead(
     val agentId: String,
     val itemId: String,
     val ways: ItemWays?,
@@ -148,6 +151,12 @@ data class ItemWaysRead(
 
     /** The vault's answer held `run.folders` (VAULT-MESSAGING 0.93.0): AA9's folders settings may be shown. */
     val foldersKnown: Boolean get() = ways?.run?.folders != null
+
+    /** The answer carries `run.folders`, read or not (a read-only page's "Stop runs" text says the folders go too). */
+    val answerHasFolders: Boolean get() = (raw["run"] as? JsonObject)?.containsKey("folders") == true
+
+    /** The same read, listed for another agent than the one asked about: read only. */
+    fun asForeign(): ItemWaysRead = ItemWaysRead(agentId, itemId, ways = null, raw, rawWays, strict, foreign = true)
 
     override fun toString(): String = "ItemWaysRead"
 }
@@ -248,7 +257,7 @@ object ItemWaysRules {
     }
 
     /** Lower case rune by rune with the simple mapping, as Go's `strings.ToLower` (no final sigma, `İ` one rune). */
-    private fun simpleLower(s: String): String {
+    fun simpleLower(s: String): String {
         val b = StringBuilder(s.length)
         var i = 0
         while (i < s.length) {
@@ -364,6 +373,11 @@ object ItemWaysRules {
 
     private fun isSha256(s: String): Boolean = s.length == SHA256_HEX && s.all { it in '0'..'9' || it in 'a'..'f' }
 
+    /** [a] and [b] are the same settings, a `run.folders` of `[]` counting as none (the vault may answer either way). */
+    fun sameSettings(a: ItemWays, b: ItemWays): Boolean = norm(a) == norm(b)
+
+    private fun norm(w: ItemWays): ItemWays = w.copy(run = w.run?.let { r -> r.copy(folders = r.folders?.takeIf { it.isNotEmpty() }) })
+
     /**
      * Whether [next] allows more than [cur] (VAULT-MESSAGING §10.11 "Widening needs the member", as vettid-vault's
      * `Widens`): a way, a program or a host added, programs emptied, a variable added to a program, Ask me before each run
@@ -419,7 +433,7 @@ object ItemWaysRules {
         val strict = runCatching { StrictJson.parseObject(answer).array("items") }.getOrNull()?.takeIf { it.size == items.size }
         return items.mapIndexed { i, raw ->
             val r = read(raw, strict?.get(i) as? StrictObject)
-            if (agentId != null && r.agentId != agentId) r.copy(ways = null, foreign = true) else r
+            if (agentId != null && r.agentId != agentId) r.asForeign() else r
         }
     }
 
@@ -530,8 +544,9 @@ object ItemWaysRules {
 
     /**
      * A read-only page's save of [way] turned off (AA7 "Fail closed"): the settings exactly as read, with the way taken
-     * out of `ways` and its member removed; every other member, unknown ones included, as its exact source text (a number
-     * is sent as it was written). It only narrows. Null when [way] can't be turned off: `use`, a way not listed, `ways`
+     * out of `ways` and its member removed; every other member, unknown ones included, with the same value: a number as
+     * its exact source text, a string with the same characters (re-escaped, so its escapes may be written differently).
+     * It only narrows. Null when [way] can't be turned off: `use`, a way not listed, `ways`
      * that is not a list of strings, an answer that did not read strictly (a duplicate member: which copy the vault holds
      * is not known), or another agent's item.
      */
@@ -563,8 +578,9 @@ object ItemWaysRules {
     private fun ownMember(way: String): Boolean = way !in TOP || way == ItemWay.RUN.wire || way == ItemWay.PROXY.wire
 
     /**
-     * [v] as it was written: numbers and strings as their source text (kotlinx would write a number back through a
-     * `Long` or `Double`: `1e2` as `100.0`, a big integer rounded), objects and arrays member by member.
+     * [v] with the value it was read with: a number as its source text (kotlinx would write a number back through a
+     * `Long` or `Double`: `1e2` as `100.0`, a big integer rounded), a string as its decoded characters (escaped again
+     * when sent), objects and arrays member by member.
      */
     @OptIn(ExperimentalSerializationApi::class)
     private fun exact(v: StrictValue): JsonElement = when (v) {

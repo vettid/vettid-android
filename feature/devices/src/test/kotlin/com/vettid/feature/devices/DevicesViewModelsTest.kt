@@ -37,7 +37,7 @@ class DevicesViewModelsTest {
     private val sharing = com.vettid.core.testing.FakeSharing()
     private val devices = FakeDevices().apply { this.devices.value = listOf(phone, agent, desktop) }
 
-    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, com.vettid.core.testing.FakeSocial())
+    private fun page(id: String) = DeviceViewModel(SavedStateHandle(mapOf(DeviceRoute.ARG to id)), devices, sharing, com.vettid.core.testing.FakeSocial(), com.vettid.core.data.devices.NoItemWays, com.vettid.core.testing.FakeItems())
 
     /** What a hold does to the list in memory (`DevicesManager.clear()`): empty, not loaded. */
     private fun holdClears() {
@@ -383,7 +383,11 @@ class DevicesViewModelsTest {
         // The page's ViewModel holds the devices repository and, since AA4, the sharing repository to read the agent's rules:
         // ending access, removing and reading the rules (and, since AA3, removing a permission or resuming, with the connections' names) sign nothing (no password, no unlock window, no rule saved).
         val ctor = DeviceViewModel::class.java.constructors.single()
-        assertEquals(listOf("SavedStateHandle", "DevicesRepository", "SharingRepository", "ConnectionsRepository"), ctor.parameterTypes.map { it.simpleName })
+        // (AA7) The items it may use: their list and the items' names, both read only (the item's page saves, not this one).
+        assertEquals(
+            listOf("SavedStateHandle", "DevicesRepository", "SharingRepository", "ConnectionsRepository", "ItemWaysList", "ItemsRepository"),
+            ctor.parameterTypes.map { it.simpleName },
+        )
         val vm = page("a1")
         advanceUntilIdle()
         vm.refreshRules()

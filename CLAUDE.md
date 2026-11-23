@@ -345,22 +345,45 @@ The A2 exit test:
   `devices.page_agent_rules_warning`, `devices.page_agent_rules_none`, `devices.page_agent_rules_failed`, `devices.page_agent_rules_limit`,
   `devices.page_agent_rule_saved`, `devices.pair_paired_unknown`.
 
-- How an agent may use an item (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11 "Ways to use a secret"), **data layer only so far**
-  (the next PR brings the screens, and with them `sync.event{leash.item.changed}` (a re-read, the mid-edit notice, no `version`
-  meaning deleted, a pin recorded by an approval), the re-read on `share.rule.*`, and the `item_ways` capability gate (decision 17);
-  none of these is handled yet): `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
+- How an agent may use an item (ANDROID-PLAN 0.1.137 AA7; VAULT-MESSAGING §10.11 "Ways to use a secret"; texts owner-approved
+  2026-11-22, GC #16443, the plan's NEW texts and its seven open items, in `feature/devices/.../strings_item_ways.xml`, held by
+  `ItemWaysTextTest`; the few the plan does not give are marked `new (app)`, not approved). **Only with a vault that lists
+  `item_ways`** (`SharingRepository.itemWays`, decision 17): the agent's page shows **Items it may use** (`WayItemsCard`, after What
+  it may use) from `leash.item.list{agent_id}` (`DeviceViewModel.readWayItems`, through the read-only `ItemWaysList`: the page holds
+  nothing that saves; read with the page, on every return, on `share.rule.*` and on `sync.event{leash.item.changed}` for this
+  agent, `AgentChange.Item`), each row the item's name from the item cache ("An item you no longer have", "Loading…" while the cache
+  loads) and its ways joined by " · "; a tap opens **the item's page** (`ItemWaysRoute(agentId, itemId)`, `ItemWaysViewModel`,
+  `ItemWaysScreen`): the four switches (use always on; reveal turned on only after the history warning; run and API off only after
+  their confirmations), the run settings (programs shown by AA8's string rule, `ShownStringBox` / `ShownString`: LRI+LRO, escapes as
+  `U+XXXX`, spaces marked, other than printable ASCII highlighted with the look-alike line; variables; the fingerprint, 16 digits, all
+  64 on a tap, **Forget fingerprint** confirmed and sent with Save; the batch-file line; the #636 advice while Ask me before each run is
+  off, `ProgramAdvice`), each program's page (its text changed = removed and added, its fingerprint forgotten; variables; Remove
+  program, the last one confirmed: a widening), Ask me before each run (off only with a program, confirmed; emptying the list turns it
+  back on), and the API settings (hosts lowercased, the last one not removable; "Authorization" and "Bearer " filled in; the preview
+  with the prefix's spaces marked). Nothing is sent while the member edits; **Save** sends one `leash.item.set` through
+  `ItemWaysRepository.save` and shows the vault's answer; a widening opens the password sheet ("Letting <agent> do more with <item>…");
+  each answer has its text; an event while the draft holds changes shows "Another device changed these settings." with **Show the
+  current ones**, one with no `version` says the item is no longer included and nothing is saved; `not_found` to a save says so and goes
+  back. A read-only page shows its notice and offers only Turn off on the ways that are on. The page reports `HoldsInput` (it is on
+  `ShellOverlayRulesTest`'s list) and its dialogs and sheet are the shell-aware ones. The text fields turn off autocorrect and
+  capitals and are kept out of autofill (`excludeFromAutofill`). A read-only page whose turn-off could never be sent (no strict reading, another agent's item: `ItemWaysUiState.canTurnOff`) offers no switch. Back on the page with nothing unsaved it reads again (`returned()`: this phone's own approval of a run records a pin with no `leash.item.changed` to this phone); Try again after a failed read keeps unsaved changes (`retry()`); an event is a deletion only with no `version` (`AgentChange.Item.deleted`; one that does not read re-reads); a `run.folders` of `[]` is the same settings as none (`ItemWaysRules.sameSettings`); a program name or path inside a sentence goes by the string rule's inline form (`ShownString.inline`: isolated, `⟨U+XXXX⟩`, `·`). Tests: `ItemWaysViewModelTest`, `ItemWaysPageTest`, `ItemWaysTextTest`, `WayItemsPageViewModelTest`. Catalog:
+  `devices.page_agent_items`, `devices.page_agent_items_failed`, `devices.item_ways`, `devices.item_ways_none`,
+  `devices.item_ways_read_only`, `devices.item_ways_program`, `devices.item_ways_pin_full`, `devices.item_ways_reveal_on`,
+  `devices.item_ways_run_off`, `devices.item_ways_proxy_off`, `devices.item_ways_each_off`, `devices.item_ways_remove_last`,
+  `devices.item_ways_forget_pin`, `devices.item_ways_password`, `devices.item_ways_alarm`, `devices.item_ways_program_refused`,
+  `devices.item_ways_host_refused`, `devices.item_ways_changed_elsewhere`, `devices.item_ways_not_included`, `devices.item_ways_bad_request`, `devices.item_ways_bad_request_fallback`. The data layer: `leash.item.list` / `leash.item.set` in `LeashApi.kt` return the answer's exact bytes
   (`VaultDevice.opRaw`) so `ItemWaysRules` (`:core:data` `devices/ItemWays.kt`) reads `item_ways` with `StrictJson` (duplicates
   refused). **Fail closed:** an unknown member at any level, an unknown way, `run`/`proxy` without its way or the reverse, any
   malformed value, and (until AA9) a non-empty `run.folders` make it read only (`ItemWaysRead.ways == null`); a read-only page saves
   only `withoutWay` (the way and its member taken out, everything else as read: built from the strict reading, numbers as written
   (`JsonUnquotedLiteral`), unknown members included; none when the answer did not read strictly (a duplicate member) or for another
-  agent's item, `ItemWaysRead.foreign`). The checks mirror
+  agent's item, `ItemWaysRead.foreign`; `ItemWaysRead` is not a value: two reads are never equal, compare its `ways`). The checks mirror
   vettid-vault's `itemspec` (`programProblem`, `programKey`, `duplicates`, `variableProblem` (the form only: the vault's refused names
   are not copied), `hostProblem`, `headerValid`, `prefixValid`), and `widens` mirrors its `Widens`. `ItemWaysManager`
   (`VaultManager.itemWays`, cleared with the devices list): a widening returns `NeedsPassword` without one, and with one opens the
   window through the app's own path every time (decision 4) and locks it after when it was closed (30 s margin); a narrowing is sent
-  without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend; a read-only save's is
-  `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (the vault's `detail` text), the owner
+  without the prompt; `credential_locked` → `CredentialLocked` then `LockedAgain` on the resend (the page also turns a resend's `CredentialLocked` into `LockedAgain`: one resend, whatever the repository says); a read-only save's is
+  `ReadOnlyLocked` (nothing resent); `conflict`, `not_found` (`NotIncluded`), `bad_request` (ANDROID-PLAN 0.1.138: a card on the page, the vault's `error.message` in a monospace span of the approved sentence when it is 1 to 200 bytes of printable ASCII (`VaultReason`), else the fallback text, `ways_bad_request_fallback`, new and not approved; cleared by the next edit or save), the owner
   check, an alarm (`AlarmOpen`) and the prompt's own refusals (`PasswordRefused`); a lock that fails is `windowNotClosed`
   (**Close it now**, as AA4). Settings of another item or another `version` than the one read are judged a widening; an answer that is not the settings sent
   (another item, `{}`) is `unreadable_settings`, not saved; `BadRequest` prints no vault text. A list answer that is not a

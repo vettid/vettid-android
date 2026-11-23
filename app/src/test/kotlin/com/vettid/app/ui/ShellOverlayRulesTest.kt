@@ -35,6 +35,7 @@ class ShellOverlayRulesTest {
         val allowed = setOf(
             "feature/approvals/src/main/kotlin/com/vettid/feature/approvals/ApprovalsScreen.kt",
             "feature/connections/src/main/kotlin/com/vettid/feature/connections/ConnectFlowScreens.kt",
+            "feature/devices/src/main/kotlin/com/vettid/feature/devices/ItemWaysScreen.kt",
             "feature/connections/src/main/kotlin/com/vettid/feature/connections/ShareLocation.kt",
             "feature/connections/src/main/kotlin/com/vettid/feature/connections/LocationViews.kt",
             "feature/items/src/main/kotlin/com/vettid/feature/items/ItemEditScreen.kt",

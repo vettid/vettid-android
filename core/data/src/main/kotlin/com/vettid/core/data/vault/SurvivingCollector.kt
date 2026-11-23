@@ -178,7 +178,7 @@ internal class PhaseSteps private constructor(
             /** Told the phase: [AppPhase.Unreachable] is no close, and the opening may continue (ANDROID-PLAN 0.1.134). */
             clearFeed: (AppPhase) -> Unit,
             clearDevices: () -> Unit,
-            clearItemWays: () -> Unit = {},
+            clearItemWays: () -> Unit,
             clearVotes: () -> Unit,
             clearPresence: () -> Unit,
             clearLocation: () -> Unit,
