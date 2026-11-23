@@ -124,8 +124,9 @@ object HeldRequests {
 
     /**
      * [pending] is the whole `approval.pending` (or its `pending.list` entry) read strictly, or null when it did not read so
-     * (a duplicate member) or its source text is not known: an agent's `item.run`, `item.proxy` and `item.get` are then
-     * deny-only (AA8 "Fail closed"; VAULT-MESSAGING 0.93.2 §6.8 step 1). The other ops follow §10.1 and read [body].
+     * (a duplicate member) or its source text is not known: every agent op is then deny only (AA8 "Fail closed";
+     * VAULT-MESSAGING 0.93.2 §6.8 step 1). A run, a proxy and a reveal are deny only on any member this version does not
+     * know; an `item.use` and a `catalog` ignore an unknown member, but not one that changes what approving means.
      */
     fun of(role: String?, type: String?, body: JsonObject?, pending: StrictObject? = null): HeldRequest = when {
         role == "desktop" -> HeldRequest.DesktopStepUp
