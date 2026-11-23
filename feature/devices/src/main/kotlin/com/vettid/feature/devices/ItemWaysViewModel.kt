@@ -172,6 +172,27 @@ data class ItemWaysUiState(
         }
     }
 
+
+    /**
+     * After a read [r] that is the latest (see `load`): [force] starts the page again; otherwise the same version is taken
+     * in quietly when nothing changed or the draft can follow it, a new one (or any change while the member holds
+     * something, or [keep]) is kept with the notice, and else the page starts again from [r].
+     */
+    internal fun afterRead(r: ItemWaysRead, force: Boolean, keep: Boolean, before: ItemWays?): ItemWaysUiState {
+        val cur = read
+        val clean = draft == cur?.ways
+        return when {
+            !force && cur != null && r.ways?.version == cur.ways?.version && (r.ways == cur.ways || clean) ->
+                copy(read = r, draft = if (clean) r.ways else draft, notIncluded = false)
+            // Kept, on the read it was made from: its save meets the vault's `conflict`, with no prompt.
+            !force && (keep || busy || draft != before) -> copy(notIncluded = false, changedElsewhere = true)
+            else -> copy(
+                read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
+                openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
+            )
+        }
+    }
+
     override fun toString(): String = "ItemWaysUiState"
 }
 
@@ -228,7 +249,8 @@ class ItemWaysViewModel @Inject constructor(
     /**
      * Reads the settings. Only the latest read is applied. [force] (opening, Show the current ones, a conflict) starts the
      * page again from them. Otherwise (an event's or a return's re-read, Try again with something held):
-     * - the same version is taken in quietly (a recorded pin), a clean draft following it, nothing else touched;
+     * - the same version is taken in quietly (a recorded pin), a clean draft following it, nothing else touched; with
+     *   a changed draft only when nothing else changed (else the next case, so the draft and its read stay together);
      * - a new version while the member holds anything, or changed the draft while the read was out, or [keep], keeps all
      *   of it with "Another device changed these settings." (AA7 "While the page is open");
      * - else the page starts again from the new version.
@@ -244,14 +266,7 @@ class ItemWaysViewModel @Inject constructor(
                     when {
                         n != loads -> it
                         r == null -> it.copy(notIncluded = true, prompt = null)
-                        !force && it.read != null && r.ways?.version == it.read.ways?.version ->
-                            it.copy(read = r, draft = if (it.draft == it.read.ways) r.ways else it.draft, notIncluded = false)
-                        // Kept, on the read it was made from: its save meets the vault's `conflict`, with no prompt.
-                        !force && (keep || it.busy || it.draft != before) -> it.copy(notIncluded = false, changedElsewhere = true)
-                        else -> it.copy(
-                            read = r, draft = r.ways, notIncluded = false, changedElsewhere = false,
-                            openProgram = null, editInput = "", addingHost = false, confirm = null, fullPin = null,
-                        )
+                        else -> it.afterRead(r, force, keep, before)
                     }
                 }
             } catch (e: VaultFailure) {

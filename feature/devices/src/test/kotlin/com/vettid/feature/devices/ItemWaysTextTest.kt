@@ -199,6 +199,6 @@ class ItemWaysTextTest {
         assertEquals("a⟨U+00B7⟩b", inner("a\u00B7b"))
         assertEquals("⟨U+27E8⟩U+202E⟨U+27E9⟩", inner("\u27E8U+202E\u27E9"))
         assertEquals("caf⟨U+00E9⟩", inner("caf\u00E9"))
-        assertEquals("(empty)", inner(""))
+        assertEquals("⟨(empty)⟩", inner(""))
     }
 }

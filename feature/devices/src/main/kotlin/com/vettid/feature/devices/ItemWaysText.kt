@@ -50,11 +50,11 @@ object ShownString {
      * [s] by the string rule as plain text, for a string inside a sentence (a dialog's text, a line of advice): isolated
      * and forced left to right (LRI LRO … PDF PDI), each space as `·`, and every code point outside printable ASCII as
      * `⟨U+XXXX⟩` (the approval documents' markers), since nothing here is highlighted: so a look-alike, or a literal `·`,
-     * `⟨` or `⟩`, cannot pass for something else. An empty string is [empty]. The box ([pieces]) is the full form.
+     * `⟨` or `⟩`, cannot pass for something else. An empty string is [empty] between markers. The box ([pieces]) is the full form.
      */
     fun inline(s: String, empty: String): String = buildString {
         append('\u2066').append('\u202D')
-        if (s.isEmpty()) append(empty)
+        if (s.isEmpty()) append('⟨').append(empty).append('⟩')
         pieces(s).forEach { p ->
             when (p) {
                 is ShownPiece.Text -> if (p.plain) append(p.text) else p.text.codePoints().forEach { marker(this, it) }

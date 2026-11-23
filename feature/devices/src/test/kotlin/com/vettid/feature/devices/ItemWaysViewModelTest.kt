@@ -814,4 +814,19 @@ class ItemWaysViewModelTest {
         advanceUntilIdle()
         assertEquals(2, repo.reads)
     }
+
+    /** The same version with a new pin while the draft holds a change: kept on its read, with the notice; no false "forgotten". */
+    @Test
+    fun aSameVersionPinWithAChangedDraftIsChangedElsewhere() = runTest(main.dispatcher) {
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run","reveal"],"run":{"programs":[{"program":"gh","env":[]}],"each":true}}"""
+        val m = vm()
+        advanceUntilIdle()
+        m.setReveal(false)
+        repo.current = """{"agent_id":"a1","item_id":"i1","version":1,"ways":["use","run","reveal"],"run":{"programs":[{"program":"gh","sha256":"$sha","path":"/usr/bin/gh","env":[]}],"each":true}}"""
+        m.retry()
+        advanceUntilIdle()
+        assertTrue(st(m).changedElsewhere)
+        assertNull("the read the draft was made from", st(m).read!!.ways!!.run!!.programs[0].sha256)
+        assertFalse(st(m).pinForgotten(st(m).draft!!.run!!.programs[0]))
+    }
 }
