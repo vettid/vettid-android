@@ -42,6 +42,15 @@ object AgentApprovals {
 
     private val HEX64 = Regex("[0-9a-f]{64}")
 
+    /** The members that change what approving means: on an `item.use` or a `catalog` none of them may appear (AA8). */
+    private val MEANINGFUL = setOf("flags", "previous_sha256", "previous_path", "replaces", "proxy", "folders")
+
+    /**
+     * An `item.use`'s or a `catalog`'s envelope, read strictly (so no duplicate member): none of [MEANINGFUL]. Another
+     * unknown member is ignored, as §6.8 step 1 says for these types.
+     */
+    fun plainShown(p: StrictObject): Boolean = p["body"] is StrictObject && MEANINGFUL.none { p.has(it) }
+
     /** An `item.get`'s envelope: known members only, no `proxy` or `replaces`, and `flags` at most `history`. */
     @Suppress("ReturnCount") // each early false is one rule of AA8's list
     fun getShown(p: StrictObject): Boolean {

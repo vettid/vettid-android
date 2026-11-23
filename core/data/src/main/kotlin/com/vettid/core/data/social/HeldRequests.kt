@@ -34,7 +34,7 @@ sealed interface HeldRequest {
     /**
      * `agent.request{op: "item.run"}` as ANDROID-PLAN 0.1.138 AA8 shows it, read strictly from `approval.pending` ("Fail
      * closed"; [AgentApprovals]). Everything is the vault's (`body`, `flags`, `previous_*`, `replaces`), never the app's copy
-     * of the item's settings. [env] keeps the body's order. [cwdUnflagged]: a `cwd` without `member_folder`, which a vault
+     * of the item's settings. [env] keeps the body's order. [hasCwd]: a `cwd`, here always without `member_folder`, which a vault
      * that carries `run.folders` never sends (AA8: judged against the item's settings before it may be approved).
      */
     data class ItemRun(
@@ -52,7 +52,7 @@ sealed interface HeldRequest {
         val previousPath: String?,
         val replaces: String?,
     ) : HeldRequest {
-        val cwdUnflagged: Boolean get() = cwd != null
+        val hasCwd: Boolean get() = cwd != null
 
         override fun toString(): String = "ItemRun"
     }
@@ -134,13 +134,18 @@ object HeldRequests {
     }
 
     private fun agentRequest(body: JsonObject, pending: StrictObject?): HeldRequest = when (VaultJson.str(body, "op")) {
-        "item.use" -> itemUse(body)
+        // §6.8 step 1: these ignore an unknown member, but never one that changes what approving means (AA8).
+        "item.use" -> plain(pending) { itemUse(body) }
         "item.get" -> if (pending != null && AgentApprovals.getShown(pending)) itemGet(body) else HeldRequest.Unshown
-        "catalog" -> HeldRequest.Catalog
+        "catalog" -> plain(pending) { HeldRequest.Catalog }
         "item.run" -> pending?.let { AgentApprovals.run(it) } ?: HeldRequest.Unshown
         "item.proxy" -> pending?.let { AgentApprovals.proxy(it) } ?: HeldRequest.Unshown
         else -> HeldRequest.Unshown
     }
+
+    /** [read] when [pending] read strictly and holds no member that changes what approving means; else deny only. */
+    private inline fun plain(pending: StrictObject?, read: () -> HeldRequest): HeldRequest =
+        if (pending != null && AgentApprovals.plainShown(pending)) read() else HeldRequest.Unshown
 
     /**
      * Whether [a] and [b] ask the same thing (AA8: a listed approval is compared with the one shown). [HeldRequest.ItemUse]

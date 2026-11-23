@@ -28,11 +28,11 @@ class HeldRequestsTest {
     }
 
     private fun use(data: String, extra: String = "") =
-        body("""{"op":"item.use","item_id":"i1","field_id":"f1","action":"hmac-sha256","data":"$data"$extra}""")
+        """{"op":"item.use","item_id":"i1","field_id":"f1","action":"hmac-sha256","data":"$data"$extra}"""
 
     @Test
     fun anItemUseReadsWithItsDataBytes() {
-        val h = HeldRequests.of("agent", "agent.request", use(b64("challenge".toByteArray()))) as HeldRequest.ItemUse
+        val h = held(use(b64("challenge".toByteArray()))) as HeldRequest.ItemUse
         assertEquals("i1", h.itemId)
         assertEquals("f1", h.fieldId)
         assertEquals("challenge", String(h.data))
@@ -45,13 +45,13 @@ class HeldRequestsTest {
             use("not base64!"),
             use(""), // 0 bytes
             use(b64(ByteArray(HeldRequests.MAX_DATA + 1))),
-            body("""{"op":"item.use","item_id":"i1","field_id":"f1","action":"sha1","data":"${b64(byteArrayOf(1))}"}"""),
-            body("""{"op":"item.use","field_id":"f1","action":"hmac-sha256","data":"${b64(byteArrayOf(1))}"}"""),
-            body("""{"op":"item.use","item_id":"i1","action":"hmac-sha256","data":"${b64(byteArrayOf(1))}"}"""),
+            """{"op":"item.use","item_id":"i1","field_id":"f1","action":"sha1","data":"${b64(byteArrayOf(1))}"}""",
+            """{"op":"item.use","field_id":"f1","action":"hmac-sha256","data":"${b64(byteArrayOf(1))}"}""",
+            """{"op":"item.use","item_id":"i1","action":"hmac-sha256","data":"${b64(byteArrayOf(1))}"}""",
         )
-        bad.forEach { assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", it)) }
+        bad.forEach { assertEquals(HeldRequest.Unshown, held(it)) }
         // The largest allowed data reads.
-        assertTrue(HeldRequests.of("agent", "agent.request", use(b64(ByteArray(HeldRequests.MAX_DATA)))).approvable)
+        assertTrue(held(use(b64(ByteArray(HeldRequests.MAX_DATA)))).approvable)
     }
 
     @Test
@@ -79,7 +79,7 @@ class HeldRequestsTest {
 
     @Test
     fun theCatalogIsApprovableAndRunAndProxyAreReadButNotYetApprovable() {
-        assertEquals(HeldRequest.Catalog, HeldRequests.of("agent", "agent.request", body("""{"op":"catalog"}""")))
+        assertEquals(HeldRequest.Catalog, held("""{"op":"catalog"}"""))
         assertFalse(held(RUN).approvable)
         assertFalse(held(PROXY_BODY, PROXY_NOTE).approvable)
     }
@@ -92,6 +92,9 @@ class HeldRequestsTest {
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","proxy":{"host":"a.example.com","header":"X","prefix":""}"""))
         assertTrue("a body member is not judged for a reveal", held("""{"op":"item.get","item_id":"i1","extra":1}""") is HeldRequest.ItemGet)
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","what":1"""))
+        assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","previous_sha256":"$SHA2""""))
+        assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","previous_path":"/x""""))
+        assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1"}""", ""","folders":{}"""))
         assertEquals(HeldRequest.Unshown, held("""{"op":"item.get","item_id":"i1","item_id":"i2"}"""))
         assertTrue(held("""{"op":"item.get","item_id":"i1"}""", ""","flags":["history"]""") is HeldRequest.ItemGet)
     }
@@ -235,7 +238,7 @@ class HeldRequestsTest {
 
     @Test
     fun nothingTheAgentSentIsPrinted() {
-        val h = HeldRequests.of("agent", "agent.request", use(b64("SECRETISH-CHALLENGE".toByteArray())))
+        val h = held(use(b64("SECRETISH-CHALLENGE".toByteArray())))
         assertFalse(h.toString().contains("SECRET"))
         val get = held("""{"op":"item.get","item_id":"i-private","fields":["f-private"]}""")
         assertFalse(get.toString().contains("private"))
@@ -272,7 +275,7 @@ class HeldRequestsTest {
         assertEquals("/opt/git", r.previousPath)
         assertEquals("a0", r.replaces)
         assertNull(r.cwd)
-        assertFalse(r.cwdUnflagged)
+        assertFalse(r.hasCwd)
         assertEquals("ItemRun", r.toString())
     }
 
@@ -282,7 +285,7 @@ class HeldRequestsTest {
         assertEquals(SecretHow.STDIN, r.how)
         assertNull(r.name)
         assertEquals("/home/me", r.cwd)
-        assertTrue("judged against the item's settings before approval", r.cwdUnflagged)
+        assertTrue("judged against the item's settings before approval", r.hasCwd)
         val f = run({ it.replace(""""how":"env"""", """"how":"file"""") }) as HeldRequest.ItemRun
         assertEquals(SecretHow.FILE, f.how)
     }
@@ -319,6 +322,9 @@ class HeldRequestsTest {
             "previous_sha256 not hex" to run(top = ""","flags":["program_changed"],"previous_sha256":"${SHA2.uppercase()}","previous_path":"/x""""),
             "program_changed alone" to run(top = ""","flags":["program_changed"]"""),
             "program_changed without previous_path" to run(top = ""","flags":["program_changed"],"previous_sha256":"$SHA2""""),
+            "program_changed without previous_sha256" to run(top = ""","flags":["program_changed"],"previous_path":"/opt/git""""),
+            "member_folder alone" to run(top = ""","flags":["member_folder"]"""),
+            "member_files alone" to run(top = ""","flags":["member_files"]"""),
             "previous_* without program_changed" to run(top = ""","previous_sha256":"$SHA2","previous_path":"/x""""),
             "member_folder (AA9 not built)" to run(top = ""","flags":["member_folder"],"folders":{"cwd":{"path":"/home","write":false}}"""),
             "member_files (AA9 not built)" to run({ it.replace(""""how":"env"""", """"inputs":[{"path":"/a"}],"how":"env"""") }, ""","flags":["member_files"],"folders":{}"""),
@@ -379,5 +385,32 @@ class HeldRequestsTest {
     fun withoutItsSourceTextARunOrProxyIsDenyOnly() {
         assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(RUN)))
         assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(PROXY_BODY)))
+    }
+
+    /** AA8: on an `item.use` or a `catalog`, a member that changes what approving means is deny only; another is ignored (§6.8). */
+    @Test
+    fun aUseOrACatalogWithAMemberThatChangesItsMeaningIsDenyOnly() {
+        val u = use(b64("challenge".toByteArray()))
+        val cat = """{"op":"catalog"}"""
+        val meaningful = listOf(
+            ""","replaces":"a0"""",
+            PROXY_NOTE,
+            ""","flags":["history"]""",
+            ""","flags":[]""",
+            ""","previous_sha256":"$SHA2"""",
+            ""","previous_path":"/x"""",
+            ""","folders":{}""",
+        )
+        for (top in meaningful) {
+            assertEquals(top, HeldRequest.Unshown, held(u, top))
+            assertEquals(top, HeldRequest.Unshown, held(cat, top))
+        }
+        assertEquals("all three on a catalog", HeldRequest.Unshown, held(cat, PROXY_NOTE + ""","replaces":"a0","flags":["shell"]"""))
+        assertEquals("a duplicate data member", HeldRequest.Unshown, held(u.replace(""""action"""", """"data":"AAEC","action"""")))
+        assertTrue("an unknown member is ignored", held(u, ""","later":1""") is HeldRequest.ItemUse)
+        assertEquals(HeldRequest.Catalog, held(cat, ""","later":1"""))
+        // Without its strict envelope: deny only.
+        assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(u)))
+        assertEquals(HeldRequest.Unshown, HeldRequests.of("agent", "agent.request", body(cat)))
     }
 }

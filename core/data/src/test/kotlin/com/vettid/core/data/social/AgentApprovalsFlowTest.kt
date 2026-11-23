@@ -255,4 +255,24 @@ class AgentApprovalsFlowTest {
         assertEquals(listOf("device:approval.pending:h2"), m.keys())
         assertEquals(emptyList<String>(), m.firstListedSince(0)?.map { it.key })
     }
+
+    @Test
+    fun aReplacesOnARevealRemovesNothing() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        m.onEvent(event("approval.pending", heldWith("h2", """{"op":"item.get","item_id":"i1"}""", ""","replaces":"h1"""")))
+        runCurrent()
+        assertEquals(listOf("device:approval.pending:h1", "device:approval.pending:h2"), m.keys())
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h2").held)
+    }
+
+    @Test
+    fun aListedApprovalFromAnotherDeviceIsDenyOnly() = runTest {
+        val m = manager()
+        m.onEvent(event("approval.pending", heldWith("h1", runBody())))
+        runCurrent()
+        m.refreshPendingFrom { listed(heldWith("h1", runBody()).replace(""""device_id":"A"""", """"device_id":"B"""")) }
+        runCurrent()
+        assertEquals(HeldRequest.Unshown, req(m, "device:approval.pending:h1").held)
+    }
 }
