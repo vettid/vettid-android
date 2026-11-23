@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ANDROID-PLAN 0.1.137 §4 "Approvals for runs, proxies and reveals (AA8)". Unless a line says otherwise, every string
+         here is the plan's NEW text or AGENT-PLAN §11's draft as the plan gives it, approved by the owner 2026-11-22 (GC
+         #16443: the NEW texts of card #16365, AA7 and AA8), word for word; "new (app)" marks a text the plan does not give,
+         not yet approved. AgentWayTextsTest holds them. -->
+
+    <!-- A run -->
+    <string name="approvals_run_title">%1$s wants to run a program with %2$s</string>
+    <plurals name="approvals_run_arguments_count">
+        <item quantity="one">%1$d argument</item>
+        <item quantity="other">%1$d arguments</item>
+    </plurals>
+    <plurals name="approvals_run_variables_count">
+        <item quantity="one">%1$d variable</item>
+        <item quantity="other">%1$d variables</item>
+    </plurals>
+    <!-- "<N> arguments, <M> variables, <size> in all" -->
+    <string name="approvals_run_summary">%1$s, %2$s, %3$s in all</string>
+    <string name="approvals_way_field">Field: %1$s</string>
+    <string name="approvals_run_program">Program</string>
+    <string name="approvals_run_fingerprint">Fingerprint: %1$s</string>
+    <string name="approvals_run_asked_as">Asked for as:</string>
+    <string name="approvals_run_arguments">Arguments</string>
+    <string name="approvals_run_no_arguments">No arguments</string>
+    <string name="approvals_run_secret_file">(the secret file\'s path)</string>
+    <string name="approvals_run_runs_in">Runs in</string>
+    <string name="approvals_run_new_folder">A new, empty folder of its own</string>
+    <string name="approvals_run_secret_given">Secret given as</string>
+    <string name="approvals_run_how_env">variable %1$s</string>
+    <string name="approvals_run_how_stdin">standard input</string>
+    <string name="approvals_run_how_file">a temporary file, its path in variable %1$s</string>
+    <string name="approvals_run_other_variables">Other variables</string>
+    <string name="approvals_run_none">None</string>
+
+    <!-- A run's warnings, one per flag -->
+    <string name="approvals_run_warn_shell">This program can run other programs or code given to it, so the command can do anything with your secret. Read every argument.</string>
+    <string name="approvals_run_warn_inline_code">This runs code given on the command line. It can do anything with your secret.</string>
+    <string name="approvals_run_warn_unbound">Any program could be asked for. Approve only a command you recognize.</string>
+    <string name="approvals_run_warn_unrecorded">First run of this program with this item. Fingerprint: %1$s. If you approve, later runs of this exact file may run without asking, as this item\'s settings allow.</string>
+    <string name="approvals_run_warn_changed">This program has changed since you approved it. Before: %1$s. Now: %2$s. If you did not update it, deny. If you approve, this file\'s fingerprint replaces the recorded one, and later runs of it may run without asking, as this item\'s settings allow.</string>
+    <!-- %1$s (the new path) is stressed: "moved to %1$s" -->
+    <string name="approvals_run_warn_moved">This program moved to %1$s. It was approved at %2$s. Before: %3$s. Now: %4$s. If you did not move or update it, deny. If you approve, this file\'s fingerprint replaces the recorded one, and later runs of it may run without asking, as this item\'s settings allow.</string>
+    <!-- The stressed part of approvals_run_warn_moved (bold); its words, cut out of it -->
+    <string name="approvals_run_moved_to">moved to %1$s</string>
+    <!-- new (app): the units of the summary's size, 1,024-based -->
+    <plurals name="approvals_way_bytes">
+        <item quantity="one">%1$d byte</item>
+        <item quantity="other">%1$d bytes</item>
+    </plurals>
+    <string name="approvals_way_kb">%1$s KB</string>
+    <string name="approvals_way_mb">%1$s MB</string>
+    <string name="approvals_run_approved_before">Approved before</string>
+    <string name="approvals_run_now">Now</string>
+    <string name="approvals_run_batch_file">This is a Windows batch file. Its fingerprint covers this file only, not the programs it starts (for an npm tool, node and its packages).</string>
+    <string name="approvals_run_runs_commands">This program can run other commands given in its arguments. Read every argument.</string>
+    <string name="approvals_run_pin_recorded">This program\'s fingerprint is now recorded for %1$s.</string>
+
+    <!-- A proxy -->
+    <string name="approvals_proxy_title">%1$s wants to use %2$s with %3$s for %4$s.</string>
+    <string name="approvals_proxy_body">The agent will not see it; the key is sent only to %1$s.</string>
+    <string name="approvals_proxy_sent_as">Sent as: %1$s: %2$s••••••••</string>
+    <!-- new (app): the seconds of a proxy's length, as approvals_duration_minutes -->
+    <plurals name="approvals_way_seconds">
+        <item quantity="one">%1$d second</item>
+        <item quantity="other">%1$d seconds</item>
+    </plurals>
+    <string name="approvals_proxy_ends_sooner">It may end sooner, when %1$s\'s access ends.</string>
+
+    <!-- Seeing it all before Approve -->
+    <string name="approvals_way_scroll_hint">Scroll to the end to approve.</string>
+    <string name="approvals_way_obscured">Another app is drawing over VettID, so Approve ignores taps. Close that app, then try again.</string>
+
+    <!-- Referred again -->
+    <string name="approvals_way_referred">Not done yet: something changed while you were deciding, so you are asked again.</string>
+    <string name="approvals_run_asked_again">Asked again. This item\'s settings or its recorded program changed while you were deciding. Check the details again.</string>
+    <string name="approvals_proxy_asked_again">Asked again. This item\'s API settings changed while you were deciding. Check the details again.</string>
+
+    <!-- Refused or expired -->
+    <string name="approvals_run_program_not_allowed">Approved, but this item no longer allows that program, so nothing was done.</string>
+    <string name="approvals_run_env_not_allowed">Approved, but this program may no longer receive those variables, so nothing was done.</string>
+    <string name="approvals_run_cwd_not_allowed">Approved, but that folder or file is no longer allowed for this item, so nothing was done.</string>
+    <string name="approvals_run_not_found">Approved, but the item or its field is gone, so the program was not run.</string>
+    <string name="approvals_proxy_not_found">Approved, but the item or its field is gone, so the key was not sent.</string>
+    <string name="approvals_way_forbidden">Approved, but your vault refused it, so nothing was done. %1$s may no longer have a permission that covers it, may be paused, or this request was asked again too many times.</string>
+    <string name="approvals_way_expired">This request expired, so nothing was done.</string>
+</resources>

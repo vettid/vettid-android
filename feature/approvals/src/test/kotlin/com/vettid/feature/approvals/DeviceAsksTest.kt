@@ -86,8 +86,10 @@ class DeviceAsksTest {
     fun theRestIsDenyOnlyOrTheCatalog() {
         assertSame(HeldShow.Catalog, DeviceAsks.show(held(HeldRequest.Catalog), items))
         assertTrue(DeviceAsks.show(held(HeldRequest.Catalog), items).approvable)
-        assertEquals(HeldShow.Later("Bank PIN"), DeviceAsks.show(held(heldRun("i1")), items))
-        assertEquals(HeldShow.Later(null), DeviceAsks.show(held(heldRun("gone")), items))
+        // AA8: a run is shown with its item's and field's names; one the cache cannot name is deny only.
+        assertEquals(HeldShow.Run(heldRun("i1"), "Bank PIN", "PIN"), DeviceAsks.show(held(heldRun("i1")), items))
+        assertTrue(DeviceAsks.show(held(heldRun("i1")), items).approvable)
+        assertEquals(HeldShow.NoItem(use = true), DeviceAsks.show(held(heldRun("gone")), items))
         assertSame(HeldShow.Desktop, DeviceAsks.show(held(HeldRequest.DesktopStepUp), items))
         assertSame(HeldShow.Other, DeviceAsks.show(held(HeldRequest.Unshown), items))
         assertSame(HeldShow.Other, DeviceAsks.show(held(null), items))

@@ -285,7 +285,8 @@ class DeviceApprovalsViewModelTest {
     @Test
     fun everythingTheAppCannotShowIsDenyOnly() = runTest {
         val unapprovable = listOf(
-            heldAsk(heldRun("i1")),
+            // A run of an item the phone no longer has.
+            heldAsk(heldRun("gone")),
             heldAsk(HeldRequest.DesktopStepUp),
             heldAsk(HeldRequest.Unshown),
             heldAsk(null),

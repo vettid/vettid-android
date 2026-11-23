@@ -37,6 +37,7 @@ import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
 import java.time.ZoneId
+import com.vettid.core.ui.text.ShownString
 
 /** The wall clock for "Waiting for 8 more minutes": read again every 20 seconds while shown. */
 @Composable
@@ -109,9 +110,31 @@ internal fun deviceTitle(
                 h.item?.let { AccountNames.isolate(it) }
                     ?: stringResource(if (h.loading) R.string.approvals_loading else R.string.approvals_held_no_item),
             )
+            is HeldShow.Run -> stringResource(R.string.approvals_run_title, who, AccountNames.isolate(h.item))
+            is HeldShow.Proxy -> stringResource(
+                R.string.approvals_proxy_title,
+                who,
+                AccountNames.isolate(h.item),
+                ShownString.inline(h.proxy.host, stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)),
+                proxyLength(h.proxy.seconds),
+            )
             HeldShow.Desktop, HeldShow.Other, HeldShow.Gone -> stringResource(R.string.approvals_held_other_title, who)
         }
     }
+}
+
+/** A proxy's length (AA8): hours, minutes and seconds, as many as it has ("15 minutes", "1 minute 30 seconds", "1 hour"). */
+@Composable
+internal fun proxyLength(seconds: Int): String {
+    val h = seconds / SECONDS_PER_HOUR
+    val m = seconds % SECONDS_PER_HOUR / SECONDS_PER_MINUTE
+    val s = seconds % SECONDS_PER_MINUTE
+    val parts = buildList {
+        if (h > 0) add(pluralStringResource(R.plurals.approvals_duration_hours, h, h))
+        if (m > 0) add(pluralStringResource(R.plurals.approvals_duration_minutes, m, m))
+        if (s > 0 || isEmpty()) add(pluralStringResource(R.plurals.approvals_way_seconds, s, s))
+    }
+    return parts.joinToString(" ")
 }
 
 /** A device request's row line under the title: "Agent · for 1 hour · Waiting for 8 more minutes". */
@@ -157,6 +180,8 @@ internal fun DeviceRequestScreen(
             HeldShow.Catalog -> stringResource(R.string.approvals_held_catalog_body)
             is HeldShow.NoItem -> stringResource(if (held.loading) R.string.approvals_loading else R.string.approvals_held_no_item_body)
             is HeldShow.Later -> stringResource(R.string.approvals_held_later_body)
+            // Shown on AA8's own screen (AgentWayScreen).
+            is HeldShow.Run, is HeldShow.Proxy -> null
             HeldShow.Desktop -> stringResource(R.string.approvals_held_desktop_body)
             HeldShow.Gone -> stringResource(R.string.approvals_held_gone_body, who)
             HeldShow.Other, null -> stringResource(R.string.approvals_held_other_body)
@@ -317,7 +342,8 @@ private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, act
                 ?: stringResource(R.string.approvals_session_allowed_plain)
         DeviceOutcome.Denied -> stringResource(R.string.approvals_held_denied)
         DeviceOutcome.NoLongerWaiting -> stringResource(R.string.approvals_no_longer_waiting)
-        is DeviceOutcome.Approved -> when (val r = o.result) {
+        DeviceOutcome.Referred -> stringResource(R.string.approvals_way_referred)
+        is DeviceOutcome.Approved -> if (o.way != null) wayResult(o, who) else when (val r = o.result) {
             // The vault did not say whether it was done: not "Approved".
             null -> stringResource(R.string.approvals_held_no_result)
             "ok" -> stringResource(R.string.approvals_held_approved)
@@ -337,10 +363,39 @@ private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, act
         onPrimary = actions.onFinish,
         onBack = actions.onFinish,
         modifier = modifier.testTag("device_outcome"),
-    ) {}
+    ) {
+        if (o is DeviceOutcome.Approved && o.pinRecorded && o.item != null) {
+            Text(
+                stringResource(R.string.approvals_run_pin_recorded, AccountNames.isolate(o.item)),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.testTag("device_pin_recorded"),
+            )
+        }
+    }
 }
 
 private const val MAX_CODE = 64
+
+/** AA8 "Refused or expired": a run's or a proxy's answer; the codes AA5 has keep its texts. */
+@Composable
+private fun wayResult(o: DeviceOutcome.Approved, who: String): String {
+    val run = o.way == AgentWay.RUN
+    return when (val r = o.result) {
+        null -> stringResource(R.string.approvals_held_no_result)
+        "ok" -> stringResource(R.string.approvals_held_approved)
+        "not_found" -> stringResource(if (run) R.string.approvals_run_not_found else R.string.approvals_proxy_not_found)
+        "forbidden" -> stringResource(R.string.approvals_way_forbidden, who)
+        "program_not_allowed" -> stringResource(R.string.approvals_run_program_not_allowed)
+        "env_not_allowed" -> stringResource(R.string.approvals_run_env_not_allowed)
+        "cwd_not_allowed" -> stringResource(R.string.approvals_run_cwd_not_allowed)
+        "session_required", "denied" -> stringResource(R.string.approvals_held_session_ended, who)
+        "way_not_allowed" -> stringResource(R.string.approvals_held_way_not_allowed)
+        else -> stringResource(
+            R.string.approvals_held_other_result,
+            AccountNames.isolateOrNull(AccountNames.cleanedCapped(r, MAX_CODE)) ?: "?",
+        )
+    }
+}
 
 /** The time of day when [until] is on the same day as [now] in [zone], else the date and time (as `DevicesText.access`). */
 internal fun untilText(until: Instant, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {

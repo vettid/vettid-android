@@ -419,6 +419,8 @@ class ApprovalDetailViewModel @Inject constructor(
     private val connections: ConnectionsRepository,
     private val pairing: PairingRepository,
     private val location: com.vettid.core.data.location.LocationRepository = com.vettid.core.data.location.NoLocation,
+    /** AA8: the item's settings, read after an approval that records a fingerprint (the vault sends this phone no event). */
+    private val itemWays: com.vettid.core.data.devices.ItemWaysRepository = com.vettid.core.data.devices.NoItemWays,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val settled = ItemsSettled()
@@ -763,15 +765,42 @@ class ApprovalDetailViewModel @Inject constructor(
     /** Allow (a session request, for [seconds]) or Approve (a held approval); the answer is kept for the screen to say. */
     private suspend fun approveDevice(a: Approval.DeviceRequest, seconds: Int) {
         val d = repo.approveDeviceRequest(a.key, if (a.isSession) seconds else null)
-        val outcome = if (!a.isSession && d.result == "not_found") {
-            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved".
-            DeviceOutcome.NoLongerWaiting
-        } else if (a.isSession) {
-            DeviceOutcome.Allowed(d.expiresAt)
-        } else {
-            DeviceOutcome.Approved(d.result)
+        val shown = uiState.value.heldShow
+        val way = when (a.held) {
+            is com.vettid.core.data.social.HeldRequest.ItemRun -> AgentWay.RUN
+            is com.vettid.core.data.social.HeldRequest.ItemProxy -> AgentWay.PROXY
+            else -> null
+        }
+        val item = (shown as? HeldShow.Run)?.item ?: (shown as? HeldShow.Proxy)?.item
+        val outcome = when {
+            a.isSession -> DeviceOutcome.Allowed(d.expiresAt)
+            // AA8 "Referred again": not done; the new approval is listed as a new decision.
+            way != null && d.result == "referred" -> DeviceOutcome.Referred
+            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved". A run's or a proxy's has its own text.
+            way == null && d.result == "not_found" -> DeviceOutcome.NoLongerWaiting
+            else -> DeviceOutcome.Approved(d.result, way, pinRecorded = d.result == "ok" && pinNowRecorded(a), item = item)
         }
         local.update { it.copy(outcome = outcome) }
+    }
+
+    /**
+     * AA8 "Approving and the pin": approving a run flagged `program_unrecorded` or `program_changed` records its
+     * fingerprint; it is said only when the item's settings, read now, show the matched entry with this run's `sha256` and
+     * `program`. A read that fails says nothing.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount")
+    private suspend fun pinNowRecorded(a: Approval.DeviceRequest): Boolean {
+        val run = a.held as? com.vettid.core.data.social.HeldRequest.ItemRun ?: return false
+        val pins = setOf(com.vettid.core.data.social.RunFlag.PROGRAM_UNRECORDED, com.vettid.core.data.social.RunFlag.PROGRAM_CHANGED)
+        if (run.flags.none { it in pins }) return false
+        val agent = a.deviceId ?: return false
+        return try {
+            itemWays.read(agent, run.itemId)?.ways?.run?.programs?.any { it.program == run.program && it.sha256 == run.sha256 } == true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

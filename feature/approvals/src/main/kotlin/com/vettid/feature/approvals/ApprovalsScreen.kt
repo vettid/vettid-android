@@ -492,7 +492,13 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         return
     }
     if (a is Approval.DeviceRequest) {
-        DeviceRequestScreen(a, state, actions, modifier)
+        val held = state.heldShow
+        // AA8: a run or a proxy is decided on its own screen (an outcome is said as for every device request).
+        if (state.outcome == null && (held is HeldShow.Run || held is HeldShow.Proxy)) {
+            AgentWayScreen(a, held, state, actions, modifier)
+        } else {
+            DeviceRequestScreen(a, state, actions, modifier)
+        }
         return
     }
     if (a is Approval.LocationRequest) {
