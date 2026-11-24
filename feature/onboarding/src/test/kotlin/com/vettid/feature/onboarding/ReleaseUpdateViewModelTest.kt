@@ -49,11 +49,11 @@ class ReleaseUpdateViewModelTest {
         assertFalse(vm.uiState.value.submitAllowed)
         vm.approve()
         assertTrue(updates.calls.isEmpty())
-        vm.setPin("24 68")
+        vm.setPin("246 813")
         assertTrue(vm.uiState.value.submitAllowed)
         assertTrue(updates.calls.isEmpty())
         vm.approve()
-        assertEquals(listOf("start:2468:5"), updates.calls)
+        assertEquals(listOf("start:246813:5"), updates.calls)
         assertEquals("", vm.uiState.value.pin)
     }
 
@@ -63,6 +63,17 @@ class ReleaseUpdateViewModelTest {
         emptyList(),
     )
 
+    /** A PIN is 6 to 32 digits (§11.3, PinPolicy): five digits do not approve the update. */
+    @Test
+    fun aPinShorterThanSixDigitsDoesNotApprove() = runTest {
+        val vm = ReleaseUpdateViewModel(FakeReleaseUpdates(offer), vault, FakeReleaseNotes(available))
+        advanceUntilIdle()
+        vm.setPin("24681")
+        assertFalse(vm.uiState.value.submitAllowed)
+        vm.setPin("246813")
+        assertTrue(vm.uiState.value.submitAllowed)
+    }
+
     @Test
     fun whatsNewLoadsForTheOfferAndNeverHoldsTheApprovalUp() = runTest {
         val updates = FakeReleaseUpdates(offer)
@@ -71,7 +82,7 @@ class ReleaseUpdateViewModelTest {
         advanceUntilIdle()
         // Still loading: approving is possible all the same.
         assertNull(vm.uiState.value.notes)
-        vm.setPin("2468")
+        vm.setPin("246813")
         assertTrue(vm.uiState.value.submitAllowed)
         notes.gate!!.complete(available)
         advanceUntilIdle()
@@ -85,9 +96,9 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes(ReleaseNotes.Unavailable))
         advanceUntilIdle()
         assertEquals(ReleaseNotes.Unavailable, vm.uiState.value.notes)
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.approve()
-        assertEquals(listOf("start:2468:5"), updates.calls)
+        assertEquals(listOf("start:246813:5"), updates.calls)
     }
 
     @Test
@@ -113,7 +124,7 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertTrue(vm.uiState.value.checkDue)
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.approve()
         assertTrue(updates.calls.isEmpty())
     }
@@ -137,7 +148,7 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes())
         advanceUntilIdle()
         assertFalse(vm.uiState.value.loading)
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.approve()
         assertTrue(updates.calls.isEmpty())
     }
@@ -150,15 +161,15 @@ class ReleaseUpdateViewModelTest {
         advanceTimeBy(100)
         assertEquals(3L, vm.uiState.value.waitSeconds)
         // The PIN field is closed while the backoff runs: nothing typed is taken, nothing is sent.
-        vm.setPin("2468")
+        vm.setPin("246813")
         assertEquals("", vm.uiState.value.pin)
         vm.retry()
         assertTrue(updates.calls.isEmpty())
         advanceTimeBy(3_100)
         assertEquals(0L, vm.uiState.value.waitSeconds)
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.retry()
-        assertEquals(listOf("retry:2468"), updates.calls)
+        assertEquals(listOf("retry:246813"), updates.calls)
         assertEquals("", vm.uiState.value.pin)
     }
 
@@ -188,12 +199,12 @@ class ReleaseUpdateViewModelTest {
         updates.progress.value =
             UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, rel(4), rel(5), failure = FailureKind.NO_RESPONSE, canAbandon = true)
         advanceUntilIdle()
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.askAbandon()
         assertTrue(vm.uiState.value.abandonConfirm)
         assertTrue(updates.calls.isEmpty())
         vm.confirmAbandon()
-        assertEquals(listOf("abandon:2468"), updates.calls)
+        assertEquals(listOf("abandon:246813"), updates.calls)
         assertEquals("", vm.uiState.value.pin)
     }
 
@@ -203,7 +214,7 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateFlowViewModel(updates)
         updates.progress.value = UpdateProgress(UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NETWORK)
         advanceUntilIdle()
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.finish()
         assertEquals("", vm.uiState.value.pin)
         assertEquals(listOf("finish"), updates.calls)
@@ -217,7 +228,7 @@ class ReleaseUpdateViewModelTest {
         val first = FakeReleaseUpdates(offer).apply { pinGeneration = 3 }
         val open = ReleaseUpdateViewModel(first, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        open.setPin("2468")
+        open.setPin("246813")
         first.pinGeneration = 4 // while the PIN is typed
         open.approve()
         assertEquals(listOf<Int?>(3), first.generations)
@@ -231,10 +242,10 @@ class ReleaseUpdateViewModelTest {
         updates.changeHold.value = null
         advanceUntilIdle()
         assertTrue(held.uiState.value.pinAllowed)
-        held.setPin("1357")
+        held.setPin("135791")
         updates.pinGeneration = 5
         held.approve()
-        assertEquals(listOf("start:1357:5"), updates.calls)
+        assertEquals(listOf("start:135791:5"), updates.calls)
         assertEquals(listOf<Int?>(4), updates.generations)
     }
 
@@ -244,7 +255,7 @@ class ReleaseUpdateViewModelTest {
         val updates = FakeReleaseUpdates(offer)
         val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes())
         advanceUntilIdle()
-        vm.setPin("2468")
+        vm.setPin("246813")
         updates.changeHold.value = FailureKind.CHANGE_CHECKING
         advanceUntilIdle()
         assertEquals("", vm.uiState.value.pin)
@@ -266,15 +277,15 @@ class ReleaseUpdateViewModelTest {
         updates.progress.value =
             UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, rel(4), rel(5), failure = FailureKind.NO_RESPONSE, canAbandon = true)
         advanceUntilIdle()
-        vm.setPin("2468")
+        vm.setPin("246813")
         updates.pinGeneration = 3
         vm.retry()
         // Read again as the keypad empties (it stays open: the fake's step does not move).
-        vm.setPin("2468")
+        vm.setPin("246813")
         updates.pinGeneration = 4
         vm.askAbandon()
         vm.confirmAbandon()
-        assertEquals(listOf("retry:2468", "abandon:2468"), updates.calls)
+        assertEquals(listOf("retry:246813", "abandon:246813"), updates.calls)
         assertEquals(listOf<Int?>(2, 3), updates.generations)
     }
 
@@ -285,10 +296,10 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateFlowViewModel(updates)
         updates.progress.value = UpdateProgress(UpdateStep.FAILED, rel(4), rel(5), failure = FailureKind.NETWORK)
         advanceUntilIdle()
-        vm.setPin("2468")
+        vm.setPin("246813")
         updates.pinGeneration = 1
         vm.retry()
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.retry()
         assertEquals(listOf<Int?>(0, 1), updates.generations)
     }
@@ -300,7 +311,7 @@ class ReleaseUpdateViewModelTest {
         val vm = ReleaseUpdateViewModel(updates, vault, FakeReleaseNotes())
         advanceUntilIdle()
         updates.pinGeneration = 4
-        vm.setPin("2468")
+        vm.setPin("246813")
         vm.approve()
         assertEquals(listOf<Int?>(4), updates.generations)
     }
