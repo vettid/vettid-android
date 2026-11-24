@@ -46,6 +46,35 @@ class OwnerCheckFieldsInViewTest {
         rule.onNodeWithTag("owner_check_password").assertIsDisplayed()
     }
 
+    /** Holding off: the warning and its choices stay where the member reads them first; the fields are not scrolled to. */
+    @Test
+    fun holdingOffKeepsTheWarningInView() {
+        val now = Instant.now()
+        val view = OwnerCheckView(
+            OwnerCheckState.HELD, now.minusSeconds(60), 86_400, 0, hold = true, holdOffUntil = null,
+            waiting = WaitingCounts(messages = 12, requests = 3, calls = 2, other = 5),
+            idleLockAt = now.plusSeconds(7_200),
+        )
+        rule.setContent { OwnerCheckContent(OwnerCheckUiState(mode = OwnerCheckMode.HOLD_OFF, view = view), actions, onCancel = {}) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("hold_off_warning").assertIsDisplayed()
+    }
+
+    /** A check whose answer was lost: the line saying it may have counted, under the fields, is brought into view. */
+    @Test
+    fun aMaybeCountedLineIsBroughtIntoView() {
+        val now = Instant.now()
+        val view = OwnerCheckView(
+            OwnerCheckState.HELD, now.minusSeconds(60), 86_400, 1, hold = true, holdOffUntil = null,
+            waiting = WaitingCounts(messages = 12, requests = 3, calls = 2, other = 5),
+            idleLockAt = now.plusSeconds(7_200),
+        )
+        val state = OwnerCheckUiState(mode = OwnerCheckMode.GATED, view = view, message = OwnerCheckMessage.MaybeCounted(2))
+        rule.setContent { OwnerCheckContent(state, actions, onCancel = {}) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("owner_check_maybe_counted").assertIsDisplayed()
+    }
+
     /** With checks already failed, the "checks left" line under the fields is the group's last: it is brought into view too. */
     @Test
     fun theChecksLeftLineIsBroughtIntoViewWithTheFields() {

@@ -33,7 +33,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -287,13 +289,27 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
             // Locked: the lock text only, no fields (§3.6.5: not a retry).
             val fields = !state.locked && state.watch == LockWatch.NONE
             // The fields come after the waiting card and the lock lines, so on a short screen (a fold's outer one) they can be
-            // below the fold under a disabled Check: scroll them into view when they appear (R33).
+            // below the fold under a disabled Check: scroll them into view when they appear (R33), and when a check's answer
+            // comes (a wrong check's error and the checks left are in the group; a line under it is brought itself). Not when
+            // a message clears (the member typing again), and not when holding off: the warning and its choices above the
+            // fields are what the member reads first, and must not be scrolled away.
             val fieldsInView = remember { BringIntoViewRequester() }
-            LaunchedEffect(fields) {
-                if (fields) {
-                    withFrameNanos { }
+            val messageInView = remember { BringIntoViewRequester() }
+            val bringFields = fields && state.mode != OwnerCheckMode.HOLD_OFF
+            var fieldsBrought by remember { mutableStateOf(false) }
+            LaunchedEffect(bringFields, m?.let { it::class }) {
+                if (!bringFields) {
+                    fieldsBrought = false
+                    return@LaunchedEffect
+                }
+                if (m == null && fieldsBrought) return@LaunchedEffect
+                withFrameNanos { }
+                if (m is OwnerCheckMessage.MaybeCounted || m is OwnerCheckMessage.Failed) {
+                    messageInView.bringIntoView()
+                } else {
                     fieldsInView.bringIntoView()
                 }
+                fieldsBrought = true
             }
             if (!state.pinKept && fields) SecretField(
                 value = state.pin,
@@ -334,7 +350,8 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                 m is OwnerCheckMessage.MaybeCounted -> Text(
                     pluralStringResource(R.plurals.unlock_check_maybe_counted, m.atLeast, m.atLeast),
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted"),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted")
+                        .bringIntoViewRequester(messageInView),
                 )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
@@ -343,7 +360,7 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                     NoticeKind.URGENT,
                     if (m.kind == FailureKind.NOT_HOLDER) stringResource(m.kind.titleRes(0)) else title,
                     failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
-                    modifier = Modifier.testTag("owner_check_failed"),
+                    modifier = Modifier.testTag("owner_check_failed").bringIntoViewRequester(messageInView),
                 )
                 else -> Unit
             }

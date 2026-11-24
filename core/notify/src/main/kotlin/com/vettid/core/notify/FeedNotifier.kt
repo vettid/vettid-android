@@ -210,9 +210,36 @@ class FeedNotifier(
             null
         }
         val n = NotificationContent.of(item, channel, previews, names, res(), text)
-        synchronized(lock) {
+        postAndNote(item, n, channel, previews, names)
+    }
+
+    /**
+     * Posts [n] and keeps an unnamed `connection.added` to be named ([noteUnnamed]), unless its [previews] show no names (under
+     * the cover they are [NotificationPreviews.NOTHING]: nothing was read).
+     */
+    private fun postAndNote(item: FeedItem, n: LocalNotification, channel: String, previews: NotificationPreviews, names: FeedNames) {
+        val noted = synchronized(lock) {
             postLocked(item, n)
-            noteUnnamed(item, channel, covered || previews == NotificationPreviews.NOTHING, names)
+            // The cover may have come up since [previews] was read: then it was posted in public form, and is not kept.
+            noteUnnamed(item, channel, previews == NotificationPreviews.NOTHING || source.coveredNow(), names)
+        }
+        // The name may have landed between the names read for [n] and the noting, its change already gone by: look once.
+        if (noted) nameIfKnown(item, channel)
+    }
+
+    /**
+     * The look after noting [item]: named now, it is posted again with the name. Its tag was just posted under [lock], so it
+     * counts as showing by [posted] alone (the system's list of active notifications may not have it yet).
+     */
+    private fun nameIfKnown(item: FeedItem, channel: String) {
+        val names = if (source.coveredNow()) null else source.names()
+        if (names == null || !connectionNamed(item, names)) return
+        val previews = settings.value.previews
+        synchronized(lock) {
+            if (unnamedAdded.remove(item.itemId) != null && item.itemId in posted.keys) {
+                val again = item.copy(quietRepost = true)
+                postLocked(again, NotificationContent.of(again, channel, previews, names, res(), null))
+            }
         }
     }
 
@@ -221,12 +248,10 @@ class FeedNotifier(
      * ([onConnectionsChanged]); not under the cover (nothing was read) nor with previews that show no names ([hidden]), where
      * a re-post would change nothing.
      */
-    private fun noteUnnamed(item: FeedItem, channel: String, hidden: Boolean, names: FeedNames) {
-        if (item.kind == CONNECTION_ADDED && !hidden && !connectionNamed(item, names)) {
-            unnamedAdded[item.itemId] = item to channel
-        } else {
-            unnamedAdded.remove(item.itemId)
-        }
+    private fun noteUnnamed(item: FeedItem, channel: String, hidden: Boolean, names: FeedNames): Boolean {
+        val unnamed = item.kind == CONNECTION_ADDED && !hidden && !connectionNamed(item, names)
+        if (unnamed) unnamedAdded[item.itemId] = item to channel else unnamedAdded.remove(item.itemId)
+        return unnamed
     }
 
     private fun connectionNamed(item: FeedItem, names: FeedNames): Boolean = FeedKinds.connectionName(item, names).literal != null
@@ -443,6 +468,9 @@ class FeedNotifier(
             // Every tag still in [posted]: a dismissed one was taken out by [onDismissed]; a snoozed one is not active but is
             // here, and posting to its tag updates it without showing it, so the named original cannot come back.
             posted.values.toList().forEach { poster.post(it) }
+            // Each is now in public form, and a notification is not restored when the cover goes: one still waiting for its
+            // connection's name is not named later either (it would bring back a name the cover took away).
+            unnamedAdded.clear()
         }
     }
 

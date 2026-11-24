@@ -54,7 +54,10 @@ class FeedNotifierTest {
             log += "post:${n.tag}"
         }
 
-        override fun isPosted(tag: String): Boolean = tag in shown
+        /** Whether the system lists a shown tag as active yet (a post is enqueued; the list can lag it). */
+        var listed: (String) -> Boolean = { true }
+
+        override fun isPosted(tag: String): Boolean = tag in shown && listed(tag)
 
         override fun cancel(tag: String) {
             val had = shown.remove(tag) != null
@@ -90,9 +93,12 @@ class FeedNotifierTest {
         override val alarm = MutableStateFlow<CredentialAlarm?>(null)
         var names = FeedNames(mapOf("c1" to ConnectionInfo("c1", "", ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee")), mapOf("i1" to "Passport"))
 
+        /** Called after each read of [names]: a test can make the next read differ (a name landing in between). */
+        var afterNames: () -> Unit = {}
+
         override fun names(): FeedNames {
             namesCalls++
-            return names
+            return names.also { afterNames() }
         }
 
         override val connectionsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
@@ -181,6 +187,67 @@ class FeedNotifierTest {
         runCurrent()
         assertEquals(listOf("post:f2"), poster.log)
         assertFalse(poster.isPosted("f1"))
+    }
+
+    /**
+     * The cover came up over one still waiting for its name: it is re-posted in public form, and since nothing is restored
+     * when the cover goes, a name that arrives after the cover is gone does not bring the notification's name back.
+     */
+    @Test
+    fun aConnectionAddedTheCoverTookIsNotNamedAfterIt() = runTest {
+        source.names = unnamed
+        notifier()
+        arrive(item("f1", kind = "connection.added", ref = null))
+        source.covered.value = true
+        runCurrent()
+        source.covered.value = false
+        runCurrent()
+        source.names = named
+        poster.log.clear()
+        source.connectionsChanged.emit(Unit)
+        runCurrent()
+        assertTrue("not named after the cover: ${poster.log}", poster.log.isEmpty())
+    }
+
+    /** The name lands just after the arrival read the names, its change already gone by: it is named all the same. */
+    @Test
+    fun aNameThatLandsWhileTheArrivalIsPostedIsNotLost() = runTest {
+        source.names = unnamed
+        notifier()
+        source.afterNames = { source.names = named; source.afterNames = {} }
+        poster.listed = { false } // just posted: not in the system's active list yet
+        arrive(item("f1", kind = "connection.added", ref = null))
+        assertEquals("You are now connected with \u2068Sam Lee\u2069", poster.shown.getValue("f1").title)
+    }
+
+    /** The cover came up after the arrival read the names and before it posted: posted in public form, not kept to be named. */
+    @Test
+    fun aConnectionAddedPostedAsTheCoverCameUpIsNotKept() = runTest {
+        source.names = unnamed
+        notifier()
+        source.afterNames = { source.nowOverride = true; source.afterNames = {} }
+        arrive(item("f1", kind = "connection.added", ref = null))
+        source.nowOverride = false
+        source.names = named
+        poster.log.clear()
+        source.connectionsChanged.emit(Unit)
+        runCurrent()
+        assertTrue("not named after the cover: ${poster.log}", poster.log.isEmpty())
+    }
+
+    /** With previews that show no names nothing could be named: it is not kept to be named. */
+    @Test
+    fun aConnectionAddedUnderNoNamePreviewsIsNotKept() = runTest {
+        settings.value = NotifySettings(previews = NotificationPreviews.NOTHING)
+        source.names = unnamed
+        notifier()
+        arrive(item("f1", kind = "connection.added", ref = null))
+        settings.value = NotifySettings(previews = NotificationPreviews.NAMES)
+        source.names = named
+        poster.log.clear()
+        source.connectionsChanged.emit(Unit)
+        runCurrent()
+        assertTrue("not posted again: ${poster.log}", poster.log.isEmpty())
     }
 
     /** One the system took away with no delete intent (its tag no longer posted) is not brought back to be named. */

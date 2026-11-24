@@ -89,7 +89,7 @@ fun VettIdTopAppBar(
         actions()
         LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it) }
         if (bell != null) NotificationBellButton(bell)
-        // No name yet (the account not read since the unlock): no label, the tile alone (owner decision a, GC #17652).
+        // No name yet (the account not read since the unlock): "Account" and a person in the tile (owner decision a, GC #17652).
         val avatarLabel = if (accountName.isBlank()) {
             stringResource(R.string.core_ui_cd_account_unnamed)
         } else {

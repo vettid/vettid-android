@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -478,9 +479,10 @@ data class DecisionActions(
 fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier = Modifier) {
     HoldsInput(state.openForDecision)
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
-    // Done (read, decided, or a restored entry already left): nothing is drawn while it closes, so a result read before is
-    // not shown again for the length of the transition (R33).
-    if (state.done) return
+    // A restored entry already done (its result read and left before): nothing is drawn while it closes, so the result is not
+    // shown again for the length of the transition (R33). One that becomes done here keeps its screen while it closes.
+    val doneWhenShown = remember { state.done }
+    if (doneWhenShown) return
     val a = state.approval
     // A critical-use result first: a withdrawal told after it was shown does not replace it (and so close it unread).
     if (a != null && state.criticalResult != null) {

@@ -383,7 +383,7 @@ fun AppShell(
                 ) {
                     CompositionLocalProvider(
                         LocalInputGuard provides inputGuard,
-                        LocalCheckCovered provides covered,
+                        LocalCheckCovered provides (covered || cover.undecided),
                         LocalApprovalsIndicator provides indicator,
                     ) {
                         NavHost(navController = navController, startDestination = MessagesRoute) {

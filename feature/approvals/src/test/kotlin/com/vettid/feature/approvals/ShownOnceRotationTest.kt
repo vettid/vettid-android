@@ -1,7 +1,12 @@
 package com.vettid.feature.approvals
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import com.vettid.core.ui.components.LocalCheckCovered
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -22,5 +27,34 @@ class ShownOnceRotationTest {
         rule.activityRule.scenario.recreate()
         rule.waitForIdle()
         assertEquals(0, finished)
+    }
+
+    @Test
+    fun theDailyChecksCoverComingUpFinishesTheResult() {
+        var finished = 0
+        var covered by mutableStateOf(false)
+        rule.setContent { CompositionLocalProvider(LocalCheckCovered provides covered) { FinishWhenLeft { finished++ } } }
+        rule.waitForIdle()
+        assertEquals(0, finished)
+        covered = true
+        rule.waitForIdle()
+        assertEquals(1, finished)
+    }
+
+    /** A result composed under the cover (it arrived while the check was up) was never seen: it waits, then shows. */
+    @Test
+    fun aResultFirstComposedUnderTheCoverIsNotFinished() {
+        var finished = 0
+        var covered by mutableStateOf(true)
+        rule.setContent { CompositionLocalProvider(LocalCheckCovered provides covered) { FinishWhenLeft { finished++ } } }
+        rule.waitForIdle()
+        assertEquals(0, finished)
+        covered = false
+        rule.waitForIdle()
+        assertEquals(0, finished)
+        // Seen now: the next cover counts as leaving.
+        covered = true
+        rule.waitForIdle()
+        assertEquals(1, finished)
     }
 }

@@ -126,6 +126,39 @@ class DeviceAsksScreenTest {
         assertEquals(1, finished)
     }
 
+    /** The same for a critical-item use's result. */
+    @Test
+    fun leavingACriticalResultCountsAsRead() {
+        var finished = 0
+        var shown by mutableStateOf(true)
+        val s = state(session()).copy(criticalResult = "ok")
+        rule.setContent { if (shown) ApprovalDetailScreen(s, DecisionActions(onFinish = { finished++ })) }
+        rule.waitForIdle()
+        assertEquals(0, finished)
+        shown = false
+        rule.waitForIdle()
+        assertEquals(1, finished)
+    }
+
+    /** A restored entry already done draws nothing while it closes; one that becomes done here keeps its screen meanwhile. */
+    @Test
+    fun onlyAnEntryDoneWhenShownDrawsNothing() {
+        val until = now.plusSeconds(3_600)
+        var s by mutableStateOf(state(session(), outcome = DeviceOutcome.Allowed(until)))
+        rule.setContent { ApprovalDetailScreen(s, DecisionActions()) }
+        rule.onNodeWithText("Access allowed until ${untilText(until)}", substring = true).assertExists()
+        s = s.copy(done = true)
+        rule.waitForIdle()
+        rule.onNodeWithText("Access allowed until ${untilText(until)}", substring = true).assertExists()
+    }
+
+    @Test
+    fun aRestoredEntryAlreadyDoneDrawsNothing() {
+        val until = now.plusSeconds(3_600)
+        show(state(session(), outcome = DeviceOutcome.Allowed(until)).copy(done = true))
+        rule.onNodeWithText("Access allowed until ${untilText(until)}", substring = true).assertDoesNotExist()
+    }
+
     @Test
     fun theOutcomesOfAnAccessRequest() {
         val until = now.plusSeconds(3_600)
