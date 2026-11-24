@@ -700,7 +700,7 @@ object ScreenCatalog {
         "transfer_in.rejected" to { TIn(TransferInUiState(step = TransferInStep.REJECTED)) },
         "transfer_in.timed_out" to { TIn(TransferInUiState(step = TransferInStep.TIMED_OUT)) },
         "transfer_in.no_answer" to { TIn(TransferInUiState(step = TransferInStep.NOT_ANSWERED)) },
-        "unlock" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), pin = "1234"), NoUnlock) },
+        "unlock" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), pin = "123456"), NoUnlock) },
         "unlock.updated" to {
             UnlockContent(
                 UnlockUiState(
@@ -1829,7 +1829,7 @@ object ScreenCatalog {
         },
         // The release update (ANDROID-PLAN 0.1.19), shown by the release gate (Rule 3).
         "release_update" to {
-            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468", notes = whatsNew), NoUpdate, onBack = null)
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "246813", notes = whatsNew), NoUpdate, onBack = null)
         },
         "release_update.notes_loading" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer), NoUpdate, onBack = null) },
         "release_update.notes_unavailable" to {
@@ -1863,14 +1863,14 @@ object ScreenCatalog {
         },
         "release_update.new_failed" to {
             ReleaseUpdateFlowContent(
-                updateFlow(UpdateStep.NEW_RELEASE_FAILED) { it.copy(failure = FailureKind.NO_RESPONSE, canAbandon = true) }.copy(pin = "2468"),
+                updateFlow(UpdateStep.NEW_RELEASE_FAILED) { it.copy(failure = FailureKind.NO_RESPONSE, canAbandon = true) }.copy(pin = "246813"),
                 NoUpdate,
             )
         },
         "release_update.abandon_confirm" to {
             ReleaseUpdateFlowContent(
                 updateFlow(UpdateStep.NEW_RELEASE_FAILED) { it.copy(failure = FailureKind.NO_RESPONSE, canAbandon = true) }
-                    .copy(pin = "2468", abandonConfirm = true),
+                    .copy(pin = "246813", abandonConfirm = true),
                 NoUpdate,
             )
         },

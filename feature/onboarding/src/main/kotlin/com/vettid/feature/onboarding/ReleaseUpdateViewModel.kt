@@ -136,7 +136,7 @@ class ReleaseUpdateViewModel @Inject constructor(
     }
 
     private companion object {
-        const val MAX_PIN = 32
+        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
     }
 }
 
@@ -261,7 +261,7 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
     }
 
     private companion object {
-        const val MAX_PIN = 32
+        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         const val TICK_MS = 1000L
     }
 }

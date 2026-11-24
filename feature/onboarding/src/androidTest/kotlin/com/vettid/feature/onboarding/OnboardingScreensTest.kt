@@ -148,7 +148,7 @@ class OnboardingScreensTest {
             override fun setPin(v: String) = Unit
             override fun approve() = Unit
         }
-        rule.setContent { VettIdTheme { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = offer, pin = "2468"), actions) {} } }
+        rule.setContent { VettIdTheme { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = offer, pin = "246813"), actions) {} } }
         rule.onNodeWithTag("whats_new_loading").assertExists()
         rule.onNodeWithTag("primary_button").assertIsEnabled()
     }

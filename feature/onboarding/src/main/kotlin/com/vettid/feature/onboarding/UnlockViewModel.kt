@@ -657,7 +657,7 @@ class UnlockViewModel @Inject constructor(
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 
-        private const val MAX_PIN = 32
+        private const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         private const val TICK_MS = 1000L
     }
 }

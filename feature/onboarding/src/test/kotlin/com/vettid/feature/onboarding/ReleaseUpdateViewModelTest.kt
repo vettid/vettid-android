@@ -192,6 +192,24 @@ class ReleaseUpdateViewModelTest {
         assertEquals(listOf("finish"), updates.calls)
     }
 
+    /** The update flow's retry and its way back take the same 6 to 32 digits (§11.3): five are not sent. */
+    @Test
+    fun aRetryOrAWayBackNeedsSixDigits() = runTest {
+        val updates = FakeReleaseUpdates(offer)
+        val vm = ReleaseUpdateFlowViewModel(updates)
+        updates.progress.value =
+            UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, rel(4), rel(5), failure = FailureKind.NO_RESPONSE, canAbandon = true)
+        advanceUntilIdle()
+        vm.setPin("24681")
+        assertFalse(vm.uiState.value.retryAllowed)
+        vm.retry()
+        vm.askAbandon()
+        vm.confirmAbandon()
+        assertTrue("nothing sent with five digits: ${updates.calls}", updates.calls.isEmpty())
+        vm.setPin("246813")
+        assertTrue(vm.uiState.value.retryAllowed)
+    }
+
     @Test
     fun returningToTheOldReleaseAsksFirst() = runTest {
         val updates = FakeReleaseUpdates(offer)
