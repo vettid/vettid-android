@@ -2355,6 +2355,36 @@ class FeedManagerTest {
         assertEquals(emptyList<String>(), arrived)
     }
 
+    /**
+     * A covered wake copy kept across a blip, then the vault locks and opens again before the lock's clear is reached (the
+     * phase collector behind): the new opening drops the copy, so its read notifies nothing for it (a push of the opening
+     * before is not notified in the next one).
+     */
+    @Test
+    fun aNewOpeningDropsACoveredCopy() = runTest {
+        val ops = Ops()
+        val m = openedEarlier(ops, item("i1", 1), item("y2", 2)) // y2 read as backlog
+        val arrived = mutableListOf<String>()
+        backgroundScope.launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) { m.arrivals.collect { arrived += it.itemId } }
+        m.clear(keepHeld = true) // a blip
+        val gate = CompletableDeferred<Unit>()
+        ops.gate = gate // the wake's read waits
+        val before = synchronized(ops) { ops.lists.size }
+        m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // The wake's read is out (held at the gate) when the vault opens again.
+        repeat(SETTLE_TRIES) { if (synchronized(ops) { ops.lists.size } < before + 1) { runCurrent(); Thread.sleep(SETTLE_MS) } }
+        assertEquals(before + 1, synchronized(ops) { ops.lists.size })
+        m.vaultOpened(now) // a lock and a new opening; the copy was a push's, so only the clear stops it
+        // Both reads list y2 active: the wake's, voided by the opening, and the opening's own.
+        repeat(2) { ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2) }
+        ops.gate = null
+        gate.complete(Unit)
+        settle { m.readsUnderWay == 0 }
+        m.refresh() // the new opening's full read
+        settle { m.readsUnderWay == 0 && synchronized(ops) { ops.pages.isEmpty() } }
+        assertEquals(emptyList<String>(), arrived)
+    }
+
     /** A full read's answer sets the covered mark: after it, a new item's wake above the answer, but below the old mark, notifies. */
     @Test
     fun aFullReadsAnswerSetsTheCoveredMark() = runTest {
