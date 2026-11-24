@@ -478,7 +478,15 @@ data class DecisionActions(
 fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier = Modifier) {
     HoldsInput(state.openForDecision)
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
+    // Done (read, decided, or a restored entry already left): nothing is drawn while it closes, so a result read before is
+    // not shown again for the length of the transition (R33).
+    if (state.done) return
     val a = state.approval
+    // A critical-use result first: a withdrawal told after it was shown does not replace it (and so close it unread).
+    if (a != null && state.criticalResult != null) {
+        CriticalResult(state.criticalResult, a, actions.onFinish, modifier)
+        return
+    }
     if (a != null && state.withdrawn) {
         WithdrawnScreen(a, state, actions, modifier)
         return
@@ -492,10 +500,6 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     }
     if (a == null || state.gone) {
         GoneScreen(a, state, actions, modifier)
-        return
-    }
-    state.criticalResult?.let { status ->
-        CriticalResult(status, a, actions.onFinish, modifier)
         return
     }
     if (a is Approval.DeviceRequest) {
@@ -721,6 +725,7 @@ internal fun failureText(
 /** What a critical-item use came to (§10.13 `status`), shown before the screen closes. */
 @Composable
 private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, modifier: Modifier) {
+    FinishWhenLeft(onFinish)
     val who = themOf(a.connectionName)
     FormScaffold(
         title = stringResource(if (status == "ok") R.string.approvals_critical_done_title else R.string.approvals_critical_failed_title),

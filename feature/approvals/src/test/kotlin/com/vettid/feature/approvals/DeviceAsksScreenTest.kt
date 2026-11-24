@@ -3,13 +3,16 @@
 
 package com.vettid.feature.approvals
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -20,13 +23,13 @@ import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.HeldRequest
 import com.vettid.core.ui.components.ShellChrome
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import java.time.Instant
 
 /** The texts of ANDROID-PLAN 0.1.116 §4 "Approvals for devices and agents (AA5)", word for word (drafts), and their layout. */
 @RunWith(RobolectricTestRunner::class)
@@ -107,6 +110,20 @@ class DeviceAsksScreenTest {
         rule.onNodeWithText("Deny").assertExists()
         rule.onNodeWithText("$bot isn't in your list of devices, so you can only deny this request.").assertExists()
         assertEquals(0, rule.onAllNodesWithText("1 hour").fetchSemanticsNodes().size)
+    }
+
+    /** Shown once (R33): leaving the outcome by any way counts as read, so a restored entry closes instead of showing it again. */
+    @Test
+    fun leavingTheOutcomeCountsAsRead() {
+        var finished = 0
+        var shown by mutableStateOf(true)
+        val s = state(session(), outcome = DeviceOutcome.Allowed(now.plusSeconds(3_600)))
+        rule.setContent { if (shown) ApprovalDetailScreen(s, DecisionActions(onFinish = { finished++ })) }
+        rule.waitForIdle()
+        assertEquals(0, finished)
+        shown = false // the screen leaves the composition: the drawer, a notification, back
+        rule.waitForIdle()
+        assertEquals(1, finished)
     }
 
     @Test

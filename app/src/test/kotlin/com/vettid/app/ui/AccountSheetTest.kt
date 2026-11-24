@@ -132,7 +132,8 @@ class AccountSheetTest {
             names += accountShellName(null)
         }
         rule.waitForIdle()
-        assertEquals(listOf("Sam Rivera", "sam@example.org", "VettID member", "VettID member"), names.take(4))
+        // Not read yet since the unlock: no name (owner decision a, GC #17652).
+        assertEquals(listOf("Sam Rivera", "sam@example.org", "VettID member", ""), names.take(4))
     }
 
     @Test

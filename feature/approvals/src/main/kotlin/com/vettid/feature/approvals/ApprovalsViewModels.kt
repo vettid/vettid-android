@@ -350,9 +350,10 @@ data class ApprovalDetailUiState(
 
     /**
      * A request is open for the member's decision (any kind, a device's or an agent's too), typed or not: the daily owner check
-     * waits for it (VAULT-MESSAGING §3.6.5). Not once it was decided, left, withdrawn, or held.
+     * waits for it (VAULT-MESSAGING §3.6.5). Not once it was decided (its outcome or result shown), left, withdrawn, or held.
      */
-    val openForDecision: Boolean get() = approval != null && !done && !gone && !withdrawn && !held
+    val openForDecision: Boolean
+        get() = approval != null && !done && !gone && !withdrawn && !held && outcome == null && criticalResult == null
 
     /** (AA5) The length that Allow sends: the member's choice, else the requested one, else 1 hour. */
     val allowSeconds: Int

@@ -247,10 +247,14 @@ fun AccountEmailGroup(account: AccountInfo?) {
 
 /**
  * The name the top bar and the avatar sheet show for [shown] (the account as [shownInShell] gives it): [shellName], else
- * "VettID member". Never the masked hint.
+ * "VettID member" for an account read with no name and no address. Never the masked hint. Before the account is read since
+ * the unlock ([shown] null), no name at all: "" (owner decision a, GC #17652), so the shell shows the tile alone.
  */
 @Composable
-fun accountShellName(shown: AccountInfo?): String = shown?.shellName() ?: stringResource(R.string.account_placeholder_name)
+fun accountShellName(shown: AccountInfo?): String = when (shown) {
+    null -> ""
+    else -> shown.shellName() ?: stringResource(R.string.account_placeholder_name)
+}
 
 /** The membership in one line, under the address when there are no names to show. */
 @Composable

@@ -2,32 +2,33 @@ package com.vettid.core.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -88,7 +89,12 @@ fun VettIdTopAppBar(
         actions()
         LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it) }
         if (bell != null) NotificationBellButton(bell)
-        val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
+        // No name yet (the account not read since the unlock): no label, the tile alone (owner decision a, GC #17652).
+        val avatarLabel = if (accountName.isBlank()) {
+            stringResource(R.string.core_ui_cd_account_unnamed)
+        } else {
+            stringResource(R.string.core_ui_cd_account, accountName)
+        }
         // Not an IconButton: its circular clip would cut the tile's corners.
         Box(
             modifier = Modifier
@@ -99,7 +105,13 @@ fun VettIdTopAppBar(
                 .semantics { this.contentDescription = avatarLabel },
             contentAlignment = Alignment.Center,
         ) {
-            InitialTile(name = accountName, size = 36, style = TileStyle.Self, photo = accountPhoto)
+            InitialTile(
+                name = accountName,
+                size = 36,
+                style = TileStyle.Self,
+                photo = accountPhoto,
+                icon = Icons.Outlined.Person.takeIf { accountName.isBlank() },
+            )
         }
     }
 }

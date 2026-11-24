@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -96,6 +97,12 @@ interface NotifySource {
     fun names(): FeedNames
 
     /**
+     * Emits when the connections in memory change (a peer's `profile.update` names it after the `connection.added` item, at
+     * the accepting side, VAULT-MESSAGING §9.3): a notification posted before the name was known is named then (R33).
+     */
+    val connectionsChanged: Flow<Unit> get() = emptyFlow()
+
+    /**
      * Reads the votes list afresh (review 1, M3): true only when the read went through and was applied (not voided by a lock
      * or hold while it was out), so that [names]' `votesGaveUp` is the vault's state after the item arrived. A source
      * without votes has nothing to read.
@@ -142,6 +149,12 @@ class FeedNotifier(
         var n: LocalNotification? = null
     }
 
+    /**
+     * The `connection.added` notifications posted while their connection had no name yet, by tag, with their channel (under
+     * [lock], memory only): each is posted again, quietly, once [NotifySource.connectionsChanged] names it.
+     */
+    private val unnamedAdded = HashMap<String, Pair<FeedItem, String>>()
+
     /** The votes list read asked for and not yet started, and whether a read is running (under [lock]). */
     private var voteReadNext: CompletableDeferred<Boolean>? = null
     private var voteReading = false
@@ -157,6 +170,7 @@ class FeedNotifier(
         scope.launch { combine(source.lockedElsewhere, source.idleLocked) { l, i -> l to i }.collect { (l, i) -> onLocked(l, i) } }
         scope.launch { source.ownerCheck.collect { onOwnerCheck(it) } }
         scope.launch { source.alarm.collect { onAlarm(it) } }
+        scope.launch { source.connectionsChanged.collect { onConnectionsChanged() } }
     }
 
     @Suppress("ReturnCount")
@@ -196,7 +210,45 @@ class FeedNotifier(
             null
         }
         val n = NotificationContent.of(item, channel, previews, names, res(), text)
-        synchronized(lock) { postLocked(item, n) }
+        synchronized(lock) {
+            postLocked(item, n)
+            noteUnnamed(item, channel, covered || previews == NotificationPreviews.NOTHING, names)
+        }
+    }
+
+    /**
+     * Under [lock]: a `connection.added` just posted without its connection's name is kept to be named later
+     * ([onConnectionsChanged]); not under the cover (nothing was read) nor with previews that show no names ([hidden]), where
+     * a re-post would change nothing.
+     */
+    private fun noteUnnamed(item: FeedItem, channel: String, hidden: Boolean, names: FeedNames) {
+        if (item.kind == CONNECTION_ADDED && !hidden && !connectionNamed(item, names)) {
+            unnamedAdded[item.itemId] = item to channel
+        } else {
+            unnamedAdded.remove(item.itemId)
+        }
+    }
+
+    private fun connectionNamed(item: FeedItem, names: FeedNames): Boolean = FeedKinds.connectionName(item, names).literal != null
+
+    /**
+     * The connections changed: each `connection.added` posted unnamed whose connection now has a name is posted again with it,
+     * in place and without a sound, while it still shows (a dismissed one stays dismissed); under the cover, nothing.
+     */
+    private fun onConnectionsChanged() {
+        if (synchronized(lock) { unnamedAdded.isEmpty() } || source.coveredNow()) return
+        val names = source.names()
+        val previews = settings.value.previews
+        synchronized(lock) {
+            val ready = unnamedAdded.values.filter { (item, _) -> connectionNamed(item, names) }
+            ready.forEach { (item, channel) ->
+                unnamedAdded.remove(item.itemId)
+                if (stillShowing(item)) {
+                    val again = item.copy(quietRepost = true)
+                    postLocked(again, NotificationContent.of(again, channel, previews, names, res(), null))
+                }
+            }
+        }
     }
 
     /**
@@ -354,6 +406,7 @@ class FeedNotifier(
         val active = items.filter { it.status == FeedManager.STATUS_ACTIVE }.map { it.itemId }.toSet()
         synchronized(lock) {
             val gone = posted.keys.filter { it !in active }.also { posted.keys.removeAll(it.toSet()) }
+            unnamedAdded.keys.removeAll { it !in active }
             gone.forEach { poster.cancel(it) }
         }
     }
@@ -364,6 +417,7 @@ class FeedNotifier(
             val all = posted.keys.toList().also { posted.clear() }
             // Those still waiting for the votes list are not posted, even if the vault opens again before they would be.
             voteWaiting.clear()
+            unnamedAdded.clear()
             all.forEach { poster.cancel(it) }
             // Those a process before this one posted (the set above is memory only): at start the vault is not open
             // yet, so every item notification still showing is one that outlived the open vault (ANDROID-PLAN §4,
@@ -395,7 +449,10 @@ class FeedNotifier(
     /** The member dismissed the notification [tag] (its delete intent): it is not re-posted by a cover-up. */
     fun onDismissed(tag: String?) {
         if (tag == null) return
-        synchronized(lock) { posted.remove(tag) }
+        synchronized(lock) {
+            posted.remove(tag)
+            unnamedAdded.remove(tag)
+        }
     }
 
     /**
@@ -469,6 +526,7 @@ class FeedNotifier(
         /** How long a `vote.result` waits for the votes list read, and a read may take, before it is titled generically (M3). */
         const val VOTE_LIST_WAIT_MS = 3_000L
         private const val VOTE_RESULT = "vote.result"
+        private const val CONNECTION_ADDED = "connection.added"
         const val TAG_LOCKED = "vault.locked"
         const val TAG_CHECK = "owner_check.due"
         const val TAG_ALARM = "credential.alarm"

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,6 +54,9 @@ class VaultNotifySource(
     override val idleLocked: StateFlow<com.vettid.core.data.vault.IdleLocked?> = vault.ownerCheck.idleLocked
     override val ownerCheck: StateFlow<OwnerCheckView?> = vault.ownerCheck.ownerCheck
     override val alarm: StateFlow<CredentialAlarm?> = vault.alarm
+
+    /** The connections' names in memory changed: a `connection.added` posted before its name was known is named then. */
+    override val connectionsChanged: Flow<Unit> = vault.social.connections.map { }
 
     /** The votes list read afresh (review 1, M3): [votesReadAfresh]. */
     override suspend fun refreshVotes(): Boolean = votesReadAfresh(vault.votes)
