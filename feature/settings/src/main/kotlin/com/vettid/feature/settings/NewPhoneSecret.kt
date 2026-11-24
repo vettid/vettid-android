@@ -40,13 +40,9 @@ data class NewPhoneSecretUiState(
     val errorCode: String? = null,
     val done: Boolean = false,
 ) {
-    val canSubmit: Boolean get() = !busy && pin.length >= MIN_PIN && password.isNotEmpty()
+    val canSubmit: Boolean get() = !busy && PinPolicy.wellFormed(pin) && password.isNotEmpty()
 
     override fun toString(): String = "NewPhoneSecretUiState(busy=$busy, error=$error, done=$done)"
-
-    private companion object {
-        const val MIN_PIN = 6
-    }
 }
 
 /**
@@ -59,7 +55,7 @@ class NewPhoneSecretViewModel @Inject constructor(private val vault: VaultReposi
     private val state = MutableStateFlow(NewPhoneSecretUiState())
     val uiState: StateFlow<NewPhoneSecretUiState> = state.asStateFlow()
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), error = null) }
+    fun setPin(v: String) = state.update { it.copy(pin = PinPolicy.digits(v), error = null) }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 

@@ -393,8 +393,13 @@ data class ChangePinUiState(
      */
     val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
 
-    /** Submit is offered once there is something to judge: a current PIN of the vault PIN's form (§11.3) and both new entries. */
-    val submitAllowed: Boolean get() = !checking && PinPolicy.wellFormed(current) && pin.isNotEmpty() && confirm.isNotEmpty()
+    /**
+     * Submit is offered once there is something to judge: a current PIN of the vault PIN's form (§11.3), both new entries, and
+     * the password when the phone secret asks for it ([withPassword]).
+     */
+    val submitAllowed: Boolean
+        get() = !checking && PinPolicy.wellFormed(current) && pin.isNotEmpty() && confirm.isNotEmpty() &&
+            (!withPassword || password.isNotEmpty())
 
     override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword, check=$check)"
 }
@@ -423,14 +428,14 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
     private val state = MutableStateFlow(ChangePinUiState(withPassword = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePinUiState> = state.asStateFlow()
 
-    fun setCurrent(v: String) = state.update { it.copy(current = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), error = null) }
+    fun setCurrent(v: String) = state.update { it.copy(current = PinPolicy.digits(v), error = null) }
 
     fun setPin(v: String) = state.update {
-        it.copy(pin = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), problem = null, same = false)
+        it.copy(pin = PinPolicy.digits(v), problem = null, same = false)
     }
 
     fun setConfirm(v: String) = state.update {
-        it.copy(confirm = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), mismatch = false)
+        it.copy(confirm = PinPolicy.digits(v), mismatch = false)
     }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
@@ -555,7 +560,7 @@ class DeleteVaultViewModel @Inject constructor(private val vault: VaultRepositor
 
     fun setPhrase(v: String) = state.update { it.copy(phrase = v, phraseWrong = false) }
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), error = null) }
+    fun setPin(v: String) = state.update { it.copy(pin = PinPolicy.digits(v), error = null) }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 

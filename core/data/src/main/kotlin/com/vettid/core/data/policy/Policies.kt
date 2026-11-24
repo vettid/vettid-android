@@ -26,11 +26,19 @@ object PinPolicy {
     )
 
     /**
-     * [pin] has the vault PIN's form (§11.3): 6 to 32 ASCII digits. For a PIN the member already has (unlock, the current PIN
-     * of a change, a deletion, the release update): the vault refuses any other form, so it is not sent. Not the strength
-     * rules of [check], which are for a PIN being chosen.
+     * [pin] has the vault PIN's form (§11.3): 6 to 32 ASCII digits. Every send of a PIN the member already has is gated on
+     * it: the unlock and its way back, the daily check, the release update, the current PIN of a change and of a reset, a
+     * deletion, a transfer out and in, the recovery, the new phone secret, a name change, the history export and the
+     * credential prompts. The vault refuses any other form, so it is not sent. Not the strength rules of [check], which are
+     * for a PIN being chosen.
      */
     fun wellFormed(pin: String): Boolean = pin.length in MIN_LENGTH..MAX_LENGTH && pin.all { it in '0'..'9' }
+
+    /**
+     * What a PIN field keeps of [typed]: its ASCII digits, at most [MAX_LENGTH]. Not `Char.isDigit`, which also takes the
+     * Arabic-Indic, fullwidth and other Unicode digits a keyboard may type, and the vault refuses.
+     */
+    fun digits(typed: String): String = typed.filter { it in '0'..'9' }.take(MAX_LENGTH)
 
     /** The first rule [pin] breaks, or null if it is acceptable. */
     fun check(pin: String): Problem? = when {

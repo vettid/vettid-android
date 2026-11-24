@@ -18,6 +18,21 @@ class PoliciesTest {
         }
     }
 
+    /** A PIN field keeps ASCII digits only, at most 32: never the other Unicode digits `isDigit` takes. */
+    @Test
+    fun digitsKeepsAsciiDigitsOnly() {
+        val arabicIndic = (0x0661..0x0666).map { Char(it) }.joinToString("")
+        val fullwidth = (0xFF11..0xFF16).map { Char(it) }.joinToString("")
+        val devanagari = (0x0967..0x096C).map { Char(it) }.joinToString("")
+        for (other in listOf(arabicIndic, fullwidth, devanagari)) {
+            assertTrue(other.all { it.isDigit() }) // what the fields used to let in
+            assertEquals("", PinPolicy.digits(other))
+            assertFalse(PinPolicy.wellFormed(other))
+        }
+        assertEquals("402817", PinPolicy.digits("4a0 2-8$fullwidth" + "17"))
+        assertEquals("1".repeat(32), PinPolicy.digits("1".repeat(40)))
+    }
+
     @Test
     fun pinRules() {
         assertEquals(PinPolicy.Problem.NOT_DIGITS, PinPolicy.check(""))

@@ -234,7 +234,7 @@ data class UnlockUiState(
     val returnPinAllowed: Boolean get() = returnOffered && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy && !erasing
 
     /** The way back may be started with the PIN typed. */
-    val returnSubmitAllowed: Boolean get() = returnPinAllowed && pin.length >= MIN_PIN_LENGTH
+    val returnSubmitAllowed: Boolean get() = returnPinAllowed && PinPolicy.wellFormed(pin)
 
     /**
      * "Cancel the recovery and unlock" may be pressed whenever it would be sent: a PIN, no wait, the password when the owner
@@ -302,16 +302,12 @@ data class UnlockUiState(
         }
 
     /** Whether the unlock may be sent: a PIN, and with a check due, the password too. */
-    val submitAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH && (!checkDue || password.isNotEmpty())
+    val submitAllowed: Boolean get() = pinAllowed && PinPolicy.wellFormed(pin) && (!checkDue || password.isNotEmpty())
 
     override fun toString(): String =
         "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, serviceWait=$serviceWaitSeconds, " +
             "refused=$refused, signerRefused=$signerRefused, " +
             "notRecognised=$notRecognised, erasing=$erasing, checkDue=$checkDue)"
-
-    private companion object {
-        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
-    }
 }
 
 /** What the unlock screen can ask for. */
@@ -469,7 +465,7 @@ class UnlockViewModel @Inject constructor(
 
     override fun acknowledgeUpdate() = state.update { it.copy(updateAcknowledged = true) }
 
-    override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), message = null) }
+    override fun setPin(v: String) = state.update { it.copy(pin = PinPolicy.digits(v), message = null) }
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
 
@@ -657,7 +653,6 @@ class UnlockViewModel @Inject constructor(
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 
-        private const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         private const val TICK_MS = 1000L
     }
 }

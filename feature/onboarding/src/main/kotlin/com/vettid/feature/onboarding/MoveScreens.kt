@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.CouldNotTell
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -346,8 +347,6 @@ private fun EndedPlain(state: RecoverUiState) {
     if (state.error != null) Failure(state.error, shownCode = state.errorShown)
 }
 
-private const val MIN_PIN = 6
-
 /**
  * The scan step. **Type the code instead** (ANDROID-PLAN 0.1.33) is a text button under the camera, and the primary
  * action when the camera permission is refused or the phone has no camera.
@@ -458,7 +457,7 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
             else -> stringResource(R.string.recover_pin_submit)
         },
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submitPin,
-        primaryEnabled = state.preflightError != null || (state.pinAllowed && state.pin.length >= MIN_PIN),
+        primaryEnabled = state.preflightError != null || (state.pinAllowed && PinPolicy.wellFormed(state.pin)),
         busy = state.busy,
         // A registered recovery can be left (A6 audit E1): also when the release check fails or blocks the PIN.
         secondaryLabel = stringResource(R.string.recover_start_over),
