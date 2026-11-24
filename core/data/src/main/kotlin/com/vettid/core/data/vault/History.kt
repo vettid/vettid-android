@@ -1,5 +1,6 @@
 package com.vettid.core.data.vault
 
+import kotlinx.coroutines.sync.withLock
 import com.vettid.core.vault.AuditEntry
 import com.vettid.core.vault.AuditPage
 import com.vettid.core.vault.VaultApi
@@ -160,11 +161,13 @@ interface HistoryRepository {
 
     /**
      * id → name of the vault's devices (`device.list`, §10.3), for the device of an entry (VAULT-MESSAGING 0.23.2:
-     * `vault.unlocked` and a device's `vault.locked` carry `device_id`; ANDROID-PLAN 0.1.27). Read once per session
-     * and kept; [refresh] reads it again. Null when it was never read (the call failed): the app then names no device,
-     * rather than calling every device removed.
+     * `vault.unlocked` and a device's `vault.locked` carry `device_id`; ANDROID-PLAN 0.1.27). Read once and kept for the
+     * process (until a wipe); [refresh] reads it again, and so does a [wanted] id the kept list lacks (a device paired
+     * since the list was read), once per such id until the next refresh: one still missing after a fresh read is gone. A
+     * read that fails names no one gone, so a later call tries again. One read at a time. Null when it was never read (the
+     * call failed): the app then names no device, rather than calling every device removed.
      */
-    suspend fun deviceNames(refresh: Boolean = false): Map<String, String>? = null
+    suspend fun deviceNames(refresh: Boolean = false, wanted: Collection<String> = emptyList()): Map<String, String>? = null
 
     /** This phone's device id (from its pairing), to mark "This phone" on an entry; null when not known. */
     fun selfDeviceId(): String? = null
@@ -214,20 +217,48 @@ class HistoryManager(
     @Volatile
     private var deviceCache: Map<String, String>? = null
 
-    override suspend fun deviceNames(refresh: Boolean): Map<String, String>? {
-        val kept = deviceCache
+    /** Ids a fresh read did not list: gone, so they make no further read (until a refresh). */
+    private val knownGone = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
+    /** One `device.list` read at a time: two at once could repeat the read, or let the older answer be kept. */
+    private val deviceRead = kotlinx.coroutines.sync.Mutex()
+
+    override suspend fun deviceNames(refresh: Boolean, wanted: Collection<String>): Map<String, String>? {
         val read = devices
         return when {
-            kept != null && !refresh -> kept
-            read == null -> null
-            else -> try {
-                vaultGuard(resend = true) { read() }.also { deviceCache = it }
-            } catch (_: VaultFailure) {
-                // Best effort, as in the export: an older list (or none) rather than a failed History.
-                kept
-            }
+            !refresh && keptFor(wanted) != null -> deviceCache
+            read == null -> deviceCache
+            // A read that ended while this one waited may already answer it.
+            else -> deviceRead.withLock { keptFor(wanted).takeIf { !refresh } ?: readDevices(read, refresh, wanted) }
         }
     }
+
+    private suspend fun readDevices(
+        read: suspend () -> Map<String, String>,
+        refresh: Boolean,
+        wanted: Collection<String>,
+    ): Map<String, String>? {
+        val kept = deviceCache
+        val missing = missingFrom(kept, wanted)
+        return try {
+            vaultGuard(resend = true) { read() }.also { fresh ->
+                deviceCache = fresh
+                if (refresh) knownGone.clear()
+                knownGone += missing.filter { it !in fresh }
+            }
+        } catch (_: VaultFailure) {
+            // Best effort, as in the export: an older list (or none) rather than a failed History.
+            kept
+        }
+    }
+
+    /** The kept list when it names every [wanted] id not known to be gone; null when a read is needed. */
+    private fun keptFor(wanted: Collection<String>): Map<String, String>? =
+        deviceCache?.takeIf { missingFrom(it, wanted).isEmpty() }
+
+    // A device paired after the list was read is not in it: read again rather than call it removed (R33).
+    private fun missingFrom(kept: Map<String, String>?, wanted: Collection<String>): List<String> =
+        kept?.let { k -> wanted.filter { it !in k && it !in knownGone } }.orEmpty()
 
     override fun selfDeviceId(): String? = self()
 
@@ -235,6 +266,7 @@ class HistoryManager(
     fun clear() {
         cache.clear()
         deviceCache = null
+        knownGone.clear()
     }
 
     override suspend fun auditPage(request: AuditRequest): AuditResult {

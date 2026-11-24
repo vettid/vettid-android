@@ -333,6 +333,20 @@ class HistoryEventTitlesTest {
         FakeItems(),
     )
 
+    /** R33: an entry's detail names a device paired since the names were read (it reads them again), not "Removed device". */
+    @Test
+    fun anEntrysDetailNamesADevicePairedSinceTheNamesWereRead() = runTest(main.dispatcher) {
+        var list = mapOf("phone" to "Pixel 7")
+        val desk = AuditEntry("e20", 20, t0.toString(), "device.paired", null, "desk", null, null, "", "")
+        val vault = Vault({ AuditPage(listOf(desk), seq = 20) })
+        val manager = HistoryManager(ops = { vault }, devices = { list })
+        manager.deviceNames() // read once, before the desktop paired
+        list = mapOf("phone" to "Pixel 7", "desk" to "billie")
+        val model = HistoryEntryViewModel(SavedStateHandle(mapOf("seq" to 20L)), manager, FakeSocial(), FakeItems())
+        val s = settle(model) { it.entry != null && !it.loading }
+        assertEquals("billie", s.deviceName)
+    }
+
     private fun TestScope.settle(model: HistoryEntryViewModel, done: (HistoryEntryUiState) -> Boolean): HistoryEntryUiState {
         repeat(SETTLE_ROUNDS) {
             advanceUntilIdle()
