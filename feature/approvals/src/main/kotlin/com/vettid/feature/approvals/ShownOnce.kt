@@ -12,7 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
-import com.vettid.core.ui.components.LocalCheckCovered
+import com.vettid.core.ui.components.LocalCheckComing
 
 /**
  * A result shown once: leaving its screen by any way (OK, back, the drawer, a notification) counts as read, so a restored
@@ -29,7 +29,7 @@ internal fun FinishWhenLeft(onFinish: () -> Unit) {
     val activity = LocalContext.current.findActivity()
     val finish by rememberUpdatedState(onFinish)
     DisposableEffect(Unit) { onDispose { if (activity?.isChangingConfigurations != true) finish() } }
-    val covered = LocalCheckCovered.current
+    val covered = LocalCheckComing.current
     var seen by remember { mutableStateOf(false) }
     LaunchedEffect(covered) { if (!covered) seen = true else if (seen) finish() }
 }

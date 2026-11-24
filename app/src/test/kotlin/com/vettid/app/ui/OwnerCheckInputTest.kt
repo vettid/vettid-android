@@ -25,6 +25,7 @@ import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.AlertDialog
 import com.vettid.core.ui.components.InputGuard
+import com.vettid.core.ui.components.LocalCheckComing
 import com.vettid.core.ui.components.LocalCheckCovered
 import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.core.ui.components.SecretField
@@ -81,7 +82,12 @@ class OwnerCheckInputTest {
         cover = covering
         val mode = covering.mode
         Box {
-            CompositionLocalProvider(LocalInputGuard provides guard, LocalCheckCovered provides (mode != null)) {
+            // The shell's own expressions (AppShell), so that these tests pin what the app provides.
+            CompositionLocalProvider(
+                LocalInputGuard provides guard,
+                LocalCheckCovered provides covering.covered,
+                LocalCheckComing provides covering.coming,
+            ) {
                 when (screen) {
                     Screen.READ_ONLY, Screen.DRAWER -> Text("content", Modifier.testTag("content"))
                     Screen.EDITOR -> Editor()

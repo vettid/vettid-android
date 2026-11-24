@@ -477,7 +477,7 @@ data class DecisionActions(
 @Composable
 @Suppress("CyclomaticComplexMethod", "ReturnCount")
 fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions, modifier: Modifier = Modifier) {
-    HoldsInput(state.openForDecision)
+    HoldsInput(state.holdsCheck)
     LaunchedEffect(state.done) { if (state.done) actions.onBack() }
     // A restored entry already done (its result read and left before): nothing is drawn while it closes, so the result is not
     // shown again for the length of the transition (R33). One that becomes done here keeps its screen while it closes.

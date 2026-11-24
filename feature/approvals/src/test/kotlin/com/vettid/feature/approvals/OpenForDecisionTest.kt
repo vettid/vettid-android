@@ -36,4 +36,23 @@ class OpenForDecisionTest {
         assertFalse(ApprovalDetailUiState(key = d.key, approval = d, outcome = allowed).openForDecision)
         assertFalse(ApprovalDetailUiState(key = a.key, approval = a, criticalResult = "ok").openForDecision)
     }
+
+    /**
+     * The check still waits while the outcome or result is on screen, until it is read: a check raised by the decision's own
+     * answer would take it away unread (R33). Not once it was read (done), and not for an empty screen.
+     */
+    @Test
+    fun `the check waits while an outcome or result is unread`() {
+        val d = Approval.DeviceRequest(
+            "device.session.pending", "s1", "Laptop", "desktop", null, at, at.plusSeconds(600), deviceId = "D",
+        )
+        val open = ApprovalDetailUiState(key = d.key, approval = d)
+        assertTrue(open.holdsCheck)
+        val allowed = open.copy(outcome = DeviceOutcome.Allowed(at.plusSeconds(3_600)))
+        assertTrue("the outcome's first apply keeps the check waiting", allowed.holdsCheck)
+        assertFalse("read", allowed.copy(done = true).holdsCheck)
+        assertTrue(ApprovalDetailUiState(key = a.key, approval = a, criticalResult = "ok").holdsCheck)
+        assertFalse(ApprovalDetailUiState(key = a.key, approval = a, criticalResult = "ok", done = true).holdsCheck)
+        assertFalse(ApprovalDetailUiState(key = a.key).holdsCheck)
+    }
 }

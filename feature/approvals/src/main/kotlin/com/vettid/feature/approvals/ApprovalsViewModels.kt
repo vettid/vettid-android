@@ -355,6 +355,13 @@ data class ApprovalDetailUiState(
     val openForDecision: Boolean
         get() = approval != null && !done && !gone && !withdrawn && !held && outcome == null && criticalResult == null
 
+    /**
+     * The daily check waits for this screen ([com.vettid.core.ui.components.HoldsInput], within its usual bound): while a
+     * request is open for a decision, and while its outcome or result is on screen until it is read (OK, Back). A check
+     * that came up the moment an outcome was set would take it away unread (R33).
+     */
+    val holdsCheck: Boolean get() = openForDecision || (!done && (outcome != null || criticalResult != null))
+
     /** (AA5) The length that Allow sends: the member's choice, else the requested one, else 1 hour. */
     val allowSeconds: Int
         get() = sessionSeconds ?: DeviceAsks.preselected((approval as? Approval.DeviceRequest)?.seconds)

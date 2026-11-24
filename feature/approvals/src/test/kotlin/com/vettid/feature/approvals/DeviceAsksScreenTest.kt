@@ -126,6 +126,20 @@ class DeviceAsksScreenTest {
         assertEquals(1, finished)
     }
 
+    /** The daily check waits for an outcome on screen until it is read (R33): the screen holds the guard. */
+    @Test
+    fun anUnreadOutcomeHoldsTheCheck() {
+        val guard = com.vettid.core.ui.components.InputGuard()
+        val s = state(session(), outcome = DeviceOutcome.Allowed(now.plusSeconds(3_600)))
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(com.vettid.core.ui.components.LocalInputGuard provides guard) {
+                ApprovalDetailScreen(s, DecisionActions())
+            }
+        }
+        rule.waitForIdle()
+        assertTrue(guard.active)
+    }
+
     /** The same for a critical-item use's result. */
     @Test
     fun leavingACriticalResultCountsAsRead() {

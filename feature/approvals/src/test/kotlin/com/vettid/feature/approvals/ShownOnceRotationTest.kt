@@ -6,7 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import com.vettid.core.ui.components.LocalCheckCovered
+import com.vettid.core.ui.components.LocalCheckComing
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -33,7 +33,7 @@ class ShownOnceRotationTest {
     fun theDailyChecksCoverComingUpFinishesTheResult() {
         var finished = 0
         var covered by mutableStateOf(false)
-        rule.setContent { CompositionLocalProvider(LocalCheckCovered provides covered) { FinishWhenLeft { finished++ } } }
+        rule.setContent { CompositionLocalProvider(LocalCheckComing provides covered) { FinishWhenLeft { finished++ } } }
         rule.waitForIdle()
         assertEquals(0, finished)
         covered = true
@@ -46,7 +46,7 @@ class ShownOnceRotationTest {
     fun aResultFirstComposedUnderTheCoverIsNotFinished() {
         var finished = 0
         var covered by mutableStateOf(true)
-        rule.setContent { CompositionLocalProvider(LocalCheckCovered provides covered) { FinishWhenLeft { finished++ } } }
+        rule.setContent { CompositionLocalProvider(LocalCheckComing provides covered) { FinishWhenLeft { finished++ } } }
         rule.waitForIdle()
         assertEquals(0, finished)
         covered = false

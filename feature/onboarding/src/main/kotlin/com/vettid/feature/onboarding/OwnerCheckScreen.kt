@@ -304,7 +304,8 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                 }
                 if (m == null && fieldsBrought) return@LaunchedEffect
                 withFrameNanos { }
-                if (m is OwnerCheckMessage.MaybeCounted || m is OwnerCheckMessage.Failed) {
+                // The wait line takes the message line's place during a backoff: then the fields are brought instead.
+                if ((m is OwnerCheckMessage.MaybeCounted || m is OwnerCheckMessage.Failed) && state.waitSeconds == 0L) {
                     messageInView.bringIntoView()
                 } else {
                     fieldsInView.bringIntoView()

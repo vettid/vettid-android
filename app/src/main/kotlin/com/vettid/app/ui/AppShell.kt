@@ -48,6 +48,7 @@ import com.vettid.core.notify.Visible
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.core.ui.components.InputGuard
 import com.vettid.core.ui.components.LocalCallScreenShown
+import com.vettid.core.ui.components.LocalCheckComing
 import com.vettid.core.ui.components.LocalCheckCovered
 import com.vettid.core.ui.components.LocalInputGuard
 import com.vettid.feature.settings.NotificationSettingsRoute
@@ -274,7 +275,7 @@ fun AppShell(
     // must not receive what is typed for the check, nor keep the keyboard's connection (as the app lock does).
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
-    val covered = checkMode != null
+    val covered = cover.covered
     LaunchedEffect(covered) {
         if (covered) {
             focus.clearFocus(force = true)
@@ -383,7 +384,8 @@ fun AppShell(
                 ) {
                     CompositionLocalProvider(
                         LocalInputGuard provides inputGuard,
-                        LocalCheckCovered provides (covered || cover.undecided),
+                        LocalCheckCovered provides cover.covered,
+                        LocalCheckComing provides cover.coming,
                         LocalApprovalsIndicator provides indicator,
                     ) {
                         NavHost(navController = navController, startDestination = MessagesRoute) {

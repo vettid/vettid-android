@@ -219,9 +219,10 @@ class FeedNotifier(
      */
     private fun postAndNote(item: FeedItem, n: LocalNotification, channel: String, previews: NotificationPreviews, names: FeedNames) {
         val noted = synchronized(lock) {
-            postLocked(item, n)
-            // The cover may have come up since [previews] was read: then it was posted in public form, and is not kept.
-            noteUnnamed(item, channel, previews == NotificationPreviews.NOTHING || source.coveredNow(), names)
+            // The cover may have come up since [previews] was read: then it is posted in public form, and is not kept.
+            val covered = source.coveredNow()
+            postLocked(item, n, covered)
+            noteUnnamed(item, channel, previews == NotificationPreviews.NOTHING || covered, names)
         }
         // The name may have landed between the names read for [n] and the noting, its change already gone by: look once.
         if (noted) nameIfKnown(item, channel)
@@ -404,9 +405,9 @@ class FeedNotifier(
      * the vault locked or the phone was wiped is not posted after its cancel; the cover that came up meanwhile gives
      * the public form.
      */
-    private fun postLocked(item: FeedItem, n: LocalNotification) {
+    private fun postLocked(item: FeedItem, n: LocalNotification, covered: Boolean = source.coveredNow()) {
         if (!notifiable(item)) return
-        val shown = if (source.coveredNow()) {
+        val shown = if (covered) {
             n.publicForm(quiet = false)
         } else {
             coverDone = false
