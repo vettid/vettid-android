@@ -2343,7 +2343,11 @@ class FeedManagerTest {
         val gate = CompletableDeferred<Unit>()
         ops.gate = gate // the wake's read waits, with the list's answer queued (y2 active in it)
         ops.pages += FeedPage(listOf(item("i1", 1), item("y2", 2)), 2)
+        val before = synchronized(ops) { ops.lists.size }
         m.replay(event(item("y2", 2)), wake = true) // covered: kept
+        // The wake's read is out (held at the gate) when the hold comes.
+        repeat(SETTLE_TRIES) { if (synchronized(ops) { ops.lists.size } < before + 1) { runCurrent(); Thread.sleep(SETTLE_MS) } }
+        assertEquals("the wake's read is held at the gate", before + 1, synchronized(ops) { ops.lists.size })
         m.clear(endsOpening = false) // the hold
         ops.gate = null
         gate.complete(Unit)
