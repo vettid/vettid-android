@@ -195,9 +195,9 @@ class HistoryViewModel @Inject constructor(
     }
 
     /** The device names (ANDROID-PLAN 0.1.27), best effort: without them rows name no device. */
-    private fun loadDevices(refresh: Boolean) {
+    private fun loadDevices(refresh: Boolean, wanted: Collection<String> = emptyList()) {
         viewModelScope.launch {
-            history.deviceNames(refresh)?.let { d -> state.update { it.copy(deviceNames = d) } }
+            history.deviceNames(refresh, wanted)?.let { d -> state.update { it.copy(deviceNames = d) } }
         }
     }
 
@@ -317,6 +317,10 @@ class HistoryViewModel @Inject constructor(
                     chainBroken = it.chainBroken || snap.chainBroken, loading = false, loadingMore = false, error = null,
                 )
             }
+            // A device these entries name but the names lack (paired since they were read): read them again.
+            val known = state.value.deviceNames
+            val wanted = snap.entries.mapNotNull { it.deviceId }.distinct()
+            if (known != null && wanted.any { it !in known }) loadDevices(refresh = false, wanted = wanted)
         } catch (e: VaultFailure) {
             state.update { s ->
                 val failed = s.copy(loading = false, loadingMore = false, error = e.kind, errorCode = e.shownCode)
@@ -396,7 +400,7 @@ class HistoryEntryViewModel @Inject constructor(
                     ?: history.auditPage(AuditRequest(beforeSeq = seq + 1, limit = 1)).entries.firstOrNull { it.seq == seq }
                 val c = e?.connectionId?.let { id -> connections.connections.value.firstOrNull { it.id == id } }
                 val i = e?.let { AuditKinds.itemOf(it.kind, it.ref) }?.let { id -> items.items.value.firstOrNull { it.itemId == id } }
-                val devices = e?.deviceId?.let { history.deviceNames() }
+                val devices = e?.deviceId?.let { id -> history.deviceNames(wanted = listOf(id)) }
                 state.update {
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
