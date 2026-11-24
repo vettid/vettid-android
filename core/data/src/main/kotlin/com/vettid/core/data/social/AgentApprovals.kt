@@ -10,7 +10,8 @@ import com.vettid.core.data.devices.RunFolder
 import com.vettid.core.data.devices.RunFolders
 
 /**
- * An agent's `item.run`, `item.proxy` and `item.get` held for approval, read as ANDROID-PLAN 0.1.138 AA8 "Fail closed" says:
+ * An agent's `item.run`, `item.proxy` and `item.get` held for approval (and, for [named], its `item.use` and `catalog` too),
+ * read as ANDROID-PLAN 0.1.139 AA8 "Fail closed" says:
  * from the whole `approval.pending` (or its `pending.list` entry) read strictly, so a duplicate member anywhere has already
  * made it unreadable. Anything this version does not know, or that does not fit, is [HeldRequest.Unshown] (deny only). Pure.
  */
@@ -57,15 +58,15 @@ object AgentApprovals {
     private val MEANINGFUL = setOf("flags", "previous_sha256", "previous_path", "replaces", "proxy", "folders")
 
     /**
-     * An `item.use`'s or a `catalog`'s envelope, read strictly (so no duplicate member): none of [MEANINGFUL]. Another
+     * An `item.use`'s or a `catalog`'s envelope, read strictly (so no duplicate member): [named], and none of [MEANINGFUL]. Another
      * unknown member is ignored, as §6.8 step 1 says for these types.
      */
-    fun plainShown(p: StrictObject): Boolean = p["body"] is StrictObject && MEANINGFUL.none { p.has(it) }
+    fun plainShown(p: StrictObject): Boolean = named(p) && p["body"] is StrictObject && MEANINGFUL.none { p.has(it) }
 
     /** An `item.get`'s envelope: known members only, no `proxy` or `replaces`, and `flags` at most `history`. */
     @Suppress("ReturnCount") // each early false is one rule of AA8's list
     fun getShown(p: StrictObject): Boolean {
-        if (p["body"] !is StrictObject) return false
+        if (!named(p) || p["body"] !is StrictObject) return false
         val flags = flags(p) ?: return false
         return envelope(p, allowProxy = false, allowReplaces = false) && flags.all { it == "history" } && noRunMembers(p)
     }
@@ -73,7 +74,7 @@ object AgentApprovals {
     /** An `item.run`, or [HeldRequest.Unshown]. */
     @Suppress("ReturnCount", "CyclomaticComplexMethod")
     fun run(p: StrictObject): HeldRequest {
-        if (!envelope(p, allowProxy = false, allowReplaces = true)) return HeldRequest.Unshown
+        if (!named(p) || !envelope(p, allowProxy = false, allowReplaces = true)) return HeldRequest.Unshown
         val body = p["body"] as? StrictObject ?: return HeldRequest.Unshown
         if (!body.members.keys.all { it in RUN_BODY }) return HeldRequest.Unshown
         val wire = flags(p) ?: return HeldRequest.Unshown
@@ -112,7 +113,7 @@ object AgentApprovals {
     /** An `item.proxy`, or [HeldRequest.Unshown]. */
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // each early return is one rule of AA8's list
     fun proxy(p: StrictObject): HeldRequest {
-        if (!envelope(p, allowProxy = true, allowReplaces = true) || !noRunMembers(p)) return HeldRequest.Unshown
+        if (!named(p) || !envelope(p, allowProxy = true, allowReplaces = true) || !noRunMembers(p)) return HeldRequest.Unshown
         val body = p["body"] as? StrictObject ?: return HeldRequest.Unshown
         if (!body.members.keys.all { it in PROXY_BODY }) return HeldRequest.Unshown
         // Any flag on a proxy.
@@ -130,6 +131,19 @@ object AgentApprovals {
         if (!replacesOk(p)) return HeldRequest.Unshown
         return HeldRequest.ItemProxy(item, field, host, header, prefix, seconds, str(p, "replaces"))
     }
+
+    /**
+     * The request names its device and itself and has a time to end: a non-blank string `device_id`, a `name` the screen can
+     * show (not only spaces or invisible characters once cleaned), and an `exp`
+     * that reads as a time. The screen says who asks and how long it waits, and the approval ends at `exp`; without them it
+     * would show "an agent" that never expires, so every agent op is deny only (AA8 "Fail closed"; owner a, GC #17671, as iOS).
+     */
+    private fun named(p: StrictObject): Boolean =
+        !str(p, "device_id").isNullOrBlank() &&
+            // The name the screen shows (cleaned as `device.list`'s are): one of only spaces or invisible characters
+            // would show "An agent" with Approve offered.
+            com.vettid.core.data.devices.DeviceWire.cleanName(str(p, "name")).isNotEmpty() &&
+            ApprovalParser.instant(str(p, "exp")) != null
 
     /** Known top-level members only; `proxy` and `replaces` only where they belong. */
     private fun envelope(p: StrictObject, allowProxy: Boolean, allowReplaces: Boolean): Boolean =

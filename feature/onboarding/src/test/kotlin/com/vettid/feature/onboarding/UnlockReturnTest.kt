@@ -74,6 +74,24 @@ class UnlockReturnTest {
         assertEquals("", vm.uiState.value.pin)
     }
 
+    /** The way back takes the same 6 to 32 digits as the unlock (§11.3): five are not sent. */
+    @Test
+    fun theWayBackNeedsSixDigits() = runTest {
+        vault.moveUnconfirmed.value = failed
+        val vm = vm()
+        advanceUntilIdle()
+        vm.setPin("40281")
+        vm.askReturn()
+        vm.confirmReturn()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.returnSubmitAllowed)
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vault.calls.none { it.startsWith("returnToPreviousRelease") })
+        vm.setPin("402817")
+        assertTrue(vm.uiState.value.returnSubmitAllowed)
+    }
+
     @Test
     fun returnConfirmedWithoutAPinAsksForItFirst() = runTest {
         vault.moveUnconfirmed.value = failed

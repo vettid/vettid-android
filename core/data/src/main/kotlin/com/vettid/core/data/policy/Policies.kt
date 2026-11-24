@@ -25,6 +25,13 @@ object PinPolicy {
         "100200", "098765", "012345", "123456789", "1234567890", "0123456789", "11223344",
     )
 
+    /**
+     * [pin] has the vault PIN's form (§11.3): 6 to 32 ASCII digits. For a PIN the member already has (unlock, the current PIN
+     * of a change, a deletion, the release update): the vault refuses any other form, so it is not sent. Not the strength
+     * rules of [check], which are for a PIN being chosen.
+     */
+    fun wellFormed(pin: String): Boolean = pin.length in MIN_LENGTH..MAX_LENGTH && pin.all { it in '0'..'9' }
+
     /** The first rule [pin] breaks, or null if it is acceptable. */
     fun check(pin: String): Problem? = when {
         pin.isEmpty() || !pin.all { it in '0'..'9' } -> Problem.NOT_DIGITS
