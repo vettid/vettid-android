@@ -386,7 +386,7 @@ class OnboardingViewModel @Inject constructor(
 
     override fun setPin(v: String) = state.update {
         // The PIN the password step asks for (askPin) is the member's own and is sent: ASCII digits only. The PIN being
-        // chosen keeps what was typed, so that PinPolicy.check can say why it is refused.
+        // chosen is judged by PinPolicy.check, whose rules it must pass (its field already takes ASCII digits only).
         val pin = if (it.askPin) PinPolicy.digits(v) else v.take(PinPolicy.MAX_LENGTH)
         // The password step may ask for the PIN too (askPin): "Don't use your PIN as your password." follows it.
         val rule = if (it.passwordRefused || it.password.isEmpty()) it.passwordRule else PasswordRule.check(it.password, pin)

@@ -47,6 +47,19 @@ class PinFieldsAsciiTest {
         assertFalse("a short PIN is not sent", "renewPhoneSecret" in vault.calls)
         vm.setPin("975310")
         assertTrue(vm.uiState.value.canSubmit)
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue("a PIN of the vault's form is sent", "renewPhoneSecret" in vault.calls)
+    }
+
+    @Test
+    fun aTransferOutAndANameChangeNeedAPinOfTheVaultsForm() {
+        val approve = TransferOutUiState(step = TransferOutStep.APPROVE, pin = "975310", password = "p")
+        assertTrue(approve.canApprove)
+        assertFalse(approve.copy(pin = "97531").canApprove)
+        val confirm = ChangeNameUiState(step = ChangeNameStep.CONFIRM, pin = "975310", password = "p")
+        assertTrue(confirm.submitAllowed)
+        assertFalse(confirm.copy(pin = "97531").submitAllowed)
     }
 
     @Test

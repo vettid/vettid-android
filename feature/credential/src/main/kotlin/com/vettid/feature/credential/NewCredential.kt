@@ -165,6 +165,12 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
     fun confirm() {
         val s = state.value
         if (!s.confirming) return
+        // The entries again, at the send: the daily check may have wiped them while the confirmation was open (it comes back
+        // after the check), and nothing is sent without them. Not [filled], which a change being decided turns off.
+        if (!PinPolicy.wellFormed(s.pin) || s.current.isEmpty() || s.password.isEmpty()) {
+            state.update { it.copy(confirming = false) }
+            return
+        }
         state.update { it.copy(confirming = false, busy = true, error = null, check = null) }
         following = true
         viewModelScope.launch {
