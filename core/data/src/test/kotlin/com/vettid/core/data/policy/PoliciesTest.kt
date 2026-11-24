@@ -9,6 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PoliciesTest {
+    /** A PIN the member already has takes the vault PIN's form (§11.3): 6 to 32 ASCII digits, nothing about its strength. */
+    @Test
+    fun wellFormedIsTheVaultPinsForm() {
+        for (ok in listOf("111111", "402817", "1".repeat(32))) assertTrue(ok, PinPolicy.wellFormed(ok))
+        for (bad in listOf("", "40281", "1".repeat(33), "40281a", "40281 7", "\u0664\u0660\u0662\u0668\u0661\u0667")) {
+            assertFalse(bad, PinPolicy.wellFormed(bad))
+        }
+    }
+
     @Test
     fun pinRules() {
         assertEquals(PinPolicy.Problem.NOT_DIGITS, PinPolicy.check(""))

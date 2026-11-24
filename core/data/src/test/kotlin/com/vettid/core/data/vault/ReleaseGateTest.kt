@@ -650,7 +650,7 @@ class ReleaseGateTest {
         m.refreshOffer()
         val told = m.toldPauses()
         ops.results += UpdateStepResult.Moved
-        assertTrue(m.start("2468", behind))
+        assertTrue(m.start("246813", behind))
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value?.step)
         m.finish()
@@ -667,7 +667,7 @@ class ReleaseGateTest {
         m.vaultOpened()
         m.refreshOffer()
         ops.results += UpdateStepResult.Moved
-        assertTrue(m.start("2468", behind))
+        assertTrue(m.start("246813", behind))
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value?.step)
         // The opening on release 5 reads release 6.
@@ -699,7 +699,7 @@ class ReleaseGateTest {
                 m.refreshOffer()
             }
         }
-        assertTrue(m.start("2468", behind))
+        assertTrue(m.start("246813", behind))
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value?.step)
         assertTrue("the newer offer stays", m.behind.value && m.required.value)
