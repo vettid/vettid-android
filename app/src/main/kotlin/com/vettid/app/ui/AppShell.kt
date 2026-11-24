@@ -109,6 +109,8 @@ import com.vettid.feature.items.RuleEditRoute
 import com.vettid.feature.items.SharedWithYouRoute
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
+import com.vettid.feature.connections.ScanRoute
+import com.vettid.feature.messages.PhotoViewerRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
 import com.vettid.feature.connections.ConnectionsHost
 import com.vettid.feature.connections.InviteRoute
@@ -127,6 +129,10 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.vettid.core.ui.components.ApprovalsIndicator
+import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.social.OpenApprovals
+import com.vettid.core.ui.components.LocalApprovalsIndicator
 import com.vettid.feature.onboarding.OwnerCheckMode
 import com.vettid.feature.onboarding.OwnerCheckRoute
 import android.Manifest
@@ -198,6 +204,7 @@ fun AppShell(
     }
     // What is on screen is not notified (ANDROID-PLAN 0.1.23, Notification modes 7); in the background, everything is.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { shell.setVisible(null) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { shell.resumed() }
     LaunchedEffect(backStackEntry?.id) { shell.setVisible(visibleOf(backStackEntry)) }
     // Notifications (0.1.23, §9 question 13): the permission asked once while a mode other than Off is in effect,
     // and the one-time note for installs that never chose a mode.
@@ -224,6 +231,14 @@ fun AppShell(
         null
     } else {
         NotificationBell(feedBadge.unread, feedBadge.urgent) { navController.navigate(NotificationsRoute()) { launchSingleTop = true } }
+    }
+    // The approvals indicator (ANDROID-PLAN §4 "The approvals indicator", D9): every screen of the unlocked shell with a top
+    // bar, detail screens too; not on Approvals or a request's screen, not over a camera or a photo, not while the vault is
+    // held or the check due, not at 0.
+    val open by shell.openApprovals.collectAsStateWithLifecycle()
+    val indicator = approvalsIndicator(open, gate.gated, { route -> current?.hierarchy?.any { it.hasRoute(route) } == true }) {
+        // Always the list, never the single request, even at 1 (6).
+        navController.navigateTopLevel(ApprovalsRoute)
     }
     val chrome = remember(accountName, photo, bell?.unread, bell?.urgent, bell == null) {
         ShellChrome(
@@ -361,7 +376,11 @@ fun AppShell(
                         .fillMaxSize()
                         .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
                 ) {
-                    CompositionLocalProvider(LocalInputGuard provides inputGuard, LocalCheckCovered provides covered) {
+                    CompositionLocalProvider(
+                        LocalInputGuard provides inputGuard,
+                        LocalCheckCovered provides covered,
+                        LocalApprovalsIndicator provides indicator,
+                    ) {
                         NavHost(navController = navController, startDestination = MessagesRoute) {
                             messagesDestination(
                                 chrome,
@@ -780,3 +799,41 @@ private fun Modifier.consumeAllPointers(): Modifier = pointerInput(Unit) {
         while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
     }
 }
+
+/**
+ * Where the approvals indicator is never shown (ANDROID-PLAN §4 "The approvals indicator" 2): Approvals and an entry, a
+ * request being compared or answered (an accepted invitation's safety code, a pairing), and the full-screen camera and
+ * photo. The cameras inside a screen (the profile photo, the wallet's scan) clear it themselves.
+ */
+internal val INDICATOR_HIDDEN_ON: List<kotlin.reflect.KClass<*>> = listOf(
+    ApprovalsRoute::class,
+    ApprovalDetailRoute::class,
+    AcceptRoute::class,
+    PairRoute::class,
+    ScanRoute::class,
+    PhotoViewerRoute::class,
+)
+
+/**
+ * The indicator the shell provides (2, 8): none while the vault is held or the check due ([gated]), on a screen of
+ * [INDICATOR_HIDDEN_ON] ([on] tells whether the current destination is that route), or at 0.
+ */
+internal fun approvalsIndicator(
+    open: OpenApprovals,
+    gated: Boolean,
+    on: (kotlin.reflect.KClass<*>) -> Boolean,
+    onClick: () -> Unit,
+): ApprovalsIndicator? =
+    if (gated || open.count <= 0 || INDICATOR_HIDDEN_ON.any(on)) {
+        null
+    } else {
+        ApprovalsIndicator(
+            count = open.count,
+            critical = open.critical != null,
+            urgent = open.critical?.urgent == true,
+            deadline = open.critical?.deadline,
+            // A name the connection or device chose: isolated, as everywhere it is spoken (11).
+            label = open.critical?.label?.let(AccountNames::isolate),
+            onClick = onClick,
+        )
+    }

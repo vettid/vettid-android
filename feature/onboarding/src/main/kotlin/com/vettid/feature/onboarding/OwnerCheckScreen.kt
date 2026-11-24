@@ -178,10 +178,10 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         modifier = Modifier.testTag("owner_check"),
         // Cancel stays beside Lock vault while the vault is probably locked (a voluntary check or the hold-off can be left).
         onBack = if (cancelBesideLock) onCancel else null,
-        topActions = {
-            if (cancelBesideLock) {
-                TopBarTextAction(stringResource(R.string.ownercheck_cancel), onCancel, Modifier.testTag("owner_check_cancel"))
-            }
+        topActions = if (cancelBesideLock) {
+            { TopBarTextAction(stringResource(R.string.ownercheck_cancel), onCancel, Modifier.testTag("owner_check_cancel")) }
+        } else {
+            null
         },
         header = {
             Spacer(Modifier.height(Spacing.l))
