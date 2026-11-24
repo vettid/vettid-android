@@ -393,6 +393,9 @@ data class ChangePinUiState(
      */
     val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
 
+    /** Submit is offered once there is something to judge: a current PIN of the vault PIN's form (§11.3) and both new entries. */
+    val submitAllowed: Boolean get() = !checking && PinPolicy.wellFormed(current) && pin.isNotEmpty() && confirm.isNotEmpty()
+
     override fun toString(): String = "ChangePinUiState(busy=$busy, error=$error, done=$done, withPassword=$withPassword, check=$check)"
 }
 
@@ -420,11 +423,15 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
     private val state = MutableStateFlow(ChangePinUiState(withPassword = vault.usesPhoneSecret))
     val uiState: StateFlow<ChangePinUiState> = state.asStateFlow()
 
-    fun setCurrent(v: String) = state.update { it.copy(current = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), error = null) }
+    fun setCurrent(v: String) = state.update { it.copy(current = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), error = null) }
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), problem = null, same = false) }
+    fun setPin(v: String) = state.update {
+        it.copy(pin = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), problem = null, same = false)
+    }
 
-    fun setConfirm(v: String) = state.update { it.copy(confirm = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), mismatch = false) }
+    fun setConfirm(v: String) = state.update {
+        it.copy(confirm = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), mismatch = false)
+    }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 
@@ -486,7 +493,8 @@ class ChangePinViewModel @Inject constructor(private val vault: VaultRepository)
         val p = PinPolicy.check(s.pin)
         when {
             // (§11.14.9) Nothing is sent while a change is being decided.
-            s.checking || s.current.isEmpty() -> return
+            // The current PIN is one the vault holds: 6 to 32 digits, else it is not sent (§11.3).
+            s.checking || !PinPolicy.wellFormed(s.current) -> return
             s.withPassword && s.password.isEmpty() -> return
             p != null -> state.update { it.copy(problem = p) }
             s.pin == s.current -> state.update { it.copy(same = true) }
@@ -531,13 +539,9 @@ data class DeleteVaultUiState(
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     val errorCode: String? = null,
 ) {
-    val ready: Boolean get() = DeletePhrase.matches(phrase) && pin.length >= MIN_PIN && password.isNotEmpty() && acknowledged
+    val ready: Boolean get() = DeletePhrase.matches(phrase) && PinPolicy.wellFormed(pin) && password.isNotEmpty() && acknowledged
 
     override fun toString(): String = "DeleteVaultUiState(ready=$ready, busy=$busy, error=$error)"
-
-    private companion object {
-        const val MIN_PIN = 4
-    }
 }
 
 /**
@@ -551,7 +555,7 @@ class DeleteVaultViewModel @Inject constructor(private val vault: VaultRepositor
 
     fun setPhrase(v: String) = state.update { it.copy(phrase = v, phraseWrong = false) }
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter(Char::isDigit).take(PinPolicy.MAX_LENGTH), error = null) }
+    fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c in '0'..'9' }.take(PinPolicy.MAX_LENGTH), error = null) }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 

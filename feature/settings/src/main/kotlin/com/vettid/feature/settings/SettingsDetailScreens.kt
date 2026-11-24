@@ -423,8 +423,7 @@ fun ChangePinContent(
         },
         primaryLabel = stringResource(if (state.done) R.string.settings_done else R.string.settings_pin_submit),
         onPrimary = if (state.done) onBack else onSubmit,
-        primaryEnabled = state.done ||
-            (!state.checking && state.current.isNotEmpty() && state.pin.isNotEmpty() && state.confirm.isNotEmpty()),
+        primaryEnabled = state.done || state.submitAllowed,
         busy = state.busy,
         onBack = onBack,
     ) {

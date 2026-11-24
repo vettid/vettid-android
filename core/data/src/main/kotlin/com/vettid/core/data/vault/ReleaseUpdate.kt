@@ -639,7 +639,8 @@ class ReleaseUpdateManager(
     override val pinGeneration: Int get() = ops.pinGeneration()
 
     override fun start(pin: String, offer: ReleaseUpdateOffer, generation: Int?): Boolean {
-        if (running() || pin.isEmpty() || !mayStart()) return false
+        // A PIN the vault would refuse (§11.3) is never sent, and the open vault is not locked for it.
+        if (running() || !com.vettid.core.data.policy.PinPolicy.wellFormed(pin) || !mayStart()) return false
         // The PIN as the keypad took it: whatever moves which PIN the vault expects before an unlock goes out stops it.
         val typed = taken(pin, generation)
         val guidUsable = userGuidUsable()
@@ -670,7 +671,7 @@ class ReleaseUpdateManager(
 
     override fun retry(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
-        if (running() || pin.isEmpty() || refusedWhileChangeUnresolved()) return
+        if (running() || !com.vettid.core.data.policy.PinPolicy.wellFormed(pin) || refusedWhileChangeUnresolved()) return
         val typed = taken(pin, generation)
         when (p.step) {
             UpdateStep.BAD_PIN -> launch { approve(typed) }
@@ -699,7 +700,8 @@ class ReleaseUpdateManager(
 
     override fun abandon(pin: String, generation: Int?) {
         val p = progressFlow.value ?: return
-        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() && pin.isNotEmpty()
+        val offered = p.step == UpdateStep.NEW_RELEASE_FAILED && p.canAbandon && ops.canAbandon() &&
+            com.vettid.core.data.policy.PinPolicy.wellFormed(pin)
         if (running() || !offered || refusedWhileChangeUnresolved()) return
         val typed = taken(pin, generation)
         launch { wayBack(typed) }
@@ -708,7 +710,7 @@ class ReleaseUpdateManager(
     override fun returnToPrevious(pin: String, generation: Int?): Boolean {
         val m = ops.moveMarker()?.takeIf { it.failed && ops.canAbandon() }
         val idle = !running() && progressFlow.value == null
-        if (!idle || pin.isEmpty() || m == null) return false
+        if (!idle || !com.vettid.core.data.policy.PinPolicy.wellFormed(pin) || m == null) return false
         // The update's screens take over (the root shows them over every phase), as if the move had just failed there.
         progressFlow.value = UpdateProgress(UpdateStep.NEW_RELEASE_FAILED, m.from, m.to, vaultOpen = false, canAbandon = true)
         if (!refusedWhileChangeUnresolved()) {

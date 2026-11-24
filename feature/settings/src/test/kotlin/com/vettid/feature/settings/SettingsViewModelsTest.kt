@@ -204,6 +204,38 @@ class SettingsViewModelsTest {
         assertTrue(prefs.current.value.appLockEnabled)
     }
 
+    /** The current PIN is one the vault holds, 6 to 32 digits (§11.3): five are not sent. */
+    @Test
+    fun changePinSendsNoShortCurrentPin() = runTest {
+        val vm = ChangePinViewModel(vault)
+        vm.setCurrent("40281")
+        vm.setPin("59173048")
+        vm.setConfirm("59173048")
+        assertFalse("the button is not offered for a current PIN the vault would refuse", vm.uiState.value.submitAllowed)
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.done)
+        assertEquals(null, vault.lastPin)
+        vm.setCurrent("402817")
+        assertTrue(vm.uiState.value.submitAllowed)
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /** Deleting the vault takes the vault PIN's form, 6 to 32 digits (§11.3): five are not ready. */
+    @Test
+    fun deleteNeedsASixDigitPin() = runTest {
+        val vm = DeleteVaultViewModel(vault)
+        vm.setPhrase("delete my vault")
+        vm.setPin("40281")
+        vm.setPassword("pw")
+        vm.setAcknowledged(true)
+        assertFalse(vm.uiState.value.ready)
+        vm.setPin("402817")
+        assertTrue(vm.uiState.value.ready)
+    }
+
     @Test
     fun changePinRules() = runTest {
         val vm = ChangePinViewModel(vault)

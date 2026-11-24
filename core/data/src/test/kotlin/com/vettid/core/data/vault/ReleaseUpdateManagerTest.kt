@@ -96,10 +96,10 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        assertTrue(m.start("2468", offer))
+        assertTrue(m.start("246813", offer))
         runCurrent()
         assertEquals(listOf("lock", "unlock", "unlock"), ops.log)
-        assertEquals(listOf(Call("2468", 5, false), Call("2468", null, false)), ops.unlocks)
+        assertEquals(listOf(Call("246813", 5, false), Call("246813", null, false)), ops.unlocks)
         val p = m.progress.value!!
         assertEquals(UpdateStep.DONE, p.step)
         assertTrue(p.vaultOpen)
@@ -114,7 +114,7 @@ class ReleaseUpdateManagerTest {
         ops.guid = false
         ops.results += UpdateStepResult.Moved
         val m = manager(ops)
-        assertTrue(m.start("2468", offer))
+        assertTrue(m.start("246813", offer))
         runCurrent()
         assertEquals(emptyList<String>(), ops.log)
         val p = m.progress.value!!
@@ -123,7 +123,7 @@ class ReleaseUpdateManagerTest {
         assertEquals(UnlockAttempt.CODE_NO_USER_GUID, p.failureCode)
         assertTrue("the vault is still open", p.vaultOpen)
         // Try again with the vault open: still nothing locked or sent.
-        m.retry("2468", null)
+        m.retry("246813", null)
         runCurrent()
         assertEquals(emptyList<String>(), ops.log)
         assertEquals(UnlockAttempt.CODE_NO_USER_GUID, m.progress.value!!.failureCode)
@@ -134,13 +134,13 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.lockFails = VaultFailure(FailureKind.NETWORK)
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertEquals(UpdateStep.FAILED, m.progress.value!!.step)
         ops.log.clear()
         ops.lockFails = null
         ops.guid = false
-        m.retry("2468", null)
+        m.retry("246813", null)
         runCurrent()
         assertEquals(emptyList<String>(), ops.log)
         assertEquals(UnlockAttempt.CODE_NO_USER_GUID, m.progress.value!!.failureCode)
@@ -153,7 +153,7 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved // routed to the old release again: it reports the move once more
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertEquals(1, ops.unlocks.count { it.approve != null })
         assertEquals(5L, ops.unlocks.first().approve)
@@ -166,12 +166,26 @@ class ReleaseUpdateManagerTest {
         ops.offer = offer
         val m = manager(ops)
         m.refreshOffer()
-        m.retry("2468")
-        m.abandon("2468")
+        m.retry("246813")
+        m.abandon("246813")
         m.finish()
         runCurrent()
         assertEquals(offer, m.offer.value)
         assertTrue(ops.log.isEmpty())
+    }
+
+    /** A PIN the vault would refuse (§11.3: 6 to 32 digits) starts nothing: the open vault is not locked for it. */
+    @Test
+    fun aMalformedPinNeitherLocksNorUnlocks() = runTest {
+        val ops = Ops()
+        val m = manager(ops)
+        for (pin in listOf("", "24681", "2468a1", "1".repeat(33))) {
+            assertFalse(pin, m.start(pin, offer))
+        }
+        runCurrent()
+        assertNull(m.progress.value)
+        assertTrue("nothing locked or sent: ${ops.log}", ops.log.isEmpty() && ops.unlocks.isEmpty())
+        assertTrue(m.start("246813", offer))
     }
 
     @Test
@@ -179,7 +193,7 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.due = true
         val m = manager(ops)
-        assertFalse(m.start("2468", offer))
+        assertFalse(m.start("246813", offer))
         runCurrent()
         assertNull(m.progress.value)
         assertTrue(ops.log.isEmpty())
@@ -193,7 +207,7 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Failed(FailureKind.VAULT_UNAVAILABLE, ReleaseUpdateManager.CODE_RELEASE_STARTING, 30)
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertEquals(UpdateStep.REOPENING, m.progress.value!!.step)
         assertTrue(m.progress.value!!.starting)
@@ -215,7 +229,7 @@ class ReleaseUpdateManagerTest {
         val m = manager(ops)
         var seen: UpdateProgress? = null
         ops.whileStarting = { seen = m.progress.value }
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertTrue(seen!!.starting)
         assertEquals(UpdateStep.APPROVING, seen!!.step)
@@ -231,7 +245,7 @@ class ReleaseUpdateManagerTest {
             ops.results += UpdateStepResult.Failed(FailureKind.VAULT_UNAVAILABLE, ReleaseUpdateManager.CODE_RELEASE_STARTING, 10)
         }
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         // backgroundScope work does not count for advanceUntilIdle: move the clock past every wait.
         advanceTimeBy(10 * 60_000L)
         runCurrent()
@@ -247,7 +261,7 @@ class ReleaseUpdateManagerTest {
             val ops = Ops()
             ops.results += UpdateStepResult.Refused(code)
             val m = manager(ops)
-            m.start("2468", offer)
+            m.start("246813", offer)
             runCurrent()
             val p = m.progress.value!!
             assertEquals(code, UpdateStep.REFUSED, p.step)
@@ -266,15 +280,15 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("1111", offer)
+        m.start("111111", offer)
         runCurrent()
         assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
         assertEquals(FailureKind.BAD_PIN, m.progress.value!!.failure)
         assertFalse(m.progress.value!!.vaultOpen)
-        m.retry("2468")
+        m.retry("246813")
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value!!.step)
-        assertEquals(listOf(Call("1111", 5, false), Call("2468", 5, false), Call("2468", null, false)), ops.unlocks)
+        assertEquals(listOf(Call("111111", 5, false), Call("246813", 5, false), Call("246813", null, false)), ops.unlocks)
         // Locked once only: the wrong PIN left it locked.
         assertEquals(1, ops.log.count { it == "lock" })
     }
@@ -284,7 +298,7 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.results += UpdateStepResult.Backoff(90)
         val m = manager(ops)
-        m.start("1111", offer)
+        m.start("111111", offer)
         runCurrent()
         val p = m.progress.value!!
         assertEquals(UpdateStep.BAD_PIN, p.step)
@@ -297,7 +311,7 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.lockFails = VaultFailure(FailureKind.NETWORK)
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         val p = m.progress.value!!
         assertEquals(UpdateStep.FAILED, p.step)
@@ -314,11 +328,11 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertEquals(UpdateStep.FAILED, m.progress.value!!.step)
         assertFalse(m.progress.value!!.vaultOpen)
-        m.retry("2468")
+        m.retry("246813")
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value!!.step)
         assertEquals(listOf(5L, 5L, null), ops.unlocks.map { it.approve })
@@ -331,16 +345,58 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
         ops.results += UpdateStepResult.Abandoned
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         val p = m.progress.value!!
         assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
         assertTrue(p.canAbandon)
-        m.abandon("2468")
+        m.abandon("246813")
         runCurrent()
         assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
         assertTrue(m.progress.value!!.vaultOpen)
-        assertEquals(Call("2468", null, true), ops.unlocks.last())
+        assertEquals(Call("246813", null, true), ops.unlocks.last())
+    }
+
+    /** The way back takes the same 6 to 32 digits (§11.3): five send nothing; six go back. */
+    @Test
+    fun theWayBackSendsNoMalformedPin() = runTest {
+        val ops = Ops()
+        ops.results += UpdateStepResult.Moved
+        ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
+        ops.results += UpdateStepResult.Abandoned
+        val m = manager(ops)
+        m.start("246813", offer)
+        runCurrent()
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        val sent = ops.unlocks.size
+        val logged = ops.log.size
+        m.abandon("24681")
+        runCurrent()
+        assertEquals("nothing sent", sent, ops.unlocks.size)
+        assertEquals("nothing locked", logged, ops.log.size)
+        assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
+        m.abandon("246813")
+        runCurrent()
+        assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
+    }
+
+    /** A retry takes the same 6 to 32 digits (§11.3): five neither lock nor send; six lock again. */
+    @Test
+    fun aRetrySendsNoMalformedPin() = runTest {
+        val ops = Ops()
+        ops.lockFails = VaultFailure(FailureKind.NETWORK)
+        val m = manager(ops)
+        m.start("246813", offer)
+        runCurrent()
+        assertEquals(UpdateStep.FAILED, m.progress.value!!.step)
+        ops.log.clear()
+        ops.lockFails = null
+        m.retry("24681", null)
+        runCurrent()
+        assertEquals("nothing locked or sent", emptyList<String>(), ops.log)
+        m.retry("246813", null)
+        runCurrent()
+        assertTrue("locked again: ${ops.log}", ops.log.isNotEmpty())
     }
 
     @Test
@@ -350,10 +406,10 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertFalse(m.progress.value!!.canAbandon)
-        m.abandon("2468")
+        m.abandon("246813")
         runCurrent()
         assertEquals(2, ops.unlocks.size)
         assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
@@ -366,9 +422,9 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
-        m.retry("2468")
+        m.retry("246813")
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value!!.step)
         assertEquals(listOf(5L, null, null), ops.unlocks.map { it.approve })
@@ -379,8 +435,8 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.results += UpdateStepResult.Moved
         val m = manager(ops)
-        assertTrue(m.start("2468", offer))
-        assertFalse(m.start("2468", offer))
+        assertTrue(m.start("246813", offer))
+        assertFalse(m.start("246813", offer))
         runCurrent()
         assertEquals(1, ops.log.count { it == "lock" })
     }
@@ -390,7 +446,7 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.results += UpdateStepResult.Opened
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         assertEquals(UpdateStep.REFUSED, m.progress.value!!.step)
         assertEquals(ReleaseUpdateManager.CODE_NOT_MOVED, m.progress.value!!.refusal)
@@ -420,18 +476,18 @@ class ReleaseUpdateManagerTest {
         ops.changeUnresolved = true
         val m = manager(ops)
         assertTrue(m.changeUnresolved())
-        assertFalse(m.start("2468", offer))
+        assertFalse(m.start("246813", offer))
         runCurrent()
         assertTrue(ops.log.isEmpty())
         // A failed update (the PIN step) and a new release that did not open: held too.
         ops.changeUnresolved = false
         ops.results += UpdateStepResult.BadPin(0)
-        assertTrue(m.start("2468", offer))
+        assertTrue(m.start("246813", offer))
         runCurrent()
         assertEquals(UpdateStep.BAD_PIN, m.progress.value!!.step)
         val sent = ops.log.size
         ops.changeUnresolved = true
-        m.retry("1357")
+        m.retry("135791")
         runCurrent()
         assertEquals("nothing sent", sent, ops.log.size)
         assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
@@ -439,13 +495,13 @@ class ReleaseUpdateManagerTest {
         ops.changeUnresolved = false
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
-        m.retry("1357")
+        m.retry("135791")
         runCurrent()
         assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
         val sent2 = ops.log.size
         ops.changeUnresolved = true
-        m.abandon("1357")
-        m.retry("1357")
+        m.abandon("135791")
+        m.retry("135791")
         runCurrent()
         assertEquals(sent2, ops.log.size)
         assertEquals(FailureKind.CHANGE_UNRESOLVED, m.progress.value!!.failure)
@@ -464,7 +520,7 @@ class ReleaseUpdateManagerTest {
         val m = manager(ops)
         val reading = m.pinGeneration
         ops.generation++ // a PIN change began while the PIN was typed
-        assertTrue(m.start("2468", offer, reading))
+        assertTrue(m.start("246813", offer, reading))
         runCurrent()
         assertTrue("refused before the lock: nothing locked, nothing sent", ops.log.isEmpty())
         assertTrue(ops.taken.isEmpty())
@@ -475,13 +531,13 @@ class ReleaseUpdateManagerTest {
         assertTrue("the vault is as it was", p.vaultOpen)
         assertTrue(p.waiting)
         // "Try again" with the same old reading: refused again before the lock.
-        m.retry("2468", reading)
+        m.retry("246813", reading)
         runCurrent()
         assertTrue(ops.log.isEmpty())
-        m.retry("1357", m.pinGeneration)
+        m.retry("135791", m.pinGeneration)
         runCurrent()
         assertEquals(listOf("lock", "unlock"), ops.log)
-        assertEquals(listOf(Call("1357", 5, false)), ops.unlocks)
+        assertEquals(listOf(Call("135791", 5, false)), ops.unlocks)
         assertEquals(listOf(1), ops.taken)
     }
 
@@ -493,7 +549,7 @@ class ReleaseUpdateManagerTest {
         val m = manager(ops)
         ops.whileStarting = { ops.generation++ }
         ops.startingCallbacks = 1 // the approval's unlock: a change decided while it is on its way
-        assertTrue(m.start("2468", offer, m.pinGeneration))
+        assertTrue(m.start("246813", offer, m.pinGeneration))
         runCurrent()
         assertEquals(listOf("lock", "unlock", "refused"), ops.log)
         val p = m.progress.value!!
@@ -501,7 +557,7 @@ class ReleaseUpdateManagerTest {
         assertEquals(ReleaseUpdateManager.CODE_PIN_TAKEN_BEFORE, p.failureCode)
         // Typed again: the reopen goes, and so does the way back.
         ops.results += UpdateStepResult.Opened
-        m.retry("2468", m.pinGeneration)
+        m.retry("246813", m.pinGeneration)
         runCurrent()
         assertEquals(UpdateStep.DONE, m.progress.value!!.step)
     }
@@ -512,7 +568,7 @@ class ReleaseUpdateManagerTest {
         val ops = Ops()
         ops.generation = 7
         val m = manager(ops)
-        assertTrue(m.start("2468", offer))
+        assertTrue(m.start("246813", offer))
         runCurrent()
         assertEquals(listOf(7), ops.taken)
         assertEquals(UpdateStep.REFUSED, m.progress.value!!.step)
@@ -525,12 +581,12 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Moved
         ops.results += UpdateStepResult.Failed(FailureKind.NETWORK, null)
         val m = manager(ops)
-        assertTrue(m.start("2468", offer, m.pinGeneration))
+        assertTrue(m.start("246813", offer, m.pinGeneration))
         runCurrent()
         assertEquals(UpdateStep.NEW_RELEASE_FAILED, m.progress.value!!.step)
         val reading = m.pinGeneration
         ops.generation++
-        m.abandon("2468", reading)
+        m.abandon("246813", reading)
         runCurrent()
         assertEquals("refused", ops.log.last())
         assertTrue(ops.unlocks.none { it.abandon })
@@ -547,9 +603,9 @@ class ReleaseUpdateManagerTest {
         ops.marker = failedMarker
         ops.results += UpdateStepResult.Abandoned
         val m = manager(ops)
-        assertTrue(m.returnToPrevious("2468"))
+        assertTrue(m.returnToPrevious("246813"))
         runCurrent()
-        assertEquals(listOf(Call("2468", null, true)), ops.unlocks)
+        assertEquals(listOf(Call("246813", null, true)), ops.unlocks)
         val p = m.progress.value!!
         assertEquals(UpdateStep.ABANDONED, p.step)
         assertEquals(4L, p.from.number)
@@ -562,18 +618,20 @@ class ReleaseUpdateManagerTest {
     fun noWayBackWithoutAFailedMarkerOrWhileAnUpdateIsShown() = runTest {
         val ops = Ops()
         val m = manager(ops)
-        assertFalse(m.returnToPrevious("2468")) // no marker
+        assertFalse(m.returnToPrevious("246813")) // no marker
         ops.marker = failedMarker.copy(failed = false)
-        assertFalse(m.returnToPrevious("2468")) // before `failed`: the unlock screen unlocks as usual
+        assertFalse(m.returnToPrevious("246813")) // before `failed`: the unlock screen unlocks as usual
         ops.marker = failedMarker
         assertFalse(m.returnToPrevious("")) // no PIN
+        assertFalse(m.returnToPrevious("24681")) // not a vault PIN (§11.3: 6 to 32 digits)
+        assertNull("a malformed PIN shows no way back", m.progress.value)
         ops.abandonable = false
-        assertFalse(m.returnToPrevious("2468"))
+        assertFalse(m.returnToPrevious("246813"))
         ops.abandonable = true
         ops.results += UpdateStepResult.Failed(FailureKind.NO_RESPONSE, null)
-        assertTrue(m.returnToPrevious("2468"))
+        assertTrue(m.returnToPrevious("246813"))
         runCurrent()
-        assertFalse(m.returnToPrevious("2468")) // its outcome is shown
+        assertFalse(m.returnToPrevious("246813")) // its outcome is shown
         assertEquals(1, ops.unlocks.size)
         runCurrent()
         assertTrue(ops.unlocks.all { it.abandon && it.approve == null })
@@ -585,7 +643,7 @@ class ReleaseUpdateManagerTest {
         ops.marker = failedMarker
         ops.results += UpdateStepResult.Refused("downgrade")
         val m = manager(ops)
-        m.returnToPrevious("2468")
+        m.returnToPrevious("246813")
         runCurrent()
         assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
         assertTrue(m.progress.value!!.vaultOpen)
@@ -601,7 +659,7 @@ class ReleaseUpdateManagerTest {
             ops.marker = failedMarker
             ops.results += r
             val m = manager(ops)
-            m.returnToPrevious("2468")
+            m.returnToPrevious("246813")
             ops.abandonable = false // the vault manager cleared the marker with that answer
             runCurrent()
             val p = m.progress.value!!
@@ -619,14 +677,14 @@ class ReleaseUpdateManagerTest {
         ops.results += UpdateStepResult.Failed(FailureKind.ROUTE_PENDING, "route_pending")
         ops.results += UpdateStepResult.Refused("downgrade")
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         // Still routed to N after the retries (point 6): the neutral failure, with "Try again" and "Return to release N".
         val p = m.progress.value!!
         assertEquals(UpdateStep.NEW_RELEASE_FAILED, p.step)
         assertEquals(FailureKind.ROUTE_PENDING, p.failure)
         assertTrue(p.canAbandon)
-        m.abandon("2468")
+        m.abandon("246813")
         runCurrent()
         assertEquals(UpdateStep.ABANDONED, m.progress.value!!.step)
     }
@@ -637,7 +695,7 @@ class ReleaseUpdateManagerTest {
         ops.startingCallbacks = 1
         ops.results += UpdateStepResult.Failed(FailureKind.VAULT_UNAVAILABLE, ReleaseUpdateManager.CODE_RELEASE_STARTING, 30)
         val m = manager(ops)
-        m.start("2468", offer)
+        m.start("246813", offer)
         runCurrent()
         m.close()
         assertNull(m.progress.value)
