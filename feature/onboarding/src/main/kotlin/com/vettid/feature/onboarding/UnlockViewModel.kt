@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.KeptTransfer
@@ -309,7 +310,7 @@ data class UnlockUiState(
             "notRecognised=$notRecognised, erasing=$erasing, checkDue=$checkDue)"
 
     private companion object {
-        const val MIN_PIN_LENGTH = 4
+        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
     }
 }
 
@@ -656,7 +657,7 @@ class UnlockViewModel @Inject constructor(
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 
-        private const val MAX_PIN = 32
+        private const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         private const val TICK_MS = 1000L
     }
 }
