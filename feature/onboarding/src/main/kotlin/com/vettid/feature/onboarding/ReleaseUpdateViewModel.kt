@@ -2,15 +2,18 @@ package com.vettid.feature.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.OwnerCheckRepository
-import com.vettid.core.data.vault.ownerCheckDue
 import com.vettid.core.data.vault.ReleaseNotes
 import com.vettid.core.data.vault.ReleaseNotesRepository
 import com.vettid.core.data.vault.ReleaseUpdateOffer
 import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.UpdateProgress
 import com.vettid.core.data.vault.UpdateStep
+import com.vettid.core.data.vault.ownerCheckDue
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
+import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,8 +25,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.time.Instant
-import javax.inject.Inject
 
 /** Immutable UI state of the update screen (the release gate's update). */
 data class ReleaseUpdateUiState(
@@ -50,7 +51,7 @@ data class ReleaseUpdateUiState(
     override fun toString(): String = "ReleaseUpdateUiState(loading=$loading, offer=${offer?.target?.number}, checkDue=$checkDue)"
 
     private companion object {
-        const val MIN_PIN_LENGTH = 4
+        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
     }
 }
 
@@ -135,7 +136,7 @@ class ReleaseUpdateViewModel @Inject constructor(
     }
 
     private companion object {
-        const val MAX_PIN = 32
+        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
     }
 }
 
@@ -163,7 +164,7 @@ data class ReleaseUpdateFlowUiState(
     override fun toString(): String = "ReleaseUpdateFlowUiState(step=${progress?.step}, wait=$waitSeconds)"
 
     private companion object {
-        const val MIN_PIN_LENGTH = 4
+        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
     }
 }
 
@@ -260,7 +261,7 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
     }
 
     private companion object {
-        const val MAX_PIN = 32
+        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         const val TICK_MS = 1000L
     }
 }
