@@ -103,6 +103,15 @@ class ApprovalsIndicatorTest {
         rule.onNodeWithTag("approvals_pill_urgent").assertContentDescriptionEquals("Approvals, 2 waiting")
     }
 
+    /** The pill is the one control: a 48 dp target whose tap opens the list. */
+    @Test
+    fun thePillIsA48dpTargetThatOpensTheList() {
+        var taps = 0
+        show(ApprovalsIndicator(count = 1, critical = true, urgent = true, deadline = Instant.now().plusSeconds(60)) { taps++ })
+        rule.onNodeWithTag("approvals_pill_urgent").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
+        assertEquals(1, taps)
+    }
+
     @Test
     fun aSignInIsNeutralAndDescribed() {
         val deadline = Instant.now().plusSeconds(80).plusMillis(500)
@@ -129,6 +138,19 @@ class ApprovalsIndicatorTest {
             }
         }
         rule.onNodeWithTag("approvals_pill_urgent").assertExists()
+        rule.onAllNodesWithTag("approvals_pill_time", useUnmergedTree = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun noTickUnderTheDailyCheck() {
+        val indicator = ApprovalsIndicator(count = 1, critical = true, urgent = true, deadline = Instant.now().plusSeconds(60)) {}
+        rule.setContent {
+            VettIdTheme {
+                CompositionLocalProvider(LocalApprovalsIndicator provides indicator, LocalCheckCovered provides true) {
+                    VettIdTopAppBar("Messages", {}, "Al", {}, bell = NotificationBell(0, false) {})
+                }
+            }
+        }
         rule.onAllNodesWithTag("approvals_pill_time", useUnmergedTree = true).assertCountEquals(0)
     }
 
@@ -197,11 +219,9 @@ class ApprovalsIndicatorTest {
     }
 
     @Test
-    fun theCountIsNeverRedAndOnlyAnUrgentEntryIsInTheUrgencyColours() {
+    fun onlyAnUrgentEntryIsInTheUrgencyColours() {
         for (scheme in listOf(LightColors, DarkColors)) {
             val red = setOf(scheme.error, scheme.errorContainer, scheme.onError, scheme.onErrorContainer)
-            assertEquals(scheme.primaryContainer to scheme.onPrimaryContainer, countColors(scheme))
-            assertFalse(countColors(scheme).first in red)
             assertEquals(scheme.surfaceVariant to scheme.onSurfaceVariant, timeColors(urgent = false, scheme))
             assertFalse(timeColors(urgent = false, scheme).first in red)
             assertEquals(scheme.errorContainer to scheme.onErrorContainer, timeColors(urgent = true, scheme))

@@ -56,6 +56,7 @@ import com.vettid.core.data.vault.WaitingCounts
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.data.vault.titleRes
 import com.vettid.core.data.vault.vaultCode
+import com.vettid.core.ui.components.WithoutApprovalsIndicator
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -124,9 +125,15 @@ fun OwnerCheckRoute(
 }
 
 /** The owner-check screen for [state] (stateless). */
-@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCancel: () -> Unit) {
+    // The gate: never the approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2), whatever provides it.
+    WithoutApprovalsIndicator { OwnerCheckBody(state, actions, onCancel) }
+}
+
+@Suppress("LongMethod", "CyclomaticComplexMethod")
+@Composable
+private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions, onCancel: () -> Unit) {
     val v = state.view
     // STAGING-TIME-SCALE: the interval as it runs (the setting divided by the vault's time scale), from seconds.
     val interval = durationText(state.timeScale.scaledSeconds(v?.intervalSeconds ?: OwnerCheckView.MAX_INTERVAL_S))

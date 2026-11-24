@@ -54,11 +54,12 @@ object OpenApprovalRules {
 
     fun of(list: List<Approval>, now: Instant): OpenApprovals {
         val open = list.filter { counts(it, now) }
+        val count = entries(open)
         val critical = open.filter { timeCritical(it, now) }
-        if (critical.isEmpty()) return OpenApprovals(open.size)
+        if (critical.isEmpty()) return OpenApprovals(count)
         val soonest = critical.filter { it.exp != null }.minByOrNull { it.exp!! }
         return OpenApprovals(
-            open.size,
+            count,
             CriticalApproval(deadline = soonest?.exp, urgent = critical.any { !signIn(it) }, label = soonest?.let(::label)),
         )
     }
@@ -67,9 +68,25 @@ object OpenApprovalRules {
     fun changesAt(list: List<Approval>): List<Instant> =
         list.filter { it.needsDecision }.mapNotNull { it.exp }.flatMap { listOf(it.minus(URGENT_WINDOW), it) }
 
-    /** The name an entry carries: its connection's, else its device's; null when it names none. */
-    private fun label(a: Approval): String? =
-        a.connectionName?.takeIf { it.isNotBlank() } ?: (a as? Approval.DeviceRequest)?.deviceName?.takeIf { it.isNotBlank() }
+    /**
+     * The number of entries among [open] (1): a connection's asks within 10 minutes of the first are one batch, one entry, as
+     * the Approvals list shows them ([AskBatching]); every other approval is an entry of its own.
+     */
+    private fun entries(open: List<Approval>): Int {
+        val (asks, others) = open.partition { AskBatching.connectionOf(it) != null }
+        return others.size + asks.groupBy { AskBatching.connectionOf(it) }.values.sumOf { AskBatching.split(it).size }
+    }
+
+    /** The name an entry carries: its connection's, a connection request's own, else its device's; null when it names none. */
+    private fun label(a: Approval): String? {
+        val own = when (a) {
+            is Approval.ConnectionRequest -> a.name
+            is Approval.OutgoingRequest -> a.name
+            is Approval.DeviceRequest -> a.deviceName
+            else -> null
+        }
+        return a.connectionName?.takeIf { it.isNotBlank() } ?: own?.takeIf { it.isNotBlank() }
+    }
 }
 
 /**

@@ -1,5 +1,7 @@
 package com.vettid.feature.connections
 
+import com.vettid.core.ui.components.LocalApprovalsIndicator
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -222,41 +224,45 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onDismiss = share::dismiss,
             ),
         )
-        ConnectionDetailScreen(
-            state = state,
-            actions = DetailActions(
-                onBack = host.onBack,
-                onMessage = { host.onOpenConversation(state.connectionId) },
-                onCall = vm::call,
-                onFavorite = vm::toggleFavorite,
-                onAuthenticate = vm::requestAuthentication,
-                onAsk = vm::ask,
-                onConfirm = vm::confirm,
-                onDismissNotice = vm::dismissNotice,
-                onHistory = { host.onOpenHistory(state.connectionId) },
-                onSharing = { host.onOpenSharing(state.connectionId) },
-                onSharedWithYou = { host.onOpenShared(state.connectionId) },
-                onShareItems = { host.onNewShareRule(state.connectionId) },
-                onOpenRule = { host.onOpenShareRule(state.connectionId, it) },
-                onAskDeleteRule = vm::askDeleteRule,
-                onDeleteRule = vm::deleteRule,
-                onAskForSomething = { host.onAskFor(state.connectionId) },
-                onMuteAsks = vm::muteAsks,
-                onResumeAsks = vm::resumeAsks,
-                onOpenVotes = { host.onOpenVotes(state.connectionId) },
-                onRefreshPresence = vm::refreshPresence,
-                onSetPresenceShared = vm::setPresenceShared,
-                onSetCallsAllowed = vm::setCallsAllowed,
-                onShareLocation = share::open,
-                onStopSharingLocation = vm::stopSharingLocation,
-                onOpenPosition = { host.navigate(PositionRoute(state.connectionId)) },
-                onStopReceiving = vm::stopReceiving,
-                onAskLocation = vm::openAsk,
-                onAskNote = vm::setAskNote,
-                onSendAsk = vm::sendAsk,
-                onCloseAsk = vm::closeAsk,
-            ),
-        )
+        // The share sheet covers the page (a request's answer when opened from one): no approvals indicator under it (§4
+        // "The approvals indicator" 2).
+        CompositionLocalProvider(LocalApprovalsIndicator provides LocalApprovalsIndicator.current.takeUnless { shareState.visible }) {
+            ConnectionDetailScreen(
+                state = state,
+                actions = DetailActions(
+                    onBack = host.onBack,
+                    onMessage = { host.onOpenConversation(state.connectionId) },
+                    onCall = vm::call,
+                    onFavorite = vm::toggleFavorite,
+                    onAuthenticate = vm::requestAuthentication,
+                    onAsk = vm::ask,
+                    onConfirm = vm::confirm,
+                    onDismissNotice = vm::dismissNotice,
+                    onHistory = { host.onOpenHistory(state.connectionId) },
+                    onSharing = { host.onOpenSharing(state.connectionId) },
+                    onSharedWithYou = { host.onOpenShared(state.connectionId) },
+                    onShareItems = { host.onNewShareRule(state.connectionId) },
+                    onOpenRule = { host.onOpenShareRule(state.connectionId, it) },
+                    onAskDeleteRule = vm::askDeleteRule,
+                    onDeleteRule = vm::deleteRule,
+                    onAskForSomething = { host.onAskFor(state.connectionId) },
+                    onMuteAsks = vm::muteAsks,
+                    onResumeAsks = vm::resumeAsks,
+                    onOpenVotes = { host.onOpenVotes(state.connectionId) },
+                    onRefreshPresence = vm::refreshPresence,
+                    onSetPresenceShared = vm::setPresenceShared,
+                    onSetCallsAllowed = vm::setCallsAllowed,
+                    onShareLocation = share::open,
+                    onStopSharingLocation = vm::stopSharingLocation,
+                    onOpenPosition = { host.navigate(PositionRoute(state.connectionId)) },
+                    onStopReceiving = vm::stopReceiving,
+                    onAskLocation = vm::openAsk,
+                    onAskNote = vm::setAskNote,
+                    onSendAsk = vm::sendAsk,
+                    onCloseAsk = vm::closeAsk,
+                ),
+            )
+        }
     }
     composable<LocationRoute> {
         val vm: LocationViewModel = hiltViewModel()

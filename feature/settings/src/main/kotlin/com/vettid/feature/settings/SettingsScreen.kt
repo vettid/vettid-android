@@ -48,7 +48,6 @@ import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VerifiedUser
-import com.vettid.core.ui.components.WithoutApprovalsIndicator
 import com.vettid.core.ui.components.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -243,19 +242,16 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
         // 2026-10-08). Saved across process death: the screen comes back to the live camera (the shot is never stored).
         var capturing by rememberSaveable { mutableStateOf(false) }
         if (capturing) {
-            // The camera: no approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2).
-            WithoutApprovalsIndicator {
-                PhotoCaptureScreen(
-                    capture.machine,
-                    onClose = { capturing = false },
-                    onUse = { selection ->
-                        capturing = false
-                        // The square under the round frame, scaled and re-encoded off the main thread (VAULT-MESSAGING
-                        // §10.8: at most 65,536 bytes), in the view model's scope: the bytes are zeroed if it ends first.
-                        vm.encodePhoto { encodeShot(selection) }
-                    },
-                )
-            }
+            PhotoCaptureScreen(
+                capture.machine,
+                onClose = { capturing = false },
+                onUse = { selection ->
+                    capturing = false
+                    // The square under the round frame, scaled and re-encoded off the main thread (VAULT-MESSAGING
+                    // §10.8: at most 65,536 bytes), in the view model's scope: the bytes are zeroed if it ends first.
+                    vm.encodePhoto { encodeShot(selection) }
+                },
+            )
             return@composable
         }
         SharedProfileContent(

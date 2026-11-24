@@ -38,7 +38,6 @@ import com.vettid.core.chain.AddressFamily
 import com.vettid.core.chain.ChainServer
 import com.vettid.core.chain.Network
 import com.vettid.core.data.vault.messageRes
-import com.vettid.core.ui.components.WithoutApprovalsIndicator
 import com.vettid.core.ui.components.HoldsInput
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -121,8 +120,7 @@ fun SendScreen(state: SendUiState, actions: SendActions, modifier: Modifier = Mo
 }
 
 @Composable
-private fun ScanStep(state: SendUiState, actions: SendActions, modifier: Modifier) = WithoutApprovalsIndicator {
-    // The camera: no approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2).
+private fun ScanStep(state: SendUiState, actions: SendActions, modifier: Modifier) {
     FormScaffold(
         title = stringResource(R.string.wallet_send_scan_title),
         primaryLabel = null,

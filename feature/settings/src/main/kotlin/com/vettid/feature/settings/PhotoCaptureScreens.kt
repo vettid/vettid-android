@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.ui.components.WithoutApprovalsIndicator
 import com.vettid.core.ui.components.CameraAccess
 import com.vettid.core.ui.components.CameraLens
 import com.vettid.core.ui.components.FormScaffold
@@ -94,7 +95,12 @@ data class PhotoCaptureActions(
  * Stateless; [camera] draws the live preview (a fake one in the screen catalog).
  */
 @Composable
-fun PhotoCaptureContent(state: PhotoCaptureUiState, actions: PhotoCaptureActions, camera: @Composable (Modifier) -> Unit) {
+fun PhotoCaptureContent(
+    state: PhotoCaptureUiState,
+    actions: PhotoCaptureActions,
+    camera: @Composable (Modifier) -> Unit,
+) = WithoutApprovalsIndicator {
+    // The camera: no approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2).
     val review = state.step == CaptureStep.REVIEW && state.shot != null
     val (primary, onPrimary) = primaryAction(state, actions, review)
     val (secondary, onSecondary) = secondaryAction(state, actions, review)

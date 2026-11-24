@@ -86,7 +86,6 @@ val LocalApprovalsIndicator = compositionLocalOf<ApprovalsIndicator?> { null }
 fun WithoutApprovalsIndicator(content: @Composable () -> Unit) =
     CompositionLocalProvider(LocalApprovalsIndicator provides null, content = content)
 
-private const val MAX_COUNT = 99
 private const val SECOND_MS = 1_000L
 private const val SECONDS_PER_MINUTE = 60L
 
@@ -106,7 +105,8 @@ fun ApprovalsIndicatorButton(indicator: ApprovalsIndicator, modifier: Modifier =
     // The one-second tick runs only while the screen is in front (3): for the pill, or while TalkBack explores by touch
     // for the icon's description to name the time left (it needs the entry's name); it announces nothing.
     val started = LocalLifecycleOwner.current.lifecycle.currentStateAsState().value.isAtLeast(Lifecycle.State.STARTED)
-    val ticks = started && indicator.critical && indicator.deadline != null &&
+    // Not under the daily check, which is drawn over the shell.
+    val ticks = started && !LocalCheckCovered.current && indicator.critical && indicator.deadline != null &&
         (pill || (indicator.label != null && touchExploration()))
     val left = if (ticks) secondsLeft(indicator.deadline!!) else null
     val description = description(indicator, left)
@@ -125,7 +125,11 @@ fun ApprovalsIndicatorButton(indicator: ApprovalsIndicator, modifier: Modifier =
                 Icon(Icons.Outlined.TaskAlt, contentDescription = null)
             }
             val badge = Modifier.align(Alignment.TopEnd).offset(y = 4.dp)
-            if (indicator.critical) ClockBadge(indicator.urgent, badge) else CountBadgeSmall(indicator.count, badge)
+            if (indicator.critical) {
+                ClockBadge(indicator.urgent, badge)
+            } else {
+                CountBadge(indicator.count, badge.testTag("approvals_badge"), small = true)
+            }
         }
     }
 }
@@ -170,28 +174,6 @@ private fun Pill(indicator: ApprovalsIndicator, left: Long?, description: String
 }
 
 @Composable
-private fun CountBadgeSmall(count: Int, modifier: Modifier) {
-    val (background, content) = countColors(MaterialTheme.colorScheme)
-    Box(
-        modifier = modifier
-            .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
-            .clip(VettIdShape.pill)
-            .background(background)
-            .padding(horizontal = Spacing.xs)
-            .testTag("approvals_badge")
-            .clearAndSetSemantics {},
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = if (count > MAX_COUNT) "$MAX_COUNT+" else count.toString(),
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = content,
-        )
-    }
-}
-
-@Composable
 private fun ClockBadge(urgent: Boolean, modifier: Modifier) {
     val (background, content) = timeColors(urgent, MaterialTheme.colorScheme)
     Box(
@@ -218,9 +200,6 @@ private fun ClockBadge(urgent: Boolean, modifier: Modifier) {
  */
 internal fun timeColors(urgent: Boolean, scheme: ColorScheme): Pair<Color, Color> =
     if (urgent) scheme.errorContainer to scheme.onErrorContainer else scheme.surfaceVariant to scheme.onSurfaceVariant
-
-/** The count badge's colours (4): the drawer's gold `CountBadge`, never red (red is the bell's alarm). */
-internal fun countColors(scheme: ColorScheme): Pair<Color, Color> = scheme.primaryContainer to scheme.onPrimaryContainer
 
 /** Whether TalkBack (or another service) explores by touch, followed as it changes. */
 @Composable

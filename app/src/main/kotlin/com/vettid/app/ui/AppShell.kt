@@ -110,6 +110,7 @@ import com.vettid.feature.items.SharedWithYouRoute
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
 import com.vettid.feature.connections.ScanRoute
+import com.vettid.feature.settings.TransferOutRoute
 import com.vettid.feature.messages.PhotoViewerRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
 import com.vettid.feature.connections.ConnectionsHost
@@ -236,9 +237,13 @@ fun AppShell(
     // bar, detail screens too; not on Approvals or a request's screen, not over a camera or a photo, not while the vault is
     // held or the check due, not at 0.
     val open by shell.openApprovals.collectAsStateWithLifecycle()
-    val indicator = approvalsIndicator(open, gate.gated, { route -> current?.hierarchy?.any { it.hasRoute(route) } == true }) {
-        // Always the list, never the single request, even at 1 (6).
-        navController.navigateTopLevel(ApprovalsRoute)
+    // Not under a call's screen either, which covers the shell. Remembered: the top bars recompose only when it changes.
+    val callShown = LocalCallScreenShown.current
+    // Always the list, never the single request, even at 1 (6).
+    val openApprovalsList = remember(navController) { { navController.navigateTopLevel(ApprovalsRoute) } }
+    val indicator = remember(open, gate.gated, current, callShown) {
+        val on = { route: kotlin.reflect.KClass<*> -> callShown || current?.hierarchy?.any { it.hasRoute(route) } == true }
+        approvalsIndicator(open, gate.gated, on, openApprovalsList)
     }
     val chrome = remember(accountName, photo, bell?.unread, bell?.urgent, bell == null) {
         ShellChrome(
@@ -802,8 +807,13 @@ private fun Modifier.consumeAllPointers(): Modifier = pointerInput(Unit) {
 
 /**
  * Where the approvals indicator is never shown (ANDROID-PLAN §4 "The approvals indicator" 2): Approvals and an entry, a
- * request being compared or answered (an accepted invitation's safety code, a pairing), and the full-screen camera and
- * photo. The cameras inside a screen (the profile photo, the wallet's scan) clear it themselves.
+ * request being compared or answered (an accepted invitation's safety code, a pairing), the full-screen camera and photo,
+ * and the flows its tap must not leave midway: the wallet's flows that [popWalletSecrets] pops (a wallet being made or
+ * imported with its limit, a phrase being backed up, a payment being reviewed and signed, which Back is held for), and a
+ * move to a new phone (every other way out of it rejects the transfer). A screen Send opens on top of itself (Backup,
+ * the chain server, Spending limits) keeps it: its tap pops Send too, but the signing, the broadcast and a limit's raise
+ * finish whatever happens to the screen, and a signed payment stays for the next Send. The profile photo's camera,
+ * inside its screen, clears it itself.
  */
 internal val INDICATOR_HIDDEN_ON: List<kotlin.reflect.KClass<*>> = listOf(
     ApprovalsRoute::class,
@@ -812,6 +822,11 @@ internal val INDICATOR_HIDDEN_ON: List<kotlin.reflect.KClass<*>> = listOf(
     PairRoute::class,
     ScanRoute::class,
     PhotoViewerRoute::class,
+    NewWalletRoute::class,
+    ImportWalletRoute::class,
+    BackupRoute::class,
+    SendRoute::class,
+    TransferOutRoute::class,
 )
 
 /**

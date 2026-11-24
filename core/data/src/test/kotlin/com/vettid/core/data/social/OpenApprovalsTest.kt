@@ -112,6 +112,25 @@ class OpenApprovalsTest {
         )
     }
 
+    /** A connection's asks within 10 minutes of the first are one batch, one entry (1), as the Approvals list shows them. */
+    @Test
+    fun aBatchCountsAsOne() {
+        val a1 = auth("a1", sec(9_000)).copy(receivedAt = now, connectionId = "c")
+        val a2 = grant("g2", sec(9_000)).copy(receivedAt = now.plusSeconds(300), connectionId = "c")
+        val later = auth("a3", sec(9_000)).copy(receivedAt = now.plusSeconds(601), connectionId = "c")
+        val other = auth("a4", sec(9_000)).copy(receivedAt = now.plusSeconds(60), connectionId = "d")
+        assertEquals(1, OpenApprovalRules.of(listOf(a1, a2), now).count)
+        assertEquals("a second batch 10 minutes after the first", 2, OpenApprovalRules.of(listOf(a1, a2, later), now).count)
+        val all = listOf(a1, a2, later, other, location("l", sec(9_000)))
+        assertEquals("another connection's ask, and an approval that is not an ask", 4, OpenApprovalRules.of(all, now).count)
+    }
+
+    /** A connection request names itself (its `name`), so its time left can be said (11). */
+    @Test
+    fun aConnectionRequestIsNamedByItsOwnName() {
+        assertEquals("Ann Lee", OpenApprovalRules.of(listOf(connection(RequestState.PENDING, sec(100))), now).critical?.label)
+    }
+
     @Test
     fun aDeviceRequestIsNamedByItsDevice() {
         assertEquals("Laptop", OpenApprovalRules.of(listOf(device(Approval.DeviceRequest.SESSION_PENDING, sec(60))), now).critical?.label)
