@@ -30,6 +30,52 @@ class HeldRequestsTest {
     private fun use(data: String, extra: String = "") =
         """{"op":"item.use","item_id":"i1","field_id":"f1","action":"hmac-sha256","data":"$data"$extra}"""
 
+    /**
+     * Every agent op (use, reveal, catalog, run, proxy) is deny only unless the request names its device and itself and has a
+     * time to end (AA8 "Fail closed"; owner a, GC #17671; the same cases as the iPhone's).
+     */
+    @Test
+    fun anAgentRequestWithoutItsDeviceNameOrExpIsDenyOnly() {
+        fun make(body: String, members: String, top: String = ""): HeldRequest {
+            val raw = """{"approval_id":"a1","role":"agent","type":"agent.request","body":$body$members$top}"""
+            val strict = runCatching { com.vettid.core.crypto.json.StrictJson.parseObject(raw) }.getOrNull()
+            return HeldRequests.of("agent", "agent.request", VaultJson.parseObject(raw.toByteArray())["body"] as? kotlinx.serialization.json.JsonObject, strict)
+        }
+        val ops = mapOf(
+            "use" to (use(b64("challenge".toByteArray())) to ""),
+            "reveal" to ("""{"op":"item.get","item_id":"i1"}""" to ""),
+            "catalog" to ("""{"op":"catalog"}""" to ""),
+            "run" to (RUN to ""),
+            "proxy" to (PROXY_BODY to PROXY_NOTE),
+        )
+        val ok = ""","device_id":"A","name":"Bot","exp":"2026-11-02T12:05:00.000Z""""
+        val bad = listOf(
+            ""","name":"Bot","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"","name":"Bot","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":7,"name":"Bot","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":["Bot"],"exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"Bot"""",
+            ""","device_id":"A","name":"Bot","exp":"soon"""",
+            ""","device_id":"A","name":"Bot","exp":null""",
+            ""","device_id":"A","name":"Bot","exp":1793000000""",
+            // A name the screen cannot show: only spaces, a tab, invisible or bidi characters.
+            ""","device_id":"A","name":" ","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"\t","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"\u200b","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"\u202e","exp":"2026-11-02T12:05:00.000Z"""",
+            ""","device_id":"A","name":"\u200b \u2060","exp":"2026-11-02T12:05:00.000Z"""",
+            // A blank device_id (the vault assigns it; tested all the same).
+            ""","device_id":" ","name":"Bot","exp":"2026-11-02T12:05:00.000Z"""",
+        )
+        for ((op, b) in ops) {
+            val (body, top) = b
+            assertTrue("$op with its device, name and exp", make(body, ok, top).approvable)
+            for (members in bad) assertEquals("$op $members", HeldRequest.Unshown, make(body, members, top))
+        }
+    }
+
     @Test
     fun anItemUseReadsWithItsDataBytes() {
         val h = held(use(b64("challenge".toByteArray()))) as HeldRequest.ItemUse
