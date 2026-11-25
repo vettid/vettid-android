@@ -194,9 +194,10 @@ class CallsController(
     private val startService: () -> Unit,
     config: MediaConfig = MediaConfig(),
     /**
-     * Whether this build was made for the phone tests: the only kind that may ask for [MediaConfig.dtlsPqcTrial]
-     * or any of [MediaFaults] (owner decision 2026-10-12: known-good algorithms only; and no build a member uses
-     * can break a rule on purpose). Necessary, not sufficient: see [testsAllowed].
+     * Whether this build was made for the phone tests: the only kind that may ask for [MediaConfig.dtlsPqcTrial],
+     * relay only, any of [MediaFaults] or any of the signalling faults ([MediaConfig.share]; owner decision
+     * 2026-10-12: known-good algorithms only; and no build a member uses can break a rule on purpose). Necessary,
+     * not sufficient: see [testsAllowed].
      */
     private val testBuild: Boolean = false,
     private val now: () -> Instant = Instant::now,
@@ -226,12 +227,15 @@ class CallsController(
     /** Changes how the next call's engine is set up. Throws unless [testsAllowed] (or [c] is the plain configuration). */
     fun setMediaConfig(c: MediaConfig) {
         val plain = c.plain
-        check(plain || testsAllowedFlow.value) { "the DTLS trial, the test faults and relay only are for the phone tests only" }
+        check(plain || testsAllowedFlow.value) {
+            "the DTLS trial, the media and signalling faults and relay only are for the phone tests only"
+        }
         mediaConfigValue = c
     }
 
     private val signalling = VaultCallSignalling(
-        vault.gateway,
+        // The signalling faults of the test screen, as the engine's: off unless the tests are allowed now.
+        vault.gateway.withFaults { mediaConfig.share },
         vault::fingerprint,
         engines.suites,
         vault::refreshConnections,

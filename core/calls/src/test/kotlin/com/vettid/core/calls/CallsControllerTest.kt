@@ -15,6 +15,7 @@ import com.vettid.core.vault.CallCandidate
 import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallKeys
 import com.vettid.core.vault.CallRecord
+import com.vettid.core.vault.CallShareFaults
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.MadeByCallApi
 import com.vettid.core.vault.OutgoingCall
@@ -60,6 +61,11 @@ class CallsControllerTest {
 
         /** When set, `call.start`'s answer comes only once the test lets it. */
         var startGate: Channel<Unit>? = null
+
+        /** The signalling faults the controller gave this gateway (CALLS-PLAN §13.4 step 8), read as a message would. */
+        var faults: () -> CallShareFaults = { CallShareFaults.NONE }
+
+        override fun withFaults(faults: () -> CallShareFaults): CallGateway = also { this.faults = faults }
 
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
             sent += "start($connectionId)" + (if (peerIk != null) " form2" else "")
@@ -859,6 +865,17 @@ class CallsControllerTest {
         assertThrows(IllegalStateException::class.java) { test.setMediaConfig(MediaConfig(relayOnly = true)) }
         assertThrows(IllegalStateException::class.java) { controller(MediaConfig(relayOnly = true), testBuild = true) }
         test.setMediaConfig(MediaConfig()) // the plain configuration can always be set
+
+        // (Step 8) The signalling faults reach the gateway only while the tests are allowed: a lock turns them off for
+        // the next message even though the switch was left on.
+        vault.unlocked.value = true
+        runCurrent()
+        val share = CallShareFaults(wrongConfirm = true)
+        test.setMediaConfig(MediaConfig(share = share))
+        assertEquals(share, vault.gateway.faults())
+        vault.unlocked.value = false
+        runCurrent()
+        assertEquals(CallShareFaults.NONE, vault.gateway.faults())
     }
 
     @Test
@@ -882,6 +899,9 @@ class CallsControllerTest {
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(faulty) }
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(dtlsPqcTrial = true)) }
         assertThrows(IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(relayOnly = true)) }
+        for (share in listOf(CallShareFaults(wrongConfirm = true), CallShareFaults(suitesAfterSigning = true))) {
+            assertThrows("$share", IllegalStateException::class.java) { c.setMediaConfig(MediaConfig(share = share)) }
+        }
     }
 
     /**

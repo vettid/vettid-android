@@ -3,6 +3,7 @@ package com.vettid.core.calls
 import com.vettid.core.crypto.call.CallWire
 import com.vettid.core.crypto.call.MediaSuite
 import com.vettid.core.vault.CallCandidate
+import com.vettid.core.vault.CallShareFaults
 import kotlinx.coroutines.flow.Flow
 
 /** Where the media connection of a call stands. */
@@ -153,9 +154,11 @@ data class MediaConfig(
      * relayed candidates alone, so the call goes through the vault's TURN server or not at all.
      */
     val relayOnly: Boolean = false,
+    /** Test builds only (CALLS-PLAN §13.4 step 8): signalling faults ([CallShareFaults]), applied by the gateway. */
+    val share: CallShareFaults = CallShareFaults.NONE,
 ) {
     /** No test option on: the only configuration a build members use may make. */
-    val plain: Boolean get() = !dtlsPqcTrial && !faults.any && !relayOnly
+    val plain: Boolean get() = !dtlsPqcTrial && !faults.any && !relayOnly && !share.any
 }
 
 interface MediaEngineFactory {

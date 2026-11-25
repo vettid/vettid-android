@@ -155,7 +155,7 @@ object CallsModule {
         override val recheck: Flow<Unit> = merge(m.ownerCheck.ownerCheck.map { }, m.social.connections.map { })
 
         override val gateway: CallGateway =
-            VaultCallGateway(api = { m.vaultApi() }, events = sources.map { it.events }, sendEnd = m::sendCallEnd)
+            VaultCallGateway(api = { m.vaultApi() }, events = sources.map { it.events }, sendEnd = m::sendCallEnd, testBuild = TEST_BUILD)
 
         override val droppedForTime: Flow<String> = sources.flatMapLatest { it.droppedForTime }
 
