@@ -469,6 +469,57 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
     }
 
+    /**
+     * ANDROID-PLAN 0.1.141: Back from the transfer goes by the phase read again. While a transfer is still live there
+     * (TRANSFER_WAITING, also when the transfer screen could not read it back) the move screen stays; after it ended, a
+     * TRANSFER_WAITING read before decides nothing: welcome without a redeemed code, vault elsewhere with one.
+     */
+    @Test
+    fun backFromTheTransferFollowsThePhaseReadAgain() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.TRANSFER_WAITING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals("still waiting: the move screen stays", OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        // The transfer ended; the phase in memory still says TRANSFER_WAITING until it is read again.
+        vault.phaseAfterRefresh = AppPhase.SignedOut
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals("no redeemed code: welcome", OnboardingStep.WELCOME, vm.uiState.value.step)
+    }
+
+    @Test
+    fun backFromAnEndedTransferWithARedeemedCodeIsVaultElsewhere() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.TRANSFER_WAITING)
+        val vm = vm()
+        advanceUntilIdle()
+        // (The #446 pair) The phase a redeemed code leaves after the transfer ended: NEW_VAULT (VAULT_ELSEWHERE is never
+        // published).
+        vault.phaseAfterRefresh = AppPhase.Setup(SetupStage.NEW_VAULT)
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
+    }
+
+    /** The move finished while the member left it (the old phone approved): it says so, not "your account has a vault". */
+    @Test
+    fun backFromATransferThatFinishedMeanwhileShowsItsEnd() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.TRANSFER_WAITING)
+        val vm = vm()
+        advanceUntilIdle()
+        // Finished while the transfer screen was up: that phase was not followed then (the move screen was on), and the
+        // refresh reads it again with nothing new to follow: Back alone decides.
+        vault.phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        vault.phaseAfterRefresh = AppPhase.Setup(SetupStage.FINISHING)
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.DONE, vm.uiState.value.step)
+    }
+
     @Test
     fun aRecoveryInProgressResumesAfterARestart() = runTest {
         vault.phase.value = AppPhase.Setup(SetupStage.RECOVERING)

@@ -216,13 +216,16 @@ class OnboardingViewModel @Inject constructor(
                     }
                 }
                 // A recovery or a transfer shows its own "your vault is connected to this phone now".
-                SetupStage.FINISHING -> if (!moving) {
-                    go(OnboardingStep.DONE)
-                    state.update { it.copy(movedIn = vault.movedIn, phoneSecret = vault.usesPhoneSecret) }
-                }
+                SetupStage.FINISHING -> if (!moving) showDone()
             }
             else -> Unit
         }
+    }
+
+    /** "Your vault is connected to this phone now", as a recovery or a transfer that finished says it. */
+    private fun showDone() {
+        go(OnboardingStep.DONE)
+        state.update { it.copy(movedIn = vault.movedIn, phoneSecret = vault.usesPhoneSecret) }
     }
 
     /** (Review F1) An enrollment request is outstanding that this flow did not post with its PIN ([OnboardingUiState.pinFixed]). */
@@ -289,8 +292,28 @@ class OnboardingViewModel @Inject constructor(
     /** Vault elsewhere: move it here from the old phone. */
     override fun transfer() = go(OnboardingStep.TRANSFER_IN)
 
-    /** Leaves the recovery or the transfer: back where it was started from. */
+    /**
+     * Leaves the recovery or the transfer: back where it was started from. (ANDROID-PLAN 0.1.141) From the transfer, only
+     * by the phase read again: a transfer to this phone that is still live ([SetupStage.TRANSFER_WAITING], also when the
+     * screen could not read it back) keeps the move screen, and after an ending a phase read before it never decides
+     * where Back goes (welcome without a redeemed setup code, "Your account already has a vault" with one).
+     */
     override fun leaveMove() {
+        if (state.value.step == OnboardingStep.TRANSFER_IN) {
+            viewModelScope.launch {
+                account.refresh()
+                val p = account.phase.value
+                if (p is AppPhase.Setup && p.stage == SetupStage.TRANSFER_WAITING) return@launch
+                if (state.value.step != OnboardingStep.TRANSFER_IN) return@launch
+                when {
+                    // The move finished meanwhile (the old phone approved as the member left): it says so.
+                    p is AppPhase.Setup && p.stage == SetupStage.FINISHING -> showDone()
+                    p is AppPhase.Setup -> go(OnboardingStep.VAULT_ELSEWHERE)
+                    else -> go(OnboardingStep.WELCOME)
+                }
+            }
+            return
+        }
         go(if (account.phase.value is AppPhase.Setup) OnboardingStep.VAULT_ELSEWHERE else OnboardingStep.WELCOME)
         viewModelScope.launch { account.refresh() }
     }

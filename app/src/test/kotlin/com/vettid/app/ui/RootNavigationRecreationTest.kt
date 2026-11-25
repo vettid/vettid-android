@@ -93,7 +93,7 @@ class RootNavigationRecreationTest {
             NavHost(nav, startDestination = StartingTestDest) {
                 composable<StartingTestDest> { Text("starting", Modifier.testTag("starting")) }
                 composable<OnboardingTestDest> {
-                    val vm = viewModel { TransferInViewModel(vault, vault) }
+                    val vm = viewModel { TransferInViewModel(vault, vault, vault) }
                     if (transfers.lastOrNull() !== vm) transfers += vm
                     val s by vm.uiState.collectAsState()
                     Column {
