@@ -482,7 +482,9 @@ class OnboardingViewModelTest {
         vault.phase.value = AppPhase.Setup(SetupStage.TRANSFER_WAITING)
         val vm = vm()
         advanceUntilIdle()
-        vault.phaseAfterRefresh = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+        // (The #446 pair) The phase a redeemed code leaves after the transfer ended: NEW_VAULT (VAULT_ELSEWHERE is never
+        // published).
+        vault.phaseAfterRefresh = AppPhase.Setup(SetupStage.NEW_VAULT)
         vm.leaveMove()
         advanceUntilIdle()
         assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)

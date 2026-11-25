@@ -3,8 +3,11 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.InviteLinks
+import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.TransferInWaiting
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -149,6 +152,7 @@ interface TransferInActions {
 class TransferInViewModel @Inject constructor(
     private val move: MoveRepository,
     private val vault: VaultRepository,
+    private val account: AccountRepository,
 ) : ViewModel(), TransferInActions {
     private val state = MutableStateFlow(TransferInUiState())
     val uiState: StateFlow<TransferInUiState> = state.asStateFlow()
@@ -160,6 +164,15 @@ class TransferInViewModel @Inject constructor(
 
     /** Closes a confirmation of [TransferInUiState.pendingCode] at minute 10, when no abandon is offered any more. */
     private var pendingCloser: Job? = null
+
+    /**
+     * The first read-back found a waiting transfer while a code of the member's was being checked, and left the screen to
+     * that check. A check that then starts nothing goes back to the waiting transfer ([madeUpReadBack]).
+     */
+    private var readBackSkipped = false
+
+    /** The step a different code waiting behind "Cancel the move?" came from (scan or paste), to start from there. */
+    private var pendingFrom = TransferInStep.SCAN
 
     init {
         // (A6 audit N1) A transfer that waits for the old phone (a restart, or the screen left): its code again, waiting.
@@ -176,6 +189,7 @@ class TransferInViewModel @Inject constructor(
             val s = state.value
             val first = s.step == TransferInStep.INTRO || s.step == TransferInStep.SCAN || s.step == TransferInStep.PASTE
             val theirs = s.busy || s.confirmCancel
+            if (s.busy && first) readBackSkipped = true
             if (!first || theirs || waiter?.isActive == true) return@launch
             resumeWaiting(w)
         }
@@ -183,6 +197,7 @@ class TransferInViewModel @Inject constructor(
 
     /** The waiting transfer [w] on screen again: its code, the countdown from its stored start, and the wait for its approval. */
     private fun resumeWaiting(w: TransferInWaiting) {
+        readBackSkipped = false
         val deadline = w.startedAt.plus(WINDOW)
         state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
         waiter?.cancel()
@@ -194,13 +209,21 @@ class TransferInViewModel @Inject constructor(
      * existing "The move stopped on this phone", once (the repository clears it as it is read).
      */
     private suspend fun toldStoppedMove() {
-        if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return
+        val step = state.value.step
+        val first = step == TransferInStep.INTRO || step == TransferInStep.SCAN || step == TransferInStep.PASTE
+        if (!first || state.value.busy || waiter?.isActive == true) return
         val stopped = try {
             move.takeTransferStopped()
         } catch (_: VaultFailure) {
             false
         }
-        if (stopped) state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
+        // (The #446 review, L3) A code started meanwhile supersedes the stopped move: not shown over it.
+        val now = state.value.step
+        val firstStep = now == TransferInStep.INTRO || now == TransferInStep.SCAN || now == TransferInStep.PASTE
+        val still = firstStep && !state.value.busy && waiter?.isActive != true
+        if (stopped && still) {
+            state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
+        }
     }
 
     override fun scan() = state.update { it.copy(step = TransferInStep.SCAN, inputProblem = null, error = null) }
@@ -217,17 +240,31 @@ class TransferInViewModel @Inject constructor(
         // (ANDROID-PLAN 0.1.141) Also while the screen still reads back a transfer that may wait, or an abandon is on its
         // way: the move screen stays.
         val held = s.reading || s.abandoning || s.busy && s.step == TransferInStep.COMPARE
-        if (settlingNow() || held) return true
-        return when (s.step) {
-            TransferInStep.SCAN, TransferInStep.PASTE -> {
-                state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
+        return when {
+            settlingNow() || held -> true
+            s.step == TransferInStep.SCAN || s.step == TransferInStep.PASTE -> {
+                backFromAFirstStep()
                 true
             }
-            TransferInStep.CONNECTING, TransferInStep.COMPARE -> {
+            s.step == TransferInStep.CONNECTING || s.step == TransferInStep.COMPARE -> {
                 cancel()
                 true
             }
             else -> false
+        }
+    }
+
+    private fun backFromAFirstStep() {
+        if (!readBackSkipped) return state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
+        // (The #446 pair, L4) A waiting transfer the first read-back left to a code check (refused, or a code of the
+        // wrong kind, with its text shown): Back goes to it, not to the first step. Back is held while it is read.
+        state.update { it.copy(reading = true) }
+        viewModelScope.launch {
+            try {
+                madeUpReadBack(orFirstStep = true)
+            } finally {
+                state.update { it.copy(reading = false) }
+            }
         }
     }
 
@@ -252,27 +289,32 @@ class TransferInViewModel @Inject constructor(
         when (problem) {
             // (VAULT-MESSAGING 0.88.4 §11.14.10 rule 5) The open transfer's own code outlives its 10 minutes: asked first,
             // so a re-scan of it goes back to that move, never "expired" (and then a new code that would drop it).
-            FailureKind.INVITE_EXPIRED -> {
-                // Busy while asked: a repeated camera frame or a quick second scan does not start another (review of #334).
-                if (state.value.busy) return
-                state.update { it.copy(busy = true) }
-                viewModelScope.launch {
-                    val own = try {
-                        move.isOpenTransferCode(text)
-                    } catch (_: VaultFailure) {
-                        false
-                    }
-                    state.update { it.copy(busy = false) }
-                    val step = state.value.step
-                    when {
-                        !own -> state.update { it.copy(inputProblem = problem) }
-                        step == TransferInStep.SCAN || step == TransferInStep.PASTE -> begin(text)
-                        else -> Unit // left meanwhile: nothing to go back to
-                    }
-                }
-            }
+            FailureKind.INVITE_EXPIRED -> expiredUnlessOwn(text)
             null -> beginUnlessAnotherWaits(text)
             else -> state.update { it.copy(inputProblem = problem) }
+        }
+    }
+
+    /** An expired code: the open transfer's own goes back to its move; any other is "expired". */
+    private fun expiredUnlessOwn(text: String) {
+        // Busy while asked: a repeated camera frame or a quick second scan does not start another (review of #334).
+        if (state.value.busy) return
+        state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            val own = try {
+                move.isOpenTransferCode(text)
+            } catch (_: VaultFailure) {
+                false
+            }
+            val waiting = if (own) readWaiting() else null
+            state.update { it.copy(busy = false) }
+            val step = state.value.step
+            when {
+                !own -> state.update { it.copy(inputProblem = FailureKind.INVITE_EXPIRED) } // shown; Back goes to the transfer
+                step != TransferInStep.SCAN && step != TransferInStep.PASTE -> madeUpReadBack() // left meanwhile
+                waiting != null -> resumeWaiting(waiting) // its own move, still waiting: no new connection
+                else -> begin(text)
+            }
         }
     }
 
@@ -299,11 +341,15 @@ class TransferInViewModel @Inject constructor(
             }
             state.update { it.copy(busy = false) }
             val step = state.value.step
-            if (step != TransferInStep.SCAN && step != TransferInStep.PASTE) return@launch // left meanwhile
+            if (step != TransferInStep.SCAN && step != TransferInStep.PASTE) return@launch madeUpReadBack() // left meanwhile
             val tenMinutes = waiting?.startedAt?.plus(WINDOW)
             when {
-                tenMinutes == null || own -> begin(text)
+                // (The #446 pair, L2) The waiting transfer's own code goes back to it, with no new connection (CONNECTING
+                // would let Cancel drop it unconfirmed).
+                own && waiting != null -> resumeWaiting(waiting)
+                tenMinutes == null -> begin(text)
                 Instant.now(clock).isBefore(tenMinutes) -> askBeforeAnotherCode(text, tenMinutes)
+                // Shown with the busy text; Back goes to the waiting transfer ([back], [madeUpReadBack]).
                 else -> state.update {
                     it.copy(error = FailureKind.BUSY, errorCode = MoveRepository.CODE_TRANSFER_SETTLING, errorShown = null)
                 }
@@ -311,8 +357,31 @@ class TransferInViewModel @Inject constructor(
         }
     }
 
+    private suspend fun readWaiting(): TransferInWaiting? = try {
+        move.transferInWaiting()
+    } catch (_: VaultFailure) {
+        null
+    }
+
+    /** (The #446 pair, L4) A code check that started nothing, after the first read-back left a waiting transfer to it. */
+    private suspend fun madeUpReadBack(orFirstStep: Boolean = false) {
+        if (!readBackSkipped) return
+        readBackSkipped = false
+        if (state.value.confirmCancel || waiter?.isActive == true) return
+        val w = readWaiting()
+        val step = state.value.step
+        val first = step == TransferInStep.INTRO || step == TransferInStep.SCAN || step == TransferInStep.PASTE
+        when {
+            !first -> Unit
+            w != null -> state.update { it.copy(inputProblem = null, error = null, errorCode = null) }.also { resumeWaiting(w) }
+            orFirstStep -> state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
+        }
+    }
+
     /** "Cancel the move?" for [text], closed by itself at [tenMinutes] (no abandon from then on). */
     private fun askBeforeAnotherCode(text: String, tenMinutes: Instant) {
+        pendingFrom = state.value.step
+        readBackSkipped = false // the confirmation leads back to the waiting transfer or abandons it
         state.update { it.copy(confirmCancel = true, pendingCode = text, error = null) }
         pendingCloser?.cancel()
         pendingCloser = viewModelScope.launch {
@@ -344,6 +413,9 @@ class TransferInViewModel @Inject constructor(
                 null
             }
             val shown = stored ?: deadline
+            // (The #446 review, L4) Only a code that reached its comparison ends a skipped read-back: one refused by the
+            // repository (a transfer still pinned) keeps it, so Back then goes to that transfer.
+            readBackSkipped = false
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = shown) }
             waitForApproval(shown) { move.awaitTransferIn() }
         }
@@ -360,7 +432,9 @@ class TransferInViewModel @Inject constructor(
             wait()
             ticker?.cancel()
             val phoneSecret = vault.usesPhoneSecret
-            state.update { it.copy(step = TransferInStep.DONE, sas = null, phoneSecret = phoneSecret) }
+            state.update {
+                it.copy(step = TransferInStep.DONE, sas = null, phoneSecret = phoneSecret, confirmCancel = false, pendingCode = null)
+            }
         } catch (e: VaultFailure) {
             ticker?.cancel()
             state.update {
@@ -427,12 +501,43 @@ class TransferInViewModel @Inject constructor(
      */
     override fun cancel() {
         if (settlingNow() || state.value.abandoning) return
-        val step = state.value.step
-        if (step == TransferInStep.COMPARE) {
-            state.update { it.copy(confirmCancel = true) }
-            return
+        when (state.value.step) {
+            TransferInStep.COMPARE -> state.update { it.copy(confirmCancel = true) }
+            TransferInStep.CONNECTING -> cancelConnecting()
+            else -> drop()
         }
-        drop()
+    }
+
+    /**
+     * (The #446 pair, L2) Cancel while connecting: a transfer to this phone that already waits with its code shown (a
+     * read-back that failed let another code connect) is not dropped unconfirmed. Its code and countdown come back with
+     * "Cancel the move?"; with none waiting, the connection is dropped as before.
+     */
+    private fun cancelConnecting() {
+        viewModelScope.launch {
+            val read = try {
+                Result.success(move.transferInWaiting())
+            } catch (e: VaultFailure) {
+                Result.failure(e)
+            }
+            val w = read.getOrNull()
+            val beforeTen = { t: TransferInWaiting? -> t == null || Instant.now(clock).isBefore(t.startedAt.plus(WINDOW)) }
+            when (state.value.step) {
+                // It reached the comparison meanwhile: the member's Cancel is that screen's (confirmed, before minute 10).
+                TransferInStep.COMPARE -> if (!settlingNow() && beforeTen(w)) state.update { it.copy(confirmCancel = true) }
+                TransferInStep.CONNECTING -> when {
+                    // (The #446 review, L2) Not read back: one may wait. Confirmed first, nothing dropped unasked.
+                    read.isFailure -> state.update { it.copy(confirmCancel = true) }
+                    w == null -> drop()
+                    else -> {
+                        resumeWaiting(w)
+                        // (L1) From minute 10 no cancel is offered: the checking screen alone.
+                        if (beforeTen(w)) state.update { it.copy(confirmCancel = true) }
+                    }
+                }
+                else -> Unit // it moved on meanwhile
+            }
+        }
     }
 
     override fun confirmCancel() {
@@ -487,16 +592,39 @@ class TransferInViewModel @Inject constructor(
             } else {
                 null
             }
+            // (The #446 pair, L5) A transfer approved during the abandon may already be paired (no longer waiting): the phase,
+            // read again, says so, and the move goes on to its end.
+            if (done && left == null && pairedMeanwhile()) {
+                val phoneSecret = vault.usesPhoneSecret
+                state.update {
+                    it.copy(step = TransferInStep.DONE, busy = false, abandoning = false, confirmCancel = false, sas = null,
+                        pendingCode = null, phoneSecret = phoneSecret)
+                }
+                return@launch
+            }
             state.update { it.copy(abandoning = false, confirmCancel = false) }
             when {
                 !done || left != null -> backToTheWaitingTransfer()
                 next != null -> {
-                    state.update { it.copy(step = TransferInStep.SCAN, busy = false, sas = null, deadline = null) }
+                    state.update { it.copy(step = pendingFrom, busy = false, sas = null, deadline = null) }
                     begin(next)
                 }
                 else -> state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null) }
             }
         }
+    }
+
+    @Suppress("TooGenericExceptionCaught") // a refresh that fails says nothing: not paired, as before
+    private suspend fun pairedMeanwhile(): Boolean {
+        try {
+            account.refresh()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return false
+        }
+        val p = account.phase.value
+        return p is AppPhase.Setup && p.stage == SetupStage.FINISHING
     }
 
     /** The waiting transfer again (its code and countdown, or the checking text from minute 10); the first step if none. */
@@ -527,7 +655,11 @@ class TransferInViewModel @Inject constructor(
 
     override fun again() {
         if (settlingNow()) return
-        state.update { TransferInUiState(step = TransferInStep.SCAN) }
+        // A new start of the steps, not a restart: nothing is being read back ([TransferInUiState.reading] is the screen's
+        // first read only), so Back works at once.
+        readBackSkipped = false
+        pendingFrom = TransferInStep.SCAN
+        state.update { TransferInUiState(step = TransferInStep.SCAN, reading = false) }
     }
 
     override fun finish() {

@@ -39,7 +39,7 @@ class TransferInViewModelTest {
 
     @Test
     fun scanCompareApproveDone() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         val code = qr()
         vm.scanned(code)
@@ -65,7 +65,7 @@ class TransferInViewModelTest {
      */
     @Test
     fun aTransferWithoutUserGuidIsAStoppedMove() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(100)
@@ -84,17 +84,17 @@ class TransferInViewModelTest {
     @Test
     fun aMoveThatStoppedBeforeARestartIsToldOnce() = runTest {
         vault.transferStopped = true
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
-        val next = TransferInViewModel(vault, vault)
+        val next = TransferInViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(TransferInStep.INTRO, next.uiState.value.step)
     }
 
     @Test
     fun rejectedOnTheOldPhone() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(100)
@@ -109,7 +109,7 @@ class TransferInViewModelTest {
         val start = Instant.now()
         // Started 12 minutes ago: past the 11-minute deadline (the start published the waiting phase).
         vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(720))
-        return TransferInViewModel(vault, vault).also {
+        return TransferInViewModel(vault, vault, vault).also {
             it.clock = object : Clock() {
                 override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
 
@@ -204,7 +204,7 @@ class TransferInViewModelTest {
         // The stored start is that of the code scanned below: its own transfer, recognized as such.
         val code = qr()
         vault.openTransferCode = code
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
 
@@ -266,7 +266,7 @@ class TransferInViewModelTest {
         // The stored start is that of the code scanned below: its own transfer, recognized as such.
         val code = qr()
         vault.openTransferCode = code
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
 
@@ -301,7 +301,7 @@ class TransferInViewModelTest {
      */
     @Test
     fun timesOutAfterTheWindow() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.paste()
         vm.setInput(qr())
         vm.submitInput()
@@ -319,7 +319,7 @@ class TransferInViewModelTest {
     /** (A6 audit N1) The take-over after the approval failed: "Finishing the move" and Try again, never the code again. */
     @Test
     fun aFailedTakeOverIsTriedAgain() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(100)
@@ -342,7 +342,7 @@ class TransferInViewModelTest {
     fun aRestartWhileWaitingShowsTheCodeAndWaitsAgain() = runTest {
         val start = Instant.now()
         vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(120))
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
 
@@ -369,7 +369,7 @@ class TransferInViewModelTest {
     fun theOpenTransfersOwnCodeAfterItsExpiryGoesBackToTheMove() = runTest {
         val expired = qr(exp = Instant.now().minusSeconds(60))
         vault.openTransferCode = expired
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(expired)
         advanceTimeBy(100)
@@ -378,7 +378,7 @@ class TransferInViewModelTest {
         assertEquals("042817", vm.uiState.value.sas)
         assertTrue("isOpenTransferCode" in vault.calls && "transferIn" in vault.calls)
         vault.openTransferCode = null
-        val vm2 = TransferInViewModel(vault, vault)
+        val vm2 = TransferInViewModel(vault, vault, vault)
         vm2.scan()
         vault.calls.clear()
         vm2.scanned(expired)
@@ -389,7 +389,7 @@ class TransferInViewModelTest {
 
     @Test
     fun otherCodesAreRefusedBeforeAnythingIsSent() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr(InviteKind.CONNECTION))
         assertEquals(FailureKind.INVITE_INVALID, vm.uiState.value.inputProblem)
@@ -405,7 +405,7 @@ class TransferInViewModelTest {
     /** (A6 audit N1) Once the code is shown, Back asks first: the old phone may already have approved the move. */
     @Test
     fun cancellingDropsTheHandshake() = runTest {
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(100)
@@ -431,7 +431,7 @@ class TransferInViewModelTest {
     @Test
     fun theScreenNeverCutsTheRepositorysWaitShortAndCancelLeaves() = runTest {
         vault.transferHsResp = CompletableDeferred()
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceTimeBy(300_000)
@@ -455,7 +455,7 @@ class TransferInViewModelTest {
     @Test
     fun anHsRespAfterSixtySecondsFromTheScanStillShowsTheCode() = runTest {
         vault.transferHsResp = CompletableDeferred()
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         val start = Instant.now()
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
@@ -477,7 +477,7 @@ class TransferInViewModelTest {
     @Test
     fun theRepositorysOwnHsRespTimeoutSaysTheSame() = runTest {
         vault.fail["transferIn"] = FakeVault.failure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED)
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceUntilIdle()
@@ -487,7 +487,7 @@ class TransferInViewModelTest {
     @Test
     fun anHsRespWithin60SecondsShowsTheCode() = runTest {
         vault.transferHsResp = CompletableDeferred()
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         // The approval countdown is still running when this test ends, and `runTest` drains it: its clock follows the
         // test's virtual time, or it would spin through virtual seconds until 10 real minutes have passed.
         val start = Instant.now()
@@ -511,7 +511,7 @@ class TransferInViewModelTest {
     @Test
     fun aFailureToConnectReturnsToTheCode() = runTest {
         vault.fail["transferIn"] = FakeVault.failure(FailureKind.NO_RESPONSE)
-        val vm = TransferInViewModel(vault, vault)
+        val vm = TransferInViewModel(vault, vault, vault)
         vm.scan()
         vm.scanned(qr())
         advanceUntilIdle()
