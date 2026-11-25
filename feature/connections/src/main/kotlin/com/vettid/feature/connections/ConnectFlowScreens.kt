@@ -60,6 +60,7 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.ui.components.rememberConfirmedLeave
+import com.vettid.core.ui.components.WithoutApprovalsIndicator
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -366,7 +367,8 @@ fun ConnectionRequestContent(
     displayName: String? = null,
     /** (ANDROID-PLAN 0.1.57 (2)) The code `error_vault_code` names with [error], or null. */
     errorCode: String? = null,
-) {
+) = WithoutApprovalsIndicator {
+    // A request's screen: no approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2).
     val who = AccountNames.isolateOrNull(name) ?: stringResource(R.string.connections_request_them)
     FormScaffold(
         title = stringResource(R.string.connections_request_title),

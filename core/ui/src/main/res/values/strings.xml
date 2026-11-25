@@ -13,6 +13,18 @@
         <item quantity="one">%1$d pending</item>
         <item quantity="other">%1$d pending</item>
     </plurals>
+    <!-- Owner-approved 2026-11-24 (GC #17779): ANDROID-PLAN §4 "The approvals indicator" 11. -->
+    <plurals name="approvals_indicator_description">
+        <item quantity="one">Approvals, %1$d waiting</item>
+        <item quantity="other">Approvals, %1$d waiting</item>
+    </plurals>
+    <!-- Owner-approved 2026-11-24 (GC #17779). %2$s: the soonest entry's label; %3$s: "1 minute 20 seconds", "45 seconds". -->
+    <plurals name="approvals_indicator_description_urgent">
+        <item quantity="one">Approvals, %1$d waiting. %2$s expires in %3$s</item>
+        <item quantity="other">Approvals, %1$d waiting. %2$s expires in %3$s</item>
+    </plurals>
+    <!-- Owner-approved 2026-11-24 (GC #17779): the pill, M:SS. -->
+    <string name="approvals_indicator_time" translatable="false">%1$d:%2$02d</string>
     <string name="core_ui_notifications">Notifications</string>
     <plurals name="core_ui_notifications_unread">
         <item quantity="one">Notifications, %1$d unread</item>

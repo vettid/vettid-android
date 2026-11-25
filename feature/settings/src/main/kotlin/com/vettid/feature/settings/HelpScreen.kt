@@ -40,7 +40,8 @@ fun HelpScreen(onBack: () -> Unit, modifier: Modifier = Modifier, bell: com.vett
         onBackClick = onBack,
         modifier = modifier,
         background = VettIdTheme.colors.groupedBackground,
-        actions = { bell?.let { com.vettid.core.ui.components.NotificationBellButton(it) } },
+        // No bell, no actions: the approvals indicator then shows in full (null, not an empty row).
+        actions = bell?.let { b -> { com.vettid.core.ui.components.NotificationBellButton(b) } },
     ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.help_title))

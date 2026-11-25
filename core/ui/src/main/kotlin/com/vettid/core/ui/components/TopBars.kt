@@ -40,8 +40,9 @@ import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
 /**
- * Main top bar (Proton inbox): menu, large start-aligned title, optional search, the Notifications [bell]
- * (ANDROID-PLAN 0.1.23) and the member's avatar tile which opens the account sheet.
+ * Main top bar (Proton inbox): menu, large start-aligned title, optional search, the approvals indicator
+ * ([LocalApprovalsIndicator], left of the bell), the Notifications [bell] (ANDROID-PLAN 0.1.23) and the member's avatar
+ * tile which opens the account sheet.
  */
 @Composable
 fun VettIdTopAppBar(
@@ -85,6 +86,7 @@ fun VettIdTopAppBar(
             }
         }
         actions()
+        LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it) }
         if (bell != null) NotificationBellButton(bell)
         val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
         // Not an IconButton: its circular clip would cut the tile's corners.
@@ -105,13 +107,14 @@ fun VettIdTopAppBar(
 /**
  * Back-arrow bar for detail and settings screens. The title (if any) goes in the
  * content below: centred for detail screens ([CenteredTitle]), large and
- * start-aligned for settings ([LargeTitle]).
+ * start-aligned for settings ([LargeTitle]). The approvals indicator ([LocalApprovalsIndicator]) comes before the
+ * [actions], as the icon alone when there are any, so it never takes their room.
  */
 @Composable
 fun VettIdBackTopBar(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    actions: @Composable RowScope.() -> Unit = {},
+    actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -125,7 +128,8 @@ fun VettIdBackTopBar(
             Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.core_ui_cd_back))
         }
         Spacer(Modifier.weight(1f))
-        actions()
+        LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it, compact = actions != null) }
+        actions?.invoke(this)
     }
 }
 
