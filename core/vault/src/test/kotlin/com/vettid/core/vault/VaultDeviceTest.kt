@@ -4538,6 +4538,88 @@ class VaultDeviceTest {
     }
 
     /**
+     * (Test builds only, CALLS-PLAN §13.4 step 8) The signalling faults: a start with `suitesAfterSigning` sends a
+     * `suites` list that `ek_sig2` does not sign (still a valid list, so only the signature refuses it); an answer with
+     * `wrongConfirm` sends a `confirm` the caller's check refuses. Outside a call-test build either is refused before
+     * anything is signed or sent.
+     */
+    @OptIn(MadeByCallApi::class)
+    @Test
+    fun theSignallingFaultsBreakOnlyTheirRuleAndOnlyInATestBuild() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val api = VaultApi(d)
+            val peer = CallPeer()
+            // Not a test build: refused before any deposit.
+            for (f in listOf(CallShareFaults(suitesAfterSigning = true), CallShareFaults(wrongConfirm = true))) {
+                assertThrows("$f", IllegalStateException::class.java) {
+                    runBlocking { api.callStart("conn-1", sdp, MediaSuite.entries, peerIk = peer.vault.publicKey, faults = f) }
+                }
+            }
+            assertEquals("nothing deposited", null, deposits.poll(300, TimeUnit.MILLISECONDS))
+            // A test build, but a form 1 call: the fault would do nothing, so it is refused, not ignored.
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { api.callStart("conn-1", sdp, MediaSuite.entries, faults = CallShareFaults(suitesAfterSigning = true), testBuild = true) }
+            }
+            val form1 = IncomingCall(
+                Ulid.new(), "conn-1", "audio", sdp, Instant.now().plusSeconds(45), java.time.Duration.ofSeconds(45),
+                CallWire.IceConfig(Ulid.new(), Instant.now().plusSeconds(600), emptyList()),
+                CallMedia.Negotiated(MediaSuite.AES_128_GCM, listOf(1)), CallWire.newOfferKey().publicKey.bytes(),
+            )
+            assertThrows(IllegalStateException::class.java) {
+                runBlocking { api.callAnswer(form1, sdp, faults = CallShareFaults(wrongConfirm = true), testBuild = true) }
+            }
+            assertEquals("nothing deposited", null, deposits.poll(300, TimeUnit.MILLISECONDS))
+
+            // suitesAfterSigning: the list sent is not the list signed.
+            val starting = async(Dispatchers.IO) {
+                runCatching {
+                    api.callStart("conn-1", sdp, MediaSuite.entries, peerIk = peer.vault.publicKey, faults = CallShareFaults(suitesAfterSigning = true), testBuild = true)
+                }
+            }
+            val req = v.open(nextDeposit().second)
+            val b = StrictJson.parseObject(req.body)
+            val callId = b.string("call_id")
+            val ek = b.base64("ek", 1216)
+            val p = CallWire.Parties(v.ik.publicKey, peer.vault.publicKey)
+            val sent = b.array("suites").map { it.asUint(1, 65535).toInt() }
+            assertEquals(listOf(1, 2), sent)
+            val sig2 = b.base64("ek_sig2", 64)
+            assertTrue("ek_sig2 still signs the offered list", com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.offerMessage2(callId, "audio", listOf(1), p, ek), sig2))
+            assertTrue("and not the list sent", !com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.offerMessage2(callId, "audio", sent, p, ek), sig2))
+            d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = req.type, ts = Instant.now(), re = req.id, status = Inner.STATUS_ERROR, error = com.vettid.core.crypto.envelope.InnerError("bad_request")))))
+            assertEquals("bad_request", (starting.await().exceptionOrNull() as? VaultOpException)?.code)
+
+            // wrongConfirm: the answer is otherwise right, and the caller's check of confirm refuses it.
+            val inCallId = Ulid.new()
+            val offerKey = CallWire.newOfferKey()
+            val inEk = offerKey.publicKey.bytes()
+            val ip = CallWire.Parties(peer.vault.publicKey, v.ik.publicKey)
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val m2 = CallWire.offerMessage2(inCallId, "audio", listOf(1), ip, inEk)
+            val offer = peer.vouched(
+                v.ice(JsonBuilder().string("call_id", inCallId).string("connection_id", "conn-1").string("media", "audio")
+                    .string("sdp", CallMedia.sdpWithOffer(sdp, listOf(1))).base64("ek", inEk).string("exp", ts(exp)), inCallId),
+                CallWire.shareMessage("offer", inCallId, "audio", inEk),
+            ).raw("suites", "[1]").base64("device_sig2", CallWire.signShare(peer.device, m2))
+                .base64("vault_sig2", peer.vault.sign(CallWire.LABEL_VOUCH, CallWire.vouchMessage(peer.device.publicKey, m2))).build()
+            d.handle(v.seal("call.offer", offer))
+            val call = api.callIncoming(d.awaitEvent("call.offer"), peer.pinned)
+            assertThrows(IllegalStateException::class.java) { runBlocking { api.callAnswer(call, sdp, faults = CallShareFaults(wrongConfirm = true)) } }
+            assertEquals("nothing deposited", null, deposits.poll(300, TimeUnit.MILLISECONDS))
+            val keys = async(Dispatchers.IO) { api.callAnswer(call, sdp, keepalive = true, faults = CallShareFaults(wrongConfirm = true), testBuild = true) }
+            val ans = StrictJson.parseObject(v.open(nextDeposit().second).body)
+            keys.await().destroy()
+            val enc = ans.base64("enc", 1120)
+            assertTrue("enc_sig is right", com.vettid.core.crypto.Ed25519.verify(secrets.identity.publicKey, CallWire.LABEL_SHARE, CallWire.answerMessage2(inCallId, 1, listOf(1), ip, enc), ans.base64("enc_sig", 64)))
+            val kCall = CallWire.accept2(offerKey, enc, inCallId, ip)
+            assertTrue("confirm is refused", !CallWire.verifyConfirm(CallWire.confirmKey(kCall, inCallId), 1, listOf(1), inCallId, ip, ans.base64("confirm", 32)))
+        }
+    }
+
+    /**
      * Answering a form 2 offer: every form it carries is checked (part of form 2 refused), the choice is from the signed
      * list, and the answer is in form 2: `suite`, `offered`, `confirm`, `enc_sig` over m2, no VettID SDP attribute.
      */

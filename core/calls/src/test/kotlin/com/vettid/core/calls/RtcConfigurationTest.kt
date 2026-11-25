@@ -48,6 +48,9 @@ class RtcConfigurationTest {
     fun relayOnlyIsATestOption() {
         assertEquals(true, MediaConfig().plain)
         assertEquals(false, MediaConfig(relayOnly = true).plain)
+        // The signalling faults (CALLS-PLAN §13.4 step 8) are test options as well.
+        assertEquals(false, MediaConfig(share = com.vettid.core.vault.CallShareFaults(wrongConfirm = true)).plain)
+        assertEquals(false, MediaConfig(share = com.vettid.core.vault.CallShareFaults(suitesAfterSigning = true)).plain)
     }
 
     /**
@@ -64,6 +67,8 @@ class RtcConfigurationTest {
             MediaConfig(faults = MediaFaults(misstateOwnSsrc = true)),
             MediaConfig(faults = MediaFaults(sendUnencrypted = true)),
             MediaConfig(faults = MediaFaults(wrongSendKey = true)),
+            MediaConfig(share = com.vettid.core.vault.CallShareFaults(wrongConfirm = true)),
+            MediaConfig(share = com.vettid.core.vault.CallShareFaults(suitesAfterSigning = true)),
         )) {
             org.junit.Assert.assertThrows("$c", IllegalStateException::class.java) { factory.create(c) }
         }

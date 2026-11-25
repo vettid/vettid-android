@@ -28,7 +28,6 @@ import com.vettid.core.calls.CallState
 import com.vettid.core.calls.CallsController
 import com.vettid.core.calls.CallsDiagnostics
 import com.vettid.core.calls.MediaConfig
-import com.vettid.core.calls.MediaFaults
 import com.vettid.core.ui.theme.Spacing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +58,9 @@ object CallTest {
         "wrongSendKey" to { c -> c.faults.wrongSendKey },
         "dtlsPqcTrial" to { c -> c.dtlsPqcTrial },
         "relayOnly" to { c -> c.relayOnly },
+        // CALLS-PLAN §13.4 step 8: signalling that breaks the call shares' rules (VAULT-MESSAGING §10.10).
+        "wrongConfirm" to { c -> c.share.wrongConfirm },
+        "suitesAfterSigning" to { c -> c.share.suitesAfterSigning },
     )
 
     fun toggled(c: MediaConfig, label: String): MediaConfig {
@@ -70,6 +72,8 @@ object CallTest {
             "wrongSendKey" -> c.copy(faults = f.copy(wrongSendKey = !f.wrongSendKey))
             "dtlsPqcTrial" -> c.copy(dtlsPqcTrial = !c.dtlsPqcTrial)
             "relayOnly" -> c.copy(relayOnly = !c.relayOnly)
+            "wrongConfirm" -> c.copy(share = c.share.copy(wrongConfirm = !c.share.wrongConfirm))
+            "suitesAfterSigning" -> c.copy(share = c.share.copy(suitesAfterSigning = !c.share.suitesAfterSigning))
             else -> c
         }
     }
@@ -160,7 +164,7 @@ class CallTestViewModel @Inject constructor(private val calls: CallsController) 
     }
 
     fun reset() {
-        calls.setMediaConfig(MediaConfig(faults = MediaFaults()))
+        calls.setMediaConfig(MediaConfig())
         changed.value++
     }
 }

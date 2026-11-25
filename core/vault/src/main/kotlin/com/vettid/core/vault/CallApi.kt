@@ -34,6 +34,26 @@ import java.time.Instant
 // (VaultDevice.sendOnce): none of them means anything later. `call.end` is an ordinary durable send, so that a hang-up
 // that could not be delivered at once still reaches the vault and frees it.
 
+/**
+ * (Test builds only: CALLS-PLAN §13.4 step 8) Signalling that breaks a rule of VAULT-MESSAGING's call shares on
+ * purpose, to show that the other side refuses it. All off in every build a member uses: the gateway refuses any of
+ * them unless the build is a call-test build (`VaultCallGateway`), and the calls controller unless the vault reports
+ * this app's signer class as `development`. `callStart` and `callAnswer` refuse them too unless told the build is a
+ * call-test build ([checkFaults]), next to the code that breaks the rule.
+ */
+data class CallShareFaults(
+    /** Answering (form 2): a `confirm` that is not the one over this call, so the caller refuses the answer. */
+    val wrongConfirm: Boolean = false,
+    /** Calling (form 2): `suites` other than the list `ek_sig2` signs, so the vault refuses the start. */
+    val suitesAfterSigning: Boolean = false,
+) {
+    val any: Boolean get() = wrongConfirm || suitesAfterSigning
+
+    companion object {
+        val NONE = CallShareFaults()
+    }
+}
+
 /** Limits and times of §10.10, as vettid-vault's `features/calls` enforces them. */
 object CallLimits {
     const val MAX_SDP = 32 * 1024
@@ -340,7 +360,14 @@ suspend fun VaultApi.callStart(
      * device sends it only when its vault is C2 (`call.list` `v: 2`). Null: form 1 only, as to an S10 vault.
      */
     peerIk: ByteArray? = null,
+    /** (Test builds only) [CallShareFaults.suitesAfterSigning]. */
+    faults: CallShareFaults = CallShareFaults.NONE,
+    /** Whether this is a call-test build: without it any [faults] is refused before anything is signed or sent. */
+    testBuild: Boolean = false,
 ): OutgoingCall {
+    checkFaults(faults, testBuild)
+    // A fault of form 2 on a form 1 start would do nothing, and a test run could pass for the wrong reason.
+    check(!faults.suitesAfterSigning || peerIk != null) { "suitesAfterSigning not applied: a form 1 start" }
     val callId = device.newId()
     val offered = checked("media suites") { CallMedia.offerOf(MediaSuite.formOne(suites)) }
     val parties = peerIk?.let { checked("call parties") { CallWire.Parties(device.vaultIdentityKey(), it) } }
@@ -364,7 +391,7 @@ suspend fun VaultApi.callStart(
                 put("ek", Base64s.encodeStd(ek))
                 put("ek_sig", Base64s.encodeStd(share))
                 if (share2 != null) {
-                    putJsonArray("suites") { offered.forEach { add(JsonPrimitive(it)) } }
+                    putJsonArray("suites") { sentSuites(offered, faults).forEach { add(JsonPrimitive(it)) } }
                     put("ek_sig2", Base64s.encodeStd(share2))
                     put("keepalive", true)
                 }
@@ -446,7 +473,18 @@ fun VaultApi.callIncoming(
  * Encapsulates to the caller's key, signs the share, deposits once, and returns the call's keys, which never leave
  * this device. The vault does not answer: a call that was no longer ringing comes back as `call.end{unavailable}`.
  */
-suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String, keepalive: Boolean = false): CallKeys {
+suspend fun VaultApi.callAnswer(
+    call: IncomingCall,
+    sdp: String,
+    keepalive: Boolean = false,
+    /** (Test builds only) [CallShareFaults.wrongConfirm]. */
+    faults: CallShareFaults = CallShareFaults.NONE,
+    /** Whether this is a call-test build: without it any [faults] is refused before anything is derived or sent. */
+    testBuild: Boolean = false,
+): CallKeys {
+    checkFaults(faults, testBuild)
+    // A fault of form 2 on a form 1 answer would do nothing, and a test run could pass for the wrong reason.
+    check(!faults.wrongConfirm || call.parties != null) { "wrongConfirm not applied: a form 1 answer" }
     val chosen = call.negotiated
     val parties = call.parties
     // (C2) A form 2 answer's SDP carries no VettID attribute: the choice is the signed `suite`.
@@ -486,7 +524,7 @@ suspend fun VaultApi.callAnswer(call: IncomingCall, sdp: String, keepalive: Bool
                 if (parties != null && confirm != null) {
                     put("suite", chosen.chosen.id)
                     putJsonArray("offered") { chosen.offered.forEach { add(JsonPrimitive(it)) } }
-                    put("confirm", Base64s.encodeStd(confirm))
+                    put("confirm", Base64s.encodeStd(sentConfirm(confirm, faults)))
                 }
                 if (keepalive) put("keepalive", true)
             },
@@ -801,3 +839,24 @@ fun callEventsIn(events: Flow<VaultMessage>): Flow<CallEvent> =
             else -> null
         }
     }
+
+/** Refuses any test fault outside a call-test build. */
+internal fun checkFaults(faults: CallShareFaults, testBuild: Boolean) {
+    check(testBuild || !faults.any) { "call signalling faults are for the call-test build only" }
+}
+
+/**
+ * The `suites` a start sends: [offered], the list `ek_sig2` signs, unless the test fault adds a suite after signing
+ * (still a valid list, so only the signature check refuses it).
+ */
+internal fun sentSuites(offered: List<Int>, faults: CallShareFaults): List<Int> {
+    if (!faults.suitesAfterSigning) return offered
+    val extra = (1..MAX_SUITE_ID).first { it !in offered }
+    // At most 8 suites (§10.10): a full list has its last one replaced, so it stays one the vault parses.
+    return if (offered.size < CallMedia.MAX_SUITES) offered + extra else offered.dropLast(1) + extra
+}
+
+/** The `confirm` an answer sends: [confirm], unless the test fault changes one bit of it. */
+internal fun sentConfirm(confirm: ByteArray, faults: CallShareFaults): ByteArray =
+    if (faults.wrongConfirm) confirm.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() } else confirm
+

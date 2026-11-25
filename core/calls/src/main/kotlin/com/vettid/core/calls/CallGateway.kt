@@ -6,6 +6,7 @@ import com.vettid.core.vault.CallCandidate
 import com.vettid.core.vault.CallEvent
 import com.vettid.core.vault.CallKeys
 import com.vettid.core.vault.CallList
+import com.vettid.core.vault.CallShareFaults
 import com.vettid.core.vault.CallPermission
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.OutgoingCall
@@ -32,8 +33,9 @@ import kotlinx.coroutines.flow.mapNotNull
 
 /**
  * `CallApi` as an interface, one function for one function, so that [VaultCallSignalling] can be tested without a
- * vault. [VaultCallGateway] is the only implementation outside tests and adds nothing: every check is in `CallApi`
- * ([callIncoming], [callAccept]), and which checks are asked for is decided in [VaultCallSignalling].
+ * vault. [VaultCallGateway] is the only implementation outside tests and adds nothing but the test build's check of
+ * the signalling faults ([withFaults]): every check of a call is in `CallApi` ([callIncoming], [callAccept]), and
+ * which checks are asked for is decided in [VaultCallSignalling].
  */
 @Suppress("TooManyFunctions") // one function per call message type of §10.10
 interface CallGateway {
@@ -71,6 +73,13 @@ interface CallGateway {
 
     /** (C2) The connections a `sync.event{kind: "call.permission"}` names, as they come. */
     val permissionChanges: Flow<String> get() = emptyFlow()
+
+    /**
+     * (Test builds only) This gateway with [faults] applied to every start and answer from now on (CALLS-PLAN §13.4
+     * step 8). A gateway that has no faults returns itself; [VaultCallGateway] refuses any fault outside a call-test
+     * build, as `callStart` / `callAnswer` do.
+     */
+    fun withFaults(faults: () -> CallShareFaults): CallGateway = this
 }
 
 /**
@@ -80,22 +89,47 @@ interface CallGateway {
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @Suppress("TooManyFunctions") // one function per call message type of §10.10
-class VaultCallGateway(
+class VaultCallGateway internal constructor(
     private val api: suspend () -> VaultApi,
     events: Flow<Flow<VaultMessage>>,
-    private val sendEnd: suspend (callId: String, reason: String) -> Unit = { id, reason -> api().callEnd(id, reason) },
+    private val sendEnd: suspend (callId: String, reason: String) -> Unit,
+    /** Whether this is a call-test build ([CallShareFaults] are refused otherwise). */
+    private val testBuild: Boolean,
+    private val faults: () -> CallShareFaults,
+    /** The `CallApi` calls a start and an answer go to (tests record them). */
+    private val ops: CallOps,
 ) : CallGateway {
+    constructor(
+        api: suspend () -> VaultApi,
+        events: Flow<Flow<VaultMessage>>,
+        sendEnd: suspend (callId: String, reason: String) -> Unit = { id, reason -> api().callEnd(id, reason) },
+        testBuild: Boolean = false,
+    ) : this(api, events, sendEnd, testBuild, { CallShareFaults.NONE }, CallOps)
+
+    private val eventsIn = events
+
+    override fun withFaults(faults: () -> CallShareFaults): CallGateway = VaultCallGateway(api, eventsIn, sendEnd, testBuild, faults, ops)
+
+    /** The faults for one message, refused here outside a call-test build (the second check is `CallApi`'s). */
+    private fun faultsNow(): CallShareFaults =
+        faults().also { check(testBuild || !it.any) { "call signalling faults are for the call-test build only" } }
+
     override val events: Flow<CallEvent> = events.flatMapLatest { callEventsIn(it) }
 
     override val permissionChanges: Flow<String> = events.flatMapLatest { f -> f.mapNotNull { callPermissionChange(it) } }
 
-    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
-        api().callStart(connectionId, sdp, suites, peerIk = peerIk)
+    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+        val f = faultsNow() // before the vault is asked for anything
+        return ops.start(api, connectionId, sdp, suites, peerIk, f, testBuild)
+    }
 
     override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall =
         api().callIncoming(event, pinnedFingerprint, suites)
 
-    override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys = api().callAnswer(call, sdp, keepalive)
+    override suspend fun answer(call: IncomingCall, sdp: String, keepalive: Boolean): CallKeys {
+        val f = faultsNow() // before the vault is asked for anything
+        return ops.answer(api, call, sdp, keepalive, f, testBuild)
+    }
 
     override suspend fun keepalive(callId: String) = api().callKeepalive(callId)
 
@@ -113,4 +147,30 @@ class VaultCallGateway(
     override suspend fun setPermission(connectionId: String, allowed: Boolean) = api().callPermissionSet(connectionId, allowed)
 
     override suspend fun permissions(): List<CallPermission> = api().callPermissionList()
+}
+
+/** The two `CallApi` calls the signalling faults go into, as [VaultCallGateway] makes them (tests record them). */
+internal open class CallOps {
+    @Suppress("LongParameterList") // callStart's own parameters
+    open suspend fun start(
+        api: suspend () -> VaultApi,
+        connectionId: String,
+        sdp: String,
+        suites: Collection<MediaSuite>,
+        peerIk: ByteArray?,
+        faults: CallShareFaults,
+        testBuild: Boolean,
+    ): OutgoingCall = api().callStart(connectionId, sdp, suites, peerIk = peerIk, faults = faults, testBuild = testBuild)
+
+    @Suppress("LongParameterList") // callAnswer's own parameters
+    open suspend fun answer(
+        api: suspend () -> VaultApi,
+        call: IncomingCall,
+        sdp: String,
+        keepalive: Boolean,
+        faults: CallShareFaults,
+        testBuild: Boolean,
+    ): CallKeys = api().callAnswer(call, sdp, keepalive, faults = faults, testBuild = testBuild)
+
+    companion object Default : CallOps()
 }
