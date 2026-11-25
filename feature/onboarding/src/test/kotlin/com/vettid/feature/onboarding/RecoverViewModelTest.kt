@@ -38,6 +38,22 @@ class RecoverViewModelTest {
     private val api = "https://account.vettid.org"
     private val qr = """{"v":1,"t":"r","api":"$api","vault_id":"$vid","recovery_id":"$rid","code":"$code"}"""
 
+    /** A PIN shorter than the vault PIN's form (§11.3) is not sent: the step stays. */
+    @Test
+    fun aShortPinIsNotSent() = runTest {
+        val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())
+        advanceUntilIdle()
+        vm.scan()
+        vm.scanned(qr)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.setPin("97531")
+        vm.submitPin()
+        advanceUntilIdle()
+        assertEquals(null, vault.lastPin)
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+    }
+
     @Test
     fun scanRegisterPinPasswordDone() = runTest {
         val vm = RecoverViewModel(vault, vault, vault, FakeReleaseNotes())

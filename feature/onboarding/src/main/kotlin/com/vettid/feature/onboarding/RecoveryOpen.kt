@@ -28,6 +28,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -138,7 +139,7 @@ data class RecoveryOpenUiState(
         get() = step == OpenStep.FINISH && !lostOk && outcome?.opened == true && outcome.code == CODE_DEVICE_SECRET
 
     /** The PIN alone, for [OpenStep.FINISH]. */
-    val pinValid: Boolean get() = pin.length in PIN_MIN..PIN_MAX && pin.all { it.isDigit() }
+    val pinValid: Boolean get() = PinPolicy.wellFormed(pin)
 
     /** Before the second attempt, and from three or fewer left: a warning above the check. */
     val warning: OpenWarning?
@@ -151,8 +152,6 @@ data class RecoveryOpenUiState(
     override fun toString(): String = "RecoveryOpenUiState(step=$step, outcome=${outcome?.code}, failure=$failure, used=$used)"
 
     companion object {
-        private const val PIN_MIN = 6
-        private const val PIN_MAX = 32
         private const val LOW = 3
         private const val CODE_DEVICE_SECRET = "device_secret"
         const val CODE_UNREADABLE = "unreadable_result"
@@ -220,7 +219,7 @@ class RecoveryOpenViewModel @Inject constructor(
         }
     }
 
-    fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
+    fun setPin(v: String) = state.update { it.copy(pin = PinPolicy.digits(v)) }
 
     fun setPassword(v: String) = state.update { it.copy(password = v) }
 
@@ -350,7 +349,6 @@ class RecoveryOpenViewModel @Inject constructor(
     }
 
     companion object {
-        private const val MAX_PIN = 32
         const val CODE_WRONG = "wrong"
         const val CODE_WRONG_AGAIN = "wrong_again"
         const val CODE_LOST = "attempt_lost"

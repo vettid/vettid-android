@@ -387,6 +387,19 @@ class OnboardingViewModelTest {
         assertEquals("40281795", vault.lastCredentialPin)
     }
 
+    /** The PIN the password step asks for is sent: it keeps ASCII digits only, never the Unicode digits `isDigit` takes. */
+    @Test
+    fun theAskedPinKeepsAsciiDigitsOnly() = runTest {
+        vault.phoneSecret = true
+        vault.phase.value = AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        val vm = vm()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.askPin)
+        val arabicIndic = (0x0664..0x0669).map { Char(it) }.joinToString("")
+        vm.setPin(arabicIndic + "40281795")
+        assertEquals("40281795", vm.uiState.value.pin)
+    }
+
     /** Release R: after a restart the PIN is not in memory; the password step asks for it and credential.create carries it. */
     @Test
     fun releaseRNeedsCredentialAsksForThePin() = runTest {

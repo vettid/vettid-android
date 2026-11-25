@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.altchan.TypedRecoveryCode
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AccountSite
 import com.vettid.core.data.vault.CouldNotTell
@@ -533,12 +534,12 @@ class RecoverViewModel @Inject constructor(
         kind == FailureKind.UNAUTHORIZED || code == UnlockViewModel.CODE_UNREADABLE || code == CODE_UNKNOWN_DEVICE
 
     override fun setPin(v: String) = state.update {
-        it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), pinWrong = false, error = null)
+        it.copy(pin = PinPolicy.digits(v), pinWrong = false, error = null)
     }
 
     override fun submitPin() {
         val s = state.value
-        if (!s.pinAllowed || s.pin.length < MIN_PIN) return
+        if (!s.pinAllowed || !PinPolicy.wellFormed(s.pin)) return
         state.update { it.copy(busy = true, pinWrong = false, error = null) }
         viewModelScope.launch {
             // The PIN only unlocks (Rule 3): the update is approved on the release gate's own screen once the vault is open.
@@ -702,8 +703,6 @@ class RecoverViewModel @Inject constructor(
         /** The steps a registered recovery can be left from. */
         private val LEAVABLE = setOf(RecoverStep.PIN, RecoverStep.PASSWORD, RecoverStep.ENDED)
 
-        private const val MIN_PIN = 6
-        private const val MAX_PIN = 32
         private const val TICK_MS = 1000L
 
         /** The host of [origin] (`account.vettid.org`), or [origin] itself when it is not a URL. */
