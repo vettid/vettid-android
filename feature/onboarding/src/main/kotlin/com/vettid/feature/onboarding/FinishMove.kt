@@ -20,6 +20,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
@@ -142,13 +143,13 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
 
     // Typing does not clear `noUserGuid`: no PIN can change it (the field is disabled then).
     fun setPin(v: String) = set {
-        if (it.noUserGuid) it else it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), failure = null)
+        if (it.noUserGuid) it else it.copy(pin = PinPolicy.digits(v), failure = null)
     }
 
     fun finish() {
         val s = state.value
         val pin = s.pin
-        if (pin.length < MIN_PIN || !s.pinAllowed) return
+        if (!PinPolicy.wellFormed(pin) || !s.pinAllowed) return
         val taken = keypad.take(s.pinAllowed)
         // Handed over: the keypad empties, so that a PIN refused as typed before a change is typed again.
         set { it.copy(busy = true, failure = null, pin = "") }
@@ -166,11 +167,6 @@ class FinishMoveViewModel @Inject constructor(private val vault: VaultRepository
             }
             set { it.copy(busy = false, done = failure == null, failure = failure, noUserGuid = noGuid) }
         }
-    }
-
-    private companion object {
-        const val MIN_PIN = 6
-        const val MAX_PIN = 32
     }
 }
 
@@ -228,7 +224,7 @@ fun FinishMovePane(state: FinishMoveUiState, vm: FinishMoveViewModel, onDone: ()
             }
             Button(
                 onClick = vm::finish,
-                enabled = state.pin.length >= 6 && state.pinAllowed,
+                enabled = PinPolicy.wellFormed(state.pin) && state.pinAllowed,
                 modifier = Modifier.testTag("finish_move_go"),
             ) {
                 Text(stringResource(R.string.onboarding_finish_move_title))

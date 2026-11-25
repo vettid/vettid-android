@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.policy.PasswordRule
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.ChangeCheck
 import com.vettid.core.data.vault.ChangeKind
 import com.vettid.core.data.vault.CredentialAlarm
@@ -179,7 +180,7 @@ data class ChangePasswordUiState(
     val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended
 
     /** The PIN, when it is asked ([askPin]): digits, at least 6. */
-    val pinReady: Boolean get() = !askPin || pin.length >= MIN_PIN && pin.all { it.isDigit() }
+    val pinReady: Boolean get() = !askPin || PinPolicy.wellFormed(pin)
 
     /** Every field the change needs is filled in, and no change is being decided (§11.14.9). */
     val canSubmit: Boolean
@@ -204,13 +205,8 @@ data class ChangePasswordUiState(
         else -> copy(current = "", pin = "")
     }
 
-    private companion object {
-        const val MIN_PIN = 6
-        const val MAX_PIN = 32
-    }
-
     internal fun withPin(v: String): ChangePasswordUiState {
-        val pin = v.filter { it.isDigit() }.take(MAX_PIN)
+        val pin = PinPolicy.digits(v)
         // "Don't use your PIN as your password." follows the PIN as it is typed too.
         val rule = if (newRules && !refused && password.isNotEmpty()) PasswordRule.check(password, pin) else rule
         return copy(pin = pin, rule = rule, error = null)

@@ -21,6 +21,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.policy.PasswordRule
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.policy.hintRes
 import com.vettid.core.data.policy.labelRes
 import com.vettid.core.data.policy.messageRes
@@ -82,15 +83,10 @@ data class NewCredentialUiState(
     val checking: Boolean get() = check?.open == true || check is ChangeCheck.Ended || check is ChangeCheck.Moved
 
     val filled: Boolean
-        get() = pin.length >= MIN_PIN && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged &&
+        get() = PinPolicy.wellFormed(pin) && current.isNotEmpty() && password.isNotEmpty() && confirm.isNotEmpty() && acknowledged &&
             !refused && (!newRules || rule.passes) && !checking
 
     override fun toString(): String = "NewCredentialUiState(busy=$busy, error=$error, done=$done, check=$check)"
-
-    companion object {
-        const val MIN_PIN = 6
-        const val MAX_PIN = 32
-    }
 }
 
 /**
@@ -133,7 +129,7 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
     }
 
     fun setPin(v: String) = state.update {
-        val pin = v.filter { c -> c.isDigit() }.take(NewCredentialUiState.MAX_PIN)
+        val pin = PinPolicy.digits(v)
         val rule = if (it.newRules && !it.refused && it.password.isNotEmpty()) PasswordRule.check(it.password, pin) else it.rule
         it.copy(pin = pin, rule = rule, error = null)
     }
@@ -169,6 +165,12 @@ class NewCredentialViewModel @Inject constructor(private val repo: CredentialRep
     fun confirm() {
         val s = state.value
         if (!s.confirming) return
+        // The entries again, at the send: the daily check may have wiped them while the confirmation was open (it comes back
+        // after the check), and nothing is sent without them. Not [filled], which a change being decided turns off.
+        if (!PinPolicy.wellFormed(s.pin) || s.current.isEmpty() || s.password.isEmpty()) {
+            state.update { it.copy(confirming = false) }
+            return
+        }
         state.update { it.copy(confirming = false, busy = true, error = null, check = null) }
         following = true
         viewModelScope.launch {

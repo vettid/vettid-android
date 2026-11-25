@@ -46,6 +46,34 @@ class NewCredentialViewModelTest {
         assertEquals("a much longer new pass phrase 42", vault.lastNewPassword)
     }
 
+    /** The reset's PIN and the change's asked PIN need the vault PIN's form (§11.3): five digits are not enough. */
+    @Test
+    fun theResetAndTheChangeNeedAPinOfTheVaultsForm() {
+        val reset = NewCredentialUiState(pin = "975310", current = "c", password = "p", confirm = "p", acknowledged = true)
+        assertTrue(reset.filled)
+        assertFalse(reset.copy(pin = "97531").filled)
+        assertTrue(ChangePasswordUiState(askPin = true, pin = "975310").pinReady)
+        assertFalse(ChangePasswordUiState(askPin = true, pin = "97531").pinReady)
+    }
+
+    /** The daily check wiped the entries while the confirmation was open: Confirm sends nothing and closes it. */
+    @Test
+    fun entriesWipedUnderTheConfirmationAreNotSent() = runTest {
+        val vm = NewCredentialViewModel(vault, vault)
+        filled(vm)
+        vm.setAcknowledged(true)
+        vm.submit()
+        assertTrue(vm.uiState.value.confirming)
+        // What the check's wipe does to the secret fields.
+        vm.setPin("")
+        vm.setCurrent("")
+        vm.setPassword("")
+        vm.confirm()
+        advanceUntilIdle()
+        assertFalse("newCredential" in vault.calls)
+        assertFalse(vm.uiState.value.confirming)
+    }
+
     @Test
     fun aWrongEntryIsShownAndNotKept() = runTest {
         vault.fail["newCredential"] = FakeVault.failure(FailureKind.BAD_PASSWORD, "bad_password")
