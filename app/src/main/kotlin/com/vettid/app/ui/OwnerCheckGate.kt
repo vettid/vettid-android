@@ -282,7 +282,13 @@ internal fun ownerCheckMode(
 }
 
 /** What the shell does with the check: [mode] to show, [undecided] to hide the content for a frame, [release] when it passed. */
-internal class OwnerCheckCover(val mode: OwnerCheckMode?, val undecided: Boolean, val release: () -> Unit)
+internal class OwnerCheckCover(val mode: OwnerCheckMode?, val undecided: Boolean, val release: () -> Unit) {
+    /** The check covers the shell: [LocalCheckCovered] (dialogs and sheets are taken away, after the wipe). */
+    val covered: Boolean get() = mode != null
+
+    /** The check covers the shell or is deciding whether to: [LocalCheckComing] (a result on screen counts as left). */
+    val coming: Boolean get() = mode != null || undecided
+}
 
 /** How long `gated` must stay false before a covering check is let go without being confirmed passed (a flicker is not a pass). */
 internal const val OWNER_CHECK_UNLATCH_MS = 2_000L

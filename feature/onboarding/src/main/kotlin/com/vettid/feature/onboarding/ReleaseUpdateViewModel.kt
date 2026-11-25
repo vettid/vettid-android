@@ -46,13 +46,9 @@ data class ReleaseUpdateUiState(
     /** The PIN field can be used: an offer, and neither the owner check nor a change comes first. */
     val pinAllowed: Boolean get() = offer != null && !checkDue && !changeUnresolved
 
-    val submitAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH
+    val submitAllowed: Boolean get() = pinAllowed && PinPolicy.wellFormed(pin)
 
     override fun toString(): String = "ReleaseUpdateUiState(loading=$loading, offer=${offer?.target?.number}, checkDue=$checkDue)"
-
-    private companion object {
-        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
-    }
 }
 
 /** What the update screen can ask for. */
@@ -122,7 +118,7 @@ class ReleaseUpdateViewModel @Inject constructor(
         }
     }
 
-    override fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
+    override fun setPin(v: String) = set { it.copy(pin = PinPolicy.digits(v)) }
 
     override fun approve() {
         val s = state.value
@@ -133,10 +129,6 @@ class ReleaseUpdateViewModel @Inject constructor(
         } else {
             set { it.copy(checkDue = updates.ownerCheckDue(), changeHold = updates.changeHold.value) }
         }
-    }
-
-    private companion object {
-        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
     }
 }
 
@@ -159,13 +151,9 @@ data class ReleaseUpdateFlowUiState(
 
     val pinAllowed: Boolean get() = waitSeconds == 0L && progress?.waiting == true && !noUserGuid
 
-    val retryAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH
+    val retryAllowed: Boolean get() = pinAllowed && PinPolicy.wellFormed(pin)
 
     override fun toString(): String = "ReleaseUpdateFlowUiState(step=${progress?.step}, wait=$waitSeconds)"
-
-    private companion object {
-        const val MIN_PIN_LENGTH = PinPolicy.MIN_LENGTH // 6 (§11.3): a shorter PIN is never sent
-    }
 }
 
 /** What the update's screens can ask for. */
@@ -217,7 +205,7 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
         }
     }
 
-    override fun setPin(v: String) = set { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN)) }
+    override fun setPin(v: String) = set { it.copy(pin = PinPolicy.digits(v)) }
 
     override fun retry() {
         val s = state.value
@@ -261,7 +249,6 @@ class ReleaseUpdateFlowViewModel @Inject constructor(private val updates: Releas
     }
 
     private companion object {
-        const val MAX_PIN = PinPolicy.MAX_LENGTH // 32 (§11.3)
         const val TICK_MS = 1000L
     }
 }

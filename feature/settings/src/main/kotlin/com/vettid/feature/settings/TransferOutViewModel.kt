@@ -2,6 +2,7 @@ package com.vettid.feature.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.KeptTransfer
 import com.vettid.core.data.vault.MoveRepository
@@ -89,13 +90,9 @@ data class TransferOutUiState(
     /** (STAGING-TIME-SCALE) A staging build adds its note to that text. */
     val stagingNote: Boolean = false,
 ) {
-    val canApprove: Boolean get() = pin.length >= MIN_PIN && password.isNotEmpty() && waitSeconds == 0L && !busy
+    val canApprove: Boolean get() = PinPolicy.wellFormed(pin) && password.isNotEmpty() && waitSeconds == 0L && !busy
 
     override fun toString(): String = "TransferOutUiState(step=$step, busy=$busy, error=$error)"
-
-    companion object {
-        const val MIN_PIN = 6
-    }
 }
 
 /** What the transfer screens on the old phone can ask for. */
@@ -223,7 +220,7 @@ class TransferOutViewModel @Inject constructor(
         }
     }
 
-    override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), error = null) }
+    override fun setPin(v: String) = state.update { it.copy(pin = PinPolicy.digits(v), error = null) }
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 
@@ -321,7 +318,6 @@ class TransferOutViewModel @Inject constructor(
     private companion object {
         val WINDOW: Duration = Duration.ofMinutes(10)
         const val TICK_MS = 1000L
-        const val MAX_PIN = 32
         const val CODE_SIGNER_UNCONFIRMED = "signer_unconfirmed"
 
         /** The steps in which the transfer is open at the vault: leaving cancels it, the deadline expires it. */

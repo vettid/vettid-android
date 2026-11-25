@@ -131,7 +131,7 @@ data class OnboardingUiState(
     val progressFailed: Boolean get() = progress.any { it.second == StepState.FAILED }
 
     /** (Release R) The PIN the password step asks for ([askPin]) is entered: digits only, the policy was met at setup. */
-    val credentialPinReady: Boolean get() = !askPin || pin.length >= MIN_EXISTING_PIN && pin.all { it.isDigit() }
+    val credentialPinReady: Boolean get() = !askPin || PinPolicy.wellFormed(pin)
 
     /** The password step can go on: both fields filled, the rules met, the PIN entered when it is asked. */
     val canSubmitPassword: Boolean
@@ -139,8 +139,6 @@ data class OnboardingUiState(
 
     override fun toString(): String = "OnboardingUiState(step=$step, busy=$busy, error=$error)"
 }
-
-private const val MIN_EXISTING_PIN = 6
 
 /**
  * Drives onboarding (VAULT-MESSAGING 0.15.0 §11.12; the app never signs in): the setup code from the account
@@ -410,7 +408,9 @@ class OnboardingViewModel @Inject constructor(
     // --- vault PIN ---
 
     override fun setPin(v: String) = state.update {
-        val pin = v.take(PinPolicy.MAX_LENGTH)
+        // The PIN the password step asks for (askPin) is the member's own and is sent: ASCII digits only. The PIN being
+        // chosen is judged by PinPolicy.check, whose rules it must pass (its field already takes ASCII digits only).
+        val pin = if (it.askPin) PinPolicy.digits(v) else v.take(PinPolicy.MAX_LENGTH)
         // The password step may ask for the PIN too (askPin): "Don't use your PIN as your password." follows it.
         val rule = if (it.passwordRefused || it.password.isEmpty()) it.passwordRule else PasswordRule.check(it.password, pin)
         it.copy(pin = pin, pinProblem = null, passwordRule = rule)

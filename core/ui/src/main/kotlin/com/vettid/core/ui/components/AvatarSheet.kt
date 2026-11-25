@@ -1,13 +1,15 @@
 package com.vettid.core.ui.components
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -69,15 +71,18 @@ fun AvatarSheetContent(
             .padding(bottom = Spacing.l),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        InitialTile(name = name, size = 88, style = TileStyle.Self, photo = photo)
+        InitialTile(name = name, size = 88, style = TileStyle.Self, photo = photo, icon = Icons.Outlined.Person.takeIf { name.isBlank() })
         Spacer(Modifier.height(Spacing.l))
-        Text(
-            text = name,
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.semantics { heading() },
-        )
+        // No name yet (the account not read since the unlock): no name line (owner decision a, GC #17652).
+        if (name.isNotBlank()) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
+            )
+        }
         Text(
             text = detail,
             style = MaterialTheme.typography.bodyLarge,

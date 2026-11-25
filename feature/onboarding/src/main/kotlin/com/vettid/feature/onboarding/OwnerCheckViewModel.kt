@@ -2,6 +2,7 @@ package com.vettid.feature.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.HoldOff
 import com.vettid.core.data.vault.OwnerCheckOutcome
@@ -130,7 +131,7 @@ data class OwnerCheckUiState(
     val watch: LockWatch = LockWatch.NONE,
 ) {
     val submitAllowed: Boolean
-        get() = !busy && !locking && !locked && watch == LockWatch.NONE && waitSeconds == 0L && pin.length >= MIN_PIN &&
+        get() = !busy && !locking && !locked && watch == LockWatch.NONE && waitSeconds == 0L && PinPolicy.wellFormed(pin) &&
             password.isNotEmpty() && !passedTick && !awaitingDropped
 
     /**
@@ -142,12 +143,6 @@ data class OwnerCheckUiState(
 
     override fun toString(): String =
         "OwnerCheckUiState(mode=$mode, busy=$busy, message=$message, wait=$waitSeconds, passed=$passed, tick=$passedTick)"
-
-    companion object {
-        /** A vault PIN is 6–32 digits (§3.6.1: `bad_request` otherwise). */
-        const val MIN_PIN = 6
-        const val MAX_PIN = 32
-    }
 }
 
 /** What the check screen can ask for. */
@@ -297,7 +292,7 @@ class OwnerCheckViewModel @Inject constructor(
 
 
     override fun setPin(v: String) = state.update {
-        it.copy(pin = v.filter { c -> c.isDigit() }.take(OwnerCheckUiState.MAX_PIN), message = null)
+        it.copy(pin = PinPolicy.digits(v), message = null)
     }
 
     override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }

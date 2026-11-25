@@ -8,6 +8,7 @@ import com.vettid.core.data.items.Sensitivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
@@ -376,15 +377,10 @@ data class ChangeNameUiState(
     val requestedName: String get() = "${first.trim(' ')} ${last.trim(' ')}"
 
     val submitAllowed: Boolean
-        get() = step == ChangeNameStep.CONFIRM && !busy && waitSeconds == 0L && pin.length >= MIN_PIN && password.isNotEmpty()
+        get() = step == ChangeNameStep.CONFIRM && !busy && waitSeconds == 0L && PinPolicy.wellFormed(pin) && password.isNotEmpty()
 
     override fun toString(): String =
         "ChangeNameUiState(step=$step, busy=$busy, message=$message, wait=$waitSeconds, request=${request?.state})"
-
-    companion object {
-        const val MIN_PIN = 6
-        const val MAX_PIN = 32
-    }
 }
 
 /**
@@ -483,7 +479,7 @@ class ChangeNameViewModel @Inject constructor(
     }
 
     fun setPin(v: String) = state.update {
-        it.copy(pin = v.filter { c -> c.isDigit() }.take(ChangeNameUiState.MAX_PIN), message = null)
+        it.copy(pin = PinPolicy.digits(v), message = null)
     }
 
     fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }

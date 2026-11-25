@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.ExportAnswer
@@ -66,7 +67,7 @@ sealed interface ExportStep {
         val retryUntil: Instant? = null,
     ) : ExportStep {
         fun canSend(now: Instant): Boolean =
-            pin.length in PIN_MIN..PIN_MAX && !busy && (retryUntil == null || !now.isBefore(retryUntil))
+            PinPolicy.wellFormed(pin) && !busy && (retryUntil == null || !now.isBefore(retryUntil))
 
         override fun toString(): String = "Pin($format, busy=$busy, error=$error, retryUntil=$retryUntil)"
     }
@@ -86,12 +87,6 @@ sealed interface ExportStep {
     /** A failure: [kind] of the vault's (an owner check due, the network…), or [saveFailed] writing the document. */
     /** [shownCode]: (ANDROID-PLAN 0.1.57 (2)) the code `error_vault_code` names, or null. */
     data class Failed(val kind: FailureKind?, val saveFailed: Boolean = false, val shownCode: String? = null) : ExportStep
-
-    companion object {
-        /** §11.3: the PIN is 6–32 ASCII digits. */
-        const val PIN_MIN = 6
-        const val PIN_MAX = 32
-    }
 }
 
 /** What History knows when the member asks for an export: the list's filters and the names it shows. */
@@ -161,7 +156,7 @@ class HistoryExportViewModel @Inject constructor(
     }
 
     fun setPin(pin: String) = state.update { s ->
-        if (s is ExportStep.Pin && !s.busy) s.copy(pin = pin.filter { it in '0'..'9' }.take(ExportStep.PIN_MAX)) else s
+        if (s is ExportStep.Pin && !s.busy) s.copy(pin = PinPolicy.digits(pin)) else s
     }
 
     /** Sends `audit.export` with the PIN, then reads the entries. */

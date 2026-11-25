@@ -2,32 +2,33 @@ package com.vettid.core.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -40,8 +41,9 @@ import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
 /**
- * Main top bar (Proton inbox): menu, large start-aligned title, optional search, the Notifications [bell]
- * (ANDROID-PLAN 0.1.23) and the member's avatar tile which opens the account sheet.
+ * Main top bar (Proton inbox): menu, large start-aligned title, optional search, the approvals indicator
+ * ([LocalApprovalsIndicator], left of the bell), the Notifications [bell] (ANDROID-PLAN 0.1.23) and the member's avatar
+ * tile which opens the account sheet.
  */
 @Composable
 fun VettIdTopAppBar(
@@ -85,8 +87,14 @@ fun VettIdTopAppBar(
             }
         }
         actions()
+        LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it) }
         if (bell != null) NotificationBellButton(bell)
-        val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
+        // No name yet (the account not read since the unlock): "Account" and a person in the tile (owner decision a, GC #17652).
+        val avatarLabel = if (accountName.isBlank()) {
+            stringResource(R.string.core_ui_cd_account_unnamed)
+        } else {
+            stringResource(R.string.core_ui_cd_account, accountName)
+        }
         // Not an IconButton: its circular clip would cut the tile's corners.
         Box(
             modifier = Modifier
@@ -97,7 +105,13 @@ fun VettIdTopAppBar(
                 .semantics { this.contentDescription = avatarLabel },
             contentAlignment = Alignment.Center,
         ) {
-            InitialTile(name = accountName, size = 36, style = TileStyle.Self, photo = accountPhoto)
+            InitialTile(
+                name = accountName,
+                size = 36,
+                style = TileStyle.Self,
+                photo = accountPhoto,
+                icon = Icons.Outlined.Person.takeIf { accountName.isBlank() },
+            )
         }
     }
 }
@@ -105,13 +119,14 @@ fun VettIdTopAppBar(
 /**
  * Back-arrow bar for detail and settings screens. The title (if any) goes in the
  * content below: centred for detail screens ([CenteredTitle]), large and
- * start-aligned for settings ([LargeTitle]).
+ * start-aligned for settings ([LargeTitle]). The approvals indicator ([LocalApprovalsIndicator]) comes before the
+ * [actions], as the icon alone when there are any, so it never takes their room.
  */
 @Composable
 fun VettIdBackTopBar(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    actions: @Composable RowScope.() -> Unit = {},
+    actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
@@ -125,7 +140,8 @@ fun VettIdBackTopBar(
             Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.core_ui_cd_back))
         }
         Spacer(Modifier.weight(1f))
-        actions()
+        LocalApprovalsIndicator.current?.let { ApprovalsIndicatorButton(it, compact = actions != null) }
+        actions?.invoke(this)
     }
 }
 

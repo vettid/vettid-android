@@ -335,6 +335,7 @@ private fun HeldFacts(held: HeldShow?) {
 @Composable
 @Suppress("CyclomaticComplexMethod")
 private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, actions: DecisionActions, modifier: Modifier) {
+    FinishWhenLeft(actions.onFinish)
     val who = deviceSentenceInline(a)
     val text = when (o) {
         is DeviceOutcome.Allowed ->

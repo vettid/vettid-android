@@ -275,7 +275,7 @@ fun FormScaffold(
     tertiaryLabel: String? = null,
     onTertiary: () -> Unit = {},
     header: @Composable ColumnScope.() -> Unit = {},
-    topActions: @Composable RowScope.() -> Unit = {},
+    topActions: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // paneTitle: a screen change nobody tapped for (the pairing code, a step's result) is announced by its title (A3, A30).

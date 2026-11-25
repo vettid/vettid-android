@@ -18,7 +18,14 @@ import kotlinx.coroutines.withTimeoutOrNull
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.social.MessagesRepository
-import com.vettid.core.data.social.needsDecision
+import com.vettid.core.data.social.OpenApprovalRules
+import com.vettid.core.data.social.OpenApprovals
+import com.vettid.core.data.social.deadlineClock
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.votes.VoteRules
 import com.vettid.core.data.votes.VotesRepository
@@ -50,7 +57,7 @@ data class PresenceFailure(val kind: com.vettid.core.data.vault.FailureKind, val
 
 /** The app shell (drawer badges, the Notifications bell, invitation links the app was opened with). */
 @HiltViewModel
-@Suppress("LongParameterList") // injected: what the shell shows comes from each of these
+@Suppress("LongParameterList", "TooManyFunctions") // injected: what the shell shows comes from each of these; one small call per event
 class ShellViewModel @Inject constructor(
     private val approvals: ApprovalsRepository,
     messages: MessagesRepository,
@@ -65,6 +72,10 @@ class ShellViewModel @Inject constructor(
     private val presence: PresenceRepository,
     private val devices: com.vettid.core.data.devices.DevicesRepository? = null,
 ) : ViewModel() {
+    /** The clock of the approvals' deadlines; tests set a virtual one before the first read. */
+    @androidx.annotation.VisibleForTesting
+    internal var clock: () -> java.time.Instant = java.time.Instant::now
+
     /** A notification's tap waiting for the shell (ANDROID-PLAN 0.1.23). */
     val tap: StateFlow<NotificationOpenInbox.Open?> = taps.pending
 
@@ -179,14 +190,34 @@ class ShellViewModel @Inject constructor(
 
     fun inviteLinkTaken() = invites.consume()
 
+    private val resumes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** The app came back to the front: the approvals' clock reads the time again (a sleep stops in deep sleep). */
+    fun resumed() {
+        resumes.tryEmit(Unit)
+    }
+
+    /**
+     * The open approvals (ANDROID-PLAN §4 "The approvals indicator" 1, 3, 5): the indicator's count and countdown, and the
+     * drawer badge's count (one source, 8). Recounted at each deadline and at the start of each last 2 minutes by
+     * [deadlineClock] (one sleep to the next, no polling), and on [resumed].
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val openApprovals: StateFlow<OpenApprovals> = approvals.approvals
+        .flatMapLatest { list ->
+            deadlineClock(flowOf(OpenApprovalRules.changesAt(list)), resumes, { clock() }).map { now -> OpenApprovalRules.of(list, now) }
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, OpenApprovals())
+
     val badges: StateFlow<ShellBadges> = combine(
-        approvals.approvals,
+        openApprovals,
         messages.conversations,
         combine(votes.votes, votes.reconnect, VoteRules::entry),
         wallet.shown,
     ) { a, c, v, w ->
         ShellBadges(
-            approvals = a.count { it.needsDecision },
+            approvals = a.count,
             unread = unreadConversations(c),
             votes = v.badge,
             votesShown = v.shown,
