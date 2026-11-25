@@ -82,9 +82,15 @@ class HistoryViewModelTest {
         seed(listOf(ConnectionInfo("c1", "", ConnectionState.ACTIVE)))
     }
 
-    private fun vm(vault: Vault, connectionId: String? = "c1", owner: FakeVault = FakeVault(), query: String? = null) = HistoryViewModel(
+    private fun vm(
+        vault: Vault,
+        connectionId: String? = "c1",
+        owner: FakeVault = FakeVault(),
+        query: String? = null,
+        devices: (suspend () -> Map<String, String>)? = null,
+    ) = HistoryViewModel(
         SavedStateHandle(listOfNotNull(connectionId?.let { "connectionId" to it }, query?.let { "query" to it }).toMap()),
-        HistoryManager { vault },
+        HistoryManager(ops = { vault }, devices = devices),
         social,
         RuntimeEnvironment.getApplication(),
         FakeItems(),
@@ -102,6 +108,25 @@ class HistoryViewModelTest {
     }
 
     private fun idle(s: HistoryUiState) = !s.loading && !s.loadingMore
+
+    /**
+     * R33: History read the device list before a desktop paired; that desktop's entries name it, not "Removed device":
+     * an entry's device the kept names lack makes the list read again.
+     */
+    @Test
+    fun aDevicePairedSinceTheNamesWereReadIsNamed() = runTest(main.dispatcher) {
+        var list = mapOf("phone" to "Pixel 7")
+        val withDesk = AuditEntry("e9", 9, t0.toString(), "device.paired", null, "desk", null, null, "", "")
+        val vault = Vault({ AuditPage(listOf(withDesk), seq = 9) })
+        val manager = HistoryManager(ops = { vault }, devices = { list })
+        manager.deviceNames() // read once, before the desktop paired
+        list = mapOf("phone" to "Pixel 7", "desk" to "billie")
+        val model = HistoryViewModel(
+            SavedStateHandle(), manager, social, RuntimeEnvironment.getApplication(), FakeItems(), FakeVault(),
+        )
+        val s = settle(model) { idle(it) && it.deviceNames?.containsKey("desk") == true }
+        assertEquals("billie", s.deviceNames?.get("desk"))
+    }
 
     @Test
     fun aConnectionsHistoryShowsItsEntriesAndStopsLoading() = runTest(main.dispatcher) {
