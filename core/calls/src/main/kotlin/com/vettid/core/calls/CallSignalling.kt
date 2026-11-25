@@ -93,6 +93,13 @@ internal interface CallSignalling {
     /** `call.start`. Throws [CallRefusedException] with the vault's code, [CallSecurityException], or an [IOException]. */
     suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall
 
+    /**
+     * [start], with [wanted]: whether the call is still wanted (not hung up, the vault not closing). A start that may
+     * place the call a second time (VaultCallSignalling's form 2 retry) does so only while it is.
+     */
+    suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall =
+        start(connectionId, sdp, suites)
+
     /** `call.answer` for a verified offer: returns the call's keys. Throws [CallSecurityException] or an [IOException]. */
     suspend fun answer(callId: String, sdp: String, suites: List<MediaSuite>): MediaKeys
 

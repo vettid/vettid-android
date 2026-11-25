@@ -174,6 +174,14 @@ open class FakeSignalling : CallSignalling {
         channel.trySend(e)
     }
 
+    /** What the machine said of whether the last start's call is still wanted. */
+    var wanted: (() -> Boolean)? = null
+
+    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall {
+        this.wanted = wanted
+        return start(connectionId, sdp, suites)
+    }
+
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
         sent += "start($connectionId, ${suites.map { it.id }})"
         startGate?.receive()

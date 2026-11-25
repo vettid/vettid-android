@@ -23,6 +23,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -204,6 +205,120 @@ class VaultCallSignallingTest {
         val s10 = VaultCallSignalling(g1, { identities[it] }, listOf(s1), peerKey = { ByteArray(32) { 7 } }, vaultIsC2 = { false })
         s10.start("conn-1", "v=0", listOf(s1))
         assertEquals(listOf("start(conn-1, [1])"), g1.asked)
+    }
+
+    /** A gateway whose starts run [onStart] (with the key each names), the rest as [gateway]'s. */
+    private fun startingWith(onStart: (ByteArray?) -> OutgoingCall): CallGateway = object : CallGateway by gateway {
+        override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
+            onStart(peerIk)
+    }
+
+    private fun refused(code: String): Nothing = throw VaultOpException("call.start", code)
+
+    /**
+     * (C2) A form 2 start answered `bad_request` is placed once more after both keys are refreshed (an identity
+     * rotation mid-start, VAULT-MESSAGING §10.10): the connections read again, the connection's key taken again. Only
+     * once per tap; never for form 1 or another refusal.
+     */
+    @Test
+    fun aFormTwoStartRefusedBadRequestIsPlacedOnceMoreWithFreshKeys() = runTest {
+        var key = ByteArray(32) { 7 }
+        val keys = mutableListOf<Int>()
+        val g = startingWith { ik ->
+            keys += ik!![0].toInt()
+            if (keys.size == 1) refused("bad_request") else outgoingCall()
+        }
+        val refresh = { refreshes++; key = ByteArray(32) { 8 } }
+        VaultCallSignalling(g, { identities[it] }, listOf(s1), refreshConnections = refresh, peerKey = { key }, vaultIsC2 = { true })
+            .start("conn-1", "v=0", listOf(s1))
+        assertEquals("placed again, with the refreshed key", listOf(7, 8), keys)
+        assertEquals(1, refreshes)
+
+        // A second refusal ends it as the first would have: no third start.
+        var n = 0
+        val always = startingWith { n++; refused("bad_request") }
+        val twice = VaultCallSignalling(always, { identities[it] }, listOf(s1), peerKey = { key }, vaultIsC2 = { true })
+        val e = runCatching { twice.start("conn-1", "v=0", listOf(s1)) }.exceptionOrNull()
+        assertEquals("bad_request", (e as? CallRefusedException)?.code)
+        assertEquals(2, n)
+
+        // Form 1, or another refusal: no retry.
+        for ((c2, code) in listOf(false to "bad_request", true to "busy", true to "calls_off")) {
+            n = 0
+            val once = startingWith { n++; refused(code) }
+            val v = VaultCallSignalling(once, { identities[it] }, listOf(s1), peerKey = { key }, vaultIsC2 = { c2 })
+            val x = runCatching { v.start("conn-1", "v=0", listOf(s1)) }.exceptionOrNull()
+            assertEquals("$c2 $code", code, (x as? CallRefusedException)?.code)
+            assertEquals("$c2 $code", 1, n)
+        }
+    }
+
+    /**
+     * The retry places nothing for a call no longer wanted (hung up or the vault closing), before or after the
+     * refresh; it waits for the refresh only so long; it is in form 2 again; and the second refusal is the one said.
+     */
+    @Test
+    fun theRetryIsOnlyForAWantedCallInFormTwo() = runTest {
+        val key = ByteArray(32) { 7 }
+        var n = 0
+        val badThenOk = startingWith { n++; if (n == 1) refused("bad_request") else outgoingCall() }
+
+        // Not wanted when the refusal comes: no refresh, no second start.
+        val e1 = runCatching {
+            VaultCallSignalling(
+                badThenOk, { identities[it] }, listOf(s1), refreshConnections = { refreshes++ }, peerKey = { key }, vaultIsC2 = { true },
+            ).start("conn-1", "v=0", listOf(s1)) { false }
+        }.exceptionOrNull()
+        assertEquals("bad_request", (e1 as? CallRefusedException)?.code)
+        assertEquals(1, n)
+        assertEquals(0, refreshes)
+
+        // Hung up during the refresh: no second start.
+        n = 0
+        var wanted = true
+        val e2 = runCatching {
+            VaultCallSignalling(
+                badThenOk, { identities[it] }, listOf(s1), refreshConnections = { wanted = false }, peerKey = { key }, vaultIsC2 = { true },
+            ).start("conn-1", "v=0", listOf(s1)) { wanted }
+        }.exceptionOrNull()
+        assertEquals("bad_request", (e2 as? CallRefusedException)?.code)
+        assertEquals(1, n)
+
+        // A refresh that never answers is given 3 s, then the call is placed again.
+        n = 0
+        val t0 = testScheduler.currentTime
+        VaultCallSignalling(
+            badThenOk, { identities[it] }, listOf(s1), refreshConnections = { awaitCancellation() }, peerKey = { key },
+            vaultIsC2 = { true },
+        ).start("conn-1", "v=0", listOf(s1))
+        assertEquals(2, n)
+        assertEquals(3_000L, testScheduler.currentTime - t0)
+
+        // The key gone after the refresh (or the vault now read as older): never a form 1 retry.
+        n = 0
+        var k: ByteArray? = key
+        val sent = mutableListOf<Boolean>()
+        val recording = startingWith { ik ->
+            sent += ik != null
+            n++
+            if (n == 1) refused("bad_request") else outgoingCall()
+        }
+        val e3 = runCatching {
+            VaultCallSignalling(
+                recording, { identities[it] }, listOf(s1), refreshConnections = { k = null }, peerKey = { k }, vaultIsC2 = { k != null },
+            ).start("conn-1", "v=0", listOf(s1))
+        }.exceptionOrNull()
+        assertTrue(e3.toString(), e3 is CallSecurityException)
+        assertEquals(listOf(true), sent)
+
+        // The second refusal is the one the member is told.
+        n = 0
+        val badThenBusy = startingWith { n++; if (n == 1) refused("bad_request") else refused("busy") }
+        val e4 = runCatching {
+            VaultCallSignalling(badThenBusy, { identities[it] }, listOf(s1), peerKey = { key }, vaultIsC2 = { true })
+                .start("conn-1", "v=0", listOf(s1))
+        }.exceptionOrNull()
+        assertEquals("busy", (e4 as? CallRefusedException)?.code)
     }
 
     /** (C2) Unless told the vault is older, a start is in form 2: without the connection's key no call is placed. */

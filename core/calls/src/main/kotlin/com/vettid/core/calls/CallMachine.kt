@@ -88,6 +88,9 @@ internal class CallMachine(
 
     private val inbox = Channel<Msg>(Channel.UNLIMITED)
     private var session: Session? = null
+
+    /** The current session's seq ([NO_SEQ] without one), readable off the loop: a start asks whether its call is still wanted. */
+    private val liveSeq = java.util.concurrent.atomic.AtomicInteger(NO_SEQ)
     private var nextSeq = 0
 
     /**
@@ -348,6 +351,7 @@ internal class CallMachine(
     private fun newSession(connectionId: String, direction: CallDirection): Session {
         val s = Session(nextSeq++, connectionId, direction, SupervisorJob(scope.coroutineContext.job), elapsedMs())
         session = s
+        liveSeq.set(s.seq)
         // However the call's jobs end (also when the machine's scope goes away with a call live), the engine is
         // closed: the microphone and the keys do not outlive the call.
         s.job.invokeOnCompletion { s.engine?.close() }
@@ -433,7 +437,7 @@ internal class CallMachine(
         scope.launch {
             withContext(NonCancellable) {
                 try {
-                    val placed = signalling.start(m.connectionId, m.sdp, m.suites)
+                    val placed = signalling.start(m.connectionId, m.sdp, m.suites) { liveSeq.get() == m.seq && !closed }
                     post(Msg.Placed(m.seq, placed, elapsedMs()))
                 } catch (e: CallRefusedException) {
                     post(Msg.Failed(m.seq, refusal(e.code)))
@@ -1140,6 +1144,7 @@ internal class CallMachine(
     private fun release(s: Session) {
         if (session !== s) return
         session = null
+        liveSeq.set(NO_SEQ)
         s.callId?.let { signalling.drop(it) }
         s.lane.close()
         s.job.cancel()
@@ -1176,6 +1181,9 @@ internal class CallMachine(
     }
 
     private companion object {
+        /** No session ([liveSeq]): seqs count up from 0. */
+        const val NO_SEQ = -1
+
         const val TAG = "CallMachine"
         const val NANOS_PER_MILLI = 1_000_000L
         const val MAX_PENDING_CANDIDATES = 256

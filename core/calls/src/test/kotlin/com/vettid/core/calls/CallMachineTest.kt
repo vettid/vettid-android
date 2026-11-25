@@ -280,6 +280,35 @@ class CallMachineTest {
         assertEquals(CallEnd.HUNG_UP, m.ended().reason)
     }
 
+    /** A start's call is wanted while it is the current call and the vault is open: not after a hang-up or a lock. */
+    @Test
+    fun aStartsCallIsWantedOnlyWhileCurrentAndOpen() = runTest {
+        val m = machine()
+        signalling.startGate = Channel(1)
+        m.call("conn-1")
+        runCurrent()
+        val wanted = signalling.wanted!!
+        assertTrue(wanted())
+        m.hangUp()
+        runCurrent()
+        assertFalse("hung up", wanted())
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+
+        m.call("conn-1")
+        runCurrent()
+        val again = signalling.wanted!!
+        assertTrue(again())
+        assertFalse("the first call's is not the second's", wanted())
+        // The vault is closing before the lock's hang-up is handled: already not wanted then.
+        m.locking()
+        assertFalse("locking, before the hang-up", again())
+        runCurrent()
+        assertFalse("locked", again())
+        signalling.startGate!!.send(Unit)
+        runCurrent()
+    }
+
     /** A `call.start` out is counted from the step that sends it until its answer was handled (and its hang-up counted). */
     @Test
     fun aStartOutIsCountedUntilItsAnswerIsHandled() = runTest {
