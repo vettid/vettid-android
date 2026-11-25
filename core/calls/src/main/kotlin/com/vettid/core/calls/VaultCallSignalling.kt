@@ -220,19 +220,17 @@ internal class VaultCallSignalling(
         synchronized(lock) { letGo(callId) }
     }
 
-    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
+    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall =
+        start(connectionId, sdp, suites) { true }
+
+    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall {
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
         var endedFirst = false
         val call = try {
             // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
             // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
-            val peerIk = if (formTwo) {
-                peerKey(connectionId) ?: throw CallSecurityException("C2 vault without the connection's identity key: no call placed")
-            } else {
-                null
-            }
-            gateway.start(connectionId, sdp, suites, peerIk).also { c ->
+            placeOnce(connectionId, sdp, suites, wanted).also { c ->
                 synchronized(lock) {
                     endedFirst = endedEarly.remove(c.callId)
                     if (endedFirst) {
@@ -263,6 +261,45 @@ internal class VaultCallSignalling(
         // Not for a call already ended: it is not kept, and its answer is nobody's (nor held again for another start).
         if (!endedFirst) for (e in held) if (e.callId == call.callId) answer(e)?.let { late.trySend(it) }
         return PlacedCall(call.callId, call.exp, call.ice.servers, call.formTwo)
+    }
+
+    /**
+     * The `call.start` of one tap. (C2) A form 2 start answered `bad_request` is placed once more, with a new
+     * `call_id`, after this device has refreshed both keys it names (VAULT-MESSAGING §10.10 "What each party checks":
+     * its own vault's, which `identity.rotate` changes and the device follows as it comes, read again by the start;
+     * and the connection's, read again from the vault's list): an identity rotation during the first start. Only
+     * once, and only while the call is still [wanted] (a hang-up or a lock meanwhile places nothing more); the second
+     * start is in form 2 again, whatever was learnt meanwhile. A second refusal ends the call as the first would have.
+     */
+    private suspend fun placeOnce(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): OutgoingCall {
+        // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without that
+        // key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
+        suspend fun key(): ByteArray? = if (formTwo) {
+            peerKey(connectionId) ?: throw CallSecurityException("C2 vault without the connection's identity key: no call placed")
+        } else {
+            null
+        }
+        val peerIk = key()
+        return try {
+            gateway.start(connectionId, sdp, suites, peerIk)
+        } catch (e: VaultOpException) {
+            val again = if (peerIk != null && e.code == "bad_request") refreshedKey(connectionId, wanted) else null
+            gateway.start(connectionId, sdp, suites, again ?: throw e)
+        }
+    }
+
+    /**
+     * The connection's key for [placeOnce]'s second start, read after the connections are refreshed (at most
+     * [REFRESH_MS]); null when the call is no longer [wanted], before or after the refresh. Never null for a key that
+     * is gone: then no call is placed at all, and never one in form 1.
+     */
+    private suspend fun refreshedKey(connectionId: String, wanted: () -> Boolean): ByteArray? {
+        if (wanted()) withTimeoutOrNull(REFRESH_MS) { refreshConnections() }
+        return if (!wanted()) {
+            null
+        } else {
+            peerKey(connectionId) ?: throw CallSecurityException("the connection's identity key is gone: no call placed")
+        }
     }
 
     override suspend fun answer(callId: String, sdp: String, suites: List<MediaSuite>): MediaKeys {
