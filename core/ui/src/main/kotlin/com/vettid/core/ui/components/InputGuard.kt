@@ -78,6 +78,13 @@ fun HoldsInput(active: Boolean) {
 val LocalCheckCovered = compositionLocalOf { false }
 
 /**
+ * True while the daily owner check covers the shell or is about to: [LocalCheckCovered], and the frames before it decides
+ * (the content drawn at alpha 0). A result on screen counts that as being left. Not for dialogs and sheets: they stay
+ * composed on those frames so that the check's wipe still reaches their secret fields.
+ */
+val LocalCheckComing = compositionLocalOf { false }
+
+/**
  * True while a call screen is drawn over the shell (`CallOverlay` provides it around the shell). Back then belongs to the call
  * screen, which is above the owner check: the check's own Back handler stays off so that it does not take the call's.
  */

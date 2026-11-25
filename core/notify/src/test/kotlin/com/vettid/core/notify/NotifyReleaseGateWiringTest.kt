@@ -23,4 +23,12 @@ class NotifyReleaseGateWiringTest {
         val n = File("src/main/kotlin/com/vettid/core/notify/FeedNotifier.kt").readLines().map { it.substringBefore("//").trim() }
         assertTrue(n.contains("on && source.openNow() && item.status == FeedManager.STATUS_ACTIVE && !shownOnScreen(item)"))
     }
+
+    /** R33: the app's source tells the notifier when the connections change, so an unnamed `connection.added` gets its name. */
+    @Test
+    fun connectionsChangedFollowsTheConnections() {
+        val c = File("src/main/kotlin/com/vettid/core/notify/VaultNotifySource.kt").readLines()
+            .map { it.substringBefore("//").trim() }
+        assertTrue(c.contains("override val connectionsChanged: Flow<Unit> = vault.social.connections.map { }"))
+    }
 }

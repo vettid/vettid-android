@@ -6,6 +6,8 @@
     <string name="core_ui_cd_dismiss">Dismiss</string>
     <string name="core_ui_cd_clear_search">Clear and close search</string>
     <string name="core_ui_cd_account">Account: %1$s</string>
+    <!-- Owner-approved 2026-11-24 (GC #17692). The account button while the member's name is not read yet (GC #17652). -->
+    <string name="core_ui_cd_account_unnamed">Account</string>
     <string name="core_ui_cd_back">Back</string>
     <string name="core_ui_cd_logo">VettID</string>
     <string name="core_ui_cancel">Cancel</string>

@@ -6,14 +6,7 @@ import android.content.ContextWrapper
 import android.view.HapticFeedbackConstants
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.style.TextAlign
-import com.vettid.core.ui.theme.VettIdTheme
-import kotlinx.coroutines.delay
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,11 +14,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
@@ -34,18 +33,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,7 +76,9 @@ import com.vettid.core.ui.format.failureText
 import com.vettid.core.ui.format.scaledDurationText
 import com.vettid.core.ui.format.stagingNoteSuffix
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
+import kotlinx.coroutines.delay
 
 /**
  * The owner-check screen for [mode], driven by [OwnerCheckViewModel]. [onDone] after a passed check; [onCancel]
@@ -132,6 +139,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 }
 
 @Suppress("LongMethod", "CyclomaticComplexMethod")
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions, onCancel: () -> Unit) {
     val v = state.view
@@ -280,6 +288,30 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
             }.takeIf { state.unlockedWrong == null && !state.locked && state.watch == LockWatch.NONE }
             // Locked: the lock text only, no fields (§3.6.5: not a retry).
             val fields = !state.locked && state.watch == LockWatch.NONE
+            // The fields come after the waiting card and the lock lines, so on a short screen (a fold's outer one) they can be
+            // below the fold under a disabled Check: scroll them into view when they appear (R33), and when a check's answer
+            // comes (a wrong check's error and the checks left are in the group; a line under it is brought itself). Not when
+            // a message clears (the member typing again), and not when holding off: the warning and its choices above the
+            // fields are what the member reads first, and must not be scrolled away.
+            val fieldsInView = remember { BringIntoViewRequester() }
+            val messageInView = remember { BringIntoViewRequester() }
+            val bringFields = fields && state.mode != OwnerCheckMode.HOLD_OFF
+            var fieldsBrought by remember { mutableStateOf(false) }
+            LaunchedEffect(bringFields, m?.let { it::class }) {
+                if (!bringFields) {
+                    fieldsBrought = false
+                    return@LaunchedEffect
+                }
+                if (m == null && fieldsBrought) return@LaunchedEffect
+                withFrameNanos { }
+                // The wait line takes the message line's place during a backoff: then the fields are brought instead.
+                if ((m is OwnerCheckMessage.MaybeCounted || m is OwnerCheckMessage.Failed) && state.waitSeconds == 0L) {
+                    messageInView.bringIntoView()
+                } else {
+                    fieldsInView.bringIntoView()
+                }
+                fieldsBrought = true
+            }
             if (!state.pinKept && fields) SecretField(
                 value = state.pin,
                 onValueChange = actions::setPin,
@@ -297,14 +329,17 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                 enabled = !state.busy && !state.locking && state.waitSeconds == 0L,
                 error = if (m is OwnerCheckMessage.BadPassword) stringResource(R.string.ownercheck_bad_password) else null,
                 onImeAction = actions::submit,
-                modifier = Modifier.testTag("owner_check_password"),
+                // The last of the group is brought into view: the checks-left line when it shows, else this field.
+                modifier = Modifier.testTag("owner_check_password").then(
+                    if (left == null) Modifier.bringIntoViewRequester(fieldsInView) else Modifier,
+                ),
             )
             if (left != null) {
                 Text(
                     pluralStringResource(R.plurals.ownercheck_checks_left, left, left),
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (left <= WARN_LEFT) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("owner_check_left"),
+                    modifier = Modifier.testTag("owner_check_left").bringIntoViewRequester(fieldsInView),
                 )
             }
             when {
@@ -316,7 +351,8 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                 m is OwnerCheckMessage.MaybeCounted -> Text(
                     pluralStringResource(R.plurals.unlock_check_maybe_counted, m.atLeast, m.atLeast),
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted"),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive }.testTag("owner_check_maybe_counted")
+                        .bringIntoViewRequester(messageInView),
                 )
                 m is OwnerCheckMessage.Backoff ->
                     Text(stringResource(R.string.ownercheck_backoff), style = MaterialTheme.typography.bodyMedium)
@@ -325,7 +361,7 @@ private fun OwnerCheckBody(state: OwnerCheckUiState, actions: OwnerCheckActions,
                     NoticeKind.URGENT,
                     if (m.kind == FailureKind.NOT_HOLDER) stringResource(m.kind.titleRes(0)) else title,
                     failureText(m.kind.messageRes(), m.kind.vaultCode(m.shownCode)),
-                    modifier = Modifier.testTag("owner_check_failed"),
+                    modifier = Modifier.testTag("owner_check_failed").bringIntoViewRequester(messageInView),
                 )
                 else -> Unit
             }
