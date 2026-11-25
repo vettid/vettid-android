@@ -201,6 +201,9 @@ class TransferInViewModelTest {
     fun theCancelDialogClosesWhenTheWindowStarts() = runTest {
         val start = Instant.now()
         vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        // The stored start is that of the code scanned below: its own transfer, recognized as such.
+        val code = qr()
+        vault.openTransferCode = code
         val vm = TransferInViewModel(vault, vault)
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
@@ -210,7 +213,7 @@ class TransferInViewModelTest {
             override fun withZone(zone: ZoneId): Clock = this
         }
         vm.paste()
-        vm.setInput(qr())
+        vm.setInput(code)
         vm.submitInput()
         advanceTimeBy(100)
         vm.cancel()
@@ -260,6 +263,9 @@ class TransferInViewModelTest {
     fun theCountdownIsFromTheStoredStartNotFromBeforeTheClaim() = runTest {
         val start = Instant.now()
         vault.waitingTransfer = com.vettid.core.data.vault.TransferInWaiting("042817", start.minusSeconds(540))
+        // The stored start is that of the code scanned below: its own transfer, recognized as such.
+        val code = qr()
+        vault.openTransferCode = code
         val vm = TransferInViewModel(vault, vault)
         vm.clock = object : Clock() {
             override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
@@ -269,7 +275,7 @@ class TransferInViewModelTest {
             override fun withZone(zone: ZoneId): Clock = this
         }
         vm.paste()
-        vm.setInput(qr())
+        vm.setInput(code)
         vm.submitInput()
         advanceTimeBy(100)
         assertTrue("one minute left of the vault's ten: ${vm.uiState.value.secondsLeft}", vm.uiState.value.secondsLeft in 55..60)

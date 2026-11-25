@@ -5,9 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.TransferInWaiting
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,6 +95,18 @@ data class TransferInUiState(
     val errorCode: String? = null,
     /** (A6 audit N1) The member asked to cancel a transfer whose code was shown: confirmed first. */
     val confirmCancel: Boolean = false,
+    /**
+     * (ANDROID-PLAN 0.1.142) A different code scanned or pasted while a transfer to this phone is live, before minute 10: it
+     * waits behind the same confirmation, and is used only once the waiting transfer is abandoned and that is saved.
+     */
+    val pendingCode: String? = null,
+    /**
+     * (ANDROID-PLAN 0.1.141) The screen is still reading back a transfer that may wait (after a restart): Back keeps the
+     * move screen meanwhile.
+     */
+    val reading: Boolean = true,
+    /** The confirmed cancel's abandon is on its way: the screen stays and offers no other cancel meanwhile. */
+    val abandoning: Boolean = false,
 ) {
     override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error)"
 }
@@ -144,6 +158,9 @@ class TransferInViewModel @Inject constructor(
     /** Tests set a fixed clock. */
     internal var clock: Clock = Clock.systemUTC()
 
+    /** Closes a confirmation of [TransferInUiState.pendingCode] at minute 10, when no abandon is offered any more. */
+    private var pendingCloser: Job? = null
+
     init {
         // (A6 audit N1) A transfer that waits for the old phone (a restart, or the screen left): its code again, waiting.
         viewModelScope.launch {
@@ -151,12 +168,25 @@ class TransferInViewModel @Inject constructor(
                 move.transferInWaiting()
             } catch (_: VaultFailure) {
                 null
-            } ?: return@launch toldStoppedMove()
-            if (state.value.step != TransferInStep.INTRO || waiter?.isActive == true) return@launch
-            val deadline = w.startedAt.plus(WINDOW)
-            state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
-            waiter = viewModelScope.launch { waitForApproval(deadline) { move.awaitTransferIn() } }
+            }
+            state.update { it.copy(reading = false) }
+            if (w == null) return@launch toldStoppedMove()
+            // (ANDROID-PLAN 0.1.141) Also when the member went on to scan or paste meanwhile, unless a code of theirs is being
+            // checked or waits behind the confirmation (that path shows the waiting transfer itself).
+            val s = state.value
+            val first = s.step == TransferInStep.INTRO || s.step == TransferInStep.SCAN || s.step == TransferInStep.PASTE
+            val theirs = s.busy || s.confirmCancel
+            if (!first || theirs || waiter?.isActive == true) return@launch
+            resumeWaiting(w)
         }
+    }
+
+    /** The waiting transfer [w] on screen again: its code, the countdown from its stored start, and the wait for its approval. */
+    private fun resumeWaiting(w: TransferInWaiting) {
+        val deadline = w.startedAt.plus(WINDOW)
+        state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
+        waiter?.cancel()
+        waiter = viewModelScope.launch { waitForApproval(deadline) { move.awaitTransferIn() } }
     }
 
     /**
@@ -184,7 +214,10 @@ class TransferInViewModel @Inject constructor(
         val s = state.value
         // During the window Back is consumed: nothing is abandoned, and leaving would only route straight back here
         // (the phase is still TRANSFER_WAITING). The settlement goes on in the manager's scope.
-        if (settlingNow()) return true
+        // (ANDROID-PLAN 0.1.141) Also while the screen still reads back a transfer that may wait, or an abandon is on its
+        // way: the move screen stays.
+        val held = s.reading || s.abandoning || s.busy && s.step == TransferInStep.COMPARE
+        if (settlingNow() || held) return true
         return when (s.step) {
             TransferInStep.SCAN, TransferInStep.PASTE -> {
                 state.update { it.copy(step = TransferInStep.INTRO, inputProblem = null) }
@@ -199,7 +232,8 @@ class TransferInViewModel @Inject constructor(
     }
 
     override fun scanned(text: String) {
-        if (state.value.step != TransferInStep.SCAN || state.value.busy) return
+        // A repeated camera frame while the code is being checked, or while it waits behind "Cancel the move?".
+        if (state.value.step != TransferInStep.SCAN || state.value.busy || state.value.confirmCancel) return
         start(text)
     }
 
@@ -237,8 +271,53 @@ class TransferInViewModel @Inject constructor(
                     }
                 }
             }
-            null -> begin(text)
+            null -> beginUnlessAnotherWaits(text)
             else -> state.update { it.copy(inputProblem = problem) }
+        }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.142) A valid code while a transfer to this phone is live: the same one goes back to its move (as
+     * [begin] does: the repository recognizes it). A different one, before minute 10, first opens "Cancel the move?" and
+     * starts only after the waiting transfer is abandoned; from minute 10 it is refused, as any new code is then, and
+     * nothing is dropped. A transfer this screen cannot read back is left to the repository, which refuses a new code
+     * while one waits.
+     */
+    private fun beginUnlessAnotherWaits(text: String) {
+        if (state.value.busy) return
+        state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            val waiting = try {
+                move.transferInWaiting()
+            } catch (_: VaultFailure) {
+                null
+            }
+            val own = waiting != null && try {
+                move.isOpenTransferCode(text)
+            } catch (_: VaultFailure) {
+                false
+            }
+            state.update { it.copy(busy = false) }
+            val step = state.value.step
+            if (step != TransferInStep.SCAN && step != TransferInStep.PASTE) return@launch // left meanwhile
+            val tenMinutes = waiting?.startedAt?.plus(WINDOW)
+            when {
+                tenMinutes == null || own -> begin(text)
+                Instant.now(clock).isBefore(tenMinutes) -> askBeforeAnotherCode(text, tenMinutes)
+                else -> state.update {
+                    it.copy(error = FailureKind.BUSY, errorCode = MoveRepository.CODE_TRANSFER_SETTLING, errorShown = null)
+                }
+            }
+        }
+    }
+
+    /** "Cancel the move?" for [text], closed by itself at [tenMinutes] (no abandon from then on). */
+    private fun askBeforeAnotherCode(text: String, tenMinutes: Instant) {
+        state.update { it.copy(confirmCancel = true, pendingCode = text, error = null) }
+        pendingCloser?.cancel()
+        pendingCloser = viewModelScope.launch {
+            delay(Duration.between(Instant.now(clock), tenMinutes).toMillis().coerceAtLeast(0))
+            if (state.value.pendingCode != null) backToTheWaitingTransfer()
         }
     }
 
@@ -328,7 +407,14 @@ class TransferInViewModel @Inject constructor(
         ticker = viewModelScope.launch {
             while (true) {
                 val left = Duration.between(Instant.now(clock), deadline).seconds.coerceAtLeast(0)
-                state.update { it.copy(secondsLeft = left, settling = left == 0L, confirmCancel = it.confirmCancel && left != 0L) }
+                state.update {
+                    it.copy(
+                        secondsLeft = left,
+                        settling = left == 0L,
+                        confirmCancel = it.confirmCancel && left != 0L,
+                        pendingCode = it.pendingCode.takeIf { left != 0L },
+                    )
+                }
                 if (left == 0L) break
                 delay(TICK_MS)
             }
@@ -340,7 +426,7 @@ class TransferInViewModel @Inject constructor(
      * N1) Once it was shown, the old phone may have approved it, so the member confirms first ([confirmCancel]).
      */
     override fun cancel() {
-        if (settlingNow()) return
+        if (settlingNow() || state.value.abandoning) return
         val step = state.value.step
         if (step == TransferInStep.COMPARE) {
             state.update { it.copy(confirmCancel = true) }
@@ -350,11 +436,79 @@ class TransferInViewModel @Inject constructor(
     }
 
     override fun confirmCancel() {
-        if (!state.value.confirmCancel || settlingNow()) return
-        drop()
+        val s = state.value
+        if (!s.confirmCancel || settlingNow()) return
+        val next = s.pendingCode
+        pendingCloser?.cancel()
+        state.update { it.copy(confirmCancel = false, pendingCode = null) }
+        if (next == null && s.step != TransferInStep.COMPARE) return drop()
+        abandonThen(next)
     }
 
-    override fun dismissCancel() = state.update { it.copy(confirmCancel = false) }
+    /**
+     * Keep waiting: the transfer goes on. A different code that waited behind the confirmation is not used, and the screen
+     * goes back to the waiting transfer as it stands.
+     */
+    override fun dismissCancel() {
+        pendingCloser?.cancel()
+        val waited = state.value.pendingCode != null
+        state.update { it.copy(confirmCancel = false, pendingCode = null) }
+        if (waited) viewModelScope.launch { backToTheWaitingTransfer() }
+    }
+
+    /**
+     * (ANDROID-PLAN 0.1.141, 0.1.142) The confirmed cancel of a transfer whose code was shown: the screen leaves it only once
+     * the abandon is done and saved, then shows the first step, or starts [next] (the different code that waited). An
+     * abandon refused because minute 10 was reached meanwhile, or that failed, starts nothing and drops nothing: back to
+     * the waiting or checking screen while the transfer is still live.
+     */
+    @Suppress("TooGenericExceptionCaught") // a drop whose save failed throws a state exception, not a VaultFailure
+    private fun abandonThen(next: String?) {
+        waiter?.cancel()
+        ticker?.cancel()
+        state.update { it.copy(busy = true, abandoning = true) }
+        viewModelScope.launch {
+            val done = try {
+                move.abandonTransferIn()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+            // An approval that landed meanwhile is not dropped (the repository keeps a paired transfer): still there, so
+            // the move goes on to its end rather than reading as cancelled.
+            val left = if (done) {
+                try {
+                    move.transferInWaiting()
+                } catch (_: VaultFailure) {
+                    null
+                }
+            } else {
+                null
+            }
+            state.update { it.copy(abandoning = false, confirmCancel = false) }
+            when {
+                !done || left != null -> backToTheWaitingTransfer()
+                next != null -> {
+                    state.update { it.copy(step = TransferInStep.SCAN, busy = false, sas = null, deadline = null) }
+                    begin(next)
+                }
+                else -> state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null) }
+            }
+        }
+    }
+
+    /** The waiting transfer again (its code and countdown, or the checking text from minute 10); the first step if none. */
+    private suspend fun backToTheWaitingTransfer() {
+        val w = try {
+            move.transferInWaiting()
+        } catch (_: VaultFailure) {
+            null
+        }
+        state.update { it.copy(busy = false, confirmCancel = false, pendingCode = null) }
+        if (w != null) resumeWaiting(w) else state.update { it.copy(step = TransferInStep.INTRO, sas = null, deadline = null) }
+    }
 
     private fun drop() {
         waiter?.cancel()

@@ -171,7 +171,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         fail.remove(name)?.let { throw it }
     }
 
-    override suspend fun refresh() = call("refresh")
+    /** When set, what [refresh] reads the phase as (the vault's state read again). */
+    var phaseAfterRefresh: AppPhase? = null
+
+    override suspend fun refresh() {
+        call("refresh")
+        phaseAfterRefresh?.let { phase.value = it }
+    }
 
     override suspend fun redeemSetupCode(code: SetupCodeInput): String {
         call("redeemSetupCode")
@@ -712,16 +718,39 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
 
     override suspend fun takeTransferStopped(): Boolean = transferStopped.also { transferStopped = false }
 
+    /** When set, [abandonTransferIn] throws it (refused at minute 10, or a drop whose save failed). */
+    var abandonFailure: Throwable? = null
+
+    /** With [abandonFailure]: the transfer was dropped from memory before the throw (a drop whose save failed). */
+    var abandonFailureDrops = false
+
+    /** When set, [abandonTransferIn] keeps the transfer and returns (it was paired meanwhile: nothing is dropped). */
+    var abandonKeepsPaired = false
+
+    /** When set, [abandonTransferIn] waits for it after recording the call. */
+    var abandonGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun abandonTransferIn() {
         call("abandonTransferIn")
-        waitingTransfer = null
+        abandonGate?.await()
+        abandonFailure?.let {
+            if (abandonFailureDrops) waitingTransfer = null
+            throw it
+        }
+        if (!abandonKeepsPaired) waitingTransfer = null
     }
 
     /** (A6 audit N1) A transfer to this phone that waits for the old phone, as a restart finds it ([transferInWaiting]). */
     var waitingTransfer: com.vettid.core.data.vault.TransferInWaiting? = null
 
+    /** When set, [transferInWaiting] throws it (the screen cannot read the transfer back). */
+    var waitingFailure: VaultFailure? = null
+
     /** A read: not recorded in [calls]. */
-    override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? = waitingTransfer
+    override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? {
+        waitingFailure?.let { throw it }
+        return waitingTransfer
+    }
 
     override suspend fun transferCreate(): TransferOfferView {
         call("transferCreate")
