@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -21,22 +22,26 @@ import com.vettid.core.ui.theme.VettIdShape
 
 private const val MAX_BADGE = 99
 
-/** Gold count pill (drawer badge, pending approvals). */
+/**
+ * Gold count pill (drawer badge, pending approvals). [small] is the approvals indicator's corner badge: smaller, and silent
+ * (the indicator's own description says the count).
+ */
 @Composable
-fun CountBadge(count: Int, modifier: Modifier = Modifier) {
+fun CountBadge(count: Int, modifier: Modifier = Modifier, small: Boolean = false) {
     val label = pluralStringResource(R.plurals.core_ui_badge_count, count, count)
+    val minSize = if (small) 18.dp else 24.dp
     Box(
         modifier = modifier
-            .defaultMinSize(minWidth = 24.dp, minHeight = 24.dp)
+            .defaultMinSize(minWidth = minSize, minHeight = minSize)
             .clip(VettIdShape.pill)
             .background(MaterialTheme.colorScheme.primaryContainer)
-            .padding(horizontal = Spacing.s)
-            .semantics { contentDescription = label },
+            .padding(horizontal = if (small) Spacing.xs else Spacing.s)
+            .then(if (small) Modifier.clearAndSetSemantics {} else Modifier.semantics { contentDescription = label }),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = if (count > MAX_BADGE) "$MAX_BADGE+" else count.toString(),
-            style = MaterialTheme.typography.labelMedium,
+            style = if (small) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onPrimaryContainer,
         )

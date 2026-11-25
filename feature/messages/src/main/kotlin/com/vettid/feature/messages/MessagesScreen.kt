@@ -1,5 +1,7 @@
 package com.vettid.feature.messages
 
+import androidx.compose.runtime.CompositionLocalProvider
+import com.vettid.core.ui.components.LocalApprovalsIndicator
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -409,80 +411,85 @@ fun ConversationScreen(state: ConversationUiState, actions: ConversationActions,
         val last = listState.layoutInfo.totalItemsCount - 1
         if (atEnd && last > 0) listState.animateScrollToItem(last)
     }
-    DetailScaffold(
-        onBackClick = actions.onBack,
-        modifier = modifier.imePadding(),
-        actions = {
-            if (state.callShown) {
-                // Calls off: TalkBack reads why on the button itself, as the line under the name says.
-                val off = (AccountNames.isolateOrNull(state.connection?.firstName) ?: name)
-                    .let { stringResource(R.string.messages_calls_off, it) }
-                    .takeIf { state.callsOff }
-                IconButton(
-                    onClick = actions.onCall,
-                    enabled = state.callEnabled,
-                    modifier = Modifier
-                        .testTag("conversation_call")
-                        .semantics { off?.let { stateDescription = it } },
-                ) {
-                    Icon(Icons.Outlined.Call, contentDescription = stringResource(R.string.messages_call))
+    // The camera and the photo draft cover the conversation: no approvals indicator under them (ANDROID-PLAN §4
+    // "The approvals indicator" 2).
+    val covered = state.capturing || state.photoDraft != null
+    CompositionLocalProvider(LocalApprovalsIndicator provides LocalApprovalsIndicator.current.takeUnless { covered }) {
+        DetailScaffold(
+            onBackClick = actions.onBack,
+            modifier = modifier.imePadding(),
+            actions = {
+                if (state.callShown) {
+                    // Calls off: TalkBack reads why on the button itself, as the line under the name says.
+                    val off = (AccountNames.isolateOrNull(state.connection?.firstName) ?: name)
+                        .let { stringResource(R.string.messages_calls_off, it) }
+                        .takeIf { state.callsOff }
+                    IconButton(
+                        onClick = actions.onCall,
+                        enabled = state.callEnabled,
+                        modifier = Modifier
+                            .testTag("conversation_call")
+                            .semantics { off?.let { stateDescription = it } },
+                    ) {
+                        Icon(Icons.Outlined.Call, contentDescription = stringResource(R.string.messages_call))
+                    }
                 }
-            }
-            IconButton(onClick = actions.onDetails) {
-                Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
-            }
-        },
-        overlay = {
-            // Photos picked or taken, then the camera (ANDROID-PLAN 0.1.39): over the whole conversation.
-            val draft = state.photoDraft
-            when {
-                draft != null -> PhotoDraftOverlay(draft, name, actions.photos)
-                state.capturing -> PhotoCaptureOverlay(actions.photos)
-            }
-        },
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            CenteredTitle(name)
-            // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
-            state.presence?.let { ConversationPresenceLine(it) }
-            if (state.callShown && state.callsOff) {
-                // (C2) The call button is disabled: why, and where to turn calls on, under the title, without a tap.
-                val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
-                Text(
-                    stringResource(R.string.messages_calls_off, first),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
-                        .testTag("conversation_calls_off"),
-                )
-            }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+                IconButton(onClick = actions.onDetails) {
+                    Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.messages_cd_details, name))
+                }
+            },
+            overlay = {
+                // Photos picked or taken, then the camera (ANDROID-PLAN 0.1.39): over the whole conversation.
+                val draft = state.photoDraft
                 when {
-                    state.loading && state.messages.isEmpty() -> Loading()
-                    state.messages.isEmpty() && state.calls.isEmpty() -> EmptyState(
-                        icon = Icons.Outlined.ChatBubbleOutline,
-                        title = stringResource(R.string.messages_conversation_empty_title),
-                        body = stringResource(R.string.messages_conversation_empty_body, name),
-                    )
-                    else -> MessageList(state, name, listState, actions)
+                    draft != null -> PhotoDraftOverlay(draft, name, actions.photos)
+                    state.capturing -> PhotoCaptureOverlay(actions.photos)
                 }
+            },
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                CenteredTitle(name)
+                // The same line as the connection's page, smaller (ANDROID-PLAN §4 "Presence"); asked when the conversation opens.
+                state.presence?.let { ConversationPresenceLine(it) }
+                if (state.callShown && state.callsOff) {
+                    // (C2) The call button is disabled: why, and where to turn calls on, under the title, without a tap.
+                    val first = AccountNames.isolateOrNull(state.connection?.firstName) ?: name
+                    Text(
+                        stringResource(R.string.messages_calls_off, first),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
+                            .testTag("conversation_calls_off"),
+                    )
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        state.loading && state.messages.isEmpty() -> Loading()
+                        state.messages.isEmpty() && state.calls.isEmpty() -> EmptyState(
+                            icon = Icons.Outlined.ChatBubbleOutline,
+                            title = stringResource(R.string.messages_conversation_empty_title),
+                            body = stringResource(R.string.messages_conversation_empty_body, name),
+                        )
+                        else -> MessageList(state, name, listState, actions)
+                    }
+                }
+                val error = state.error
+                if (error != null) {
+                    // "Services can't do that." stands alone, without the screen's generic title.
+                    val refused = error == com.vettid.core.data.vault.FailureKind.SERVICE_FORBIDDEN
+                    NoticeCard(
+                        kind = if (refused) NoticeKind.INFO else NoticeKind.WARNING,
+                        title = if (refused) "" else stringResource(R.string.messages_error_title),
+                        body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
+                        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_error"),
+                        actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },
+                    )
+                }
+                if (!state.noComposer) Composer(state, name, actions)
             }
-            val error = state.error
-            if (error != null) {
-                // "Services can't do that." stands alone, without the screen's generic title.
-                val refused = error == com.vettid.core.data.vault.FailureKind.SERVICE_FORBIDDEN
-                NoticeCard(
-                    kind = if (refused) NoticeKind.INFO else NoticeKind.WARNING,
-                    title = if (refused) "" else stringResource(R.string.messages_error_title),
-                    body = failureText(error.messageRes(), error.vaultCode(state.errorCode)),
-                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("conversation_error"),
-                    actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.messages_ok)) } },
-                )
-            }
-            if (!state.noComposer) Composer(state, name, actions)
         }
     }
     if (state.deleting != null) {

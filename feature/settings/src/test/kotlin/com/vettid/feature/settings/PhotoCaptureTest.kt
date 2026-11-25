@@ -1,5 +1,10 @@
 package com.vettid.feature.settings
 
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithTag
+import com.vettid.core.ui.components.LocalApprovalsIndicator
+import com.vettid.core.ui.components.ApprovalsIndicator
+import androidx.compose.runtime.CompositionLocalProvider
 import android.graphics.Bitmap
 import android.util.Base64
 import androidx.compose.runtime.collectAsState
@@ -270,6 +275,18 @@ class PhotoCaptureTest {
     }
 
     // --- the screens ---
+
+    /** The camera: no approvals indicator over it (ANDROID-PLAN §4 "The approvals indicator" 2). */
+    @Test
+    fun noApprovalsIndicatorOverTheCamera() {
+        rule.setContent {
+            CompositionLocalProvider(LocalApprovalsIndicator provides ApprovalsIndicator(count = 1) {}) {
+                PhotoCaptureContent(PhotoCaptureUiState(access = CameraAccess.GRANTED), PhotoCaptureActions()) { FakeCameraPreview(it) }
+            }
+        }
+        rule.onNodeWithTag("photo_capture_live").assertIsDisplayed()
+        rule.onAllNodesWithTag("top_bar_approvals").assertCountEquals(0)
+    }
 
     @Test
     fun theLiveCameraOffersTheShutterAndTheRearCamera() {
