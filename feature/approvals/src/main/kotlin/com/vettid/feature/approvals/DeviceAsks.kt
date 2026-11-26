@@ -40,7 +40,14 @@ internal sealed interface HeldShow {
      * service's name ([connection], cleaned), whether it is a service, and a block's note cleaned with its lines kept (null
      * when it has none, or none once cleaned).
      */
-    data class DesktopConnection(val remove: Boolean, val connection: String, val service: Boolean, val note: String?) : HeldShow {
+    data class DesktopConnection(
+        val remove: Boolean,
+        val connection: String,
+        val service: Boolean,
+        val note: String?,
+        /** (0.1.146) The day it was connected, shown after its name, when another connection has the same name. */
+        val connectedOn: java.time.LocalDate? = null,
+    ) : HeldShow {
         override val approvable get() = true
 
         override fun toString(): String = "DesktopConnection(remove=$remove)"
@@ -152,7 +159,7 @@ internal object DeviceAsks {
             HeldRequest.DesktopStepUp -> HeldShow.Desktop
             // Unresolved (not listed active or stale, or its names not held): the deny-only desktop row.
             is HeldRequest.DesktopConnection -> AccountNames.cleaned(a.heldConnection)
-                ?.let { HeldShow.DesktopConnection(h.remove, it, a.heldService, AccountNames.cleanedLines(h.note)) }
+                ?.let { HeldShow.DesktopConnection(h.remove, it, a.heldService, AccountNames.cleanedLines(h.note), a.heldConnectedOn) }
                 ?: HeldShow.Desktop
             HeldRequest.Unshown, null -> HeldShow.Other
         }

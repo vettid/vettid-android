@@ -292,7 +292,11 @@ class SocialManager internal constructor(
             l.map { a ->
                 // A desktop's keeps the desktop deny-only row (0.1.145 "fail closed"); any other is unshown.
                 val deny = if (a is Approval.DeviceRequest && a.role == "desktop") HeldRequest.DesktopStepUp else HeldRequest.Unshown
-                if (a is Approval.DeviceRequest && a.key in differ) a.copy(held = deny, heldConnection = null, heldService = false) else a
+                if (a is Approval.DeviceRequest && a.key in differ) {
+                    a.copy(held = deny, heldConnection = null, heldService = false, heldConnectedOn = null)
+                } else {
+                    a
+                }
             }
         }
 
@@ -2020,8 +2024,12 @@ class SocialManager internal constructor(
      */
     private fun withDesktopConnection(a: Approval, cs: List<ConnectionInfo>): Approval {
         val h = (a as? Approval.DeviceRequest)?.held as? HeldRequest.DesktopConnection ?: return a
-        val c = DesktopTargets.target(h, cs)
-        return a.copy(heldConnection = c?.let(DesktopTargets::name), heldService = c?.service == true)
+        val shown = DesktopTargets.shown(h, cs, java.time.ZoneId.systemDefault())
+        return a.copy(
+            heldConnection = shown?.name,
+            heldService = shown != null && DesktopTargets.target(h, cs)?.service == true,
+            heldConnectedOn = shown?.connectedOn,
+        )
     }
 
     /** Whether [req] may not be approved here: nothing is approved that the app does not show in full. */
@@ -2035,7 +2043,8 @@ class SocialManager internal constructor(
         val cwdRefused = run != null && run.hasCwd && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
         // (0.1.145) A desktop's block or removal only of a connection the list names (withDesktopConnection).
         // Against the list as it is now, not only the derived approvals, which may lag a refresh that dropped or renamed it.
-        return unshown || unknownDevice || cwdRefused || !DesktopTargets.resolved(req, connectionsFlow.value)
+        val desktopRefused = !DesktopTargets.resolved(req, connectionsFlow.value, java.time.ZoneId.systemDefault())
+        return unshown || unknownDevice || cwdRefused || desktopRefused
     }
 
 

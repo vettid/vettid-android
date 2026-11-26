@@ -122,7 +122,7 @@ internal fun deviceTitle(
             is HeldShow.DesktopConnection -> stringResource(
                 if (h.remove) R.string.approvals_desktop_remove_title else R.string.approvals_desktop_block_title,
                 who,
-                AccountNames.isolate(h.connection),
+                desktopTargetName(h.connection, h.connectedOn),
             )
             HeldShow.Desktop, HeldShow.Other, HeldShow.Gone -> stringResource(R.string.approvals_held_other_title, who)
         }
@@ -191,7 +191,7 @@ internal fun DeviceRequestScreen(
             HeldShow.Desktop -> stringResource(R.string.approvals_held_desktop_body)
             is HeldShow.DesktopConnection -> stringResource(
                 if (held.remove) R.string.approvals_desktop_remove_body else R.string.approvals_desktop_block_body,
-                AccountNames.isolate(held.connection),
+                desktopTargetName(held.connection, held.connectedOn),
             )
             HeldShow.Gone -> stringResource(R.string.approvals_held_gone_body, who)
             HeldShow.Other, null -> stringResource(R.string.approvals_held_other_body)
@@ -224,7 +224,7 @@ internal fun DeviceRequestScreen(
         // A service named in the title carries the label beside its name (ANDROID-PLAN 0.1.90), first under the title,
         // before the "Desktop" kind word, so it cannot be read as the desktop's.
         (held as? HeldShow.DesktopConnection)?.takeIf { it.service }?.let {
-            DesktopServiceLine(it.connection)
+            DesktopServiceLine(it.connection, it.connectedOn)
             Spacer(Modifier.height(Spacing.m))
         }
         waitingText(a.exp, now)?.takeIf { !pairing }?.let {
@@ -235,7 +235,7 @@ internal fun DeviceRequestScreen(
         if (a.isHeld) {
             // The kind of device, so that an agent calling itself "Work desktop" still shows "Agent".
             Text(kindWord(a), style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("device_kind"))
-            HeldFacts(held)
+            HeldFacts(held, who)
         }
         RenewalNotices(state, a, actions)
         state.error?.let {
@@ -290,12 +290,19 @@ private fun SessionFacts(a: Approval.DeviceRequest, who: String, state: Approval
 }
 
 @Composable
-private fun HeldFacts(held: HeldShow?) {
+private fun HeldFacts(held: HeldShow?, who: String) {
     when (held) {
         is HeldShow.DesktopConnection -> {
-            // The desktop's own words, in their own box apart from the body (0.1.145), so they cannot pass for the app's.
+            // The desktop's own words, labeled (0.1.146) and in their own box apart from the body (0.1.145), so they cannot
+            // pass for the app's.
             held.note?.let { note ->
                 Spacer(Modifier.height(Spacing.m))
+                Text(
+                    stringResource(R.string.approvals_desktop_note_from, who),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.testTag("desktop_note_label"),
+                )
+                Spacer(Modifier.height(Spacing.xs))
                 Text(
                     // Cleaned with its lines kept (DeviceAsks), each line isolated.
                     AccountNames.isolateLines(note),
@@ -437,14 +444,28 @@ internal fun untilText(until: Instant, now: Instant = Instant.now(), zone: ZoneI
     return if (sameDay) Times.time(until, zone) else Times.full(until, zone)
 }
 
-/** (0.1.145) A service a desktop's block or removal names: its name with the "Service" label beside it. */
+/**
+ * The connection a desktop's block or removal names, isolated, with (0.1.146) "(connected <date>)" after it when [connectedOn]
+ * is set (a namesake is listed): the date in the phone's medium format, with its year.
+ */
 @Composable
-internal fun DesktopServiceLine(name: String, modifier: Modifier = Modifier) {
+internal fun desktopTargetName(name: String, connectedOn: java.time.LocalDate?): String {
+    val shown = AccountNames.isolate(name)
+    if (connectedOn == null) return shown
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
+    val format = java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM)
+    val date = format.withLocale(locale).format(connectedOn)
+    return stringResource(R.string.approvals_desktop_namesake, shown, date)
+}
+
+/** (0.1.145) A service a desktop's block or removal names: its name (and any date) with the "Service" label after it. */
+@Composable
+internal fun DesktopServiceLine(name: String, connectedOn: java.time.LocalDate? = null, modifier: Modifier = Modifier) {
     androidx.compose.foundation.layout.Row(
         modifier.testTag("desktop_service"),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        Text(AccountNames.isolate(name), style = MaterialTheme.typography.bodyMedium)
+        Text(desktopTargetName(name, connectedOn), style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.width(Spacing.s))
         com.vettid.core.ui.components.ServiceTag()
     }

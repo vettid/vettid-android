@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.HeldRequest
 import java.time.Instant
@@ -68,6 +69,36 @@ class DesktopConnectionRowsTest {
         rule.onNodeWithText("Deny").performClick()
         assertEquals(1, approved)
         assertEquals(1, denied)
+    }
+
+    @Test
+    fun theNoteIsLabeledWithTheDesktopsNameAndAnEmptyNoteHasNoLabel() {
+        var shown by mutableStateOf(state(held(HeldRequest.DesktopConnection(false, "c1", "spam"))))
+        rule.setContent { ApprovalDetailScreen(shown, DecisionActions()) }
+        rule.onNodeWithTag("desktop_note_label").assertExists()
+        rule.onNodeWithText("Note from $laptop:").assertExists()
+        for (note in listOf(null, " ")) {
+            shown = state(held(HeldRequest.DesktopConnection(false, "c1", note)))
+            rule.onNodeWithTag("desktop_note_label").assertDoesNotExist()
+            rule.onNodeWithTag("desktop_note").assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun aNamesakeIsToldApartByItsDateInTitleAndBody() {
+        val nov3 = java.time.LocalDate.of(2026, 11, 3)
+        var shown by mutableStateOf(state(held(HeldRequest.DesktopConnection(false, "c1", null)).copy(heldConnectedOn = nov3)))
+        rule.setContent { ApprovalDetailScreen(shown, DecisionActions()) }
+        val dated = "$sam (connected Nov 3, 2026)"
+        rule.onNodeWithText("$laptop wants to block $dated").assertExists()
+        rule.onNodeWithText("Blocking ends your connection with $dated. They can't connect with you again until you unblock them.").assertExists()
+        shown = state(held(HeldRequest.DesktopConnection(true, "c1", null)).copy(heldConnectedOn = nov3))
+        rule.onNodeWithText("$laptop wants to remove $dated").assertExists()
+        rule.onNodeWithText("Removing ends your connection with $dated.").assertExists()
+        // A service: the date after its name and before the label.
+        shown = state(held(HeldRequest.DesktopConnection(true, "svc", null), name = "Shop", service = true).copy(heldConnectedOn = nov3))
+        rule.onNodeWithText("$laptop wants to remove \u2068Shop\u2069 (connected Nov 3, 2026)").assertExists()
+        rule.onNodeWithText("\u2068Shop\u2069 (connected Nov 3, 2026)", useUnmergedTree = true).assertExists()
     }
 
     @Test
@@ -137,6 +168,7 @@ class DesktopConnectionRowsTest {
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun theNoteIsInABorderedBox() {
         show(state(held(HeldRequest.DesktopConnection(false, "c1", "spam"))))
+        rule.onNodeWithTag("desktop_note").performScrollTo()
         val px = rule.onNodeWithTag("desktop_note").captureToImage().toPixelMap()
         val mid = px.height / 2
         // The edge is the outline, the inside the background: they differ only with a border.

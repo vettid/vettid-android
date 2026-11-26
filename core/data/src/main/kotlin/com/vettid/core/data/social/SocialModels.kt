@@ -553,6 +553,8 @@ sealed interface Approval {
          */
         val heldConnection: String? = null,
         val heldService: Boolean = false,
+        /** (0.1.146) The day [heldConnection] was connected, set only when another connection has the same shown name. */
+        val heldConnectedOn: java.time.LocalDate? = null,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
 
