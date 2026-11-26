@@ -53,6 +53,8 @@ internal class CallMachine(
      * refused when it is handled; an unlock makes it true again, with nothing to clear.
      */
     private val vaultOpen: () -> Boolean = { true },
+    /** Call-test builds only: [tapToRing] is kept. Any other build records nothing of it (owner b, #18855). */
+    private val keepTapToRing: Boolean = false,
 ) {
     private val stateFlow = MutableStateFlow<CallState>(CallState.Idle)
     val state: StateFlow<CallState> = stateFlow.asStateFlow()
@@ -66,6 +68,15 @@ internal class CallMachine(
 
     /** Each call that connected, counted once when it ends, by the last path the stack reported for it. */
     val paths: StateFlow<CallPaths> = pathsFlow.asStateFlow()
+
+    private val tapToRingFlow = MutableStateFlow<List<Long>>(emptyList())
+
+    /**
+     * The last [TAP_TO_RING_KEPT] outgoing calls' times from the tap on Call to the first ringing or answer this phone saw,
+     * oldest first: durations only, memory only, for the life of the process (read by the call test screen). Kept only
+     * with [keepTapToRing]; empty otherwise.
+     */
+    val tapToRing: StateFlow<List<Long>> = tapToRingFlow.asStateFlow()
 
     private val restartsFlow = MutableStateFlow(0)
 
@@ -214,6 +225,9 @@ internal class CallMachine(
 
         /** The last path the stack reported for this call (relayed or direct); null while it has said nothing. */
         var relayed: Boolean? = null
+
+        /** Outgoing: its tap-to-ring time is counted ([tapToRing]), once, at its first ringing or answer. */
+        var ringCounted = false
 
         /** The answer's keys until the engine has them (it wipes them); wiped here if the call ends first. */
         var keys: MediaKeys? = null
@@ -650,11 +664,13 @@ internal class CallMachine(
             is SignalEvent.Ringing -> if (s != null && s.callId == e.callId && s.phase == CallPhase.CALLING) {
                 s.phase = CallPhase.RINGING
                 diagnosticsFlow.update { it.copy(tapToRingingMs = elapsedMs() - s.tappedAtMs) }
+                countRing(s)
                 publish(s)
             }
             is SignalEvent.Answer -> {
                 val ringing = s != null && s.callId == e.callId && s.direction == CallDirection.OUTGOING &&
                     (s.phase == CallPhase.CALLING || s.phase == CallPhase.RINGING)
+                if (s != null && ringing) countRing(s) // answered before any ringing reached this phone
                 when {
                     s != null && ringing && !closed -> takeAnswer(s, e)
                     s != null && ringing -> {
@@ -1131,6 +1147,18 @@ internal class CallMachine(
         rememberEnded(held.callId)
     }
 
+    /**
+     * An outgoing call's first ringing or answer: its tap-to-ring time, kept with the last [TAP_TO_RING_KEPT]. An answer
+     * that comes while the phone is locking counts too: the other phone did answer, and this is a signalling time.
+     */
+    private fun countRing(s: Session) {
+        // Both callers are an outgoing call's ringing or answer.
+        if (!keepTapToRing || s.ringCounted) return
+        s.ringCounted = true
+        val ms = elapsedMs() - s.tappedAtMs
+        tapToRingFlow.update { (it + ms).takeLast(TAP_TO_RING_KEPT) }
+    }
+
     /** A connected call ended: its path is counted, by the last one the stack reported (relayed, direct, or not said). */
     private fun countPath(s: Session) = pathsFlow.update {
         when (s.relayed) {
@@ -1181,6 +1209,8 @@ internal class CallMachine(
     }
 
     private companion object {
+        const val TAP_TO_RING_KEPT = 20
+
         /** No session ([liveSeq]): seqs count up from 0. */
         const val NO_SEQ = -1
 

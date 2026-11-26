@@ -90,6 +90,8 @@ object CallTest {
         d: CallDiagnostics,
         all: CallsDiagnostics,
         paths: CallPaths = CallPaths(),
+        unanswered: Map<String, Int>? = null,
+        tapToRing: List<Long> = emptyList(),
     ): List<Pair<String, String>> {
         val m = d.media
         val state = when (call) {
@@ -130,7 +132,26 @@ object CallTest {
             "callsDirect" to paths.direct.toString(),
             "callsRelayed" to paths.relayed.toString(),
             "callsPathUnknown" to paths.unknown.toString(),
+            "incomingUnanswered" to unansweredLine(unanswered),
+            "tapToRingMs" to tapToRingLine(tapToRing),
         )
+    }
+
+    /**
+     * `N (timeout a, unavailable b, …)` by reason, among the last 200 calls of the vault's last `call.list` read; "-"
+     * before one.
+     */
+    fun unansweredLine(by: Map<String, Int>?): String {
+        if (by == null) return "-"
+        val n = by.values.sum()
+        return if (n == 0) "0" else "$n (" + by.entries.joinToString(", ") { "${it.key} ${it.value}" } + ")"
+    }
+
+    /** `n=K min a median b max c` over the kept outgoing calls; "-" with none. The median of an even count is the lower middle. */
+    fun tapToRingLine(ms: List<Long>): String {
+        if (ms.isEmpty()) return "-"
+        val sorted = ms.sorted()
+        return "n=${sorted.size} min ${sorted.first()} median ${sorted[(sorted.size - 1) / 2]} max ${sorted.last()}"
     }
 }
 
@@ -150,12 +171,22 @@ class CallTestViewModel @Inject constructor(private val calls: CallsController) 
             calls.testsAllowed,
             calls.state,
             calls.callDiagnostics,
-            combine(calls.diagnostics, calls.callPaths, ::Pair),
+            combine(calls.diagnostics, calls.callPaths, calls.incomingUnanswered, calls.tapToRing, ::Counts),
             changed,
-        ) { allowed, call, d, (all, paths), _ ->
+        ) { allowed, call, d, c, _ ->
             val config = calls.mediaConfig
-            CallTestUiState(allowed, config, CallTest.lines(allowed, config, call, d, all, paths))
+            CallTestUiState(allowed, config, CallTest.lines(allowed, config, call, d, c.all, c.paths, c.unanswered, c.tapToRing))
         }.stateIn(viewModelScope, SharingStarted.Eagerly, CallTestUiState())
+
+    private data class Counts(
+        val all: CallsDiagnostics,
+        val paths: CallPaths,
+        val unanswered: Map<String, Int>?,
+        val tapToRing: List<Long>,
+    )
+
+    /** Reads the vault's call list again for the unanswered count (only while the tests are allowed). */
+    fun recount() = calls.recountUnanswered()
 
     /** Flips one switch for the next call. Refused by the controller unless the tests are allowed. */
     fun toggle(label: String) {
@@ -173,7 +204,7 @@ class CallTestViewModel @Inject constructor(private val calls: CallsController) 
 fun CallTestScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val vm: CallTestViewModel = hiltViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
-    CallTestContent(state, vm::toggle, vm::reset, onBack, modifier)
+    CallTestContent(state, vm::toggle, vm::reset, onBack, modifier, onRecount = vm::recount)
 }
 
 @Composable
@@ -183,6 +214,7 @@ fun CallTestContent(
     onReset: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onRecount: () -> Unit = {},
 ) {
     Surface(modifier.fillMaxSize().testTag("calltest"), color = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(Spacing.l)) {
@@ -190,6 +222,10 @@ fun CallTestContent(
             Row {
                 TextButton(onClick = onBack, modifier = Modifier.testTag("calltest_back")) { Text("Back") }
                 TextButton(onClick = onReset, modifier = Modifier.testTag("calltest_reset")) { Text("All off") }
+                // Reads the vault's call list again for incomingUnanswered (after a call the test made).
+                TextButton(onClick = onRecount, enabled = state.allowed, modifier = Modifier.testTag("calltest_recount")) {
+                    Text("Read calls")
+                }
             }
             for ((label, on) in CallTest.SWITCHES) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

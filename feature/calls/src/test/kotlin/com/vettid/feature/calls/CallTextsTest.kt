@@ -133,6 +133,15 @@ class CallTextsTest {
         assertTrue(on.relayOnly)
         assertFalse(CallTest.toggled(on, "relayOnly").relayOnly)
         val map = CallTest.lines(true, on, CallState.Idle, CallDiagnostics(), CallsDiagnostics(), com.vettid.core.calls.CallPaths(direct = 3, relayed = 2, unknown = 1)).toMap()
+        assertEquals("-", map["incomingUnanswered"])
+        assertEquals("-", map["tapToRingMs"])
+        val counted = CallTest.lines(
+            true, on, CallState.Idle, CallDiagnostics(), CallsDiagnostics(), unanswered = mapOf("busy" to 1, "timeout" to 3),
+            tapToRing = listOf(900, 300, 1200, 600),
+        ).toMap()
+        assertEquals("4 (busy 1, timeout 3)", counted["incomingUnanswered"])
+        assertEquals("n=4 min 300 median 600 max 1200", counted["tapToRingMs"])
+        assertEquals("0", CallTest.unansweredLine(emptyMap()))
         assertEquals("relayOnly", map["faults"])
         assertEquals("3", map["callsDirect"])
         assertEquals("2", map["callsRelayed"])
