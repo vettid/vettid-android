@@ -915,6 +915,41 @@ class CallsControllerTest {
         assertEquals(CallPaths(direct = 1, relayed = 2, unknown = 1), c.callPaths.value)
     }
 
+    /**
+     * (#18637) A call-test build logs each tap and each route or mute change (states only); any other build logs
+     * nothing.
+     */
+    @Test
+    fun aTestBuildLogsTheTapsAndTheRoute() = runTest {
+        val lines = mutableListOf<String>()
+        val plain = CallsController(
+            vault, engines, backgroundScope, audio, audio, { microphone }, { services++ }, MediaConfig(), testBuild = false,
+            testLog = { lines += it },
+        )
+        plain.tapped("speaker")
+        plain.setRoute(AudioRoute.SPEAKER)
+        runCurrent()
+        assertEquals(emptyList<String>(), lines)
+
+        val test = CallsController(
+            vault, engines, backgroundScope, audio, audio, { microphone }, { services++ }, MediaConfig(), testBuild = true,
+            testLog = { lines += it },
+        )
+        vault.unlocked.value = true
+        runCurrent()
+        test.call("conn-1") // a live call, so the call's own line is there too
+        runCurrent()
+        test.tapped("speaker")
+        test.setRoute(AudioRoute.SPEAKER)
+        test.tapped("mute")
+        test.setMuted(true)
+        runCurrent()
+        assertTrue(lines.toString(), lines.containsAll(listOf("tap speaker", "set route=SPEAKER", "tap mute", "set mute=true")))
+        assertTrue("the route's state", lines.any { it.startsWith("route=") })
+        assertTrue("the call's state", lines.any { it.startsWith("call ") && it.contains("muted=true") })
+        assertTrue("no connection id", lines.none { it.contains("conn-") })
+    }
+
     @Test
     fun aCallEndsTwelveHoursAfterItWasAnswered() = runTest {
         val c = controller()

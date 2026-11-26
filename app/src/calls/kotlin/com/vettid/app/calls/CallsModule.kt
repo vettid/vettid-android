@@ -3,6 +3,7 @@ package com.vettid.app.calls
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.vettid.app.BuildConfig
 import com.vettid.core.crypto.Base64s
@@ -119,6 +120,9 @@ object CallsModule {
      */
     internal val TEST_BUILD: Boolean = BuildConfig.CALLS_TEST
 
+    /** The logcat tag of a call-test build's tap log ([CallsController]'s testLog). */
+    private const val TEST_LOG_TAG = "VettIdCallTest"
+
     /** What the calls use of the vault manager: its phase, its typed client, and its connections as the app shows them. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private class ManagerVault(private val m: VaultManager, private val prefs: PreferencesRepository, scope: CoroutineScope) : CallVault {
@@ -200,6 +204,8 @@ object CallsModule {
         // refuses it in any other): a debuggable build, or a staging build made with -PvettidCallsTest=true.
         config = MediaConfig(),
         testBuild = TEST_BUILD,
+        // Call-test builds only: the taps and the route and mute changes (states only), for a phone run's logcat.
+        testLog = { line -> if (TEST_BUILD) Log.i(TEST_LOG_TAG, line) },
     ).also { controller ->
         CallService.host = controller
         // The member's lock waits (two seconds at most) for a live call's hang-up to reach the vault.

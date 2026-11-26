@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Call
@@ -45,20 +46,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.calls.CallEnd
+import com.vettid.core.calls.CallDirection
 import com.vettid.core.calls.CallPhase
 import com.vettid.core.calls.CallState
 import com.vettid.core.data.account.AccountNames
@@ -233,6 +238,17 @@ private fun ColumnScope.LiveCall(call: CallState.Live, state: CallUiState, name:
                 call.muted,
                 actions.onMute,
                 tag = "call_mute",
+                // (C2) The answering phone's microphone is held back until the encryption is confirmed: a tap still
+                // takes effect, and the wait is shown, so a mute that changes nothing audible yet does not look dropped.
+                // Only while unmuted: a muted microphone sends nothing anyway.
+                waiting = if (call.microphoneHeld && !call.muted) stringResource(R.string.calls_microphone_waiting) else null,
+                // Its room is kept for the whole of a call that can hold (answered in form 2), so the buttons do not
+                // move when the wait ends, just as the member reaches for them.
+                reserve = if (call.direction == CallDirection.INCOMING && call.formTwo) {
+                    stringResource(R.string.calls_microphone_waiting)
+                } else {
+                    null
+                },
             )
             val hangUp = stringResource(R.string.calls_hang_up)
             RoundAction(Icons.Outlined.CallEnd, hangUp, actions.onHangUp, "call_hang_up", destructive = true)
@@ -308,19 +324,38 @@ private fun Toggle(
     onClick: () -> Unit,
     tag: String,
     enabled: Boolean = true,
+    /** Shown under the label, and spoken as the button's state, while what the button controls waits. */
+    waiting: String? = null,
+    /** A text whose room is kept under the label when nothing is waiting (drawn invisible, not spoken). */
+    reserve: String? = null,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         FilledIconToggleButton(
             checked = on,
             onCheckedChange = { onClick() },
             enabled = enabled,
-            modifier = Modifier.size(ACTION_DP.dp).testTag(tag).semantics { contentDescription = if (on) onLabel else label },
+            modifier = Modifier.size(ACTION_DP.dp).testTag(tag).semantics {
+                contentDescription = if (on) onLabel else label
+                if (waiting != null) stateDescription = waiting
+            },
         ) { Icon(icon, contentDescription = null) }
         Spacer(Modifier.height(Spacing.xs))
         Text(label, style = MaterialTheme.typography.labelMedium)
+        val line = waiting ?: reserve
+        if (line != null) {
+            Text(
+                line,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.widthIn(max = WAITING_DP.dp).alpha(if (waiting != null) 1f else 0f)
+                    .testTag(if (waiting != null) "${tag}_waiting" else "${tag}_room").clearAndSetSemantics { },
+            )
+        }
     }
 }
 
 private const val AVATAR_DP = 96
 private const val ACTION_DP = 64
+private const val WAITING_DP = 96
 private const val TICK_MS = 1_000L

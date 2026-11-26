@@ -73,10 +73,12 @@ class CallViewModel @Inject constructor(private val calls: CallsController) : Vi
     fun dismiss() = calls.dismiss()
 
     fun toggleMute() {
+        calls.tapped("mute")
         (uiState.value.call as? CallState.Live)?.let { calls.setMuted(!it.muted) }
     }
 
     fun toggleSpeaker() {
+        calls.tapped("speaker")
         val s = uiState.value
         if (s.canSpeaker) calls.setRoute(if (s.speaker) AudioRoute.EARPIECE else AudioRoute.SPEAKER)
     }

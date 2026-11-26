@@ -9,6 +9,9 @@ import android.media.AudioManager
 import android.media.Ringtone
 import android.media.RingtoneManager
 import android.media.ToneGenerator
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import com.vettid.core.notify.Channels
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +41,81 @@ interface CallAudio {
     fun stop()
 }
 
+/**
+ * The route the member last asked for, kept for [holdMs] (owner phone test 2026-11-25: an early tap on the speaker seemed
+ * to do nothing). It is shown at once, whatever the platform reports, and asked for again at each of the platform's
+ * route and device changes meanwhile: the platform switches devices asynchronously and may make its own choice when
+ * the call's audio starts. After [holdMs] the platform's route is shown again, so a request it refused is seen to go.
+ * A request for a route the phone no longer has is dropped, and so is one when a device is added (a headset plugged in
+ * takes the call, as before). It is asked for again at most [MAX_AGAIN] times, so a platform (or another app) that keeps
+ * turning it back is not answered with a call per change.
+ */
+internal class RouteRequest(private val now: () -> Long, private val holdMs: Long = HOLD_MS) {
+    private var wanted: AudioRoute? = null
+    private var until = 0L
+    private var asks = 0
+
+    fun ask(route: AudioRoute) {
+        wanted = route
+        until = now() + holdMs
+        asks = 0
+    }
+
+    /** Whether a request is still being kept. */
+    val pending: Boolean get() = live() != null
+
+    /** The route to ask the platform for again now ([current] is not it), or null. */
+    fun again(current: AudioRoute?, available: List<AudioRoute>): AudioRoute? {
+        val w = live()
+        if (w != null && w !in available) wanted = null // the route is gone (a headset unplugged): dropped
+        return w?.takeIf { it in available && it != current && asks <= MAX_AGAIN }?.also { asks++ }
+    }
+
+    /** The route to show: the requested one while it is kept, else the platform's. */
+    fun shown(current: AudioRoute?): AudioRoute? = live() ?: current
+
+    fun clear() {
+        wanted = null
+    }
+
+    private fun live(): AudioRoute? {
+        if (wanted != null && now() >= until) wanted = null
+        return wanted
+    }
+
+    companion object {
+        const val HOLD_MS = 5_000L
+
+        /** The first ask, made by the tap's own refresh, and this many more. */
+        const val MAX_AGAIN = 3
+    }
+}
+
+/**
+ * The devices the platform has reported to the device callback, by id, so that a headset is told new by its own id
+ * (#18637): not by the routes last shown, which a refresh in between may already have taken from the platform's list.
+ * Seeded with the devices there when the callback is registered (its first call lists those).
+ */
+internal class HeadsetWatch {
+    private val known = mutableSetOf<Int>()
+
+    fun seed(ids: Collection<Int>) {
+        known.clear()
+        known += ids
+    }
+
+    /** Takes the devices just added (id, route); whether one is a headset, wired or Bluetooth, not known before. */
+    fun added(devices: List<Pair<Int, AudioRoute?>>): Boolean {
+        val fresh = devices.any { (id, route) -> (route == AudioRoute.WIRED || route == AudioRoute.BLUETOOTH) && id !in known }
+        known += devices.map { it.first }
+        return fresh
+    }
+
+    fun removed(ids: Collection<Int>) {
+        known -= ids.toSet()
+    }
+}
+
 /** The sounds around a call. */
 interface CallTones {
     /** The caller's ring-back tone while the other phone rings. */
@@ -58,6 +136,19 @@ class AndroidCallAudio(context: Context) : CallAudio {
     override val state: StateFlow<AudioState> = flow.asStateFlow()
     private val direct = Executor { it.run() }
     private var active = false
+    private val request = RouteRequest(SystemClock::elapsedRealtime)
+    private val main = Handler(Looper.getMainLooper())
+
+    private val headsets = HeadsetWatch()
+
+    /** A device came or went while a request was kept: its reroute is made when the hold ends. */
+    private var rerouteOwed = false
+
+    /** When a request's hold ends, the platform's route is looked at and shown again (and a reroute owed is made). */
+    private val holdEnded = Runnable {
+        val owed = synchronized(this) { rerouteOwed.also { rerouteOwed = false } }
+        refresh(reroute = owed)
+    }
 
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
         .setAudioAttributes(
@@ -68,9 +159,26 @@ class AndroidCallAudio(context: Context) : CallAudio {
         .build()
 
     private val devices = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = refresh(reroute = true)
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
+            // A headset just added takes the call, as before: the member's pending tap does not keep it away. The
+            // callback's first call, at registration, lists the devices already there: those clear nothing.
+            synchronized(this@AndroidCallAudio) {
+                if (headsets.added(added.map { it.id to routeOf(it) })) {
+                    request.clear()
+                } else if (request.pending) {
+                    rerouteOwed = true
+                }
+            }
+            refresh(reroute = true)
+        }
 
-        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = refresh(reroute = true)
+        override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
+            synchronized(this@AndroidCallAudio) {
+                headsets.removed(removed.map { it.id })
+                if (request.pending) rerouteOwed = true
+            }
+            refresh(reroute = true)
+        }
     }
     private val changed = AudioManager.OnCommunicationDeviceChangedListener { refresh(reroute = false) }
 
@@ -80,6 +188,7 @@ class AndroidCallAudio(context: Context) : CallAudio {
         active = true
         manager.mode = AudioManager.MODE_IN_COMMUNICATION
         manager.requestAudioFocus(focus)
+        headsets.seed(manager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS).map { it.id })
         manager.registerAudioDeviceCallback(devices, null)
         manager.addOnCommunicationDeviceChangedListener(direct, changed)
         refresh(reroute = true)
@@ -88,14 +197,23 @@ class AndroidCallAudio(context: Context) : CallAudio {
     @Synchronized
     override fun setRoute(route: AudioRoute) {
         if (!active || manager == null) return
-        manager.availableCommunicationDevices.firstOrNull { routeOf(it) == route }?.let { manager.setCommunicationDevice(it) }
-        refresh(reroute = false)
+        request.ask(route)
+        refresh(reroute = false) // asks the platform for it (once: the switch is asynchronous)
+        main.removeCallbacks(holdEnded)
+        main.postDelayed(holdEnded, RouteRequest.HOLD_MS + HOLD_SLACK_MS)
+    }
+
+    private fun apply(route: AudioRoute) {
+        manager?.let { m -> m.availableCommunicationDevices.firstOrNull { routeOf(it) == route }?.let { m.setCommunicationDevice(it) } }
     }
 
     @Synchronized
     override fun stop() {
         if (!active || manager == null) return
         active = false
+        request.clear()
+        rerouteOwed = false
+        main.removeCallbacks(holdEnded)
         runCatching { manager.unregisterAudioDeviceCallback(devices) }
         runCatching { manager.removeOnCommunicationDeviceChangedListener(changed) }
         runCatching { manager.clearCommunicationDevice() }
@@ -110,7 +228,9 @@ class AndroidCallAudio(context: Context) : CallAudio {
         if (!active || manager == null) return
         val available = manager.availableCommunicationDevices
         val routes = available.mapNotNull(::routeOf).distinct().sortedBy { it.ordinal }
-        if (reroute) {
+        // The member's own request wins while it is kept: asked for again, and no reroute of ours over it.
+        request.again(manager.communicationDevice?.let(::routeOf), routes)?.let(::apply)
+        if (reroute && !request.pending) {
             val preferred = PREFERRED.firstOrNull { it in routes }
             val current = manager.communicationDevice?.let(::routeOf)
             val keep = current == AudioRoute.SPEAKER && preferred == AudioRoute.EARPIECE
@@ -118,10 +238,13 @@ class AndroidCallAudio(context: Context) : CallAudio {
                 available.firstOrNull { routeOf(it) == preferred }?.let { manager.setCommunicationDevice(it) }
             }
         }
-        flow.value = AudioState(manager.communicationDevice?.let(::routeOf), routes)
+        flow.value = AudioState(request.shown(manager.communicationDevice?.let(::routeOf)), routes)
     }
 
     companion object {
+        /** The request's end is looked at a little after it. */
+        private const val HOLD_SLACK_MS = 100L
+
         /** A headset before the earpiece; the speaker only when the member asks. */
         private val PREFERRED = listOf(AudioRoute.BLUETOOTH, AudioRoute.WIRED, AudioRoute.EARPIECE)
 

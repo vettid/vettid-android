@@ -577,6 +577,7 @@ internal class CallMachine(
             s.formTwo = true
             s.heldForDecrypt = true
             engine.setHeld(true)
+            publish(s) // the screen shows the wait from the answer on
         }
         // The callee gathers no address before the member answers (CALLS-PLAN §2 step 6).
         s.lane.trySend {
@@ -970,6 +971,7 @@ internal class CallMachine(
                 s.heldForDecrypt = false
                 cancelTimer(s, TimerKind.DECRYPT)
                 s.engine?.setHeld(false)
+                publish(s) // the screen's wait ends
             }
             is MediaEvent.Failed -> finish(s, CallEnd.FAILED, CallReason.FAILED)
         }
@@ -1092,6 +1094,7 @@ internal class CallMachine(
     private fun publish(s: Session) {
         stateFlow.value = CallState.Live(
             s.connectionId, s.direction, s.phase, s.callId, s.muted, s.activeSince, s.reconnecting, s.keysSet, s.formTwo,
+            s.heldForDecrypt,
         )
     }
 

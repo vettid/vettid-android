@@ -659,21 +659,35 @@ class CallMachineTest {
         // Keyed on the offer's form: here the vault probe has not found the vault C2 (yet), and the hold still applies.
         signalling.c2 = false
         val m = machine()
+        // The engine's answer takes a while: the wait is on the screen from the tap on Answer, not only once it is made.
+        engines.onCreate = { (it as FakeEngine).acceptOfferMs = 500 }
         signalling.deliver(offer(formTwo = true))
         runCurrent()
         m.answer()
         runCurrent()
+        assertTrue("the screen shows the wait at once", m.live().microphoneHeld)
+        advanceTimeBy(600)
+        engines.onCreate = {}
         val engine = engines.last
         assertTrue("held from the answer on", engine.holding)
+        assertTrue("the screen shows the wait", m.live().microphoneHeld)
+        // A mute tapped while held takes effect at once (shown, and kept by the engine), wait or not.
+        m.setMuted(true)
+        runCurrent()
+        assertTrue(m.live().muted && m.live().microphoneHeld)
+        m.setMuted(false)
+        runCurrent()
         engine.emit(MediaEvent.Connection(MediaConnection.CONNECTED))
         runCurrent()
         assertTrue("connected is not enough", engine.holding)
+        assertTrue(m.live().microphoneHeld)
         engine.emit(MediaEvent.Cryptor(MediaDirection.SEND, CryptorState.OK))
         runCurrent()
         assertTrue("its own sender working is not enough", engine.holding)
         engine.emit(MediaEvent.Cryptor(MediaDirection.RECEIVE, CryptorState.OK))
         runCurrent()
         assertFalse(engine.holding)
+        assertFalse("the wait is over on the screen", m.live().microphoneHeld)
         advanceTimeBy(60_000)
         assertEquals(CallPhase.ACTIVE, m.live().phase)
         m.hangUp()
