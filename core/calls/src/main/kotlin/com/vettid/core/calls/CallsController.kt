@@ -245,7 +245,10 @@ class CallsController(
         vaultIsC2 = { formTwo },
     )
     private val machine =
-        CallMachine(signalling, engines, scope, now, timings = timings, config = { mediaConfig }, vaultOpen = { vault.unlockedNow })
+        CallMachine(
+            signalling, engines, scope, now, timings = timings, config = { mediaConfig }, vaultOpen = { vault.unlockedNow },
+            keepTapToRing = testBuild,
+        )
 
     /** The call, for the call screens. */
     override val state: StateFlow<CallState> = machine.state
@@ -253,6 +256,32 @@ class CallsController(
 
     /** (C5) Direct or relayed, per call that connected since the process started. */
     val callPaths: StateFlow<CallPaths> = machine.paths
+
+    /** The last 20 outgoing calls' tap-to-ring times, for the call test screen (memory only; a call-test build only). */
+    val tapToRing: StateFlow<List<Long>> = machine.tapToRing
+
+    private val unansweredFlow = MutableStateFlow<Map<String, Int>?>(null)
+
+    /**
+     * In a test build whose tests are allowed (the development signer) only: the incoming calls never answered (no
+     * `answered_at`), by `reason` ([unansweredByReason]), among the last [HISTORY_LIMIT] (200) calls of the last `call.list`
+     * read; null until such a read. Counts only, memory only, for the call test screen.
+     */
+    val incomingUnanswered: StateFlow<Map<String, Int>?> = unansweredFlow.asStateFlow()
+
+    /** In a test build whose tests are allowed: reads `call.list` again for [incomingUnanswered]. Nothing else of it applies. */
+    fun recountUnanswered() {
+        if (!testBuild) return
+        // The tests' permission and the opening are taken together, under the lock's own monitor: a lock between the
+        // two would let the read's answer land in the next opening.
+        val epoch = synchronized(applyLock) { lockEpoch.takeIf { testsAllowedFlow.value && stillOpen(it) } } ?: return
+        scope.launch {
+            val records = runCatching { vault.gateway.list(HISTORY_LIMIT) }.getOrNull() ?: return@launch
+            synchronized(applyLock) {
+                if (stillOpen(epoch) && testsAllowedFlow.value) unansweredFlow.value = unansweredByReason(records.calls)
+            }
+        }
+    }
     val audioState: StateFlow<AudioState> = audio.state
 
     private val availabilityFlow = MutableStateFlow(CallAvailability.CLOSED)
@@ -485,7 +514,13 @@ class CallsController(
             if (records.formTwo) endStaleC2(records, epoch) else endStale(records.calls, epoch)
             if (testBuild) {
                 val signer = runCatching { vault.signerClass() }.getOrNull()
-                synchronized(applyLock) { if (stillOpen(epoch)) testsAllowedFlow.value = signer == SIGNER_DEVELOPMENT }
+                synchronized(applyLock) {
+                    if (stillOpen(epoch)) {
+                        testsAllowedFlow.value = signer == SIGNER_DEVELOPMENT
+                        // The count waits for the tests to be allowed, as the screen's Read calls does.
+                        if (signer == SIGNER_DEVELOPMENT) unansweredFlow.value = unansweredByReason(records.calls)
+                    }
+                }
             }
             return
         }
@@ -648,6 +683,7 @@ class CallsController(
             lockEpoch++
             vaultC2 = null
             testsAllowedFlow.value = false
+            unansweredFlow.value = null
             // (Review of 0470e984, L1) Nothing of the vault's call history is kept while it is locked: not the skipped
             // entries' call ids either (a sign-out to another vault in this process would keep the previous one's).
             diagnosticsFlow.update { it.copy(listSkipped = 0, listSkippedIds = emptyList()) }
@@ -760,8 +796,20 @@ class CallsController(
         private const val STATE_RINGING = "ringing"
         private const val STATE_ACTIVE = "active"
         private const val DIRECTION_OUT = "out"
+        private const val DIRECTION_IN = "in"
 
         private fun time(s: String?): Instant? = s?.let { runCatching { Instant.parse(it) }.getOrNull() }
+
+        /**
+         * The incoming records never answered (no `answered_at`), counted by `reason` (a reason the app does not read as a
+         * plain lower-case word is "other"; none yet, a call still ringing, is its state). Counts only, nothing of a record.
+         */
+        internal fun unansweredByReason(records: List<CallRecord>): Map<String, Int> =
+            records.filter { it.direction == DIRECTION_IN && it.answeredAt == null }
+                .groupingBy { r -> (r.reason ?: r.state).takeIf { PLAIN_WORD.matches(it) } ?: "other" }
+                .eachCount().toSortedMap()
+
+        private val PLAIN_WORD = Regex("[a-z_]{1,32}")
 
         /** One record of `call.list` as the conversation shows it; null for a record without a readable start. */
         internal fun entry(r: CallRecord, now: Instant): CallHistoryEntry? {

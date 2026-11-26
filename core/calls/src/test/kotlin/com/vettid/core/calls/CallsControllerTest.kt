@@ -409,6 +409,23 @@ class CallsControllerTest {
     }
 
     @Test
+    fun aMemberBuildKeepsNoTapToRingTimes() = assertTapToRingKept(testBuild = false, kept = 0)
+
+    @Test
+    fun aCallTestBuildKeepsTapToRingTimes() = assertTapToRingKept(testBuild = true, kept = 1)
+
+    private fun assertTapToRingKept(testBuild: Boolean, kept: Int) = runTest {
+        val c = controller(testBuild = testBuild)
+        vault.unlocked.value = true
+        runCurrent()
+        c.call("conn-1")
+        runCurrent()
+        vault.gateway.channel.send(CallEvent.Ringing(CALL_ID))
+        runCurrent()
+        assertEquals(kept, c.tapToRing.value.size)
+    }
+
+    @Test
     fun aroundACallTheAudioTheServiceAndTheButton() = runTest {
         val c = controller()
         vault.unlocked.value = true
@@ -486,6 +503,91 @@ class CallsControllerTest {
         runCurrent()
         assertEquals(listOf("list(200)", "end(A, failed)", "end(B, timeout)"), vault.gateway.sent)
         assertEquals(2, c.diagnostics.value.staleEnded)
+    }
+
+    /**
+     * In a test build, the `call.list` read counts the incoming calls never answered, by reason (a reason that is not a
+     * plain word is "other"; one still ringing is its state); a lock forgets the count; any other build keeps none.
+     */
+    @Test
+    fun aTestBuildCountsTheUnansweredIncomingCallsByReason() = runTest {
+        fun rec(id: String, dir: String, reason: String?, answered: Boolean = false, state: String = "ended") =
+            CallRecord(id, "conn-1", dir, "audio", state, reason, T0.toString(), answeredAt = if (answered) T0.toString() else null)
+        vault.gateway.list = {
+            listOf(
+                rec("A", "in", "timeout"),
+                rec("B", "in", "timeout"),
+                rec("C", "in", "unavailable"),
+                rec("D", "in", "hangup", answered = true), // answered: not counted
+                rec("E", "out", "timeout"), // outgoing: not counted
+                rec("F", "in", null, state = "ringing"),
+                rec("G", "in", "Weird Reason!"),
+            )
+        }
+        val plain = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertNull("not a test build", plain.incomingUnanswered.value)
+
+        vault.unlocked.value = false
+        runCurrent()
+        // A test build whose tests are not allowed (not the development signer): no count either.
+        vault.signer = "vettid"
+        val notAllowed = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        assertNull("tests not allowed", notAllowed.incomingUnanswered.value)
+        vault.unlocked.value = false
+        runCurrent()
+
+        vault.signer = "development"
+        val test = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(mapOf("other" to 1, "ringing" to 1, "timeout" to 2, "unavailable" to 1), test.incomingUnanswered.value)
+        assertEquals("in a stable order", listOf("other", "ringing", "timeout", "unavailable"), test.incomingUnanswered.value!!.keys.toList())
+        vault.unlocked.value = false
+        runCurrent()
+        assertNull("forgotten at the lock", test.incomingUnanswered.value)
+    }
+
+    /** "Read calls" reads the list again for the count, only in a test build whose tests are allowed. */
+    @Test
+    fun theTestScreenReadsTheCallsAgain() = runTest {
+        var reason = "timeout"
+        vault.gateway.list = { listOf(CallRecord("A", "conn-1", "in", "audio", "ended", reason, T0.toString())) }
+        vault.signer = "vettid"
+        val notAllowed = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        reason = "busy"
+        notAllowed.recountUnanswered()
+        runCurrent()
+        assertNull("not allowed: nothing counted or read again", notAllowed.incomingUnanswered.value)
+        vault.unlocked.value = false
+        runCurrent()
+
+        vault.signer = "development"
+        reason = "timeout"
+        val allowed = controller(testBuild = true)
+        vault.unlocked.value = true
+        runCurrent()
+        reason = "busy"
+        allowed.recountUnanswered()
+        runCurrent()
+        assertEquals(mapOf("busy" to 1), allowed.incomingUnanswered.value)
+
+        // A lock while the read is out: its answer is dropped, and nothing lands in the next opening.
+        val gate = kotlinx.coroutines.channels.Channel<Unit>(1)
+        vault.gateway.listGate = { gate.receive() }
+        reason = "declined"
+        allowed.recountUnanswered()
+        runCurrent()
+        vault.unlocked.value = false
+        runCurrent()
+        gate.send(Unit)
+        runCurrent()
+        assertNull(allowed.incomingUnanswered.value)
     }
 
     /**

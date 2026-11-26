@@ -32,11 +32,12 @@ class CallMachineTest {
         s: CallSignalling = signalling,
         e: MediaEngineFactory = engines,
         config: MediaConfig = MediaConfig(),
+        keepTapToRing: Boolean = false,
     ): CallMachine {
         open = true
         return CallMachine(
             s, e, backgroundScope, { T0.plusMillis(testScheduler.currentTime) }, { testScheduler.currentTime },
-            config = { config }, vaultOpen = { open },
+            config = { config }, vaultOpen = { open }, keepTapToRing = keepTapToRing,
         )
     }
 
@@ -70,6 +71,59 @@ class CallMachineTest {
         m.call("conn-1")
         runCurrent()
         assertEquals(CallPhase.CALLING, m.live().phase)
+    }
+
+    /**
+     * The last 20 outgoing calls' tap-to-ring times: each counted once, at its first ringing, or at its answer when no
+     * ringing reached this phone first; the oldest dropped past 20.
+     */
+    @Test
+    fun theLastOutgoingCallsTapToRingTimesAreKept() = runTest {
+        val m = machine(keepTapToRing = true)
+        // Answered with no ringing first: counted at the answer.
+        placed(m)
+        advanceTimeBy(500)
+        signalling.deliver(answer())
+        runCurrent()
+        assertEquals(listOf(500L), m.tapToRing.value)
+        m.hangUp()
+        runCurrent()
+        // Rung, then answered: counted once, at the ringing.
+        for (i in 1..21) {
+            placed(m)
+            advanceTimeBy(i * 10L)
+            signalling.deliver(SignalEvent.Ringing(CALL_ID))
+            runCurrent()
+            advanceTimeBy(1_000)
+            signalling.deliver(answer())
+            runCurrent()
+            m.hangUp()
+            runCurrent()
+        }
+        assertEquals("the last 20, oldest first", (2..21).map { it * 10L }, m.tapToRing.value)
+
+        // An incoming call, rung and answered here, is not counted.
+        signalling.deliver(offer("01JB2Z6V9K3M4N5P6Q7R8S9T70"))
+        runCurrent()
+        m.answer()
+        runCurrent()
+        assertEquals(CallDirection.INCOMING, m.live().direction)
+        m.hangUp()
+        runCurrent()
+        assertEquals((2..21).map { it * 10L }, m.tapToRing.value)
+    }
+
+    /** Any other build than a call-test one records no tap-to-ring time (owner b, #18855). */
+    @Test
+    fun aMemberBuildKeepsNoTapToRingTimes() = runTest {
+        val m = machine()
+        placed(m)
+        advanceTimeBy(300)
+        signalling.deliver(SignalEvent.Ringing(CALL_ID))
+        runCurrent()
+        signalling.deliver(answer())
+        runCurrent()
+        assertEquals(emptyList<Long>(), m.tapToRing.value)
     }
 
     @Test
