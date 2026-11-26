@@ -29,8 +29,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -202,6 +204,12 @@ class CallsController(
     private val testBuild: Boolean = false,
     private val now: () -> Instant = Instant::now,
     timings: CallTimings = CallTimings(),
+    /**
+     * Call-test builds only (#18637): a line per tap on Mute or Speaker and per change of the route or of the call's
+     * mute and microphone hold, so a phone run can tell what happened to an early tap. States and route names only:
+     * no name, id or address. Ignored unless [testBuild].
+     */
+    private val testLog: (String) -> Unit = {},
 ) : CallAccess, CallServiceHost {
     init {
         // What the app starts with is never a test configuration: those are switched on by hand, after the checks.
@@ -369,6 +377,13 @@ class CallsController(
     private var longCall: Job? = null
 
     init {
+        if (testBuild) {
+            scope.launch { audio.state.collect { note("route=${it.route} available=${it.available}") } }
+            scope.launch {
+                machine.state.map { (it as? CallState.Live)?.let { l -> "call ${l.phase} muted=${l.muted} micHeld=${l.microphoneHeld}" } }
+                    .distinctUntilChanged().collect { it?.let(::note) }
+            }
+        }
         scope.launch {
             // collectLatest cancels an opening's read when a close comes; locked() never suspends, so a close is
             // never cut short by the opening after it.
@@ -435,9 +450,22 @@ class CallsController(
 
     override fun hangUp() = machine.hangUp()
 
-    fun setMuted(muted: Boolean) = machine.setMuted(muted)
+    fun setMuted(muted: Boolean) {
+        note("set mute=$muted")
+        machine.setMuted(muted)
+    }
 
-    fun setRoute(route: AudioRoute) = audio.setRoute(route)
+    fun setRoute(route: AudioRoute) {
+        note("set route=$route")
+        audio.setRoute(route)
+    }
+
+    /** A tap on one of the call screen's toggles ([what]: mute or speaker), before anything is decided of it. */
+    fun tapped(what: String) = note("tap $what")
+
+    private fun note(line: String) {
+        if (testBuild) testLog(line)
+    }
 
     fun dismiss() = machine.dismiss()
 

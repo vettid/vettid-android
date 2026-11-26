@@ -72,6 +72,8 @@ class CallTextsTest {
             listOf("Answer", "Decline", "Mute", "Speaker", "Hang up"),
             listOf(R.string.calls_answer, R.string.calls_decline, R.string.calls_mute, R.string.calls_speaker, R.string.calls_hang_up).map(context::getString),
         )
+        // Owner-approved 2026-11-25 (GC #18857).
+        assertEquals("Mic starts once secured", context.getString(R.string.calls_microphone_waiting))
     }
 
     @Test

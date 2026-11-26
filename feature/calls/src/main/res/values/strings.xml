@@ -54,4 +54,7 @@
     <string name="calls_speaker_on">Speaker on</string>
     <!-- The duration of a call on the in-call screen, read aloud. -->
     <string name="calls_cd_duration">Call time %1$s</string>
+    <!-- Owner-approved 2026-11-25 (GC #18857). Under the Mute button of the answering phone while its microphone is held
+         back until the call's encryption is confirmed (VAULT-MESSAGING "Key confirmation"); also its spoken state. -->
+    <string name="calls_microphone_waiting">Mic starts once secured</string>
 </resources>

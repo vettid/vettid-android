@@ -108,6 +108,11 @@ sealed interface CallState {
          * this call, whatever the `call.list` read has found yet: keep-alives go on it.
          */
         val formTwo: Boolean = false,
+        /**
+         * (C2, VAULT-MESSAGING "Key confirmation") This answering device sends no sound yet: its microphone is held back
+         * until its receiver first decrypts a frame, whatever [muted] says. The screen shows the wait.
+         */
+        val microphoneHeld: Boolean = false,
     ) : CallState
 
     /** The last call, until it is dismissed or another begins. */
