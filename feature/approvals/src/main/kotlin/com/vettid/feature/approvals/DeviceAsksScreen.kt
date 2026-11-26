@@ -348,7 +348,7 @@ private fun DeviceOutcomeScreen(a: Approval.DeviceRequest, o: DeviceOutcome, act
             // The vault did not say whether it was done: not "Approved".
             null -> stringResource(R.string.approvals_held_no_result)
             "ok" -> stringResource(R.string.approvals_held_approved)
-            "not_found" -> stringResource(R.string.approvals_no_longer_waiting)
+            // `not_found` as a result reads as any other code (owner a #18392); the error form is NoLongerWaiting.
             "forbidden" -> stringResource(R.string.approvals_held_forbidden, who)
             "session_required", "denied" -> stringResource(R.string.approvals_held_session_ended, who)
             "way_not_allowed" -> stringResource(R.string.approvals_held_way_not_allowed)

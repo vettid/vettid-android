@@ -195,13 +195,16 @@ class DeviceApprovalsViewModelTest {
     }
 
     @Test
-    fun aNotFoundResultOfApproveIsNoLongerWaitingNotApproved() = runTest {
+    fun aNotFoundResultOfApproveIsTheVaultsAnswerNotNoLongerWaiting() = runTest {
+        // The result form (`{result: "not_found"}`): said as the vault's answer (owner a #18392). The error form is
+        // notFoundIsNoLongerWaiting.
         social.deviceDecision = DeviceDecision(result = "not_found")
         val m = vm(heldAsk(use))
         runCurrent()
         m.approve()
         runCurrent()
-        assertEquals(DeviceOutcome.NoLongerWaiting, m.uiState.value.outcome)
+        val o = m.uiState.value.outcome
+        assertTrue("$o", o is DeviceOutcome.Approved && o.result == "not_found" && o.way == null)
     }
 
     @Test
