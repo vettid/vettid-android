@@ -315,7 +315,7 @@ class DeviceAsksScreenTest {
     fun eachResultOfApproveHasItsText() {
         val cases = mapOf(
             "ok" to "Approved",
-            "not_found" to "This request is no longer waiting.",
+            "not_found" to "Approved, but your vault answered: \u2068not_found\u2069.", // owner a #18392
             null to "Your vault didn't say whether it was done.",
             "forbidden" to "Approved, but $bot no longer has a permission that covers it, or is paused, so nothing was done.",
             "session_required" to "Approved, but $bot's access ended first, so nothing was done.",

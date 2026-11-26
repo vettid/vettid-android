@@ -792,8 +792,8 @@ class ApprovalDetailViewModel @Inject constructor(
             a.isSession -> DeviceOutcome.Allowed(d.expiresAt)
             // AA8 "Referred again": not done; the new approval is listed as a new decision.
             way != null && d.result == "referred" -> DeviceOutcome.Referred
-            // The approval ended first (`{result: "not_found"}`, §10.3): not "Approved". A run's or a proxy's has its own text.
-            way == null && d.result == "not_found" -> DeviceOutcome.NoLongerWaiting
+            // A result of `not_found` is said as the vault's answer, as any other code (ANDROID-PLAN §4, owner a #18392):
+            // only the error `not_found` is "no longer waiting". A run's or a proxy's has its own text.
             else -> DeviceOutcome.Approved(d.result, way, pinRecorded = d.result == "ok" && pinNowRecorded(a), item = item)
         }
         local.update { it.copy(outcome = outcome) }
