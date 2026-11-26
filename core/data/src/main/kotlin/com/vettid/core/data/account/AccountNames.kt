@@ -212,9 +212,9 @@ object AccountNames {
 
     private fun isWhiteSpaceChar(c: Char) = isWhiteSpace(c.code)
 
-    /** The Unicode White_Space property (a fixed list). */
+    /** The Unicode White_Space property (a fixed list, the same on every phone and on the JVM). */
     @Suppress("MagicNumber")
-    private fun isWhiteSpace(cp: Int): Boolean = when (cp) {
+    internal fun isWhiteSpace(cp: Int): Boolean = when (cp) {
         in 0x09..0x0D, 0x20, 0x85, 0xA0, 0x1680, in 0x2000..0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000 -> true
         else -> false
     }

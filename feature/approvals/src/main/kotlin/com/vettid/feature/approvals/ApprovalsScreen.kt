@@ -289,6 +289,10 @@ private fun ApprovalRow(
         emphasized = a.needsDecision,
         onClick = { onOpen(a.key) },
         modifier = modifier.testTag("approval_${a.key}"),
+        // (0.1.145) A desktop's block or removal of a service: the label beside the service's name, not the desktop's.
+        below = (a as? Approval.DeviceRequest)
+            ?.takeIf { it.heldService && it.held is com.vettid.core.data.social.HeldRequest.DesktopConnection }
+            ?.let { d -> d.heldConnection?.let { name -> { DesktopServiceLine(name, d.heldConnectedOn) } } },
     )
 }
 
