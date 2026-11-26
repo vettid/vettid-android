@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme
@@ -220,6 +221,12 @@ internal fun DeviceRequestScreen(
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
+        // A service named in the title carries the label beside its name (ANDROID-PLAN 0.1.90), first under the title,
+        // before the "Desktop" kind word, so it cannot be read as the desktop's.
+        (held as? HeldShow.DesktopConnection)?.takeIf { it.service }?.let {
+            DesktopServiceLine(it.connection)
+            Spacer(Modifier.height(Spacing.m))
+        }
         waitingText(a.exp, now)?.takeIf { !pairing }?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("device_waiting"))
             Spacer(Modifier.height(Spacing.m))
@@ -286,11 +293,6 @@ private fun SessionFacts(a: Approval.DeviceRequest, who: String, state: Approval
 private fun HeldFacts(held: HeldShow?) {
     when (held) {
         is HeldShow.DesktopConnection -> {
-            // The title names the service; it carries the label here (ANDROID-PLAN 0.1.90).
-            if (held.service) {
-                Spacer(Modifier.height(Spacing.s))
-                com.vettid.core.ui.components.ServiceTag()
-            }
             // The desktop's own words, in their own box apart from the body (0.1.145), so they cannot pass for the app's.
             held.note?.let { note ->
                 Spacer(Modifier.height(Spacing.m))
@@ -298,11 +300,12 @@ private fun HeldFacts(held: HeldShow?) {
                     // Cleaned with its lines kept (DeviceAsks), each line isolated.
                     AccountNames.isolateLines(note),
                     style = MaterialTheme.typography.bodyLarge,
+                    // The tag first, so the node is the whole box with its border.
                     modifier = Modifier
+                        .testTag("desktop_note")
                         .fillMaxWidth()
                         .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
-                        .padding(Spacing.m)
-                        .testTag("desktop_note"),
+                        .padding(Spacing.m),
                 )
             }
         }
@@ -432,4 +435,17 @@ private fun wayResult(o: DeviceOutcome.Approved, who: String): String {
 internal fun untilText(until: Instant, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): String {
     val sameDay = until.atZone(zone).toLocalDate() == now.atZone(zone).toLocalDate()
     return if (sameDay) Times.time(until, zone) else Times.full(until, zone)
+}
+
+/** (0.1.145) A service a desktop's block or removal names: its name with the "Service" label beside it. */
+@Composable
+internal fun DesktopServiceLine(name: String, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Row(
+        modifier.testTag("desktop_service"),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(AccountNames.isolate(name), style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.width(Spacing.s))
+        com.vettid.core.ui.components.ServiceTag()
+    }
 }

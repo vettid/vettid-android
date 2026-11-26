@@ -2020,14 +2020,9 @@ class SocialManager internal constructor(
      */
     private fun withDesktopConnection(a: Approval, cs: List<ConnectionInfo>): Approval {
         val h = (a as? Approval.DeviceRequest)?.held as? HeldRequest.DesktopConnection ?: return a
-        val c = desktopTarget(h, cs)
-        return a.copy(heldConnection = c?.let { AccountNames.cleaned(it.displayName) }, heldService = c?.service == true)
+        val c = DesktopTargets.target(h, cs)
+        return a.copy(heldConnection = c?.let(DesktopTargets::name), heldService = c?.service == true)
     }
-
-    /** The connection [h] names when `connection.list` ([cs]) lists it as active or stale with names the app holds. */
-    private fun desktopTarget(h: HeldRequest.DesktopConnection, cs: List<ConnectionInfo>): ConnectionInfo? =
-        cs.firstOrNull { it.id == h.connectionId && (it.state == ConnectionState.ACTIVE || it.state == ConnectionState.STALE) }
-            ?.takeIf { AccountNames.cleaned(it.displayName) != null }
 
     /** Whether [req] may not be approved here: nothing is approved that the app does not show in full. */
     private suspend fun approvalRefused(req: Approval.DeviceRequest): Boolean {
@@ -2039,18 +2034,10 @@ class SocialManager internal constructor(
         val run = req.held as? HeldRequest.ItemRun
         val cwdRefused = run != null && run.hasCwd && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
         // (0.1.145) A desktop's block or removal only of a connection the list names (withDesktopConnection).
-        return unshown || unknownDevice || cwdRefused || !desktopResolved(req)
+        // Against the list as it is now, not only the derived approvals, which may lag a refresh that dropped or renamed it.
+        return unshown || unknownDevice || cwdRefused || !DesktopTargets.resolved(req, connectionsFlow.value)
     }
 
-    /**
-     * Whether [req], a desktop's held block or removal, may be approved: it was shown naming its connection, and the list as it
-     * is now still names it so (not only the derived approvals, which may lag a refresh that dropped or renamed it).
-     */
-    private fun desktopResolved(req: Approval.DeviceRequest): Boolean {
-        val h = req.held as? HeldRequest.DesktopConnection ?: return true
-        val now = desktopTarget(h, connectionsFlow.value)?.let { AccountNames.cleaned(it.displayName) }
-        return req.heldConnection != null && now == req.heldConnection
-    }
 
     private fun find(key: String): Approval? = approvals.value.firstOrNull { it.key == key }
         ?: denyDiffering(storedFlow.value.mapNotNull(::parsed), mismatchFlow.value)

@@ -182,6 +182,10 @@ object HeldRequests {
     @Suppress("ReturnCount") // each early return is one rule of "fail closed"
     private fun desktop(type: String?, pending: StrictObject?): HeldRequest {
         val p = pending?.takeIf { AgentApprovals.desktopShown(it) } ?: return HeldRequest.DesktopStepUp
+        // The role and type as the vault wrote them (the strict reading), and the same as the lenient one's.
+        if ((p["role"] as? StrictString)?.value != "desktop" || (p["type"] as? StrictString)?.value != type) {
+            return HeldRequest.DesktopStepUp
+        }
         val remove = when (type) {
             "connection.remove" -> true
             "block.add" -> false

@@ -114,6 +114,56 @@ class DesktopHeldConnectionFlowTest {
         assertTrue(ops.calls.isEmpty())
     }
 
+    /** Block with a note, block without, removal: the three forms, each against each kind of listed connection. */
+    private val forms = listOf(
+        "block.add" to """{"connection_id":"%s","note":"spam"}""",
+        "block.add" to """{"connection_id":"%s"}""",
+        "connection.remove" to """{"connection_id":"%s"}""",
+    )
+
+    @Test
+    fun everyFormIsNamedAndApprovedForEveryListedKind() = runTest {
+        listed = listOf(
+            FakeSocial.connection("act", "Sam", last = "Lee"),
+            FakeSocial.connection("stale", "Ada", state = ConnectionState.STALE, last = "Ng"),
+            FakeSocial.connection("svc", "Shop").copy(firstName = null, lastName = null, service = true),
+        )
+        val want = mapOf("act" to ("Sam Lee" to false), "stale" to ("Ada Ng" to false), "svc" to ("Shop" to true))
+        val m = manager()
+        m.refresh()
+        var n = 0
+        for ((type, body) in forms) for ((cid, named) in want) {
+            val id = "h${n++}"
+            m.onEvent(event("approval.pending", held(id, type, body.format(cid))))
+            runCurrent()
+            assertEquals("$type $cid", named.first, req(m, id).heldConnection)
+            assertEquals("$type $cid", named.second, req(m, id).heldService)
+            m.approveDeviceRequest("device:approval.pending:$id", null)
+            assertEquals("$type $cid", "approval.decide:$id:true", ops.calls.last())
+        }
+    }
+
+    @Test
+    fun anUnresolvedConnectionIsNeverApprovedInAnyForm() = runTest {
+        listed = listOf(
+            FakeSocial.connection("pending", "Pat", state = ConnectionState.PENDING),
+            FakeSocial.connection("blocked", "Bo", state = ConnectionState.BLOCKED),
+            FakeSocial.connection("nameless", "Nell").copy(firstName = null, lastName = null),
+        )
+        val m = manager()
+        m.refresh()
+        var n = 0
+        for ((type, body) in forms) for (cid in listOf("unknown", "pending", "blocked", "nameless")) {
+            val id = "u${n++}"
+            m.onEvent(event("approval.pending", held(id, type, body.format(cid))))
+            runCurrent()
+            assertNull("$type $cid", req(m, id).heldConnection)
+            val refused = runCatching { m.approveDeviceRequest("device:approval.pending:$id", null) }.exceptionOrNull() as? VaultFailure
+            assertEquals("$type $cid", FailureKind.NOT_SUPPORTED, refused?.kind)
+        }
+        assertTrue("nothing was sent", ops.calls.isEmpty())
+    }
+
     @Test
     fun anUnresolvedConnectionIsNeverApproved() = runTest {
         listed = listOf(

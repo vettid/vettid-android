@@ -68,7 +68,15 @@ class DesktopHeldConnectionTest {
         cases.forEachIndexed { i, h -> assertEquals("case $i", HeldRequest.DesktopStepUp, h) }
         // Without the strict reading (its source text not known) it is deny-only too.
         assertEquals(HeldRequest.DesktopStepUp, HeldRequests.of("desktop", "block.add", VaultJson.parseObject("""{"connection_id":"c1"}""".toByteArray())))
-        // Only a desktop's.
-        assertEquals(HeldRequest.Unshown, held("block.add", """{"connection_id":"c1"}""", role = "agent"))
+        // Only a desktop's: any other role, absent included, is not read as one.
+        for (role in listOf("agent", "app", "Desktop", "")) {
+            assertEquals(role, HeldRequest.Unshown, held("block.add", """{"connection_id":"c1"}""", role = role))
+        }
+        val raw = """{"approval_id":"a1","type":"block.add","body":{"connection_id":"c1"},"device_id":"desk1","name":"Laptop","exp":"2026-11-26T12:05:00Z"}"""
+        assertEquals("no role", HeldRequest.Unshown, HeldRequests.of(null, "block.add", VaultJson.parseObject("""{"connection_id":"c1"}""".toByteArray()), StrictJson.parseObject(raw)))
+        // The role and type of the strict reading must be the desktop's and the same as the lenient one's.
+        assertEquals("strict role", HeldRequest.DesktopStepUp, HeldRequests.of("desktop", "block.add", VaultJson.parseObject("""{"connection_id":"c1"}""".toByteArray()), StrictJson.parseObject(raw)))
+        val asRemove = raw.replace(""""type":"block.add"""", """"type":"connection.remove","role":"desktop"""")
+        assertEquals("strict type", HeldRequest.DesktopStepUp, HeldRequests.of("desktop", "block.add", VaultJson.parseObject("""{"connection_id":"c1"}""".toByteArray()), StrictJson.parseObject(asRemove)))
     }
 }
