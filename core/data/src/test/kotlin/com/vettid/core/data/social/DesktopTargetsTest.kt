@@ -9,11 +9,16 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
 /** ANDROID-PLAN 0.1.145: a desktop's block or removal is approved only while the list still names its connection as shown. */
+@RunWith(RobolectricTestRunner::class) // the key folds case with ICU, as AccountNames does
+@Config(sdk = [36])
 class DesktopTargetsTest {
     private val now = Instant.parse("2026-11-26T12:00:00Z")
 
@@ -95,7 +100,10 @@ class DesktopTargetsTest {
         // The same instant can be two days apart in another zone, and one in this one.
         val late = on("c2", "Sam", "Lee", 3).copy(createdAt = Instant.parse("2026-11-03T23:30:00Z"))
         assertNull(DesktopTargets.shown(block, listOf(on("c1", "Sam", "Lee", 3), late), utc))
-        assertEquals(nov3, DesktopTargets.shown(block, listOf(on("c1", "Sam", "Lee", 3), late), ZoneId.of("Asia/Tokyo"))?.connectedOn)
+        val tokyo = ZoneId.of("Asia/Tokyo")
+        assertEquals(nov3, DesktopTargets.shown(block, listOf(on("c1", "Sam", "Lee", 3), late), tokyo)?.connectedOn)
+        // Each row shows its own connection's date in the phone's zone: c2's is Nov 4 there.
+        assertEquals(nov3.plusDays(1), DesktopTargets.shown(block.copy(connectionId = "c2"), listOf(on("c1", "Sam", "Lee", 3), late), tokyo)?.connectedOn)
         // A connection without its name.
         assertNull(DesktopTargets.shown(block, listOf(on("c1", null, null, 3)), utc))
     }
@@ -122,6 +130,12 @@ class DesktopTargetsTest {
     @Test
     fun theKeyCleansCollapsesComposesAndFolds() {
         assertEquals(DesktopTargets.key("Straße Lee"), DesktopTargets.key("STRASSE  lee"))
+        // Unicode full case folding: the capital sharp s, the sharp s and SS meet; a dotless i stays apart from i.
+        assertEquals(DesktopTargets.key("WEI\u1E9E"), DesktopTargets.key("Weiß"))
+        assertEquals(DesktopTargets.key("Weiß"), DesktopTargets.key("WEISS"))
+        assertFalse(DesktopTargets.key("L\u0131la") == DesktopTargets.key("Lila"))
+        // Every White_Space run is one space, a no-break space and an ideographic one included.
+        assertEquals(DesktopTargets.key("Sam Lee"), DesktopTargets.key("Sam\u00A0\u3000Lee"))
         assertEquals(DesktopTargets.key("Zoë"), DesktopTargets.key("Zoe\u0308"))
         assertFalse(DesktopTargets.key("Sam Lee") == DesktopTargets.key("Sam Le"))
     }

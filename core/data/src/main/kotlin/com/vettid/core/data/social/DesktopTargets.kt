@@ -1,10 +1,10 @@
 package com.vettid.core.data.social
 
+import android.icu.lang.UCharacter
 import com.vettid.core.data.account.AccountNames
 import java.text.Normalizer
 import java.time.LocalDate
 import java.time.ZoneId
-import java.util.Locale
 
 /**
  * (ANDROID-PLAN 0.1.145, 0.1.146) The connection a desktop's held block or removal names, as `connection.list` has it: listed
@@ -54,16 +54,24 @@ internal object DesktopTargets {
 
     /**
      * Two shown names are the same (0.1.146) when equal after cleaning (VAULT-MESSAGING §10.8 steps 1-3, one line), each run of
-     * White_Space one space, NFC and case folding. The folding is upper case then lower case in the root locale (the full,
-     * locale-free mapping: "ß" and "SS" meet as "ss"), NFC again after it, so it needs no ICU and is the same on every phone.
+     * White_Space one space ([AccountNames.isWhiteSpace]'s fixed list), NFC and Unicode full case folding (ICU, as
+     * [AccountNames.lookalikeKey] does: "ẞ", "ß" and "SS" meet as "ss"; a dotless "ı" stays apart from "i").
      */
     fun key(name: String): String {
-        val one = WHITE_SPACE.replace(AccountNames.cleaned(name).orEmpty(), " ")
-        val folded = Normalizer.normalize(one, Normalizer.Form.NFC).uppercase(Locale.ROOT).lowercase(Locale.ROOT)
-        return Normalizer.normalize(folded, Normalizer.Form.NFC)
+        val one = buildString {
+            var space = false
+            AccountNames.cleaned(name).orEmpty().codePoints().forEach { cp ->
+                if (AccountNames.isWhiteSpace(cp)) {
+                    space = true
+                } else {
+                    if (space && isNotEmpty()) append(' ')
+                    space = false
+                    appendCodePoint(cp)
+                }
+            }
+        }
+        return Normalizer.normalize(UCharacter.foldCase(Normalizer.normalize(one, Normalizer.Form.NFC), true), Normalizer.Form.NFC)
     }
-
-    private val WHITE_SPACE = Regex("\\p{IsWhite_Space}+")
 
     private fun live(c: ConnectionInfo) = c.state == ConnectionState.ACTIVE || c.state == ConnectionState.STALE
 }

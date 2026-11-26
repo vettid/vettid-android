@@ -21,6 +21,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.lang.reflect.Proxy
 import java.time.Clock
 import java.time.Instant
@@ -31,6 +34,8 @@ import java.time.ZoneOffset
  * names the app holds), and is approved only then; otherwise it stays deny-only, enforced where it is sent.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class) // the name key folds case with ICU
+@Config(sdk = [36])
 class DesktopHeldConnectionFlowTest {
     private val now = Instant.parse("2026-11-26T12:00:00Z")
 
@@ -162,6 +167,35 @@ class DesktopHeldConnectionFlowTest {
             assertEquals("$type $cid", FailureKind.NOT_SUPPORTED, refused?.kind)
         }
         assertTrue("nothing was sent", ops.calls.isEmpty())
+    }
+
+    @Test
+    fun namesakesCarryTheirOwnDatesAndTheSameDayIsRefused() = runTest {
+        val zone = java.time.ZoneId.systemDefault()
+        fun day(c: ConnectionInfo) = c.createdAt!!.atZone(zone).toLocalDate()
+        val a = FakeSocial.connection("c1", "Sam", last = "Lee").copy(createdAt = Instant.parse("2026-11-03T12:00:00Z"))
+        val b = FakeSocial.connection("c2", "Sam", last = "Lee").copy(createdAt = Instant.parse("2026-11-10T12:00:00Z"))
+        listed = listOf(a, b)
+        val m = manager()
+        m.refresh()
+        m.onEvent(event("approval.pending", held("h1", "block.add", """{"connection_id":"c1"}""")))
+        m.onEvent(event("approval.pending", held("h2", "connection.remove", """{"connection_id":"c2"}""")))
+        runCurrent()
+        assertEquals(day(a), req(m, "h1").heldConnectedOn)
+        assertEquals(day(b), req(m, "h2").heldConnectedOn)
+        m.approveDeviceRequest("device:approval.pending:h1", null)
+        m.approveDeviceRequest("device:approval.pending:h2", null)
+        assertEquals(listOf("approval.decide:h1:true", "approval.decide:h2:true"), ops.calls)
+        // Connected the same day: neither can be told apart, so both are unnamed and refused.
+        listed = listOf(a, b.copy(createdAt = a.createdAt))
+        m.refresh()
+        m.onEvent(event("approval.pending", held("h3", "block.add", """{"connection_id":"c1"}""")))
+        runCurrent()
+        assertNull(req(m, "h3").heldConnection)
+        assertNull(req(m, "h3").heldConnectedOn)
+        val refused = runCatching { m.approveDeviceRequest("device:approval.pending:h3", null) }.exceptionOrNull() as? VaultFailure
+        assertEquals(FailureKind.NOT_SUPPORTED, refused?.kind)
+        assertEquals(2, ops.calls.size)
     }
 
     @Test

@@ -165,6 +165,18 @@ class DesktopConnectionRowsTest {
     }
 
     @Test
+    fun aPersonsListRowHasNoServiceLine() {
+        rule.setContent {
+            ApprovalsScreen(
+                ApprovalsUiState(loading = false, approvals = listOf(held(HeldRequest.DesktopConnection(true, "c1", null)))),
+                com.vettid.core.ui.components.ShellChrome("Sam", onMenuClick = {}, onAvatarClick = {}),
+            )
+        }
+        rule.onNodeWithText("$laptop wants to remove $sam").assertExists()
+        rule.onNodeWithTag("desktop_service", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
     fun theNoteIsInABorderedBox() {
         show(state(held(HeldRequest.DesktopConnection(false, "c1", "spam"))))
