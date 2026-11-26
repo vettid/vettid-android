@@ -696,14 +696,22 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** The code [isOpenTransferCode] recognises as the open transfer's own (whatever its exp); null: none. */
     var openTransferCode: String? = null
 
+    /** When set, [isOpenTransferCode] waits for it after recording the call (a code check still running). */
+    var openCodeGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
     override suspend fun isOpenTransferCode(code: String): Boolean {
         call("isOpenTransferCode")
+        openCodeGate?.await()
         return code == openTransferCode
     }
+
+    /** When set, [transferIn] throws it (the real repository refuses a new code with VAULT_EXISTS once the move landed). */
+    var transferInFailure: VaultFailure? = null
 
     override suspend fun transferIn(code: String): String {
         call("transferIn")
         lastTransferCode = code
+        transferInFailure?.let { throw it }
         return transferHsResp?.await() ?: transferSas
     }
 
@@ -716,7 +724,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** What [takeTransferStopped] answers, once (a move that stopped for its `user_guid` before a restart). */
     var transferStopped = false
 
-    override suspend fun takeTransferStopped(): Boolean = transferStopped.also { transferStopped = false }
+    /** When set, [takeTransferStopped] waits for it before it reads. */
+    var stoppedGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    override suspend fun takeTransferStopped(): Boolean {
+        stoppedGate?.await()
+        return transferStopped.also { transferStopped = false }
+    }
 
     /** When set, [abandonTransferIn] throws it (refused at minute 10, or a drop whose save failed). */
     var abandonFailure: Throwable? = null
@@ -746,8 +760,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** When set, [transferInWaiting] throws it (the screen cannot read the transfer back). */
     var waitingFailure: VaultFailure? = null
 
+    /** Gates for the next [transferInWaiting] reads, one each in order: the read waits for it, then reads. */
+    val waitingGates = ArrayDeque<kotlinx.coroutines.CompletableDeferred<Unit>>()
+
     /** A read: not recorded in [calls]. */
     override suspend fun transferInWaiting(): com.vettid.core.data.vault.TransferInWaiting? {
+        waitingGates.removeFirstOrNull()?.await()
         waitingFailure?.let { throw it }
         return waitingTransfer
     }
