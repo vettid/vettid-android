@@ -11,7 +11,6 @@ import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
@@ -20,12 +19,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Rule
 import org.junit.Test
-import java.time.Clock
-import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
 
 /**
  * ANDROID-PLAN 0.1.141 "Back while the transfer waits" and 0.1.142 "A different code while the transfer waits": while a
@@ -33,44 +27,7 @@ import java.time.ZoneOffset
  * different code asks first before minute 10 and is refused from it, nothing dropped.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class TransferInWhileWaitingTest {
-    @get:Rule
-    val main = MainDispatcherRule()
-
-    private val vault = FakeVault(AppPhase.Setup(SetupStage.TRANSFER_WAITING))
-    private val start: Instant = Instant.parse("2026-11-24T12:00:00Z")
-
-    private fun code(relay: String) = String(
-        InviteQr(
-            InviteKind.APP, relay, "abcdefghijklmnopqrstuvwxyz", ByteArray(32) { 1 }, ByteArray(32) { 2 },
-            start.plusSeconds(3_600).epochSecond,
-        ).marshal(),
-    )
-
-    private val other = code("https://relay-other.vettid.test")
-
-    /** A transfer waiting since [agoSeconds] before the test's start, and a screen on the test's clock. */
-    private fun TestScope.waitingFor(agoSeconds: Long): TransferInViewModel {
-        vault.waitingTransfer = TransferInWaiting("042817", start.minusSeconds(agoSeconds))
-        val vm = TransferInViewModel(vault, vault, vault)
-        vm.clock = object : Clock() {
-            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
-
-            override fun getZone(): ZoneId = ZoneOffset.UTC
-
-            override fun withZone(zone: ZoneId): Clock = this
-        }
-        return vm
-    }
-
-    /** Pasted at the first step, before the screen has read the transfer back (as after a restart). */
-    private fun TestScope.pasteBeforeTheReadBack(vm: TransferInViewModel, text: String) {
-        vm.paste()
-        vm.setInput(text)
-        vm.submitInput()
-        advanceTimeBy(100)
-    }
-
+class TransferInWhileWaitingTest : TransferInWaitingFixture() {
     @Test
     fun backWhileTheTransferIsReadBackKeepsTheScreen() = runTest {
         val vm = waitingFor(60)
@@ -291,17 +248,6 @@ class TransferInWhileWaitingTest {
         assertFalse("abandonTransferIn" in vault.calls)
     }
 
-    /** A screen whose first read-back failed, on the paste step, ready for a code. */
-    private fun TestScope.readBackFailedThenPasted(text: String): TransferInViewModel {
-        vault.waitingFailure = FakeVault.failure(FailureKind.OTHER, "x")
-        val vm = waitingFor(120)
-        advanceTimeBy(100)
-        vault.waitingFailure = null
-        vm.paste()
-        vm.setInput(text)
-        return vm
-    }
-
     /**
      * (The #446 pair, L2) The waiting transfer's own code, re-scanned after its read-back failed, connects again (the
      * repository recognises it): Cancel (and Back) during that connection shows the transfer with "Cancel the move?", and
@@ -495,6 +441,7 @@ class TransferInWhileWaitingTest {
             assertEquals(TransferInStep.SESSION_ENDED, vm.uiState.value.step)
             vm.again()
             assertTrue("Back works after", vm.back())
+            assertEquals("Back went to the first step", TransferInStep.INTRO, vm.uiState.value.step)
         }
     }
 

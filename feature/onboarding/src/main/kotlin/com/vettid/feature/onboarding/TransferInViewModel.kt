@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -171,6 +172,24 @@ class TransferInViewModel @Inject constructor(
      */
     private var readBackSkipped = false
 
+    /**
+     * The wait for a skipped read-back's transfer, started while a code check's text stays on screen ([waitBehind]): an
+     * approval that lands meanwhile still ends the move, and Back still goes to the transfer ([madeUpReadBack]).
+     */
+    private var behind: Job? = null
+
+    /**
+     * Bumped by what supersedes a stopped move not yet told ([supersedeStoppedMove]): a code started, or a live transfer
+     * seen. A stopped move read before the last bump is never told.
+     */
+    private var superseded = 0
+
+    /**
+     * A stopped move read while a code check was busy: told once that check starts nothing ([madeUpStoppedMove]); cleared
+     * by what supersedes it.
+     */
+    private var stoppedMoveOwed = false
+
     /** The step a different code waiting behind "Cancel the move?" came from (scan or paste), to start from there. */
     private var pendingFrom = TransferInStep.SCAN
 
@@ -198,6 +217,8 @@ class TransferInViewModel @Inject constructor(
     /** The waiting transfer [w] on screen again: its code, the countdown from its stored start, and the wait for its approval. */
     private fun resumeWaiting(w: TransferInWaiting) {
         readBackSkipped = false
+        supersedeStoppedMove()
+        behind = null
         val deadline = w.startedAt.plus(WINDOW)
         state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = w.sas, deadline = deadline) }
         waiter?.cancel()
@@ -209,21 +230,46 @@ class TransferInViewModel @Inject constructor(
      * existing "The move stopped on this phone", once (the repository clears it as it is read).
      */
     private suspend fun toldStoppedMove() {
-        val step = state.value.step
-        val first = step == TransferInStep.INTRO || step == TransferInStep.SCAN || step == TransferInStep.PASTE
-        if (!first || state.value.busy || waiter?.isActive == true) return
+        if (!onAFirstStep() || waiter?.isActive == true) return
+        val at = superseded
         val stopped = try {
             move.takeTransferStopped()
         } catch (_: VaultFailure) {
             false
         }
-        // (The #446 review, L3) A code started meanwhile supersedes the stopped move: not shown over it.
-        val now = state.value.step
-        val firstStep = now == TransferInStep.INTRO || now == TransferInStep.SCAN || now == TransferInStep.PASTE
-        val still = firstStep && !state.value.busy && waiter?.isActive != true
-        if (stopped && still) {
-            state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
+        if (!stopped) return
+        when {
+            // (The #446 review, L3; #452's pair, L3) A code started, or a live transfer seen, while it was read supersedes
+            // the stopped move: not shown over them or their ending.
+            superseded != at || !onAFirstStep() -> Unit
+            // (#18128) A code being checked: read once, and told when that check starts nothing.
+            state.value.busy -> stoppedMoveOwed = true
+            else -> showStoppedMove()
         }
+    }
+
+    /** A code started, or a live transfer seen: a stopped move read before now is never told. */
+    private fun supersedeStoppedMove() {
+        superseded++
+        stoppedMoveOwed = false
+    }
+
+    /**
+     * (#18128) A code check that started nothing, after a stopped move was read while it ran: the move is told now (the
+     * screen is then on a first step, and nothing waits: the mark is read only when no transfer does).
+     */
+    private fun madeUpStoppedMove() {
+        if (!stoppedMoveOwed) return
+        stoppedMoveOwed = false
+        if (onAFirstStep()) showStoppedMove()
+    }
+
+    private fun showStoppedMove() =
+        state.update { it.copy(step = TransferInStep.SESSION_ENDED, sas = null, secondsLeft = 0, settling = false) }
+
+    private fun onAFirstStep(): Boolean {
+        val step = state.value.step
+        return step == TransferInStep.INTRO || step == TransferInStep.SCAN || step == TransferInStep.PASTE
     }
 
     override fun scan() = state.update { it.copy(step = TransferInStep.SCAN, inputProblem = null, error = null) }
@@ -310,8 +356,16 @@ class TransferInViewModel @Inject constructor(
             state.update { it.copy(busy = false) }
             val step = state.value.step
             when {
-                !own -> state.update { it.copy(inputProblem = FailureKind.INVITE_EXPIRED) } // shown; Back goes to the transfer
-                step != TransferInStep.SCAN && step != TransferInStep.PASTE -> madeUpReadBack() // left meanwhile
+                !own -> {
+                    state.update { it.copy(inputProblem = FailureKind.INVITE_EXPIRED) } // shown; Back goes to the transfer
+                    val w = readWaiting()
+                    if (w == null) madeUpStoppedMove() else supersedeStoppedMove() // a live transfer: no stopped move
+                    waitBehind(w)
+                }
+                step != TransferInStep.SCAN && step != TransferInStep.PASTE -> {
+                    madeUpReadBack() // left meanwhile
+                    if (waiting == null) madeUpStoppedMove() else supersedeStoppedMove()
+                }
                 waiting != null -> resumeWaiting(waiting) // its own move, still waiting: no new connection
                 else -> begin(text)
             }
@@ -329,32 +383,54 @@ class TransferInViewModel @Inject constructor(
         if (state.value.busy) return
         state.update { it.copy(busy = true) }
         viewModelScope.launch {
-            val waiting = try {
-                move.transferInWaiting()
-            } catch (_: VaultFailure) {
-                null
-            }
-            val own = waiting != null && try {
-                move.isOpenTransferCode(text)
-            } catch (_: VaultFailure) {
-                false
-            }
+            val read = readWaitingResult()
+            val waiting = read.getOrNull()
+            val own = waiting != null && isOwnCode(text)
+            // Nothing read waiting: the move may be landing behind the text (a failed read may hide that too).
+            val stillLanding = waiting == null && !letTheWaitBehindEnd(join = read.isSuccess)
             state.update { it.copy(busy = false) }
+            if (waiting != null) supersedeStoppedMove() // a live transfer: no stopped move
             val step = state.value.step
-            if (step != TransferInStep.SCAN && step != TransferInStep.PASTE) return@launch madeUpReadBack() // left meanwhile
+            if (step != TransferInStep.SCAN && step != TransferInStep.PASTE) {
+                madeUpReadBack() // left meanwhile
+                if (waiting == null) madeUpStoppedMove()
+                return@launch
+            }
             val tenMinutes = waiting?.startedAt?.plus(WINDOW)
             when {
                 // (The #446 pair, L2) The waiting transfer's own code goes back to it, with no new connection (CONNECTING
                 // would let Cancel drop it unconfirmed).
                 own && waiting != null -> resumeWaiting(waiting)
+                // The wait behind the text still runs (it outlived its bound, or the read failed): nothing is started over
+                // it (a new code would cancel it as the move ends, and the repository refuses one while a transfer waits);
+                // the busy text, as from minute 10, and it goes on.
+                stillLanding -> state.update {
+                    it.copy(error = FailureKind.BUSY, errorCode = MoveRepository.CODE_TRANSFER_SETTLING, errorShown = null)
+                }
                 tenMinutes == null -> begin(text)
                 Instant.now(clock).isBefore(tenMinutes) -> askBeforeAnotherCode(text, tenMinutes)
                 // Shown with the busy text; Back goes to the waiting transfer ([back], [madeUpReadBack]).
-                else -> state.update {
-                    it.copy(error = FailureKind.BUSY, errorCode = MoveRepository.CODE_TRANSFER_SETTLING, errorShown = null)
+                else -> {
+                    state.update {
+                        it.copy(error = FailureKind.BUSY, errorCode = MoveRepository.CODE_TRANSFER_SETTLING, errorShown = null)
+                    }
+                    waitBehind(waiting)
                 }
             }
         }
+    }
+
+    /** The waiting transfer, none, or the read's failure (none and a failure are told apart). */
+    private suspend fun readWaitingResult(): Result<TransferInWaiting?> = try {
+        Result.success(move.transferInWaiting())
+    } catch (e: VaultFailure) {
+        Result.failure(e)
+    }
+
+    private suspend fun isOwnCode(text: String): Boolean = try {
+        move.isOpenTransferCode(text)
+    } catch (_: VaultFailure) {
+        false
     }
 
     private suspend fun readWaiting(): TransferInWaiting? = try {
@@ -363,11 +439,44 @@ class TransferInViewModel @Inject constructor(
         null
     }
 
+    /**
+     * (#18128) A skipped read-back's transfer [w], left behind a code check's text: its approval is waited for meanwhile,
+     * the text kept. Only while nothing else waits for it.
+     */
+    private fun waitBehind(w: TransferInWaiting?) {
+        if (w == null || !readBackSkipped) return
+        if (waiter?.isActive == true || !onAFirstStep()) return
+        val deadline = w.startedAt.plus(WINDOW)
+        state.update { it.copy(deadline = deadline) }
+        // No countdown: nothing of it is on screen, and its end would close a confirmation the closer owns.
+        waiter = viewModelScope.launch {
+            try {
+                waitForApproval(deadline, counted = false) { move.awaitTransferIn() }
+            } finally {
+                if (behind === coroutineContext[Job]) behind = null
+            }
+        }
+        behind = waiter
+    }
+
+    /**
+     * (#452's pair, L1) A check read that nothing waits any more while the wait behind the text runs: the move may be
+     * landing (the pending transfer cleared, DONE not yet written). That wait ends first, so a new code cannot cancel it as
+     * the move ends. True once no such wait runs (none, or, with [join], it ended within [BEHIND_ENDING_MS]).
+     */
+    private suspend fun letTheWaitBehindEnd(join: Boolean): Boolean {
+        val b = behind ?: return true
+        if (join && b.isActive && waiter === b) withTimeoutOrNull(BEHIND_ENDING_MS) { b.join() }
+        return !(b.isActive && waiter === b)
+    }
+
     /** (The #446 pair, L4) A code check that started nothing, after the first read-back left a waiting transfer to it. */
     private suspend fun madeUpReadBack(orFirstStep: Boolean = false) {
         if (!readBackSkipped) return
+        // A wait already shown, or a confirmation, keeps the flag ([waitBehind]'s wait is not shown: Back goes on).
+        val shownWait = waiter?.isActive == true && waiter !== behind
+        if (state.value.confirmCancel || shownWait) return
         readBackSkipped = false
-        if (state.value.confirmCancel || waiter?.isActive == true) return
         val w = readWaiting()
         val step = state.value.step
         val first = step == TransferInStep.INTRO || step == TransferInStep.SCAN || step == TransferInStep.PASTE
@@ -382,6 +491,7 @@ class TransferInViewModel @Inject constructor(
     private fun askBeforeAnotherCode(text: String, tenMinutes: Instant) {
         pendingFrom = state.value.step
         readBackSkipped = false // the confirmation leads back to the waiting transfer or abandons it
+        supersedeStoppedMove()
         state.update { it.copy(confirmCancel = true, pendingCode = text, error = null) }
         pendingCloser?.cancel()
         pendingCloser = viewModelScope.launch {
@@ -392,6 +502,8 @@ class TransferInViewModel @Inject constructor(
 
     private fun begin(text: String) {
         val from = state.value.step
+        supersedeStoppedMove() // a code started supersedes a stopped move not yet told
+        behind = null
         state.update { it.copy(step = TransferInStep.CONNECTING, busy = true, inputProblem = null, error = null, sas = null) }
         waiter?.cancel()
         waiter = viewModelScope.launch {
@@ -404,6 +516,11 @@ class TransferInViewModel @Inject constructor(
                 move.transferIn(text)
             } catch (e: VaultFailure) {
                 connectFailed(from, e)
+                // (#18128) Refused while a skipped read-back's transfer still waits: its approval is waited for again.
+                if (readBackSkipped) {
+                    if (waiter === coroutineContext[Job]) waiter = null // this connection's own job, ending
+                    waitBehind(readWaiting())
+                }
                 return@launch
             }
             // The countdown from the stored start (what the repository judges by), not from before the claim.
@@ -426,17 +543,21 @@ class TransferInViewModel @Inject constructor(
      * to the one 11-minute deadline (A6 audit N1; VAULT-MESSAGING 0.56.2 §11.14.10 rule 5), where the repository
      * collects for about 90 s (the relay's visibility timeout + 25 s + 5 s) and then completes or drops; nothing here extends it.
      */
-    private suspend fun waitForApproval(deadline: Instant, wait: suspend () -> Unit) {
-        startTicker(deadline)
+    private suspend fun waitForApproval(deadline: Instant, counted: Boolean = true, wait: suspend () -> Unit) {
+        if (counted) startTicker(deadline)
         try {
             wait()
-            ticker?.cancel()
+            if (counted) ticker?.cancel()
             val phoneSecret = vault.usesPhoneSecret
             state.update {
-                it.copy(step = TransferInStep.DONE, sas = null, phoneSecret = phoneSecret, confirmCancel = false, pendingCode = null)
+                // No code check's text over the move's end (the busy text behind which it was waited for).
+                it.copy(
+                    step = TransferInStep.DONE, sas = null, phoneSecret = phoneSecret, confirmCancel = false, pendingCode = null,
+                    inputProblem = null, error = null, errorCode = null, errorShown = null,
+                )
             }
         } catch (e: VaultFailure) {
-            ticker?.cancel()
+            if (counted) ticker?.cancel()
             state.update {
                 when (e.kind) {
                     FailureKind.REJECTED -> it.copy(step = TransferInStep.REJECTED, sas = null)
@@ -449,6 +570,14 @@ class TransferInViewModel @Inject constructor(
                         }
                     // The steps after the approval (the take-over): kept, and resumed (here, or at the next start).
                     else -> it.copy(step = TransferInStep.FINISHING_FAILED, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
+                }.let { ended ->
+                    // (#18128) No dialog, and no code check's text, over an ending; a finishing failure keeps its own error.
+                    val closed = ended.copy(confirmCancel = false, pendingCode = null, inputProblem = null)
+                    if (ended.step == TransferInStep.FINISHING_FAILED) {
+                        closed
+                    } else {
+                        closed.copy(error = null, errorCode = null, errorShown = null)
+                    }
                 }
             }
         }
@@ -472,7 +601,7 @@ class TransferInViewModel @Inject constructor(
                 bad -> it.copy(step = from, busy = false, inputProblem = e.kind)
                 e.code == MoveRepository.CODE_HS_UNANSWERED -> it.copy(step = TransferInStep.NOT_ANSWERED, busy = false)
                 else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code, errorShown = e.shownCode)
-            }
+            }.copy(confirmCancel = false) // (#18128) a "Cancel the move?" of the connection ends with it
         }
     }
 
@@ -515,11 +644,9 @@ class TransferInViewModel @Inject constructor(
      */
     private fun cancelConnecting() {
         viewModelScope.launch {
-            val read = try {
-                Result.success(move.transferInWaiting())
-            } catch (e: VaultFailure) {
-                Result.failure(e)
-            }
+            val read = readWaitingResult()
+            // (#452's pair, L2) A confirmed abandon started meanwhile (the step stays CONNECTING then) decides alone.
+            if (state.value.abandoning) return@launch
             val w = read.getOrNull()
             val beforeTen = { t: TransferInWaiting? -> t == null || Instant.now(clock).isBefore(t.startedAt.plus(WINDOW)) }
             when (state.value.step) {
@@ -546,7 +673,9 @@ class TransferInViewModel @Inject constructor(
         val next = s.pendingCode
         pendingCloser?.cancel()
         state.update { it.copy(confirmCancel = false, pendingCode = null) }
-        if (next == null && s.step != TransferInStep.COMPARE) return drop()
+        // (#18128) A connection's confirmation (a transfer may wait, not read back) goes through the abandon as COMPARE's
+        // does: refused from minute 10, it goes back to the waiting or checking screen, not the first step.
+        if (next == null && s.step != TransferInStep.COMPARE && s.step != TransferInStep.CONNECTING) return drop()
         abandonThen(next)
     }
 
@@ -571,6 +700,7 @@ class TransferInViewModel @Inject constructor(
     private fun abandonThen(next: String?) {
         waiter?.cancel()
         ticker?.cancel()
+        behind = null
         state.update { it.copy(busy = true, abandoning = true) }
         viewModelScope.launch {
             val done = try {
@@ -669,5 +799,8 @@ class TransferInViewModel @Inject constructor(
     private companion object {
         val WINDOW: Duration = com.vettid.core.data.vault.TransferInWait.VAULT_WINDOW
         const val TICK_MS = 1000L
+
+        /** How long a new code waits for the wait behind the text to end, when nothing waits any more. */
+        const val BEHIND_ENDING_MS = 5_000L
     }
 }

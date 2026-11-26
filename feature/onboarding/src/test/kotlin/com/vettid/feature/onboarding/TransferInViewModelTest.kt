@@ -370,6 +370,15 @@ class TransferInViewModelTest {
         val expired = qr(exp = Instant.now().minusSeconds(60))
         vault.openTransferCode = expired
         val vm = TransferInViewModel(vault, vault, vault)
+        // The countdown runs when the test ends: on the test's virtual time, or `runTest` spins for 10 real minutes.
+        val start = Instant.now()
+        vm.clock = object : Clock() {
+            override fun instant(): Instant = start.plusMillis(testScheduler.currentTime)
+
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+
+            override fun withZone(zone: ZoneId): Clock = this
+        }
         vm.scan()
         vm.scanned(expired)
         advanceTimeBy(100)
