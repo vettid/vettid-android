@@ -545,6 +545,14 @@ sealed interface Approval {
         val replaces: String? = null,
         /** Known only from its feed item (the process ended, `pending.list` not read): deny-only, or Allow for a session. */
         val fromFeed: Boolean = false,
+        /**
+         * (0.1.145) For a desktop's held block or removal ([HeldRequest.DesktopConnection]): the connection it names, its
+         * "First Last" (or a service's name) from `connection.list`, and whether it is a service; unset when the connection
+         * is not listed as active or stale, or its names are not held. Not [connectionName]: the entry is the desktop's,
+         * and what names an entry generically (the approvals indicator, a row's "from") must not name the target.
+         */
+        val heldConnection: String? = null,
+        val heldService: Boolean = false,
     ) : Approval {
         override val key: String get() = "device:$type:$id"
 

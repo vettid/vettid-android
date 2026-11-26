@@ -118,6 +118,11 @@ internal fun deviceTitle(
                 ShownString.inline(h.proxy.host, stringResource(com.vettid.core.ui.R.string.core_ui_string_empty)),
                 proxyLength(h.proxy.seconds),
             )
+            is HeldShow.DesktopConnection -> stringResource(
+                if (h.remove) R.string.approvals_desktop_remove_title else R.string.approvals_desktop_block_title,
+                who,
+                AccountNames.isolate(h.connection),
+            )
             HeldShow.Desktop, HeldShow.Other, HeldShow.Gone -> stringResource(R.string.approvals_held_other_title, who)
         }
     }
@@ -183,6 +188,10 @@ internal fun DeviceRequestScreen(
             // Shown on AA8's own screen (AgentWayScreen).
             is HeldShow.Run, is HeldShow.Proxy -> null
             HeldShow.Desktop -> stringResource(R.string.approvals_held_desktop_body)
+            is HeldShow.DesktopConnection -> stringResource(
+                if (held.remove) R.string.approvals_desktop_remove_body else R.string.approvals_desktop_block_body,
+                AccountNames.isolate(held.connection),
+            )
             HeldShow.Gone -> stringResource(R.string.approvals_held_gone_body, who)
             HeldShow.Other, null -> stringResource(R.string.approvals_held_other_body)
         }
@@ -276,6 +285,27 @@ private fun SessionFacts(a: Approval.DeviceRequest, who: String, state: Approval
 @Composable
 private fun HeldFacts(held: HeldShow?) {
     when (held) {
+        is HeldShow.DesktopConnection -> {
+            // The title names the service; it carries the label here (ANDROID-PLAN 0.1.90).
+            if (held.service) {
+                Spacer(Modifier.height(Spacing.s))
+                com.vettid.core.ui.components.ServiceTag()
+            }
+            // The desktop's own words, in their own box apart from the body (0.1.145), so they cannot pass for the app's.
+            held.note?.let { note ->
+                Spacer(Modifier.height(Spacing.m))
+                Text(
+                    // Cleaned with its lines kept (DeviceAsks), each line isolated.
+                    AccountNames.isolateLines(note),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+                        .padding(Spacing.m)
+                        .testTag("desktop_note"),
+                )
+            }
+        }
         is HeldShow.Use -> {
             Spacer(Modifier.height(Spacing.m))
             // In a box with its label and length, so that the agent's text cannot pass for one of the app's own lines.

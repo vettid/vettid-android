@@ -63,6 +63,12 @@ object AgentApprovals {
      */
     fun plainShown(p: StrictObject): Boolean = named(p) && p["body"] is StrictObject && MEANINGFUL.none { p.has(it) }
 
+    /**
+     * (ANDROID-PLAN 0.1.145) A desktop's held block or removal: its envelope names the device and itself as AA8 "Fail closed"'s
+     * 0.1.139 rule says, has a body, and carries none of the members that change what approving means (an agent's).
+     */
+    fun desktopShown(p: StrictObject): Boolean = plainShown(p)
+
     /** An `item.get`'s envelope: known members only, no `proxy` or `replaces`, and `flags` at most `history`. */
     @Suppress("ReturnCount") // each early false is one rule of AA8's list
     fun getShown(p: StrictObject): Boolean {

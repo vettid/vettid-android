@@ -1593,6 +1593,14 @@ object ScreenCatalog {
         "approvals.held_desktop" to {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.DesktopStepUp).copy(role = "desktop")), DecisionActions())
         },
+        "approvals.held_desktop_block" to {
+            val h = com.vettid.core.data.social.HeldRequest.DesktopConnection(false, "c1", "Sends spam")
+            ApprovalDetailScreen(agentState(agentHeld(h).copy(role = "desktop", deviceName = "Laptop", heldConnection = "Sam Rivera")), DecisionActions())
+        },
+        "approvals.held_desktop_remove" to {
+            val h = com.vettid.core.data.social.HeldRequest.DesktopConnection(true, "c1", null)
+            ApprovalDetailScreen(agentState(agentHeld(h).copy(role = "desktop", deviceName = "Laptop", heldConnection = "Sam Rivera")), DecisionActions())
+        },
         "approvals.held_other" to {
             ApprovalDetailScreen(agentState(agentHeld(com.vettid.core.data.social.HeldRequest.Unshown)), DecisionActions())
         },

@@ -1,6 +1,7 @@
 package com.vettid.core.data.social
 
 import com.vettid.core.crypto.json.JsonObject as StrictObject
+import com.vettid.core.crypto.json.JsonString as StrictString
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
@@ -83,11 +84,22 @@ sealed interface HeldRequest {
     /** A desktop's step-up request (decision 9): deny-only. */
     data object DesktopStepUp : HeldRequest
 
+    /**
+     * (ANDROID-PLAN 0.1.145) A desktop's held `block.add{connection_id, note?}` ([remove] false) or
+     * `connection.remove{connection_id}` ([remove] true), read strictly ("The desktop block and removal rows fail closed").
+     * Approvable only once [connectionId] names a connection in `connection.list` whose names the app holds; else, as a
+     * [DesktopStepUp], deny-only. [note] is the desktop's, as sent (at most 256 bytes).
+     */
+    data class DesktopConnection(val remove: Boolean, val connectionId: String, val note: String?) : HeldRequest {
+        override fun toString(): String = "DesktopConnection(remove=$remove)"
+    }
+
     /** Any other type or op, or a body that does not read: deny-only. */
     data object Unshown : HeldRequest
 
     /** Whether the request can be approved here: only what the app shows in full (a run and a proxy on AA8's screens). */
-    val approvable: Boolean get() = this is ItemUse || this is ItemGet || this is Catalog || this is ItemRun || this is ItemProxy
+    val approvable: Boolean get() =
+        this is ItemUse || this is ItemGet || this is Catalog || this is ItemRun || this is ItemProxy || this is DesktopConnection
 }
 
 /** A file a run is handed (AA9, `body.inputs`): its path on the computer and its size; it is named by its last element. */
@@ -151,7 +163,7 @@ object HeldRequests {
      * know; an `item.use` and a `catalog` ignore an unknown member, but not one that changes what approving means.
      */
     fun of(role: String?, type: String?, body: JsonObject?, pending: StrictObject? = null): HeldRequest = when {
-        role == "desktop" -> HeldRequest.DesktopStepUp
+        role == "desktop" -> desktop(type, pending)
         role != "agent" || type != "agent.request" || body == null -> HeldRequest.Unshown
         else -> agentRequest(body, pending)
     }
@@ -165,6 +177,35 @@ object HeldRequests {
         "item.proxy" -> pending?.let { AgentApprovals.proxy(it) } ?: HeldRequest.Unshown
         else -> HeldRequest.Unshown
     }
+
+    /** A desktop's `block.add` or `connection.remove` of a connection as 0.1.145 reads it, or [HeldRequest.DesktopStepUp]. */
+    @Suppress("ReturnCount") // each early return is one rule of "fail closed"
+    private fun desktop(type: String?, pending: StrictObject?): HeldRequest {
+        val p = pending?.takeIf { AgentApprovals.desktopShown(it) } ?: return HeldRequest.DesktopStepUp
+        val remove = when (type) {
+            "connection.remove" -> true
+            "block.add" -> false
+            else -> return HeldRequest.DesktopStepUp
+        }
+        val body = p["body"] as? StrictObject ?: return HeldRequest.DesktopStepUp
+        val allowed = if (remove) DESKTOP_REMOVE else DESKTOP_BLOCK
+        if (!body.members.keys.all { it in allowed }) return HeldRequest.DesktopStepUp
+        val id = (body["connection_id"] as? StrictString)?.value?.takeIf { it.isNotEmpty() } ?: return HeldRequest.DesktopStepUp
+        val note = if (body.has("note")) {
+            (body["note"] as? StrictString)?.value?.takeIf { it.toByteArray(Charsets.UTF_8).size <= MAX_BLOCK_NOTE }
+                ?: return HeldRequest.DesktopStepUp
+        } else {
+            null
+        }
+        return HeldRequest.DesktopConnection(remove, id, note)
+    }
+
+    /** A desktop's held removal's and block's body members (VAULT-MESSAGING §10.4). */
+    private val DESKTOP_REMOVE = setOf("connection_id")
+    private val DESKTOP_BLOCK = setOf("connection_id", "note")
+
+    /** A block's `note`: at most 256 bytes (VAULT-MESSAGING §10.4). */
+    private const val MAX_BLOCK_NOTE = 256
 
     /** [read] when [pending] read strictly and holds no member that changes what approving means; else deny only. */
     private inline fun plain(pending: StrictObject?, read: () -> HeldRequest): HeldRequest =
@@ -197,6 +238,8 @@ object HeldRequests {
             is HeldRequest.ItemRun -> fields(h.itemId)?.contains(h.fieldId) == true
             is HeldRequest.ItemProxy -> fields(h.itemId)?.contains(h.fieldId) == true
             HeldRequest.Catalog -> true
+            // Names no item: its connection is resolved from `connection.list` instead (SocialManager).
+            is HeldRequest.DesktopConnection -> true
             else -> false
         }
     }

@@ -219,6 +219,11 @@
     <string name="approvals_held_later_body">Update VettID to see the details. Until then you can only deny it.</string> <!-- draft -->
     <string name="approvals_held_other_title">%1$s asks to approve a request</string> <!-- draft -->
     <string name="approvals_held_desktop_body">Desktop requests can\'t be shown in this version of VettID, so you can only deny them.</string> <!-- draft -->
+    <!-- Owner-approved 2026-11-26 (GC #19089; ANDROID-PLAN 0.1.145): a desktop's held block or removal of a connection. -->
+    <string name="approvals_desktop_block_title">%1$s wants to block %2$s</string>
+    <string name="approvals_desktop_block_body">Blocking ends your connection with %1$s. They can\'t connect with you again until you unblock them.</string>
+    <string name="approvals_desktop_remove_title">%1$s wants to remove %2$s</string>
+    <string name="approvals_desktop_remove_body">Removing ends your connection with %1$s.</string>
     <string name="approvals_held_other_body">This version of VettID can\'t show this request, so you can only deny it.</string> <!-- draft -->
     <string name="approvals_held_gone_body">%1$s asked for something this phone can no longer show. Deny it, or let it expire.</string> <!-- draft -->
     <string name="approvals_held_no_item">an item you no longer have</string> <!-- draft -->

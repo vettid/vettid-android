@@ -35,6 +35,17 @@ internal sealed interface HeldShow {
         override val approvable get() = true
     }
 
+    /**
+     * (0.1.145) A desktop's held block ([remove] false) or removal of a connection the list names: its "First Last" or a
+     * service's name ([connection], cleaned), whether it is a service, and a block's note cleaned with its lines kept (null
+     * when it has none, or none once cleaned).
+     */
+    data class DesktopConnection(val remove: Boolean, val connection: String, val service: Boolean, val note: String?) : HeldShow {
+        override val approvable get() = true
+
+        override fun toString(): String = "DesktopConnection(remove=$remove)"
+    }
+
     /** The item (or a field) is not in the app's cache: "an item you no longer have", deny-only. */
     data class NoItem(val use: Boolean, val loading: Boolean = false) : HeldShow {
         override val approvable get() = false
@@ -139,6 +150,10 @@ internal object DeviceAsks {
             is HeldRequest.ItemProxy -> named(item(h.itemId), h.fieldId)
                 ?.let { (n, f) -> HeldShow.Proxy(h, n, f) } ?: HeldShow.NoItem(use = true)
             HeldRequest.DesktopStepUp -> HeldShow.Desktop
+            // Unresolved (not listed active or stale, or its names not held): the deny-only desktop row.
+            is HeldRequest.DesktopConnection -> AccountNames.cleaned(a.heldConnection)
+                ?.let { HeldShow.DesktopConnection(h.remove, it, a.heldService, AccountNames.cleanedLines(h.note)) }
+                ?: HeldShow.Desktop
             HeldRequest.Unshown, null -> HeldShow.Other
         }
     }

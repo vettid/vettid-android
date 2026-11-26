@@ -289,7 +289,11 @@ class SocialManager internal constructor(
         if (differ.isEmpty()) {
             l
         } else {
-            l.map { a -> if (a is Approval.DeviceRequest && a.key in differ) a.copy(held = HeldRequest.Unshown) else a }
+            l.map { a ->
+                // A desktop's keeps the desktop deny-only row (0.1.145 "fail closed"); any other is unshown.
+                val deny = if (a is Approval.DeviceRequest && a.role == "desktop") HeldRequest.DesktopStepUp else HeldRequest.Unshown
+                if (a is Approval.DeviceRequest && a.key in differ) a.copy(held = deny, heldConnection = null, heldService = false) else a
+            }
         }
 
     /**
@@ -1990,7 +1994,7 @@ class SocialManager internal constructor(
             .distinctBy { it.key }
         // One question per item and subject (0.23.0 §10.12), of at most one share.decide's items.
         val firsts = cs.mapNotNull { c -> AccountNames.cleaned(c.firstName)?.let { c.id to it } }.toMap()
-        fun named(a: Approval): Approval = withName(a, names, services).let { n ->
+        fun named(a: Approval): Approval = withDesktopConnection(withName(a, names, services), cs).let { n ->
             if (n is Approval.LocationRequest) n.copy(firstName = firsts[n.connectionId]) else n
         }
         return ShareQuestions.capped(ShareQuestions.dedupe(all.map(::named))).sortedByDescending { it.receivedAt }
@@ -2008,6 +2012,44 @@ class SocialManager internal constructor(
         )
         is Approval.LocationRequest -> a.copy(connectionName = names[a.connectionId], connectionService = a.connectionId in services)
         is Approval.DeviceRequest -> a
+    }
+
+    /**
+     * (0.1.145) A desktop's held block or removal with the connection it names, when `connection.list` lists it as active or
+     * stale with names the app holds; else unnamed, so it stays deny-only ([approveDeviceRequest]).
+     */
+    private fun withDesktopConnection(a: Approval, cs: List<ConnectionInfo>): Approval {
+        val h = (a as? Approval.DeviceRequest)?.held as? HeldRequest.DesktopConnection ?: return a
+        val c = desktopTarget(h, cs)
+        return a.copy(heldConnection = c?.let { AccountNames.cleaned(it.displayName) }, heldService = c?.service == true)
+    }
+
+    /** The connection [h] names when `connection.list` ([cs]) lists it as active or stale with names the app holds. */
+    private fun desktopTarget(h: HeldRequest.DesktopConnection, cs: List<ConnectionInfo>): ConnectionInfo? =
+        cs.firstOrNull { it.id == h.connectionId && (it.state == ConnectionState.ACTIVE || it.state == ConnectionState.STALE) }
+            ?.takeIf { AccountNames.cleaned(it.displayName) != null }
+
+    /** Whether [req] may not be approved here: nothing is approved that the app does not show in full. */
+    private suspend fun approvalRefused(req: Approval.DeviceRequest): Boolean {
+        // A held request without its body, or one it cannot read.
+        val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true || !HeldRequests.nameable(req.held, itemCache()))
+        // A session request known only from its feed item is allowed only for a device the list names.
+        val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
+        // A run with a `cwd` and no `member_folder` only on a vault that does not carry `run.folders` (AA8).
+        val run = req.held as? HeldRequest.ItemRun
+        val cwdRefused = run != null && run.hasCwd && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
+        // (0.1.145) A desktop's block or removal only of a connection the list names (withDesktopConnection).
+        return unshown || unknownDevice || cwdRefused || !desktopResolved(req)
+    }
+
+    /**
+     * Whether [req], a desktop's held block or removal, may be approved: it was shown naming its connection, and the list as it
+     * is now still names it so (not only the derived approvals, which may lag a refresh that dropped or renamed it).
+     */
+    private fun desktopResolved(req: Approval.DeviceRequest): Boolean {
+        val h = req.held as? HeldRequest.DesktopConnection ?: return true
+        val now = desktopTarget(h, connectionsFlow.value)?.let { AccountNames.cleaned(it.displayName) }
+        return req.heldConnection != null && now == req.heldConnection
     }
 
     private fun find(key: String): Approval? = approvals.value.firstOrNull { it.key == key }
@@ -2321,15 +2363,7 @@ class SocialManager internal constructor(
 
     override suspend fun approveDeviceRequest(key: String, seconds: Int?): DeviceDecision {
         val req = find(key) as? Approval.DeviceRequest ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        // Never approve what the app cannot show in full: a held request without its body, or one it cannot read.
-        val unshown = req.isHeld && (req.fromFeed || req.held?.approvable != true || !HeldRequests.nameable(req.held, itemCache()))
-        // A session request known only from its feed item is allowed only for a device the list names.
-        val unknownDevice = req.isSession && req.fromFeed && req.deviceId?.let(deviceListed) != true
-        // A run with a `cwd` and no `member_folder` only on a vault that does not carry `run.folders` (AA8).
-        val run = req.held as? HeldRequest.ItemRun
-        val cwdRefused = run != null && run.hasCwd && !runCwdAllowed(req.deviceId.orEmpty(), run.itemId)
-        val refused = unshown || unknownDevice || cwdRefused
-        if (req.isPairing || refused) throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        if (req.isPairing || approvalRefused(req)) throw VaultFailure(FailureKind.NOT_SUPPORTED)
         var decision = DeviceDecision()
         deviceDecide(key) { ops ->
             decision = if (req.isSession) {
