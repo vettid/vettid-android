@@ -197,6 +197,20 @@ open class FakeSignalling : CallSignalling {
         suites: List<MediaSuite>,
         wanted: () -> Boolean,
         onCallId: (String) -> Unit,
+        notPlaced: (String) -> Unit,
+    ): PlacedCall = try {
+        placing(connectionId, sdp, suites, wanted, onCallId)
+    } catch (e: Exception) {
+        if (failureNotPlaced && e === startFailure) notPlaced(startResult().callId)
+        throw e
+    }
+
+    private suspend fun placing(
+        connectionId: String,
+        sdp: String,
+        suites: List<MediaSuite>,
+        wanted: () -> Boolean,
+        onCallId: (String) -> Unit,
     ): PlacedCall {
         if (tellIds && !tellLate) onCallId(startResult().callId)
         if (tellLate) {
@@ -218,20 +232,6 @@ open class FakeSignalling : CallSignalling {
 
     /** (0.97.0) Whether [startFailure] is first told as no call ([CallSignalling.start]'s `notPlaced`): a refusal. */
     var failureNotPlaced = false
-
-    override suspend fun start(
-        connectionId: String,
-        sdp: String,
-        suites: List<MediaSuite>,
-        wanted: () -> Boolean,
-        onCallId: (String) -> Unit,
-        notPlaced: (String) -> Unit,
-    ): PlacedCall = try {
-        start(connectionId, sdp, suites, wanted, onCallId)
-    } catch (e: Exception) {
-        if (failureNotPlaced && e === startFailure) notPlaced(startResult().callId)
-        throw e
-    }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
         sent += "start($connectionId, ${suites.map { it.id }})"

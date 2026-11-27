@@ -7,6 +7,9 @@ import com.vettid.core.vault.CallShareFaults
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.MadeByCallApi
 import com.vettid.core.vault.VaultApi
+import com.vettid.core.vault.VaultDevice
+import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.VaultStateException
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
 import okhttp3.MediaType.Companion.toMediaType
@@ -125,7 +128,7 @@ class GatewayFaultsTest {
         for (wanted in listOf(true, false)) {
             val told = mutableListOf<String>()
             val s = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), vaultIsC2 = { false })
-            runCatching { s.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), { wanted }) { told += it } }
+            runCatching { s.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), { wanted }, { told += it }) }
             assertEquals(listOf("01JB2Z6V9K3M4N5P6Q7R8S9T00"), told)
             assertEquals(wanted, wantedSeen)
         }
@@ -152,11 +155,11 @@ class GatewayFaultsTest {
         }
         val g = VaultCallGateway({ error("not asked") }, emptyFlow(), { _, _ -> }, false, { CallShareFaults.NONE }, ops)
         val cases = listOf<Pair<() -> Exception, Boolean>>(
-            { com.vettid.core.vault.VaultOpException("call.start", "busy", "", null) } to true,
-            { com.vettid.core.vault.VaultStateException("not sent", "call.start", com.vettid.core.vault.VaultDevice.CODE_NOT_SENT) } to true,
-            { com.vettid.core.vault.VaultStateException("held", "call.start", com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING) } to true,
-            { com.vettid.core.vault.VaultStateException("no response", "call.start") } to false,
-            { com.vettid.core.vault.VaultStateException("unwanted", "call.start", com.vettid.core.vault.VaultDevice.CODE_NOT_WANTED) } to false,
+            { VaultOpException("call.start", "busy", "", null) } to true,
+            { VaultStateException("not sent", "call.start", VaultDevice.CODE_NOT_SENT) } to true,
+            { VaultStateException("held", "call.start", VaultDevice.CODE_LOCK_PENDING) } to true,
+            { VaultStateException("no response", "call.start") } to false,
+            { VaultStateException("unwanted", "call.start", VaultDevice.CODE_NOT_WANTED) } to false,
             { java.io.IOException("relay") } to false,
         )
         for ((f, isNoCall) in cases) {
@@ -165,19 +168,25 @@ class GatewayFaultsTest {
             val notPlaced = mutableListOf<String>()
             val s = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), vaultIsC2 = { false })
             runCatching {
-                s.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it }, notPlaced = { notPlaced += it })
+                s.start(
+                    "conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it },
+                    notPlaced = { notPlaced += it },
+                )
             }
             assertEquals("${f()}", if (isNoCall) told else emptyList<String>(), notPlaced)
         }
 
         // A form 2 start answered `bad_request`, and its retry refused too: both ids are no call.
         val answers = ArrayDeque(listOf("bad_request", "busy"))
-        failure = { com.vettid.core.vault.VaultOpException("call.start", answers.removeFirst(), "", null) }
+        failure = { VaultOpException("call.start", answers.removeFirst(), "", null) }
         val told = mutableListOf<String>()
         val notPlaced = mutableListOf<String>()
         val c2 = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), peerKey = { ByteArray(32) { 7 } }, vaultIsC2 = { true })
         runCatching {
-            c2.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it }, notPlaced = { notPlaced += it })
+            c2.start(
+                "conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it },
+                notPlaced = { notPlaced += it },
+            )
         }
         assertEquals(2, told.toSet().size)
         assertEquals(told, notPlaced)
@@ -214,7 +223,7 @@ class GatewayFaultsTest {
             CallOps().start({ api }, "conn-1", sdp, MediaSuite.DEFAULT, null, CallShareFaults.NONE, false, { told += it }, { false })
         }.exceptionOrNull()
         assertEquals(1, told.size)
-        assertEquals("$e", com.vettid.core.vault.VaultDevice.CODE_NOT_SENT, (e as? com.vettid.core.vault.VaultStateException)?.code)
+        assertEquals("$e", VaultDevice.CODE_NOT_SENT, (e as? com.vettid.core.vault.VaultStateException)?.code)
         assertEquals("nothing sent, no hang-up", emptyList<String>(), synchronized(other) { other.toList() })
     }
 

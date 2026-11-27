@@ -225,15 +225,7 @@ internal class VaultCallSignalling(
         start(connectionId, sdp, suites) { true }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall =
-        start(connectionId, sdp, suites, wanted) {}
-
-    override suspend fun start(
-        connectionId: String,
-        sdp: String,
-        suites: List<MediaSuite>,
-        wanted: () -> Boolean,
-        onCallId: (String) -> Unit,
-    ): PlacedCall = start(connectionId, sdp, suites, wanted, onCallId) {}
+        start(connectionId, sdp, suites, wanted, {})
 
     override suspend fun start(
         connectionId: String,

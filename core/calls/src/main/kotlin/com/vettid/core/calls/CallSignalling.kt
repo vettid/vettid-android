@@ -102,7 +102,9 @@ internal interface CallSignalling {
 
     /**
      * [start], with [onCallId]: (VAULT-MESSAGING 0.97.0) told each `call_id` a `call.start` goes with, before it goes, so
-     * that the caller can end the pending call on the vault's `call.end` for it before the answer.
+     * that the caller can end the pending call on the vault's `call.end` for it before the answer; and [notPlaced]: told
+     * each of those ids that is no call after all (the vault refused its `call.start`, or nothing of it was sent), so
+     * that the caller has nothing to end for it.
      */
     suspend fun start(
         connectionId: String,
@@ -110,20 +112,8 @@ internal interface CallSignalling {
         suites: List<MediaSuite>,
         wanted: () -> Boolean,
         onCallId: (String) -> Unit,
+        notPlaced: (String) -> Unit = {},
     ): PlacedCall = start(connectionId, sdp, suites, wanted)
-
-    /**
-     * [start], with [notPlaced]: told each `call_id` that [onCallId] told and that is no call after all (the vault refused
-     * its `call.start`, or nothing of it was sent), so that the caller has nothing to end for it.
-     */
-    suspend fun start(
-        connectionId: String,
-        sdp: String,
-        suites: List<MediaSuite>,
-        wanted: () -> Boolean,
-        onCallId: (String) -> Unit,
-        notPlaced: (String) -> Unit,
-    ): PlacedCall = start(connectionId, sdp, suites, wanted, onCallId)
 
     /** `call.answer` for a verified offer: returns the call's keys. Throws [CallSecurityException] or an [IOException]. */
     suspend fun answer(callId: String, sdp: String, suites: List<MediaSuite>): MediaKeys
