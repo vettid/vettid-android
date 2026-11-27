@@ -203,6 +203,7 @@ open class FakeSignalling : CallSignalling {
             sent += "start($connectionId, ${suites.map { it.id }})"
             startGate?.receive()
             onCallId(startResult().callId)
+            startGate?.receive() // the answer waits for a second go
             startFailure?.let { throw it }
             return startResult()
         }

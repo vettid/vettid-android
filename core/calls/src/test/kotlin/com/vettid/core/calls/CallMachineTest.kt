@@ -1038,6 +1038,9 @@ class CallMachineTest {
         m3.hangUp()
         runCurrent()
         assertTrue(s3.sent.none { it.startsWith("end") })
+        s3.startGate!!.send(Unit) // the id is told, the answer not yet here
+        runCurrent()
+        assertEquals("at the id", listOf("end($CALL_ID, hangup)"), s3.sent.filter { it.startsWith("end") })
         s3.startGate!!.send(Unit)
         runCurrent()
         assertEquals("one hang-up", listOf("end($CALL_ID, hangup)"), s3.sent.filter { it.startsWith("end") })
