@@ -182,6 +182,20 @@ open class FakeSignalling : CallSignalling {
         return start(connectionId, sdp, suites)
     }
 
+    /** (0.97.0) Whether the start tells the machine its call id before it goes ([CallSignalling.start]'s `onCallId`). */
+    var tellIds = false
+
+    override suspend fun start(
+        connectionId: String,
+        sdp: String,
+        suites: List<MediaSuite>,
+        wanted: () -> Boolean,
+        onCallId: (String) -> Unit,
+    ): PlacedCall {
+        if (tellIds) onCallId(startResult().callId)
+        return start(connectionId, sdp, suites, wanted)
+    }
+
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall {
         sent += "start($connectionId, ${suites.map { it.id }})"
         startGate?.receive()

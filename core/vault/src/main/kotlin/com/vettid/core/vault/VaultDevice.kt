@@ -1897,6 +1897,60 @@ class VaultDevice private constructor(
         }
     }
 
+    /**
+     * (VAULT-MESSAGING 0.97.0 §10.10 "Placing a call") A request deposited once ([sendOnce]) and, with no answer,
+     * deposited again with the same inner id (an application retry, §8.6) at each time in [resendAfter] after the first
+     * send, until [timeout] after it; never through the outbox. The first answer to the id is taken; a later one finds
+     * nothing waiting and is dropped. A re-send the gate holds back, or the relay refuses, is skipped and the wait goes
+     * on. Throws [VaultStateException] without an answer by [timeout].
+     */
+    suspend fun requestOnceRetried(
+        type: String,
+        body: JsonObject,
+        resendAfter: List<Duration>,
+        timeout: Duration,
+    ): VaultMessage {
+        require(resendAfter.zipWithNext().all { (a, b) -> a < b } && resendAfter.all { it > Duration.ZERO && it < timeout })
+        val id = Ulid.new(now())
+        val d = CompletableDeferred<Inner>()
+        pending[id] = d
+        noteOpeningRequest(id)
+        try {
+            tagged(type) {
+                lock.withLock {
+                    if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
+                    sendOnceLocked(id, type, body, null)
+                }
+            }
+            noteOpeningSent(id)
+            var waited = Duration.ZERO
+            for (at in resendAfter + timeout) {
+                withTimeoutOrNull(at.minus(waited).toMillis()) { d.await() }?.let { return VaultMessage(it) }
+                waited = at
+                if (at == timeout) break
+                try {
+                    tagged(type) { lock.withLock { if (maySend(type)) sendOnceLocked(id, type, body, null) } }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                    // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
+                }
+            }
+            throw VaultStateException("$type: no response", type)
+        } finally {
+            pending.remove(id)
+        }
+    }
+
+    /** [requestOnceRetried], returning the body of an ok response or throwing [VaultOpException]. */
+    suspend fun opOnceRetried(type: String, body: JsonObject, resendAfter: List<Duration>, timeout: Duration): JsonObject {
+        val r = requestOnceRetried(type, body, resendAfter, timeout)
+        if (r.inner.status != Inner.STATUS_OK) {
+            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
+        }
+        return r.body
+    }
+
     /** [requestOnce], returning the body of an ok response or throwing [VaultOpException]. */
     suspend fun opOnce(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout, exp: Instant? = null): JsonObject {
         val r = requestOnce(type, body, timeout, exp)

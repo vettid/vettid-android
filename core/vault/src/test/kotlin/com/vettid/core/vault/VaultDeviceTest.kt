@@ -4972,6 +4972,60 @@ class VaultDeviceTest {
     }
 
     /**
+     * (VAULT-MESSAGING 0.97.0 §10.10 "Placing a call") With no answer, `call.start` is sent again with the same inner id
+     * at each resend time (10 s and 20 s; scaled down here), never through the outbox, and given up at the timeout (30 s)
+     * with its hang-up; the call id is told before the first send. An answer to a re-sent copy is taken, a later one
+     * matches nothing; a cached copy marked `withheld: true` (STUN only) is kept as the call.
+     */
+    @Test
+    fun callStartIsSentAgainWithTheSameIdThenGivenUp() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val api = VaultApi(d)
+            val resend = listOf(java.time.Duration.ofMillis(400), java.time.Duration.ofMillis(800))
+            val told = mutableListOf<String>()
+
+            // No answer: three copies of one request, then the hang-up for its call.
+            val unanswered = async(Dispatchers.IO) {
+                runCatching {
+                    api.callStart("conn-1", sdp, timeout = java.time.Duration.ofMillis(1_200), resendAfter = resend, onCallId = { told += it })
+                }.exceptionOrNull()
+            }
+            val copies = List(3) { v.open(nextDeposit().second) }
+            assertTrue(copies.all { it.type == "call.start" })
+            assertEquals("the same request each time", 1, copies.map { it.id }.toSet().size)
+            assertEquals(1, copies.map { String(it.body) }.toSet().size)
+            assertTrue("never in the outbox", savedState(store).outbox.none { it.type == "call.start" })
+            assertTrue(unanswered.await() is VaultStateException)
+            val callId = StrictJson.parseObject(copies[0].body).string("call_id")
+            assertEquals(listOf(callId), told)
+            val end = v.open(nextDeposit().second)
+            assertEquals("call.end", end.type)
+            assertEquals("""{"call_id":"$callId","reason":"hangup"}""", String(end.body))
+            assertNull("nothing more", deposits.poll(300, TimeUnit.MILLISECONDS))
+
+            // Answered after the first re-send, with the cached copy (withheld, STUN only): the call is kept.
+            val starting = async(Dispatchers.IO) {
+                api.callStart("conn-1", sdp, timeout = java.time.Duration.ofSeconds(5), resendAfter = listOf(java.time.Duration.ofMillis(400)))
+            }
+            val first = v.open(nextDeposit().second)
+            val again = v.open(nextDeposit().second)
+            assertEquals(first.id, again.id)
+            val id2 = StrictJson.parseObject(first.body).string("call_id")
+            val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
+            val copy = v.ice(JsonBuilder().string("call_id", id2).string("exp", ts(exp)), id2).bool("withheld", true).build()
+            d.handle(v.seal("call.start", copy, re = first.id, status = Inner.STATUS_OK))
+            val call = starting.await()
+            assertEquals(id2, call.callId)
+            assertTrue("no TURN entry", call.ice.servers.isEmpty())
+            // A second answer to the same request matches nothing: no failure, nothing sent.
+            d.handle(v.seal("call.start", copy, re = first.id, status = Inner.STATUS_OK))
+            assertNull(deposits.poll(600, TimeUnit.MILLISECONDS))
+        }
+    }
+
+    /**
      * A lock must never land late (the member may have opened the vault again): it is deposited once, with an
      * `exp`, never from the outbox; and one that an earlier version of the app left in the outbox is dropped.
      */

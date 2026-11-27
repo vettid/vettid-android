@@ -147,6 +147,9 @@ internal class CallMachine(
         class Media(val seq: Int, val event: MediaEvent) : Msg
         class Placed(val seq: Int, val call: PlacedCall, val atMs: Long) : Msg
 
+        /** (0.97.0) `call.start` goes for [seq] with [callId], its answer not here yet. */
+        class Pending(val seq: Int, val callId: String) : Msg
+
         /** The offer for an outgoing call is made: `call.start` goes only if the call is still the current one. */
         class Offered(
             val seq: Int,
@@ -238,6 +241,13 @@ internal class CallMachine(
          * the call has no id, and handled in order once it has.
          */
         val early = mutableListOf<SignalEvent>()
+
+        /**
+         * (VAULT-MESSAGING 0.97.0 §10.10 "Order") The `call_id`s this call's `call.start` went out with while it had no
+         * answer (the gateway tells them before each start: a form 2 retry has a second one). A `call.end` for one of them
+         * ends the pending call at once.
+         */
+        val pendingIds = mutableSetOf<String>()
         val pendingRemote = mutableListOf<CallCandidate>()
         val pendingLocal = ArrayDeque<CallCandidate>()
         val timers = mutableMapOf<TimerKind, Job>()
@@ -341,6 +351,7 @@ internal class CallMachine(
             }
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
+            is Msg.Pending -> if (s != null && s.seq == m.seq && s.callId == null) s.pendingIds += m.callId
             is Msg.Offered -> onOffered(s, m)
             Msg.StartDone -> startsOutFlow.update { (it - 1).coerceAtLeast(0) }
             // A call that lost a glare has let its media go: what its engine still reports is of no use.
@@ -355,11 +366,27 @@ internal class CallMachine(
     }
 
     /** Keeps [e] for a call that has no id yet (see [Session.early]); true if it was kept. */
-    private fun heldEarly(s: Session?, e: SignalEvent): Boolean {
-        val waiting = s != null && s.callId == null && s.early.size < MAX_EARLY
-        if (!waiting || e is SignalEvent.Offer) return false
-        s?.early?.add(e)
-        return true
+    private fun heldEarly(s: Session?, e: SignalEvent): Boolean = when {
+        s == null || s.callId != null -> false
+        endsPending(s, e) -> true
+        s.early.size >= MAX_EARLY || e is SignalEvent.Offer -> false
+        else -> s.early.add(e)
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.97.0 §10.10 "Order") The vault's `call.end` for the call this device is placing, before the answer
+     * to its `call.start`: the call ends here at once, shown as any ended call, and the answer when it comes is ignored (the
+     * end is remembered, so [onPlaced] lets the call go and sends nothing). A glare's end (`busy` naming a winner) is held
+     * as before: the call waits for the winner's offer. True when [e] ended it.
+     */
+    private fun endsPending(s: Session, e: SignalEvent): Boolean {
+        val ends = e is SignalEvent.End && e.callId in s.pendingIds && !(e.reason == CallReason.BUSY && e.supersededBy != null)
+        if (ends) {
+            e as SignalEvent.End
+            rememberEndedOther(e.callId, e)
+            finish(s, ended(s, e.reason), null)
+        }
+        return ends
     }
 
     private fun newSession(connectionId: String, direction: CallDirection): Session {
@@ -451,7 +478,13 @@ internal class CallMachine(
         scope.launch {
             withContext(NonCancellable) {
                 try {
-                    val placed = signalling.start(m.connectionId, m.sdp, m.suites) { liveSeq.get() == m.seq && !closed }
+                    val placed = signalling.start(
+                        m.connectionId,
+                        m.sdp,
+                        m.suites,
+                        wanted = { liveSeq.get() == m.seq && !closed },
+                        onCallId = { id -> post(Msg.Pending(m.seq, id)) },
+                    )
                     post(Msg.Placed(m.seq, placed, elapsedMs()))
                 } catch (e: CallRefusedException) {
                     post(Msg.Failed(m.seq, refusal(e.code)))

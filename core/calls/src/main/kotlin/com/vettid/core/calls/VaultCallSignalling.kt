@@ -223,14 +223,23 @@ internal class VaultCallSignalling(
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>): PlacedCall =
         start(connectionId, sdp, suites) { true }
 
-    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall {
+    override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall =
+        start(connectionId, sdp, suites, wanted) {}
+
+    override suspend fun start(
+        connectionId: String,
+        sdp: String,
+        suites: List<MediaSuite>,
+        wanted: () -> Boolean,
+        onCallId: (String) -> Unit,
+    ): PlacedCall {
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
         var endedFirst = false
         val call = try {
             // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
             // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
-            placeOnce(connectionId, sdp, suites, wanted).also { c ->
+            placeOnce(connectionId, sdp, suites, wanted, onCallId).also { c ->
                 synchronized(lock) {
                     endedFirst = endedEarly.remove(c.callId)
                     if (endedFirst) {
@@ -271,7 +280,13 @@ internal class VaultCallSignalling(
      * once, and only while the call is still [wanted] (a hang-up or a lock meanwhile places nothing more); the second
      * start is in form 2 again, whatever was learnt meanwhile. A second refusal ends the call as the first would have.
      */
-    private suspend fun placeOnce(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): OutgoingCall {
+    private suspend fun placeOnce(
+        connectionId: String,
+        sdp: String,
+        suites: List<MediaSuite>,
+        wanted: () -> Boolean,
+        onCallId: (String) -> Unit,
+    ): OutgoingCall {
         // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without that
         // key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
         suspend fun key(): ByteArray? = if (formTwo) {
@@ -281,10 +296,10 @@ internal class VaultCallSignalling(
         }
         val peerIk = key()
         return try {
-            gateway.start(connectionId, sdp, suites, peerIk)
+            gateway.start(connectionId, sdp, suites, peerIk, onCallId)
         } catch (e: VaultOpException) {
             val again = if (peerIk != null && e.code == "bad_request") refreshedKey(connectionId, wanted) else null
-            gateway.start(connectionId, sdp, suites, again ?: throw e)
+            gateway.start(connectionId, sdp, suites, again ?: throw e, onCallId)
         }
     }
 

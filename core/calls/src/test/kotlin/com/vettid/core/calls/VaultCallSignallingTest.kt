@@ -211,6 +211,14 @@ class VaultCallSignallingTest {
     private fun startingWith(onStart: (ByteArray?) -> OutgoingCall): CallGateway = object : CallGateway by gateway {
         override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
             onStart(peerIk)
+
+        override suspend fun start(
+            connectionId: String,
+            sdp: String,
+            suites: Collection<MediaSuite>,
+            peerIk: ByteArray?,
+            onCallId: (String) -> Unit,
+        ): OutgoingCall = onStart(peerIk)
     }
 
     private fun refused(code: String): Nothing = throw VaultOpException("call.start", code)

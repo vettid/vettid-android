@@ -62,7 +62,7 @@ class GatewayFaultsTest {
         val ops = object : CallOps() {
             override suspend fun start(
                 api: suspend () -> VaultApi, connectionId: String, sdp: String, suites: Collection<MediaSuite>,
-                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean,
+                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean, onCallId: (String) -> Unit,
             ): com.vettid.core.vault.OutgoingCall {
                 seen += "start $testBuild $faults"
                 throw IllegalArgumentException("stop here")

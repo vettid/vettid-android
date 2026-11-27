@@ -506,6 +506,24 @@ class CallsControllerTest {
     }
 
     /**
+     * (vettid-ios#344's pair) A list that says C2 (`v >= 2`) without a readable `now` is neither form: no sweep at all.
+     * The S10 sweep would end every active record, another device's live call included.
+     */
+    @Test
+    fun aC2ListWithoutItsNowSweepsNothing() = runTest {
+        vault.gateway.version = 2
+        vault.gateway.vaultNow = null
+        vault.gateway.list = {
+            listOf(record("A", "active", "in"), record("B", "ringing", "out", T0.minusSeconds(300)))
+        }
+        val c = controller()
+        vault.unlocked.value = true
+        runCurrent()
+        assertEquals(listOf("list(200)"), vault.gateway.sent)
+        assertEquals(0, c.diagnostics.value.staleEnded)
+    }
+
+    /**
      * In a test build, the `call.list` read counts the incoming calls never answered, by reason (a reason that is not a
      * plain word is "other"; one still ringing is its state); a lock forgets the count; any other build keeps none.
      */
