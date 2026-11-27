@@ -80,6 +80,10 @@ class ResendTimesTest {
         assertEquals("10 s passed while it was made", listOf(12_000L, 20_000L), r.sends)
         assertEquals(30_000L, r.endedAt)
 
+        val onTheTime = Run(firstTakes = 10_000)
+        assertNull(onTheTime.on(times))
+        assertEquals("a deposit that ends on the 10 s time is that copy", listOf(10_000L, 20_000L), onTheTime.sends)
+
         val late = Run(firstTakes = 29_000)
         assertNull(late.on(times))
         assertEquals("no copy back to back", listOf(29_000L), late.sends)
