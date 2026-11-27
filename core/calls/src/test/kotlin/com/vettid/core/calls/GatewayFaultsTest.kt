@@ -62,7 +62,8 @@ class GatewayFaultsTest {
         val ops = object : CallOps() {
             override suspend fun start(
                 api: suspend () -> VaultApi, connectionId: String, sdp: String, suites: Collection<MediaSuite>,
-                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean,
+                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean, onCallId: (String) -> Unit,
+                wanted: () -> Boolean,
             ): com.vettid.core.vault.OutgoingCall {
                 seen += "start $testBuild $faults"
                 throw IllegalArgumentException("stop here")
@@ -98,6 +99,34 @@ class GatewayFaultsTest {
             ),
             seen,
         )
+    }
+
+    /**
+     * (0.97.0) Through the real signalling and gateway, a start hands `CallApi` the machine's [onCallId] and its wanted:
+     * the early end and the re-sends' stop depend on both arriving.
+     */
+    @Test
+    fun aStartPassesItsCallIdHookAndItsWantedThrough() = runTest {
+        var wantedSeen: Boolean? = null
+        val ops = object : CallOps() {
+            override suspend fun start(
+                api: suspend () -> VaultApi, connectionId: String, sdp: String, suites: Collection<MediaSuite>,
+                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean, onCallId: (String) -> Unit,
+                wanted: () -> Boolean,
+            ): com.vettid.core.vault.OutgoingCall {
+                onCallId("01JB2Z6V9K3M4N5P6Q7R8S9T00")
+                wantedSeen = wanted()
+                throw IllegalArgumentException("stop here")
+            }
+        }
+        val g = VaultCallGateway({ error("not asked") }, emptyFlow(), { _, _ -> }, false, { CallShareFaults.NONE }, ops)
+        for (wanted in listOf(true, false)) {
+            val told = mutableListOf<String>()
+            val s = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), vaultIsC2 = { false })
+            runCatching { s.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), { wanted }) { told += it } }
+            assertEquals(listOf("01JB2Z6V9K3M4N5P6Q7R8S9T00"), told)
+            assertEquals(wanted, wantedSeen)
+        }
     }
 
     @Test

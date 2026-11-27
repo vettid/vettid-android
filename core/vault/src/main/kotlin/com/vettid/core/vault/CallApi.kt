@@ -73,8 +73,14 @@ object CallLimits {
     /** `exp` of the ephemeral types (`call.ice`, `call.ringing`). */
     val EPHEMERAL_TTL: Duration = Duration.ofSeconds(30)
 
-    /** How long the app waits for the answer to `call.start` before it gives the call up. */
-    val START_TIMEOUT: Duration = Duration.ofSeconds(15)
+    /**
+     * How long the app waits for the answer to `call.start` before it gives the call up: (VAULT-MESSAGING 0.97.0 §10.10
+     * "Placing a call") 30 s from the first send, the request sent again with the same inner id at [START_RESEND].
+     */
+    val START_TIMEOUT: Duration = Duration.ofSeconds(30)
+
+    /** (0.97.0) When `call.start`, still unanswered, is sent again (the same request, the same inner id). */
+    val START_RESEND: List<Duration> = listOf(Duration.ofSeconds(10), Duration.ofSeconds(20))
 
     /** (C2) `call.keepalive` from the call's device while the call is active (§10.10 "Liveness"). */
     val KEEPALIVE_EVERY: Duration = Duration.ofSeconds(30)
@@ -264,6 +270,10 @@ private fun <T> checked(what: String, block: () -> T): T = try {
     throw CallMessageException(what, e)
 }
 
+/** `withheld: true` in an answer (a JSON true; anything else is not withheld). */
+private fun JsonObject.isWithheld(): Boolean =
+    (this["withheld"] as? JsonPrimitive)?.takeUnless { it.isString }?.content == "true"
+
 private fun VaultApi.iceOf(o: JsonObject, callId: String): CallWire.IceConfig = checked("ice configuration") {
     val sig = o.b64("ice_sig", Suite.ED25519_SIGNATURE_SIZE)
     CallWire.verifyIce(device.vaultIdentityKey(), o.b64("ice_config"), sig, callId, device.clockNow())
@@ -341,7 +351,10 @@ private fun checkSdp(sdp: String) {
  * one first. This start carries a form 1 signature, so rule 3 applies to it; it applies equally to a later (C2)
  * start that carries form 2 as well: no second suite while any `call.start` carries form 1, i.e. until form 1 is
  * retired (VAULT-MESSAGING "Mixed releases"). A fresh `call_id` and ephemeral KEM key, the
- * share signed with the device's identity key. Deposited once and awaited for [timeout]. Errors
+ * share signed with the device's identity key. Deposited once and, unanswered, again with the same inner id at
+ * [resendAfter] (VAULT-MESSAGING 0.97.0: 10 s and 20 s), never through the outbox; given up at [timeout] (30 s). An answer
+ * that is the vault's cached copy (`withheld: true`, the STUN entry alone) is the call as it is: kept, never placed again.
+ * Errors
  * ([VaultOpException]): `busy` (this vault is already in a call), `not_found`, `connection_unavailable`,
  * `owner_check_required`, `exists`, `bad_request`, `internal`. When it fails in any other way after the request may
  * have left (no answer in time, a lost response, an answer that does not verify), a durable `call.end{hangup}` for the
@@ -354,6 +367,8 @@ suspend fun VaultApi.callStart(
     suites: Collection<MediaSuite> = MediaSuite.DEFAULT,
     media: String = CallWire.MEDIA_AUDIO,
     timeout: Duration = CallLimits.START_TIMEOUT,
+    /** (0.97.0) Sent again, unanswered, at these times after the first send (each before [timeout]). */
+    resendAfter: List<Duration> = CallLimits.START_RESEND.filter { it < timeout },
     /**
      * (C2) The connection's identity key as this device's vault gives it (`connection.get`): with it the start also
      * carries form 2, naming this vault and the connection's (VAULT-MESSAGING 0.88.16), and `keepalive: true`; a
@@ -364,6 +379,13 @@ suspend fun VaultApi.callStart(
     faults: CallShareFaults = CallShareFaults.NONE,
     /** Whether this is a call-test build: without it any [faults] is refused before anything is signed or sent. */
     testBuild: Boolean = false,
+    /**
+     * (0.97.0) Told the call's `call_id` before `call.start` goes, so that a `call.end` for it that comes before the
+     * answer ends the pending call at once (§10.10 "Order").
+     */
+    onCallId: (String) -> Unit = {},
+    /** (0.97.0) Whether the call is still wanted (not hung up, the vault not locking): no copy is sent again once not. */
+    stillWanted: () -> Boolean = { true },
 ): OutgoingCall {
     checkFaults(faults, testBuild)
     // A fault of form 2 on a form 1 start would do nothing, and a test run could pass for the wrong reason.
@@ -380,8 +402,9 @@ suspend fun VaultApi.callStart(
         val ek = key.publicKey.bytes()
         val share = device.signCallShare(CallWire.shareMessage(CallWire.ROLE_OFFER, callId, media, ek))
         val share2 = parties?.let { device.signCallShare(CallWire.offerMessage2(callId, media, offered, it, ek)) }
+        onCallId(callId)
         attempted = true
-        val o = device.opOnce(
+        val o = device.opOnceRetried(
             "call.start",
             buildJsonObject {
                 put("connection_id", connectionId)
@@ -396,11 +419,18 @@ suspend fun VaultApi.callStart(
                     put("keepalive", true)
                 }
             },
+            resendAfter,
             timeout,
+            stillWanted,
         )
         if (o.need("call_id") != callId) throw CallMessageException("call.start answered for another call")
         val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }
-        return OutgoingCall(callId, connectionId, media, exp, iceOf(o, callId), offered, key, parties)
+        // (0.97.0 §8.2, §10.10) The vault's cached copy (`withheld: true`) is the call without a TURN server: should it carry
+        // an entry with a credential all the same, that entry is not used.
+        val ice = iceOf(o, callId).let { c ->
+            if (o.isWithheld()) c.copy(servers = c.servers.filter { it.username == null && it.credential == null }) else c
+        }
+        return OutgoingCall(callId, connectionId, media, exp, ice, offered, key, parties)
     } catch (e: VaultOpException) {
         // The vault's own refusal: there is no call.
         key.destroy()

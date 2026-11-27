@@ -45,6 +45,19 @@ interface CallGateway {
     /** [peerIk]: (C2) the connection's identity key, for a form 2 start with `keepalive`; null for form 1 only. */
     suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray? = null): OutgoingCall
 
+    /**
+     * [start], with [onCallId]: (0.97.0) told the call's `call_id` before `call.start` goes; and [wanted]: no copy of
+     * it is sent again once the call is no longer wanted.
+     */
+    suspend fun start(
+        connectionId: String,
+        sdp: String,
+        suites: Collection<MediaSuite>,
+        peerIk: ByteArray?,
+        onCallId: (String) -> Unit,
+        wanted: () -> Boolean = { true },
+    ): OutgoingCall = start(connectionId, sdp, suites, peerIk)
+
     /** Verifies an offer against the connection's identity and this device's suites, or throws. */
     suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall
 
@@ -118,9 +131,19 @@ class VaultCallGateway internal constructor(
 
     override val permissionChanges: Flow<String> = events.flatMapLatest { f -> f.mapNotNull { callPermissionChange(it) } }
 
-    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall {
+    override suspend fun start(connectionId: String, sdp: String, suites: Collection<MediaSuite>, peerIk: ByteArray?): OutgoingCall =
+        start(connectionId, sdp, suites, peerIk, {})
+
+    override suspend fun start(
+        connectionId: String,
+        sdp: String,
+        suites: Collection<MediaSuite>,
+        peerIk: ByteArray?,
+        onCallId: (String) -> Unit,
+        wanted: () -> Boolean,
+    ): OutgoingCall {
         val f = faultsNow() // before the vault is asked for anything
-        return ops.start(api, connectionId, sdp, suites, peerIk, f, testBuild)
+        return ops.start(api, connectionId, sdp, suites, peerIk, f, testBuild, onCallId, wanted)
     }
 
     override suspend fun incoming(event: VaultMessage, pinnedFingerprint: String, suites: Collection<MediaSuite>): IncomingCall =
@@ -160,7 +183,11 @@ internal open class CallOps {
         peerIk: ByteArray?,
         faults: CallShareFaults,
         testBuild: Boolean,
-    ): OutgoingCall = api().callStart(connectionId, sdp, suites, peerIk = peerIk, faults = faults, testBuild = testBuild)
+        onCallId: (String) -> Unit = {},
+        wanted: () -> Boolean = { true },
+    ): OutgoingCall = api().callStart(
+        connectionId, sdp, suites, peerIk = peerIk, faults = faults, testBuild = testBuild, onCallId = onCallId, stillWanted = wanted,
+    )
 
     @Suppress("LongParameterList") // callAnswer's own parameters
     open suspend fun answer(

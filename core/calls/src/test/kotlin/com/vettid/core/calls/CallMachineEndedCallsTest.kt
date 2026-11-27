@@ -205,6 +205,26 @@ class CallMachineEndedCallsTest {
         notRung(m, signalling, GLARE_ID)
     }
 
+    /**
+     * (VAULT-MESSAGING 0.97.0 §10.10 "A lost call.offer") An offer delivered again for the call already ringing here (the
+     * vault deposits it again from memory) changes nothing: the same call rings, once.
+     */
+    @Test
+    fun anOfferAlreadyHeldIsIgnored() = runTest {
+        val m = machine()
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        val first = m.live()
+        assertEquals(CallPhase.INCOMING, first.phase)
+        val sent = signalling.sent.toList()
+        signalling.deliver(offer(GLARE_ID))
+        runCurrent()
+        assertEquals(CallPhase.INCOMING, m.live().phase)
+        assertEquals(GLARE_ID, m.live().callId)
+        assertEquals("nothing sent for the repeat", sent, signalling.sent)
+        assertTrue("no engine before the member answers", engines.created.isEmpty())
+    }
+
     /** Other calls' ends are bounded (32, the oldest pushed out), and one delivered again is kept once, as the newest. */
     @Test
     fun otherCallsEndsAreBoundedAndARepeatIsKeptOnce() = runTest {

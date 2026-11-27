@@ -539,7 +539,13 @@ class CallsController(
                 if (records.formTwo) permissionReads.trySend(Unit) else permissionsFlow.value = CallPermissions()
                 noteSkipped(records)
             }
-            if (records.formTwo) endStaleC2(records, epoch) else endStale(records.calls, epoch)
+            // A list that says C2 (`v >= 2`) without a `now` that reads is neither form: the S10 sweep would end every
+            // active record, another device's live call included, and the C2 one needs the vault's time. No sweep then.
+            when {
+                records.formTwo -> endStaleC2(records, epoch)
+                (records.version ?: 0) >= 2 -> Unit
+                else -> endStale(records.calls, epoch)
+            }
             if (testBuild) {
                 val signer = runCatching { vault.signerClass() }.getOrNull()
                 synchronized(applyLock) {
