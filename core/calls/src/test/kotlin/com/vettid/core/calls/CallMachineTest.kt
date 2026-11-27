@@ -1003,6 +1003,47 @@ class CallMachineTest {
     }
 
     /**
+     * (0.97.0, the recheck of #455) Any end of a call while its `call.start` waits sends the hang-up for its id at once,
+     * not only the member's: a media failure, a start that fails; and an id told only after the call ended sends one too.
+     */
+    @Test
+    fun everyEndWhileTheStartIsPendingSendsItsHangUp() = runTest {
+        // A media failure while the start waits.
+        val s1 = FakeSignalling().apply { startGate = Channel(1); tellIds = true }
+        val m1 = machine(s1)
+        m1.call("conn-1")
+        runCurrent()
+        engines.last.emit(MediaEvent.Failed("test"))
+        runCurrent()
+        assertEquals(listOf("end($CALL_ID, hangup)"), s1.sent.filter { it.startsWith("end") })
+        s1.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals("one hang-up", 1, s1.sent.count { it.startsWith("end") })
+
+        // A start that fails after the id was told.
+        val s2 = FakeSignalling().apply { startGate = Channel(1); tellIds = true; startFailure = java.io.IOException("relay") }
+        val m2 = machine(s2)
+        m2.call("conn-1")
+        runCurrent()
+        s2.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(CallEnd.FAILED, m2.ended().reason)
+        assertEquals(listOf("end($CALL_ID, hangup)"), s2.sent.filter { it.startsWith("end") })
+
+        // The id told only after the member hung up.
+        val s3 = FakeSignalling().apply { startGate = Channel(1); tellIds = true; tellLate = true }
+        val m3 = machine(s3)
+        m3.call("conn-1")
+        runCurrent()
+        m3.hangUp()
+        runCurrent()
+        assertTrue(s3.sent.none { it.startsWith("end") })
+        s3.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals("one hang-up", listOf("end($CALL_ID, hangup)"), s3.sent.filter { it.startsWith("end") })
+    }
+
+    /**
      * (C2, VAULT-MESSAGING §10.10 "Glare", decision D21 a) This device's outgoing call lost a glare: the vault ends it
      * `busy` with `superseded_by` and rings the connection's own call, which this device answers without asking,
      * whichever of the two arrives first. Nothing is sent for the lost call, and "busy" is never shown.

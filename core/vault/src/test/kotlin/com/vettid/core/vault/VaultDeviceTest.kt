@@ -5032,12 +5032,11 @@ class VaultDeviceTest {
                 val e = gone.await()
                 assertTrue(case, e is VaultStateException)
                 if (case == "unwanted") {
-                    // The wait ends at once, and the caller (the machine, at its hang-up) sends the end: none here.
+                    // The wait ends at once; the hang-up goes all the same (a second one, after the caller's, is ignored).
                     assertEquals(VaultDevice.CODE_NOT_WANTED, (e as VaultStateException).code)
                     assertTrue("ended at once", (System.nanoTime() - began) / 1_000_000 < 700)
-                } else {
-                    assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
                 }
+                assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
                 assertNull(case, deposits.poll(300, TimeUnit.MILLISECONDS))
                 d.sendGate = VaultDevice.SendGate { true }
             }
@@ -5145,6 +5144,25 @@ class VaultDeviceTest {
             v.open(nextDeposit().second)
             assertNull("the 800 ms copy is skipped", deposits.poll(700, TimeUnit.MILLISECONDS))
             assertTrue(second.await().exceptionOrNull() is VaultStateException)
+
+            // A re-send held past the timeout does not hold the end: given up at about 1,000 ms.
+            val held = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried(
+                        "call.start", body, listOf(java.time.Duration.ofMillis(300)), java.time.Duration.ofMillis(1_000),
+                        minAnswerWait = java.time.Duration.ZERO,
+                    )
+                }
+            }
+            v.open(nextDeposit().second)
+            val t1 = System.nanoTime()
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            assertTrue(withTimeout(5_000) { held.await() }.exceptionOrNull() is VaultStateException)
+            val after = (System.nanoTime() - t1) / 1_000_000
+            depositGate!!.countDown()
+            depositGate = null
+            assertTrue("bounded by the timeout: $after", after < 1_400)
+            deposits.poll(500, TimeUnit.MILLISECONDS) // the held copy, let go
 
             // Not wanted before the first send (a hang-up just after the call id was told): nothing is sent.
             val never = runCatching {

@@ -1912,8 +1912,8 @@ class VaultDevice private constructor(
      * a later one finds nothing waiting and is dropped. No copy goes again once the answer is in, or while the gate holds
      * sends back; one the relay refuses is skipped and the wait goes on. Once [stillWanted] says no (a hang-up, a lock),
      * nothing more is sent, not even the first copy, and the wait ends with [VaultStateException] of code
-     * [CODE_NOT_WANTED]: the caller, which no longer wants the request, sends what ends it. Throws [VaultStateException]
-     * without an answer.
+     * [CODE_NOT_WANTED]. [stillWanted] is asked under the device lock before each send, and outside it, every
+     * [WANTED_POLL], while waiting. Throws [VaultStateException] without an answer.
      */
     @Suppress("LongParameterList", "ReturnCount", "CyclomaticComplexMethod")
     suspend fun requestOnceRetried(

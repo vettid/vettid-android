@@ -436,17 +436,12 @@ suspend fun VaultApi.callStart(
         // The vault's own refusal: there is no call.
         key.destroy()
         throw e
-    } catch (e: VaultStateException) {
-        key.destroy()
-        // No answer in time (below). Not when the wait ended because the call is no longer wanted: the caller ends it
-        // (the machine's hang-up for a pending call goes at once), so no second hang-up goes here.
-        if (attempted && e.code != VaultDevice.CODE_NOT_WANTED) runCatching { callEnd(callId, CallReason.HANGUP) }
-        throw e
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
         key.destroy()
         // No answer in time, an HTTP response that was lost, or an answer that does not verify: the vault may have
         // taken the call and sent the offer on, and nothing here could end it later. The durable hang-up does (a
-        // vault that never saw the call ignores it).
+        // vault that never saw the call ignores it). Also when the wait ended because the call is no longer wanted: the
+        // caller's own hang-up may already be on its way, and a second is ignored.
         if (attempted) runCatching { callEnd(callId, CallReason.HANGUP) }
         throw e
     }
