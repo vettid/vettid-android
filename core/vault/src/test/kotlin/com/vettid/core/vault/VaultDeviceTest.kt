@@ -5208,6 +5208,43 @@ class VaultDeviceTest {
     }
 
     /**
+     * (0.97.0) A refusal to a request deposited more than once says so (`resent`): it may answer a later copy, so it is
+     * no proof of what the first did. A refusal of the one copy sent does not.
+     */
+    @Test
+    fun aRefusalAfterAReSendIsMarkedResent() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ticker = launch(Dispatchers.IO) {
+                val base = System.nanoTime()
+                while (isActive) {
+                    elapsed = (System.nanoTime() - base) / 1_000_000
+                    delay(5)
+                }
+            }
+            val body = buildJsonObject { put("x", 1) }
+            for (resend in listOf(false, true)) {
+                val op = async(Dispatchers.IO) {
+                    runCatching {
+                        d.opOnceRetried("call.start", body, listOf(java.time.Duration.ofMillis(300)), java.time.Duration.ofSeconds(5))
+                    }.exceptionOrNull()
+                }
+                val req = v.open(nextDeposit().second)
+                if (resend) assertEquals(req.id, v.open(nextDeposit().second).id)
+                val refusal = Inner(
+                    id = Ulid.new(), type = req.type, ts = Instant.now(), re = req.id, status = Inner.STATUS_ERROR,
+                    error = com.vettid.core.crypto.envelope.InnerError("busy"),
+                )
+                d.handle(v.msg(v.keyring.current()!!.seal(refusal)))
+                val e = op.await()
+                assertTrue("$e", e is VaultOpException && e.code == "busy")
+                assertEquals("resent: $resend", resend, (e as VaultOpException).resent)
+            }
+            ticker.cancel()
+        }
+    }
+
+    /**
      * (0.97.0, the race of #454's recheck) A hang-up or a lock handled between the call id told and the first send (the
      * machine's `wanted` turns false, or the lock gate closes): no `call.start` goes, and `callStart` sends no hang-up,
      * since there is no call to end. The failure says nothing was sent.

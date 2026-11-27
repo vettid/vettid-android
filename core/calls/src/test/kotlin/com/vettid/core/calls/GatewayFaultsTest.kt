@@ -156,6 +156,12 @@ class GatewayFaultsTest {
         val g = VaultCallGateway({ error("not asked") }, emptyFlow(), { _, _ -> }, false, { CallShareFaults.NONE }, ops)
         val cases = listOf<Pair<() -> Exception, Boolean>>(
             { VaultOpException("call.start", "busy", "", null) } to true,
+            { VaultOpException("call.start", "owner_check_required", "", null) } to true,
+            // An `internal`, an `exists` or an unknown code may follow a placed call; so may any answer after a re-send.
+            { VaultOpException("call.start", "internal", "", null) } to false,
+            { VaultOpException("call.start", "exists", "", null) } to false,
+            { VaultOpException("call.start", "something_new", "", null) } to false,
+            { VaultOpException("call.start", "busy", "", null, resent = true) } to false,
             { VaultStateException("not sent", "call.start", VaultDevice.CODE_NOT_SENT) } to true,
             { VaultStateException("held", "call.start", VaultDevice.CODE_LOCK_PENDING) } to true,
             { VaultStateException("no response", "call.start") } to false,

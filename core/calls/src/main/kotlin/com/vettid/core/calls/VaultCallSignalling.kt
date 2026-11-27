@@ -281,8 +281,9 @@ internal class VaultCallSignalling(
      * and the connection's, read again from the vault's list): an identity rotation during the first start. Only
      * once, and only while the call is still [wanted] (a hang-up or a lock meanwhile places nothing more); the second
      * start is in form 2 again, whatever was learnt meanwhile. A second refusal ends the call as the first would have.
-     * Each start's `call_id` is told to [onCallId] before it goes, and to [notPlaced] when it is no call after all: the
-     * vault refused it, or nothing of it was sent ([nothingSent]).
+     * Each start's `call_id` is told to [onCallId] before it goes, and to [notPlaced] when it is surely no call: nothing
+     * of it was sent ([nothingSent]), or the vault refused its one copy with a code that comes before placing
+     * ([REFUSED_BEFORE_PLACING]).
      */
     @Suppress("LongParameterList") // start's own, and the hook for an id that is no call
     private suspend fun placeOnce(
@@ -298,7 +299,10 @@ internal class VaultCallSignalling(
             return try {
                 gateway.start(connectionId, sdp, suites, peerIk, { id -> told = id; onCallId(id) }, wanted)
             } catch (e: VaultOpException) {
-                told?.let(notPlaced)
+                // Only a refusal known to come before the vault places the call, of the one copy sent: any other (an
+                // `internal`, an `exists`, an unknown code, or an answer that may be to a re-sent copy) may follow a
+                // placed call, so its id keeps its hang-up (a needless one is ignored).
+                if (!e.resent && e.code in REFUSED_BEFORE_PLACING) told?.let(notPlaced)
                 throw e
             } catch (e: java.io.IOException) {
                 if (e.nothingSent) told?.let(notPlaced)
@@ -365,5 +369,12 @@ internal class VaultCallSignalling(
 
         /** What reading the connections again may take inside the ordered flow of events. */
         const val REFRESH_MS = 3_000L
+
+        /**
+         * (VAULT-MESSAGING §10.10) The `call.start` refusals that come before the vault places the call: with one of them
+         * to the only copy sent, there is no call to end.
+         */
+        val REFUSED_BEFORE_PLACING =
+            setOf("busy", "not_found", "connection_unavailable", "owner_check_required", "bad_request", "calls_off")
     }
 }

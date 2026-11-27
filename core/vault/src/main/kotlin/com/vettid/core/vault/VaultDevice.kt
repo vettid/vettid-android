@@ -191,8 +191,17 @@ class VaultMessage(val inner: Inner) {
  * [body] is the error response's body, when the code carries one (`exists`
  * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
  */
-class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
-    IOException("vault: $type: $code") {
+class VaultOpException(
+    val type: String,
+    val code: String,
+    message: String = "",
+    val body: JsonObject? = null,
+    /**
+     * (0.97.0) The request was deposited more than once ([VaultDevice.opOnceRetried]): the answer may be to a copy after
+     * the first, so it says nothing sure of what the first copy did.
+     */
+    val resent: Boolean = false,
+) : IOException("vault: $type: $code") {
     /**
      * The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1).
      * Never in the exception's message, which logs and crash reports may carry: the vault's text may carry vault data
@@ -1932,6 +1941,7 @@ class VaultDevice private constructor(
         timeout: Duration,
         stillWanted: () -> Boolean = { true },
         minAnswerWait: Duration = MIN_ANSWER_WAIT,
+        onCopy: () -> Unit = {},
     ): VaultMessage {
         val schedule = ResendTimes(resendAfter, timeout, minAnswerWait)
         val id = Ulid.new(now())
@@ -1966,7 +1976,7 @@ class VaultDevice private constructor(
                                 if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
                                 // A hang-up or a lock between the call id told and this send: nothing of it goes.
                                 if (!stillWanted()) throw VaultStateException("$type: no longer wanted, not sent", type, CODE_NOT_SENT)
-                                sendOnceLocked(id, type, body, null)
+                                sendOnceLocked(id, type, body, null).also { onCopy() }
                             }
                         }
                     }
@@ -1977,7 +1987,12 @@ class VaultDevice private constructor(
                     withTimeoutOrNull(bound) {
                         try {
                             tagged(type) {
-                                lock.withLock { if (!d.isCompleted && maySend(type) && stillWanted()) sendOnceLocked(id, type, body, null) }
+                                lock.withLock {
+                                    if (!d.isCompleted && maySend(type) && stillWanted()) {
+                                        sendOnceLocked(id, type, body, null)
+                                        onCopy()
+                                    }
+                                }
                             }
                         } catch (e: CancellationException) {
                             throw e
@@ -2001,9 +2016,13 @@ class VaultDevice private constructor(
         timeout: Duration,
         stillWanted: () -> Boolean = { true },
     ): JsonObject {
-        val r = requestOnceRetried(type, body, resendAfter, timeout, stillWanted)
+        val copies = java.util.concurrent.atomic.AtomicInteger()
+        val r = requestOnceRetried(type, body, resendAfter, timeout, stillWanted, onCopy = { copies.incrementAndGet() })
         if (r.inner.status != Inner.STATUS_OK) {
-            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
+            throw VaultOpException(
+                type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() },
+                resent = copies.get() > 1,
+            )
         }
         return r.body
     }
