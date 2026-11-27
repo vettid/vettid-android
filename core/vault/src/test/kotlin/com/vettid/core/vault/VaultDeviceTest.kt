@@ -5130,6 +5130,37 @@ class VaultDeviceTest {
             assertTrue("given up at about 1,600 ms: $took", took in 1_450L..1_950L)
             assertNull("no re-send", deposits.poll(100, TimeUnit.MILLISECONDS))
 
+            // Not made by the timeout: no answer.
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val stuck = async(Dispatchers.IO) {
+                runCatching { d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_000), minAnswerWait = java.time.Duration.ZERO) }
+            }
+            val e = withTimeout(3_000) { stuck.await() }.exceptionOrNull()
+            assertTrue("no answer: $e", e is VaultStateException)
+            depositGate!!.countDown()
+            depositGate = null
+            ticker.cancel()
+        }
+    }
+
+    /**
+     * (0.97.0, the rechecks of #454 and #455) The re-sends: a slow one makes the next, passed meanwhile, be skipped; one
+     * held past the timeout does not hold the end; and nothing goes for a request no longer wanted before its first send.
+     */
+    @Test
+    fun callStartReSendsAreBoundedAndSkippedWhenLateOrUnwanted() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ticker = launch(Dispatchers.IO) {
+                val base = System.nanoTime()
+                while (isActive) {
+                    elapsed = (System.nanoTime() - base) / 1_000_000
+                    delay(5)
+                }
+            }
+            val resend = listOf(java.time.Duration.ofMillis(400), java.time.Duration.ofMillis(800))
+            val body = buildJsonObject { put("x", 1) }
             // A slow re-send: the next re-send time, passed while it was being made, is skipped (no copies back to back).
             val second = async(Dispatchers.IO) {
                 runCatching {
@@ -5171,15 +5202,6 @@ class VaultDeviceTest {
             assertEquals(VaultDevice.CODE_NOT_WANTED, (never as? VaultStateException)?.code)
             assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
 
-            // Not made by the timeout: no answer.
-            depositGate = java.util.concurrent.CountDownLatch(1)
-            val stuck = async(Dispatchers.IO) {
-                runCatching { d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_000), minAnswerWait = java.time.Duration.ZERO) }
-            }
-            val e = withTimeout(3_000) { stuck.await() }.exceptionOrNull()
-            assertTrue("no answer: $e", e is VaultStateException)
-            depositGate!!.countDown()
-            depositGate = null
             ticker.cancel()
         }
     }
