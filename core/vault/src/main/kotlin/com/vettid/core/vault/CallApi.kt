@@ -441,8 +441,9 @@ suspend fun VaultApi.callStart(
         // No answer in time, an HTTP response that was lost, or an answer that does not verify: the vault may have
         // taken the call and sent the offer on, and nothing here could end it later. The durable hang-up does (a
         // vault that never saw the call ignores it). Also when the wait ended because the call is no longer wanted: the
-        // caller's own hang-up may already be on its way, and a second is ignored.
-        if (attempted) runCatching { callEnd(callId, CallReason.HANGUP) }
+        // caller's own hang-up may already be on its way, and a second is ignored. Not when nothing of it was sent (the
+        // lock gate held it, or it was unwanted before its first send): there is no call to end.
+        if (attempted && !e.nothingSent) runCatching { callEnd(callId, CallReason.HANGUP) }
         throw e
     }
 }

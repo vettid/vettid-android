@@ -9,6 +9,8 @@ import com.vettid.core.vault.MadeByCallApi
 import com.vettid.core.vault.VaultApi
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -129,6 +131,93 @@ class GatewayFaultsTest {
         }
     }
 
+    /**
+     * (0.97.0) The signalling tells the machine a `call_id` that is no call: one the vault refused (each of a form 2
+     * retry's two), and one of which nothing was sent (unwanted before its first send, held by the lock gate); never one
+     * that may have reached the vault (no answer, the relay).
+     */
+    @Test
+    fun anIdThatIsNoCallIsToldAsNotPlaced() = runTest {
+        val ids = ArrayDeque(listOf("01JB2Z6V9K3M4N5P6Q7R8S9T01", "01JB2Z6V9K3M4N5P6Q7R8S9T02"))
+        var failure: () -> Exception = { error("set below") }
+        val ops = object : CallOps() {
+            override suspend fun start(
+                api: suspend () -> VaultApi, connectionId: String, sdp: String, suites: Collection<MediaSuite>,
+                peerIk: ByteArray?, faults: CallShareFaults, testBuild: Boolean, onCallId: (String) -> Unit,
+                wanted: () -> Boolean,
+            ): com.vettid.core.vault.OutgoingCall {
+                onCallId(ids.removeFirst().also { ids.addLast(it) })
+                throw failure()
+            }
+        }
+        val g = VaultCallGateway({ error("not asked") }, emptyFlow(), { _, _ -> }, false, { CallShareFaults.NONE }, ops)
+        val cases = listOf<Pair<() -> Exception, Boolean>>(
+            { com.vettid.core.vault.VaultOpException("call.start", "busy", "", null) } to true,
+            { com.vettid.core.vault.VaultStateException("not sent", "call.start", com.vettid.core.vault.VaultDevice.CODE_NOT_SENT) } to true,
+            { com.vettid.core.vault.VaultStateException("held", "call.start", com.vettid.core.vault.VaultDevice.CODE_LOCK_PENDING) } to true,
+            { com.vettid.core.vault.VaultStateException("no response", "call.start") } to false,
+            { com.vettid.core.vault.VaultStateException("unwanted", "call.start", com.vettid.core.vault.VaultDevice.CODE_NOT_WANTED) } to false,
+            { java.io.IOException("relay") } to false,
+        )
+        for ((f, isNoCall) in cases) {
+            failure = f
+            val told = mutableListOf<String>()
+            val notPlaced = mutableListOf<String>()
+            val s = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), vaultIsC2 = { false })
+            runCatching {
+                s.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it }, notPlaced = { notPlaced += it })
+            }
+            assertEquals("${f()}", if (isNoCall) told else emptyList<String>(), notPlaced)
+        }
+
+        // A form 2 start answered `bad_request`, and its retry refused too: both ids are no call.
+        val answers = ArrayDeque(listOf("bad_request", "busy"))
+        failure = { com.vettid.core.vault.VaultOpException("call.start", answers.removeFirst(), "", null) }
+        val told = mutableListOf<String>()
+        val notPlaced = mutableListOf<String>()
+        val c2 = VaultCallSignalling(g, { "fp" }, listOf(MediaSuite.AES_128_GCM), peerKey = { ByteArray(32) { 7 } }, vaultIsC2 = { true })
+        runCatching {
+            c2.start("conn-1", "v=0\r\n", listOf(MediaSuite.AES_128_GCM), wanted = { true }, onCallId = { told += it }, notPlaced = { notPlaced += it })
+        }
+        assertEquals(2, told.toSet().size)
+        assertEquals(told, notPlaced)
+    }
+
+    /**
+     * (0.97.0) `CallOps.start` hands the machine's `wanted` on to `callStart` as its `stillWanted`: a call no longer wanted
+     * when its first copy would go sends nothing (a real device, never paired, so anything sent would fail otherwise),
+     * and `callStart` sends no hang-up for it.
+     */
+    @Test
+    fun callOpsStartPassesWantedOnToCallStart() = kotlinx.coroutines.runBlocking {
+        // A relay that registers the mailbox and records anything else.
+        val other = mutableListOf<String>()
+        val relay = okhttp3.Interceptor { chain ->
+            val path = chain.request().url.encodedPath
+            val registered = path == "/v1/register"
+            if (!registered) synchronized(other) { other += path }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(if (registered) 201 else 500).message("test")
+                .body(
+                    (if (registered) REGISTERED else "{}").toResponseBody("application/json".toMediaType()),
+                ).build()
+        }
+        val cfg = com.vettid.core.vault.DeviceConfig(
+            name = "phone", relayUrl = "http://relay.test", http = okhttp3.OkHttpClient.Builder().addInterceptor(relay).build(),
+            store = com.vettid.core.vault.InMemoryDeviceStateStore(),
+        )
+        val d = com.vettid.core.vault.VaultDevice.create(cfg, com.vettid.core.vault.DeviceSecrets.generate())
+        val api = VaultApi(d)
+        val sdp = "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n"
+        val told = mutableListOf<String>()
+        val e = runCatching {
+            CallOps().start({ api }, "conn-1", sdp, MediaSuite.DEFAULT, null, CallShareFaults.NONE, false, { told += it }, { false })
+        }.exceptionOrNull()
+        assertEquals(1, told.size)
+        assertEquals("$e", com.vettid.core.vault.VaultDevice.CODE_NOT_SENT, (e as? com.vettid.core.vault.VaultStateException)?.code)
+        assertEquals("nothing sent, no hang-up", emptyList<String>(), synchronized(other) { other.toList() })
+    }
+
     @Test
     fun noFaultsGoThroughToTheVault() = runTest {
         var asked = 0
@@ -138,5 +227,11 @@ class GatewayFaultsTest {
             kotlinx.coroutines.runBlocking { g.start("conn-1", "v=0\r\n", MediaSuite.DEFAULT, null) }
         }
         assertEquals(1, asked)
+    }
+
+    private companion object {
+        const val REGISTERED = """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,""" +
+            """"visibility_timeout_seconds":60,"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,""" +
+            """"max_claim_bytes":1,"claim_ttl_seconds":1}}"""
     }
 }

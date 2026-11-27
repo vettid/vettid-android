@@ -5199,10 +5199,41 @@ class VaultDeviceTest {
             val never = runCatching {
                 d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_200), stillWanted = { false })
             }.exceptionOrNull()
-            assertEquals(VaultDevice.CODE_NOT_WANTED, (never as? VaultStateException)?.code)
+            assertEquals(VaultDevice.CODE_NOT_SENT, (never as? VaultStateException)?.code)
+            assertTrue(never!!.nothingSent)
             assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
 
             ticker.cancel()
+        }
+    }
+
+    /**
+     * (0.97.0, the race of #454's recheck) A hang-up or a lock handled between the call id told and the first send (the
+     * machine's `wanted` turns false, or the lock gate closes): no `call.start` goes, and `callStart` sends no hang-up,
+     * since there is no call to end. The failure says nothing was sent.
+     */
+    @Test
+    fun aLockBetweenTheCallIdAndTheFirstSendSendsNothing() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, _) = pairedDevice(this, store)
+            val api = VaultApi(d)
+            for (case in listOf("unwanted", "gate")) {
+                var wanted = true
+                val e = runCatching {
+                    api.callStart(
+                        "conn-1", sdp, timeout = java.time.Duration.ofMillis(1_200),
+                        resendAfter = listOf(java.time.Duration.ofMillis(400)),
+                        onCallId = { if (case == "unwanted") wanted = false else d.sendGate = VaultDevice.SendGate { false } },
+                        stillWanted = { wanted },
+                    )
+                }.exceptionOrNull()
+                assertTrue("$case: $e", e is VaultStateException && e.nothingSent)
+                if (case == "gate") assertTrue(e!!.heldByLockGate)
+                assertNull("$case: neither the start nor a hang-up", deposits.poll(600, TimeUnit.MILLISECONDS))
+                d.sendGate = VaultDevice.SendGate { true }
+                assertTrue("$case: nothing in the outbox", savedState(store).outbox.none { it.type == "call.end" })
+            }
         }
     }
 
