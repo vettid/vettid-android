@@ -1930,7 +1930,6 @@ class VaultDevice private constructor(
             noteOpeningSent(id)
             for (at in resendAfter) {
                 withTimeoutOrNull(left(at)) { d.await() }?.let { return VaultMessage(it) }
-                if (!stillWanted()) continue
                 // Bounded by the end, whatever the deposit or the device lock takes.
                 withTimeoutOrNull(left(timeout)) {
                     try {
