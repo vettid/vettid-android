@@ -18,12 +18,15 @@ class ResendTimesTest {
         val startAt: Long = 1_000,
         val firstTakes: Long = 0,
         val againTakes: Long = 0,
+        /** Each re-send's own time, when they differ (else [againTakes]). */
+        val againEach: List<Long> = emptyList(),
         val answerAt: Long? = null,
     ) {
         var now = startAt
         val sends = mutableListOf<Long>()
         var bounds = mutableListOf<Long>()
         var endedAt = -1L
+        var againsMade = 0
 
         fun at(ms: Long) = ms - startAt
 
@@ -38,8 +41,9 @@ class ResendTimesTest {
             },
             again = { bound ->
                 bounds += bound
-                now += minOf(againTakes, bound)
-                if (againTakes <= bound) sends += at(now)
+                val takes = againEach.getOrElse(againsMade++) { againTakes }
+                now += minOf(takes, bound)
+                if (takes <= bound) sends += at(now)
             },
             answerWithin = { ms ->
                 val a = answerAt?.plus(startAt)
@@ -104,6 +108,10 @@ class ResendTimesTest {
         assertNull(slow.on(times))
         assertEquals("20 s passed while the 10 s copy was made", listOf(0L, 21_000L), slow.sends)
         assertEquals(30_000L, slow.endedAt)
+
+        val thenFast = Run(againEach = listOf(11_000, 0))
+        assertNull(thenFast.on(times))
+        assertEquals("no fast copy straight after the slow one", listOf(0L, 21_000L), thenFast.sends)
 
         val held = Run(againTakes = 60_000)
         assertNull(held.on(times))
