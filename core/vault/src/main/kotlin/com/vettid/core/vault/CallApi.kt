@@ -361,6 +361,7 @@ private fun checkSdp(sdp: String) {
  * same `call_id` follows, so that a call the vault did place does not ring on for nobody.
  */
 @OptIn(MadeByCallApi::class)
+@Suppress("CyclomaticComplexMethod") // one path per way a start ends
 suspend fun VaultApi.callStart(
     connectionId: String,
     sdp: String,
@@ -434,6 +435,12 @@ suspend fun VaultApi.callStart(
     } catch (e: VaultOpException) {
         // The vault's own refusal: there is no call.
         key.destroy()
+        throw e
+    } catch (e: VaultStateException) {
+        key.destroy()
+        // No answer in time (below). Not when the wait ended because the call is no longer wanted: the caller ends it
+        // (the machine's hang-up for a pending call goes at once), so no second hang-up goes here.
+        if (attempted && e.code != VaultDevice.CODE_NOT_WANTED) runCatching { callEnd(callId, CallReason.HANGUP) }
         throw e
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
         key.destroy()

@@ -5028,8 +5028,16 @@ class VaultDeviceTest {
                 }
                 assertEquals(case, "call.start", v.open(nextDeposit().second).type)
                 if (case == "unwanted") wanted = false else d.sendGate = VaultDevice.SendGate { it == "call.end" }
-                assertTrue(case, gone.await() is VaultStateException)
-                assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
+                val began = System.nanoTime()
+                val e = gone.await()
+                assertTrue(case, e is VaultStateException)
+                if (case == "unwanted") {
+                    // The wait ends at once, and the caller (the machine, at its hang-up) sends the end: none here.
+                    assertEquals(VaultDevice.CODE_NOT_WANTED, (e as VaultStateException).code)
+                    assertTrue("ended at once", (System.nanoTime() - began) / 1_000_000 < 700)
+                } else {
+                    assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
+                }
                 assertNull(case, deposits.poll(300, TimeUnit.MILLISECONDS))
                 d.sendGate = VaultDevice.SendGate { true }
             }
@@ -5122,6 +5130,28 @@ class VaultDeviceTest {
             val took = (System.nanoTime() - began) / 1_000_000
             assertTrue("given up at about 1,600 ms: $took", took in 1_450L..1_950L)
             assertNull("no re-send", deposits.poll(100, TimeUnit.MILLISECONDS))
+
+            // A slow re-send: the next re-send time, passed while it was being made, is skipped (no copies back to back).
+            val second = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(2_000), minAnswerWait = java.time.Duration.ZERO)
+                }
+            }
+            v.open(nextDeposit().second)
+            depositGate = java.util.concurrent.CountDownLatch(1) // the re-send at 400 ms waits
+            delay(1_000)
+            depositGate!!.countDown()
+            depositGate = null
+            v.open(nextDeposit().second)
+            assertNull("the 800 ms copy is skipped", deposits.poll(700, TimeUnit.MILLISECONDS))
+            assertTrue(second.await().exceptionOrNull() is VaultStateException)
+
+            // Not wanted before the first send (a hang-up just after the call id was told): nothing is sent.
+            val never = runCatching {
+                d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_200), stillWanted = { false })
+            }.exceptionOrNull()
+            assertEquals(VaultDevice.CODE_NOT_WANTED, (never as? VaultStateException)?.code)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
 
             // Not made by the timeout: no answer.
             depositGate = java.util.concurrent.CountDownLatch(1)
