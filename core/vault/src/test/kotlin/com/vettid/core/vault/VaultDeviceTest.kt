@@ -5105,6 +5105,24 @@ class VaultDeviceTest {
             assertTrue("the answer after a slow first deposit: ${slow.await()}", slow.await().isSuccess)
             assertNull("no copy back to back", deposits.poll(300, TimeUnit.MILLISECONDS))
 
+            // Made in about 1,000 ms of 1,200 and never answered: no re-send, and given up after the short wait (about
+            // 1,600 ms from the start), never 1,200 ms after the first deposit.
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val began = System.nanoTime()
+            val unanswered = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_200), minAnswerWait = java.time.Duration.ofMillis(600))
+                }
+            }
+            delay(1_000)
+            depositGate!!.countDown()
+            depositGate = null
+            v.open(nextDeposit().second)
+            assertTrue(unanswered.await().exceptionOrNull() is VaultStateException)
+            val took = (System.nanoTime() - began) / 1_000_000
+            assertTrue("given up at about 1,600 ms: $took", took in 1_450L..1_950L)
+            assertNull("no re-send", deposits.poll(100, TimeUnit.MILLISECONDS))
+
             // Not made by the timeout: no answer.
             depositGate = java.util.concurrent.CountDownLatch(1)
             val stuck = async(Dispatchers.IO) {
