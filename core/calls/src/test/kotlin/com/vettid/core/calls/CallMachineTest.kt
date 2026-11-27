@@ -972,6 +972,37 @@ class CallMachineTest {
     }
 
     /**
+     * (0.97.0, the review of #454) A hang-up, or a lock, while `call.start` waits for its answer: its hang-up goes at once
+     * (the callee stops ringing now, not when the start gives up), and the answer when it comes sends no second one.
+     */
+    @Test
+    fun aHangUpWhileTheStartIsPendingEndsTheCallAtOnce() = runTest {
+        for (lock in listOf(false, true)) {
+            val s = FakeSignalling().apply { startGate = Channel(1); tellIds = true }
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            if (lock) m.vaultLocking() else m.hangUp()
+            runCurrent()
+            assertEquals("lock $lock", listOf("end($CALL_ID, hangup)"), s.sent.filter { it.startsWith("end") })
+            s.startGate!!.send(Unit)
+            runCurrent()
+            assertEquals("lock $lock: one hang-up", 1, s.sent.count { it.startsWith("end") })
+        }
+        // Without the id told (an older gateway), nothing changes: the hang-up goes when the answer comes.
+        val s = FakeSignalling().apply { startGate = Channel(1) }
+        val m = machine(s)
+        m.call("conn-1")
+        runCurrent()
+        m.hangUp()
+        runCurrent()
+        assertTrue(s.sent.none { it.startsWith("end") })
+        s.startGate!!.send(Unit)
+        runCurrent()
+        assertEquals(listOf("end($CALL_ID, hangup)"), s.sent.filter { it.startsWith("end") })
+    }
+
+    /**
      * (C2, VAULT-MESSAGING §10.10 "Glare", decision D21 a) This device's outgoing call lost a glare: the vault ends it
      * `busy` with `superseded_by` and rings the connection's own call, which this device answers without asking,
      * whichever of the two arrives first. Nothing is sent for the lost call, and "busy" is never shown.

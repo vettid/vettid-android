@@ -1900,18 +1900,25 @@ class VaultDevice private constructor(
     /**
      * (VAULT-MESSAGING 0.97.0 §10.10 "Placing a call") A request deposited once ([sendOnce]) and, with no answer,
      * deposited again with the same inner id (an application retry, §8.6) at each time in [resendAfter] after the first
-     * send, until [timeout] after it; never through the outbox. The first answer to the id is taken; a later one finds
-     * nothing waiting and is dropped. A re-send the gate holds back, or the relay refuses, is skipped and the wait goes
-     * on; none goes once [stillWanted] says no (a hang-up, a lock). The times are on [DeviceConfig.elapsedMs] from just
-     * before the first send, so a slow deposit does not push the end past [timeout]. Throws [VaultStateException] without
-     * an answer by [timeout].
+     * send, until [timeout] after it; never through the outbox. The times are on [DeviceConfig.elapsedMs] from just before
+     * the first send (the device lock's wait counts), and every deposit, the first included, is bounded by [timeout]:
+     * - a first deposit not done by then is no answer (the caller treats it as one: the request may have reached the vault);
+     * - resend times that passed while the first deposit was being made are skipped (that copy has just gone);
+     * - after a first deposit that took most of the time, the answer is still waited for [minAnswerWait] from when it was
+     *   made, so a request that has just landed is not given up at once.
+     * The first answer to the id is taken, also one that came while a deposit was being made or at the deadline; a later one
+     * finds nothing waiting and is dropped. No copy goes again once the answer is in, once [stillWanted] says no (a hang-up,
+     * a lock), or while the gate holds sends back; one the relay refuses is skipped and the wait goes on. Throws
+     * [VaultStateException] without an answer.
      */
+    @Suppress("LongParameterList", "ReturnCount", "CyclomaticComplexMethod")
     suspend fun requestOnceRetried(
         type: String,
         body: JsonObject,
         resendAfter: List<Duration>,
         timeout: Duration,
         stillWanted: () -> Boolean = { true },
+        minAnswerWait: Duration = MIN_ANSWER_WAIT,
     ): VaultMessage {
         require(resendAfter.zipWithNext().all { (a, b) -> a < b } && resendAfter.all { it > Duration.ZERO && it < timeout })
         val id = Ulid.new(now())
@@ -1920,30 +1927,40 @@ class VaultDevice private constructor(
         noteOpeningRequest(id)
         val t0 = cfg.elapsedMs()
         val left = { at: Duration -> (at.toMillis() - (cfg.elapsedMs() - t0)).coerceAtLeast(0) }
+        val answered = { if (d.isCompleted) VaultMessage(d.getCompleted()) else null }
+        val noAnswer = { VaultStateException("$type: no response", type) }
         try {
-            tagged(type) {
-                lock.withLock {
-                    if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
-                    sendOnceLocked(id, type, body, null)
+            val sent = withTimeoutOrNull(left(timeout)) {
+                tagged(type) {
+                    lock.withLock {
+                        if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
+                        sendOnceLocked(id, type, body, null)
+                    }
                 }
             }
+            if (sent == null) throw noAnswer()
             noteOpeningSent(id)
+            val firstDone = cfg.elapsedMs()
             for (at in resendAfter) {
+                if (at.toMillis() <= firstDone - t0) continue // passed while the first copy was being made
                 withTimeoutOrNull(left(at)) { d.await() }?.let { return VaultMessage(it) }
-                // Bounded by the end, whatever the deposit or the device lock takes.
+                answered()?.let { return it }
                 withTimeoutOrNull(left(timeout)) {
                     try {
-                        tagged(type) { lock.withLock { if (maySend(type) && stillWanted()) sendOnceLocked(id, type, body, null) } }
+                        tagged(type) {
+                            lock.withLock { if (!d.isCompleted && maySend(type) && stillWanted()) sendOnceLocked(id, type, body, null) }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
                         // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
                     }
                 }
-                if (d.isCompleted) return VaultMessage(d.await())
+                answered()?.let { return it }
             }
-            withTimeoutOrNull(left(timeout)) { d.await() }?.let { return VaultMessage(it) }
-            throw VaultStateException("$type: no response", type)
+            val floor = (minAnswerWait.toMillis() - (cfg.elapsedMs() - firstDone)).coerceAtLeast(0)
+            withTimeoutOrNull(maxOf(left(timeout), floor)) { d.await() }?.let { return VaultMessage(it) }
+            return answered() ?: throw noAnswer()
         } finally {
             pending.remove(id)
         }
@@ -3851,6 +3868,12 @@ class VaultDevice private constructor(
     }
 
     companion object {
+        /**
+         * [requestOnceRetried]: how long the answer is still waited for after a first deposit that took most of the time,
+         * so that a request that has just landed is not given up (and hung up) at once.
+         */
+        val MIN_ANSWER_WAIT: Duration = Duration.ofSeconds(2)
+
         /** [settleCollect]'s batch: RELAY-PROTOCOL's default `max`. */
         const val SETTLE_COLLECT_MAX = 32
 

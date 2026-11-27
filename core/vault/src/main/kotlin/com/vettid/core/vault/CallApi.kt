@@ -270,6 +270,10 @@ private fun <T> checked(what: String, block: () -> T): T = try {
     throw CallMessageException(what, e)
 }
 
+/** `withheld: true` in an answer (a JSON true; anything else is not withheld). */
+private fun JsonObject.isWithheld(): Boolean =
+    (this["withheld"] as? JsonPrimitive)?.takeUnless { it.isString }?.content == "true"
+
 private fun VaultApi.iceOf(o: JsonObject, callId: String): CallWire.IceConfig = checked("ice configuration") {
     val sig = o.b64("ice_sig", Suite.ED25519_SIGNATURE_SIZE)
     CallWire.verifyIce(device.vaultIdentityKey(), o.b64("ice_config"), sig, callId, device.clockNow())
@@ -421,7 +425,12 @@ suspend fun VaultApi.callStart(
         )
         if (o.need("call_id") != callId) throw CallMessageException("call.start answered for another call")
         val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }
-        return OutgoingCall(callId, connectionId, media, exp, iceOf(o, callId), offered, key, parties)
+        // (0.97.0 §8.2, §10.10) The vault's cached copy (`withheld: true`) is the call without a TURN server: should it carry
+        // an entry with a credential all the same, that entry is not used.
+        val ice = iceOf(o, callId).let { c ->
+            if (o.isWithheld()) c.copy(servers = c.servers.filter { it.username == null && it.credential == null }) else c
+        }
+        return OutgoingCall(callId, connectionId, media, exp, ice, offered, key, parties)
     } catch (e: VaultOpException) {
         // The vault's own refusal: there is no call.
         key.destroy()

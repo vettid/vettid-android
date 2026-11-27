@@ -667,6 +667,17 @@ internal class CallMachine(
 
     private fun hangUp(s: Session, reason: CallEnd) {
         s.memberEnded = true
+        // (VAULT-MESSAGING 0.97.0) A hang-up (or a lock) while `call.start` waits for its answer, which may take 30 s: the
+        // hang-up for each id it went with goes now, so the callee stops ringing now. Not for one the vault ended already.
+        // Remembered as ended, so the answer when it comes sends no second one ([onPlaced]).
+        if (s.callId == null) {
+            for (id in s.pendingIds) {
+                if (id !in endedOthers) {
+                    rememberEndedOther(id)
+                    sendEnd(id, CallReason.HANGUP)
+                }
+            }
+        }
         when {
             s.phase == CallPhase.INCOMING -> finish(s, if (reason == CallEnd.HUNG_UP) CallEnd.DECLINED_HERE else reason, CallReason.DECLINE)
             s.callId == null || s.supersededBy != null -> finish(s, reason, null)

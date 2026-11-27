@@ -5043,14 +5043,77 @@ class VaultDeviceTest {
             assertEquals(first.id, again.id)
             val id2 = StrictJson.parseObject(first.body).string("call_id")
             val exp = Instant.now().plusSeconds(45).truncatedTo(java.time.temporal.ChronoUnit.MILLIS)
-            val copy = v.ice(JsonBuilder().string("call_id", id2).string("exp", ts(exp)), id2).bool("withheld", true).build()
+            // A copy marked withheld that carries a TURN entry all the same: the entry is not used.
+            val servers = listOf(CallWire.IceServer(listOf("stun:stun.example:3478")), CallWire.IceServer(listOf("turn:turn.example:3478"), "u", "c"))
+            fun withTurn(id: String, withheld: Boolean): String {
+                val cfg = CallWire.marshalIce(CallWire.IceConfig(id, Instant.ofEpochSecond(Instant.now().plusSeconds(21_600).epochSecond), servers))
+                val b = JsonBuilder().string("call_id", id).string("exp", ts(exp)).base64("ice_config", cfg).base64("ice_sig", v.ik.sign(CallWire.LABEL_ICE, cfg))
+                return (if (withheld) b.bool("withheld", true) else b).build()
+            }
+            val copy = withTurn(id2, true)
             d.handle(v.seal("call.start", copy, re = first.id, status = Inner.STATUS_OK))
             val call = starting.await()
             assertEquals(id2, call.callId)
-            assertTrue("no TURN entry", call.ice.servers.isEmpty())
+            assertEquals("the STUN entry alone", listOf(servers[0]), call.ice.servers)
+
+            // The live answer keeps its TURN entry.
+            val live = async(Dispatchers.IO) { api.callStart("conn-1", sdp, timeout = java.time.Duration.ofSeconds(5), resendAfter = emptyList()) }
+            val lr = v.open(nextDeposit().second)
+            val id3 = StrictJson.parseObject(lr.body).string("call_id")
+            d.handle(v.seal("call.start", withTurn(id3, false), re = lr.id, status = Inner.STATUS_OK))
+            assertEquals(servers, live.await().ice.servers)
             // A second answer to the same request matches nothing: no failure, nothing sent.
             d.handle(v.seal("call.start", copy, re = first.id, status = Inner.STATUS_OK))
             assertNull(deposits.poll(600, TimeUnit.MILLISECONDS))
+            ticker.cancel()
+        }
+    }
+
+    /**
+     * (0.97.0, the review of #454) A slow first deposit: resend times that passed while it was made are skipped (no copies
+     * back to back), and the answer is still waited for a moment after it, so a request that has just landed is not given
+     * up. A first deposit not done by the timeout is no answer.
+     */
+    @Test
+    fun aSlowFirstCallStartIsNeitherRepeatedAtOnceNorGivenUpAtOnce() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ticker = launch(Dispatchers.IO) {
+                val base = System.nanoTime()
+                while (isActive) {
+                    elapsed = (System.nanoTime() - base) / 1_000_000
+                    delay(5)
+                }
+            }
+            val resend = listOf(java.time.Duration.ofMillis(400), java.time.Duration.ofMillis(800))
+            val body = buildJsonObject { put("x", 1) }
+
+            // Made in about 1,000 ms of 1,200: no re-send, and an answer 300 ms later is still taken.
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val slow = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_200), minAnswerWait = java.time.Duration.ofMillis(600))
+                }
+            }
+            delay(1_000)
+            depositGate!!.countDown()
+            depositGate = null
+            val req = v.open(nextDeposit().second)
+            delay(300)
+            d.handle(v.seal("call.start", "{}", re = req.id, status = Inner.STATUS_OK))
+            assertTrue("the answer after a slow first deposit: ${slow.await()}", slow.await().isSuccess)
+            assertNull("no copy back to back", deposits.poll(300, TimeUnit.MILLISECONDS))
+
+            // Not made by the timeout: no answer.
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            val stuck = async(Dispatchers.IO) {
+                runCatching { d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_000), minAnswerWait = java.time.Duration.ZERO) }
+            }
+            val e = withTimeout(3_000) { stuck.await() }.exceptionOrNull()
+            assertTrue("no answer: $e", e is VaultStateException)
+            depositGate!!.countDown()
+            depositGate = null
             ticker.cancel()
         }
     }
