@@ -218,6 +218,7 @@ class VaultCallSignallingTest {
             suites: Collection<MediaSuite>,
             peerIk: ByteArray?,
             onCallId: (String) -> Unit,
+            wanted: () -> Boolean,
         ): OutgoingCall = onStart(peerIk)
     }
 

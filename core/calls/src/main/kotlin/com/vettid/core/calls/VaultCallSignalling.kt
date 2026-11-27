@@ -296,10 +296,10 @@ internal class VaultCallSignalling(
         }
         val peerIk = key()
         return try {
-            gateway.start(connectionId, sdp, suites, peerIk, onCallId)
+            gateway.start(connectionId, sdp, suites, peerIk, onCallId, wanted)
         } catch (e: VaultOpException) {
             val again = if (peerIk != null && e.code == "bad_request") refreshedKey(connectionId, wanted) else null
-            gateway.start(connectionId, sdp, suites, again ?: throw e, onCallId)
+            gateway.start(connectionId, sdp, suites, again ?: throw e, onCallId, wanted)
         }
     }
 

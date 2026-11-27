@@ -380,6 +380,8 @@ suspend fun VaultApi.callStart(
      * answer ends the pending call at once (§10.10 "Order").
      */
     onCallId: (String) -> Unit = {},
+    /** (0.97.0) Whether the call is still wanted (not hung up, the vault not locking): no copy is sent again once not. */
+    stillWanted: () -> Boolean = { true },
 ): OutgoingCall {
     checkFaults(faults, testBuild)
     // A fault of form 2 on a form 1 start would do nothing, and a test run could pass for the wrong reason.
@@ -415,6 +417,7 @@ suspend fun VaultApi.callStart(
             },
             resendAfter,
             timeout,
+            stillWanted,
         )
         if (o.need("call_id") != callId) throw CallMessageException("call.start answered for another call")
         val exp = checked("exp") { Timestamps.parseMillis(o.need("exp")) }

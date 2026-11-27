@@ -1902,19 +1902,24 @@ class VaultDevice private constructor(
      * deposited again with the same inner id (an application retry, §8.6) at each time in [resendAfter] after the first
      * send, until [timeout] after it; never through the outbox. The first answer to the id is taken; a later one finds
      * nothing waiting and is dropped. A re-send the gate holds back, or the relay refuses, is skipped and the wait goes
-     * on. Throws [VaultStateException] without an answer by [timeout].
+     * on; none goes once [stillWanted] says no (a hang-up, a lock). The times are on [DeviceConfig.elapsedMs] from just
+     * before the first send, so a slow deposit does not push the end past [timeout]. Throws [VaultStateException] without
+     * an answer by [timeout].
      */
     suspend fun requestOnceRetried(
         type: String,
         body: JsonObject,
         resendAfter: List<Duration>,
         timeout: Duration,
+        stillWanted: () -> Boolean = { true },
     ): VaultMessage {
         require(resendAfter.zipWithNext().all { (a, b) -> a < b } && resendAfter.all { it > Duration.ZERO && it < timeout })
         val id = Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         noteOpeningRequest(id)
+        val t0 = cfg.elapsedMs()
+        val left = { at: Duration -> (at.toMillis() - (cfg.elapsedMs() - t0)).coerceAtLeast(0) }
         try {
             tagged(type) {
                 lock.withLock {
@@ -1923,19 +1928,22 @@ class VaultDevice private constructor(
                 }
             }
             noteOpeningSent(id)
-            var waited = Duration.ZERO
-            for (at in resendAfter + timeout) {
-                withTimeoutOrNull(at.minus(waited).toMillis()) { d.await() }?.let { return VaultMessage(it) }
-                waited = at
-                if (at == timeout) break
-                try {
-                    tagged(type) { lock.withLock { if (maySend(type)) sendOnceLocked(id, type, body, null) } }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                    // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
+            for (at in resendAfter) {
+                withTimeoutOrNull(left(at)) { d.await() }?.let { return VaultMessage(it) }
+                if (!stillWanted()) continue
+                // Bounded by the end, whatever the deposit or the device lock takes.
+                withTimeoutOrNull(left(timeout)) {
+                    try {
+                        tagged(type) { lock.withLock { if (maySend(type) && stillWanted()) sendOnceLocked(id, type, body, null) } }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                        // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
+                    }
                 }
+                if (d.isCompleted) return VaultMessage(d.await())
             }
+            withTimeoutOrNull(left(timeout)) { d.await() }?.let { return VaultMessage(it) }
             throw VaultStateException("$type: no response", type)
         } finally {
             pending.remove(id)
@@ -1943,8 +1951,14 @@ class VaultDevice private constructor(
     }
 
     /** [requestOnceRetried], returning the body of an ok response or throwing [VaultOpException]. */
-    suspend fun opOnceRetried(type: String, body: JsonObject, resendAfter: List<Duration>, timeout: Duration): JsonObject {
-        val r = requestOnceRetried(type, body, resendAfter, timeout)
+    suspend fun opOnceRetried(
+        type: String,
+        body: JsonObject,
+        resendAfter: List<Duration>,
+        timeout: Duration,
+        stillWanted: () -> Boolean = { true },
+    ): JsonObject {
+        val r = requestOnceRetried(type, body, resendAfter, timeout, stillWanted)
         if (r.inner.status != Inner.STATUS_OK) {
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }

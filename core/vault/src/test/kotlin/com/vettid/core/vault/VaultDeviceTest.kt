@@ -45,6 +45,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
@@ -4985,6 +4987,14 @@ class VaultDeviceTest {
             val api = VaultApi(d)
             val resend = listOf(java.time.Duration.ofMillis(400), java.time.Duration.ofMillis(800))
             val told = mutableListOf<String>()
+            // The phone's monotonic clock, running with real time for the re-send times.
+            val ticker = launch(Dispatchers.IO) {
+                val base = System.nanoTime()
+                while (isActive) {
+                    elapsed = (System.nanoTime() - base) / 1_000_000
+                    delay(5)
+                }
+            }
 
             // No answer: three copies of one request, then the hang-up for its call.
             val unanswered = async(Dispatchers.IO) {
@@ -4992,8 +5002,11 @@ class VaultDeviceTest {
                     api.callStart("conn-1", sdp, timeout = java.time.Duration.ofMillis(1_200), resendAfter = resend, onCallId = { told += it })
                 }.exceptionOrNull()
             }
-            val copies = List(3) { v.open(nextDeposit().second) }
+            val times = mutableListOf<Long>()
+            val copies = List(3) { v.open(nextDeposit().second).also { times += System.nanoTime() / 1_000_000 } }
+            val gaps = times.map { it - times[0] }
             assertTrue(copies.all { it.type == "call.start" })
+            assertTrue("copies at about 400 and 800 ms: $gaps", gaps[1] in 300L..650L && gaps[2] in 700L..1_050L)
             assertEquals("the same request each time", 1, copies.map { it.id }.toSet().size)
             assertEquals(1, copies.map { String(it.body) }.toSet().size)
             assertTrue("never in the outbox", savedState(store).outbox.none { it.type == "call.start" })
@@ -5004,6 +5017,22 @@ class VaultDeviceTest {
             assertEquals("call.end", end.type)
             assertEquals("""{"call_id":"$callId","reason":"hangup"}""", String(end.body))
             assertNull("nothing more", deposits.poll(300, TimeUnit.MILLISECONDS))
+
+            // No copy goes again once the call is no longer wanted, or while the gate holds sends back.
+            for (case in listOf("unwanted", "gate")) {
+                var wanted = true
+                val gone = async(Dispatchers.IO) {
+                    runCatching {
+                        api.callStart("conn-1", sdp, timeout = java.time.Duration.ofMillis(1_200), resendAfter = resend, stillWanted = { wanted })
+                    }.exceptionOrNull()
+                }
+                assertEquals(case, "call.start", v.open(nextDeposit().second).type)
+                if (case == "unwanted") wanted = false else d.sendGate = VaultDevice.SendGate { it == "call.end" }
+                assertTrue(case, gone.await() is VaultStateException)
+                assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
+                assertNull(case, deposits.poll(300, TimeUnit.MILLISECONDS))
+                d.sendGate = VaultDevice.SendGate { true }
+            }
 
             // Answered after the first re-send, with the cached copy (withheld, STUN only): the call is kept.
             val starting = async(Dispatchers.IO) {
@@ -5022,6 +5051,7 @@ class VaultDeviceTest {
             // A second answer to the same request matches nothing: no failure, nothing sent.
             d.handle(v.seal("call.start", copy, re = first.id, status = Inner.STATUS_OK))
             assertNull(deposits.poll(600, TimeUnit.MILLISECONDS))
+            ticker.cancel()
         }
     }
 
