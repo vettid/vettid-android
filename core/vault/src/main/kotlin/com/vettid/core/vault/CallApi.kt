@@ -361,6 +361,7 @@ private fun checkSdp(sdp: String) {
  * same `call_id` follows, so that a call the vault did place does not ring on for nobody.
  */
 @OptIn(MadeByCallApi::class)
+@Suppress("CyclomaticComplexMethod") // one path per way a start ends
 suspend fun VaultApi.callStart(
     connectionId: String,
     sdp: String,
@@ -439,7 +440,8 @@ suspend fun VaultApi.callStart(
         key.destroy()
         // No answer in time, an HTTP response that was lost, or an answer that does not verify: the vault may have
         // taken the call and sent the offer on, and nothing here could end it later. The durable hang-up does (a
-        // vault that never saw the call ignores it).
+        // vault that never saw the call ignores it). Also when the wait ended because the call is no longer wanted: the
+        // caller's own hang-up may already be on its way, and a second is ignored.
         if (attempted) runCatching { callEnd(callId, CallReason.HANGUP) }
         throw e
     }

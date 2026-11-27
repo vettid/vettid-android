@@ -5028,7 +5028,14 @@ class VaultDeviceTest {
                 }
                 assertEquals(case, "call.start", v.open(nextDeposit().second).type)
                 if (case == "unwanted") wanted = false else d.sendGate = VaultDevice.SendGate { it == "call.end" }
-                assertTrue(case, gone.await() is VaultStateException)
+                val began = System.nanoTime()
+                val e = gone.await()
+                assertTrue(case, e is VaultStateException)
+                if (case == "unwanted") {
+                    // The wait ends at once; the hang-up goes all the same (a second one, after the caller's, is ignored).
+                    assertEquals(VaultDevice.CODE_NOT_WANTED, (e as VaultStateException).code)
+                    assertTrue("ended at once", (System.nanoTime() - began) / 1_000_000 < 700)
+                }
                 assertEquals("$case: the hang-up alone", "call.end", v.open(nextDeposit().second).type)
                 assertNull(case, deposits.poll(300, TimeUnit.MILLISECONDS))
                 d.sendGate = VaultDevice.SendGate { true }
@@ -5132,6 +5139,69 @@ class VaultDeviceTest {
             assertTrue("no answer: $e", e is VaultStateException)
             depositGate!!.countDown()
             depositGate = null
+            ticker.cancel()
+        }
+    }
+
+    /**
+     * (0.97.0, the rechecks of #454 and #455) The re-sends: a slow one makes the next, passed meanwhile, be skipped; one
+     * held past the timeout does not hold the end; and nothing goes for a request no longer wanted before its first send.
+     */
+    @Test
+    fun callStartReSendsAreBoundedAndSkippedWhenLateOrUnwanted() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            val ticker = launch(Dispatchers.IO) {
+                val base = System.nanoTime()
+                while (isActive) {
+                    elapsed = (System.nanoTime() - base) / 1_000_000
+                    delay(5)
+                }
+            }
+            val resend = listOf(java.time.Duration.ofMillis(400), java.time.Duration.ofMillis(800))
+            val body = buildJsonObject { put("x", 1) }
+            // A slow re-send: the next re-send time, passed while it was being made, is skipped (no copies back to back).
+            val second = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(2_000), minAnswerWait = java.time.Duration.ZERO)
+                }
+            }
+            v.open(nextDeposit().second)
+            depositGate = java.util.concurrent.CountDownLatch(1) // the re-send at 400 ms waits
+            delay(1_000)
+            depositGate!!.countDown()
+            depositGate = null
+            v.open(nextDeposit().second)
+            assertNull("the 800 ms copy is skipped", deposits.poll(700, TimeUnit.MILLISECONDS))
+            assertTrue(second.await().exceptionOrNull() is VaultStateException)
+
+            // A re-send held past the timeout does not hold the end: given up at about 1,000 ms.
+            val held = async(Dispatchers.IO) {
+                runCatching {
+                    d.requestOnceRetried(
+                        "call.start", body, listOf(java.time.Duration.ofMillis(300)), java.time.Duration.ofMillis(1_000),
+                        minAnswerWait = java.time.Duration.ZERO,
+                    )
+                }
+            }
+            v.open(nextDeposit().second)
+            val t1 = System.nanoTime()
+            depositGate = java.util.concurrent.CountDownLatch(1)
+            assertTrue(withTimeout(5_000) { held.await() }.exceptionOrNull() is VaultStateException)
+            val after = (System.nanoTime() - t1) / 1_000_000
+            depositGate!!.countDown()
+            depositGate = null
+            assertTrue("bounded by the timeout: $after", after < 1_400)
+            deposits.poll(500, TimeUnit.MILLISECONDS) // the held copy, let go
+
+            // Not wanted before the first send (a hang-up just after the call id was told): nothing is sent.
+            val never = runCatching {
+                d.requestOnceRetried("call.start", body, resend, java.time.Duration.ofMillis(1_200), stillWanted = { false })
+            }.exceptionOrNull()
+            assertEquals(VaultDevice.CODE_NOT_WANTED, (never as? VaultStateException)?.code)
+            assertNull("nothing sent", deposits.poll(300, TimeUnit.MILLISECONDS))
+
             ticker.cancel()
         }
     }

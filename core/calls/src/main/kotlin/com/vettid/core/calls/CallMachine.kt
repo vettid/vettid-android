@@ -351,7 +351,7 @@ internal class CallMachine(
             }
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
-            is Msg.Pending -> if (s != null && s.seq == m.seq && s.callId == null) s.pendingIds += m.callId
+            is Msg.Pending -> if (s != null && s.seq == m.seq && s.callId == null) s.pendingIds += m.callId else endPending(setOf(m.callId))
             is Msg.Offered -> onOffered(s, m)
             Msg.StartDone -> startsOutFlow.update { (it - 1).coerceAtLeast(0) }
             // A call that lost a glare has let its media go: what its engine still reports is of no use.
@@ -371,6 +371,21 @@ internal class CallMachine(
         endsPending(s, e) -> true
         s.early.size >= MAX_EARLY || e is SignalEvent.Offer -> false
         else -> s.early.add(e)
+    }
+
+    /**
+     * (VAULT-MESSAGING 0.97.0) A call that ends here, however (a hang-up, a lock, a failure), while its `call.start` waits
+     * for the answer, which may take 30 s; or a `call.start` told after its call ended: the hang-up for each such id goes
+     * now, so the callee stops ringing now. Not for one the vault ended already. Remembered as ended, so the answer when it
+     * comes sends no second one ([onPlaced]); `callStart`'s own hang-up, should it give up, is a second the vault ignores.
+     */
+    private fun endPending(ids: Set<String>) {
+        for (id in ids) {
+            if (id !in endedOthers) {
+                rememberEndedOther(id)
+                sendEnd(id, CallReason.HANGUP)
+            }
+        }
     }
 
     /**
@@ -667,17 +682,6 @@ internal class CallMachine(
 
     private fun hangUp(s: Session, reason: CallEnd) {
         s.memberEnded = true
-        // (VAULT-MESSAGING 0.97.0) A hang-up (or a lock) while `call.start` waits for its answer, which may take 30 s: the
-        // hang-up for each id it went with goes now, so the callee stops ringing now. Not for one the vault ended already.
-        // Remembered as ended, so the answer when it comes sends no second one ([onPlaced]).
-        if (s.callId == null) {
-            for (id in s.pendingIds) {
-                if (id !in endedOthers) {
-                    rememberEndedOther(id)
-                    sendEnd(id, CallReason.HANGUP)
-                }
-            }
-        }
         when {
             s.phase == CallPhase.INCOMING -> finish(s, if (reason == CallEnd.HUNG_UP) CallEnd.DECLINED_HERE else reason, CallReason.DECLINE)
             s.callId == null || s.supersededBy != null -> finish(s, reason, null)
@@ -1158,6 +1162,7 @@ internal class CallMachine(
         release(s)
         val callId = s.callId
         if (tell != null && callId != null) sendEnd(callId, tell)
+        if (callId == null) endPending(s.pendingIds)
         rememberIncoming(s)
         // `call.start` may still be answered for a call without its id: the call it placed is ended when it is (onPlaced).
         val duration = s.activeSince?.let { Duration.between(it, now()) }

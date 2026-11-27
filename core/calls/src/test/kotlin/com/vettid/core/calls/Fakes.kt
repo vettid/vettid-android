@@ -185,6 +185,12 @@ open class FakeSignalling : CallSignalling {
     /** (0.97.0) Whether the start tells the machine its call id before it goes ([CallSignalling.start]'s `onCallId`). */
     var tellIds = false
 
+    /** (0.97.0) Whether the start tells it only after [startGate] lets it go (a hang-up handled before the id is told). */
+    var tellLate = false
+
+    /** What the start throws after telling the id, instead of answering (a start that fails). */
+    var startFailure: Exception? = null
+
     override suspend fun start(
         connectionId: String,
         sdp: String,
@@ -192,7 +198,21 @@ open class FakeSignalling : CallSignalling {
         wanted: () -> Boolean,
         onCallId: (String) -> Unit,
     ): PlacedCall {
-        if (tellIds) onCallId(startResult().callId)
+        if (tellIds && !tellLate) onCallId(startResult().callId)
+        if (tellLate) {
+            sent += "start($connectionId, ${suites.map { it.id }})"
+            startGate?.receive()
+            onCallId(startResult().callId)
+            startGate?.receive() // the answer waits for a second go
+            startFailure?.let { throw it }
+            return startResult()
+        }
+        startFailure?.let { f ->
+            this.wanted = wanted
+            sent += "start($connectionId, ${suites.map { it.id }})"
+            startGate?.receive()
+            throw f
+        }
         return start(connectionId, sdp, suites, wanted)
     }
 
