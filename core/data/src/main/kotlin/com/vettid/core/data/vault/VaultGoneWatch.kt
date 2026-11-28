@@ -30,10 +30,10 @@ internal class VaultGoneWatch(
 
     /** A request of [type] got no answer. */
     fun onNoAnswer(type: String) {
-        if (type in ignored || !watching()) return
         val now = elapsedMs()
         val last = lastProbeMs.get()
-        if (last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS) return
+        val recent = last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS
+        if (type in ignored || recent || !watching()) return
         if (!probing.compareAndSet(false, true)) return // one at a time; its own unanswered status read lands here
         lastProbeMs.set(now)
         scope.launch {
