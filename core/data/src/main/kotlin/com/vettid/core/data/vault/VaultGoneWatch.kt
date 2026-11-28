@@ -45,10 +45,11 @@ internal class VaultGoneWatch(
     private fun claim(): Boolean {
         val now = elapsedMs()
         val last = lastProbeMs.get()
-        if (last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS) return false
-        if (!probing.compareAndSet(false, true)) return false // one at a time; its own unanswered status read lands here
-        lastProbeMs.set(now)
-        return true
+        val due = last == Long.MIN_VALUE || now - last >= PROBE_EVERY_MS
+        // One at a time; the probe's own unanswered status read lands here.
+        val claimed = due && probing.compareAndSet(false, true)
+        if (claimed) lastProbeMs.set(now)
+        return claimed
     }
 
     companion object {
