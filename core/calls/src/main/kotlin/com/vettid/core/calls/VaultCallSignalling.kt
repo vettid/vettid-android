@@ -8,6 +8,7 @@ import com.vettid.core.vault.CallMessageException
 import com.vettid.core.vault.IncomingCall
 import com.vettid.core.vault.OutgoingCall
 import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.nothingSent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -224,7 +225,7 @@ internal class VaultCallSignalling(
         start(connectionId, sdp, suites) { true }
 
     override suspend fun start(connectionId: String, sdp: String, suites: List<MediaSuite>, wanted: () -> Boolean): PlacedCall =
-        start(connectionId, sdp, suites, wanted) {}
+        start(connectionId, sdp, suites, wanted, {})
 
     override suspend fun start(
         connectionId: String,
@@ -232,6 +233,7 @@ internal class VaultCallSignalling(
         suites: List<MediaSuite>,
         wanted: () -> Boolean,
         onCallId: (String) -> Unit,
+        notPlaced: (String) -> Unit,
     ): PlacedCall {
         synchronized(lock) { starting++ }
         var held: List<CallEvent.Answer> = emptyList()
@@ -239,7 +241,7 @@ internal class VaultCallSignalling(
         val call = try {
             // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without
             // that key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
-            placeOnce(connectionId, sdp, suites, wanted, onCallId).also { c ->
+            placeOnce(connectionId, sdp, suites, wanted, onCallId, notPlaced).also { c ->
                 synchronized(lock) {
                     endedFirst = endedEarly.remove(c.callId)
                     if (endedFirst) {
@@ -279,14 +281,34 @@ internal class VaultCallSignalling(
      * and the connection's, read again from the vault's list): an identity rotation during the first start. Only
      * once, and only while the call is still [wanted] (a hang-up or a lock meanwhile places nothing more); the second
      * start is in form 2 again, whatever was learnt meanwhile. A second refusal ends the call as the first would have.
+     * Each start's `call_id` is told to [onCallId] before it goes, and to [notPlaced] when it is surely no call: nothing
+     * of it was sent ([nothingSent]), or the vault refused its one copy with a code that comes before placing
+     * ([REFUSED_BEFORE_PLACING]).
      */
+    @Suppress("LongParameterList") // start's own, and the hook for an id that is no call
     private suspend fun placeOnce(
         connectionId: String,
         sdp: String,
         suites: List<MediaSuite>,
         wanted: () -> Boolean,
         onCallId: (String) -> Unit,
+        notPlaced: (String) -> Unit,
     ): OutgoingCall {
+        suspend fun attempt(peerIk: ByteArray?): OutgoingCall {
+            var told: String? = null
+            return try {
+                gateway.start(connectionId, sdp, suites, peerIk, { id -> told = id; onCallId(id) }, wanted)
+            } catch (e: VaultOpException) {
+                // Only a refusal known to come before the vault places the call, of the one copy sent: any other (an
+                // `internal`, an `exists`, an unknown code, or an answer that may be to a re-sent copy) may follow a
+                // placed call, so its id keeps its hang-up (a needless one is ignored).
+                if (!e.resent && e.code in REFUSED_BEFORE_PLACING) told?.let(notPlaced)
+                throw e
+            } catch (e: java.io.IOException) {
+                if (e.nothingSent) told?.let(notPlaced)
+                throw e
+            }
+        }
         // (C2) A device that knows its vault to be C2 starts in form 2 too, naming the connection's key. Without that
         // key no call is placed: form 1 alone would leave a relay by a shared connection undetected.
         suspend fun key(): ByteArray? = if (formTwo) {
@@ -296,10 +318,10 @@ internal class VaultCallSignalling(
         }
         val peerIk = key()
         return try {
-            gateway.start(connectionId, sdp, suites, peerIk, onCallId, wanted)
+            attempt(peerIk)
         } catch (e: VaultOpException) {
             val again = if (peerIk != null && e.code == "bad_request") refreshedKey(connectionId, wanted) else null
-            gateway.start(connectionId, sdp, suites, again ?: throw e, onCallId, wanted)
+            attempt(again ?: throw e)
         }
     }
 
@@ -347,5 +369,12 @@ internal class VaultCallSignalling(
 
         /** What reading the connections again may take inside the ordered flow of events. */
         const val REFRESH_MS = 3_000L
+
+        /**
+         * (VAULT-MESSAGING §10.10) The `call.start` refusals that come before the vault places the call: with one of them
+         * to the only copy sent, there is no call to end.
+         */
+        val REFUSED_BEFORE_PLACING =
+            setOf("busy", "not_found", "connection_unavailable", "owner_check_required", "bad_request", "calls_off")
     }
 }

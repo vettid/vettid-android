@@ -150,6 +150,12 @@ internal class CallMachine(
         /** (0.97.0) `call.start` goes for [seq] with [callId], its answer not here yet. */
         class Pending(val seq: Int, val callId: String) : Msg
 
+        /**
+         * (0.97.0) The `call.start` told by [Pending] is no call after all (the vault refused it, or nothing of it was sent):
+         * nothing is to be ended for it.
+         */
+        class NotPlaced(val seq: Int, val callId: String) : Msg
+
         /** The offer for an outgoing call is made: `call.start` goes only if the call is still the current one. */
         class Offered(
             val seq: Int,
@@ -245,7 +251,8 @@ internal class CallMachine(
         /**
          * (VAULT-MESSAGING 0.97.0 §10.10 "Order") The `call_id`s this call's `call.start` went out with while it had no
          * answer (the gateway tells them before each start: a form 2 retry has a second one). A `call.end` for one of them
-         * ends the pending call at once.
+         * ends the pending call at once. One the gateway says is no call ([Msg.NotPlaced]: refused, or not sent) is
+         * dropped: an end of the call sends no hang-up for it.
          */
         val pendingIds = mutableSetOf<String>()
         val pendingRemote = mutableListOf<CallCandidate>()
@@ -352,6 +359,7 @@ internal class CallMachine(
             is Msg.Signal -> if (!heldEarly(s, m.event)) onSignal(s, m.event)
             is Msg.Placed -> onPlaced(s, m)
             is Msg.Pending -> if (s != null && s.seq == m.seq && s.callId == null) s.pendingIds += m.callId else endPending(setOf(m.callId))
+            is Msg.NotPlaced -> if (s != null && s.seq == m.seq) s.pendingIds -= m.callId
             is Msg.Offered -> onOffered(s, m)
             Msg.StartDone -> startsOutFlow.update { (it - 1).coerceAtLeast(0) }
             // A call that lost a glare has let its media go: what its engine still reports is of no use.
@@ -499,6 +507,7 @@ internal class CallMachine(
                         m.suites,
                         wanted = { liveSeq.get() == m.seq && !closed },
                         onCallId = { id -> post(Msg.Pending(m.seq, id)) },
+                        notPlaced = { id -> post(Msg.NotPlaced(m.seq, id)) },
                     )
                     post(Msg.Placed(m.seq, placed, elapsedMs()))
                 } catch (e: CallRefusedException) {

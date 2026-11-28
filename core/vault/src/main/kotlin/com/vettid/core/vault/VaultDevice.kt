@@ -191,8 +191,17 @@ class VaultMessage(val inner: Inner) {
  * [body] is the error response's body, when the code carries one (`exists`
  * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
  */
-class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
-    IOException("vault: $type: $code") {
+class VaultOpException(
+    val type: String,
+    val code: String,
+    message: String = "",
+    val body: JsonObject? = null,
+    /**
+     * (0.97.0) The request was deposited more than once ([VaultDevice.opOnceRetried]): the answer may be to a copy after
+     * the first, so it says nothing sure of what the first copy did.
+     */
+    val resent: Boolean = false,
+) : IOException("vault: $type: $code") {
     /**
      * The error's `message` ("" without one): `push.confirm` names the cause of a `gateway_error` there (§14.1).
      * Never in the exception's message, which logs and crash reports may carry: the vault's text may carry vault data
@@ -218,6 +227,14 @@ val Throwable.opType: String?
 val Throwable.heldByLockGate: Boolean
     get() = generateSequence(this) { it.cause }.take(CAUSE_DEPTH)
         .any { it is VaultStateException && it.code == VaultDevice.CODE_LOCK_PENDING }
+
+/**
+ * Whether nothing of the request this failure ends was sent: the lock gate held it ([heldByLockGate]), or it was no longer
+ * wanted before its first send ([VaultDevice.CODE_NOT_SENT]).
+ */
+val Throwable.nothingSent: Boolean
+    get() = heldByLockGate || generateSequence(this) { it.cause }.take(CAUSE_DEPTH)
+        .any { it is VaultStateException && it.code == VaultDevice.CODE_NOT_SENT }
 
 private const val CAUSE_DEPTH = 8
 
@@ -1911,9 +1928,10 @@ class VaultDevice private constructor(
      * to back. The first answer to the id is taken, also one that came while a deposit was being made or at the deadline;
      * a later one finds nothing waiting and is dropped. No copy goes again once the answer is in, or while the gate holds
      * sends back; one the relay refuses is skipped and the wait goes on. Once [stillWanted] says no (a hang-up, a lock),
-     * nothing more is sent, not even the first copy, and the wait ends with [VaultStateException] of code
-     * [CODE_NOT_WANTED]. [stillWanted] is asked under the device lock before each send, and outside it, every
-     * [WANTED_POLL], while waiting. Throws [VaultStateException] without an answer.
+     * nothing more is sent and the wait ends with [VaultStateException] of code [CODE_NOT_WANTED]; before the first copy,
+     * nothing is sent at all and the code is [CODE_NOT_SENT] (as a send the gate held, [nothingSent]). [stillWanted] is
+     * asked under the device lock before each send, and outside it, every [WANTED_POLL], while waiting. The times are
+     * [ResendTimes]'. Throws [VaultStateException] without an answer.
      */
     @Suppress("LongParameterList", "ReturnCount", "CyclomaticComplexMethod")
     suspend fun requestOnceRetried(
@@ -1923,14 +1941,13 @@ class VaultDevice private constructor(
         timeout: Duration,
         stillWanted: () -> Boolean = { true },
         minAnswerWait: Duration = MIN_ANSWER_WAIT,
+        onCopy: () -> Unit = {},
     ): VaultMessage {
-        require(resendAfter.zipWithNext().all { (a, b) -> a < b } && resendAfter.all { it > Duration.ZERO && it < timeout })
+        val schedule = ResendTimes(resendAfter, timeout, minAnswerWait)
         val id = Ulid.new(now())
         val d = CompletableDeferred<Inner>()
         pending[id] = d
         noteOpeningRequest(id)
-        val t0 = cfg.elapsedMs()
-        val left = { at: Duration -> (at.toMillis() - (cfg.elapsedMs() - t0)).coerceAtLeast(0) }
         val noAnswer = { VaultStateException("$type: no response", type) }
         val notWanted = { VaultStateException("$type: no longer wanted", type, CODE_NOT_WANTED) }
 
@@ -1950,37 +1967,42 @@ class VaultDevice private constructor(
             }
         }
         try {
-            val sent = withTimeoutOrNull(left(timeout)) {
-                tagged(type) {
-                    lock.withLock {
-                        if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
-                        if (!stillWanted()) throw notWanted() // a hang-up between the call id told and this send
-                        sendOnceLocked(id, type, body, null)
-                    }
-                }
-            }
-            if (sent == null) throw noAnswer()
-            noteOpeningSent(id)
-            val firstDone = cfg.elapsedMs()
-            var lastDone = firstDone
-            for (at in resendAfter) {
-                if (at.toMillis() <= lastDone - t0) continue // passed while the last copy was being made
-                answerWithin(left(at))?.let { return it }
-                withTimeoutOrNull(left(timeout)) {
-                    try {
+            return schedule.run(
+                elapsed = cfg.elapsedMs,
+                first = { bound ->
+                    val sent = withTimeoutOrNull(bound) {
                         tagged(type) {
-                            lock.withLock { if (!d.isCompleted && maySend(type) && stillWanted()) sendOnceLocked(id, type, body, null) }
+                            lock.withLock {
+                                if (!maySend(type)) throw heldByGate(type) // (ANDROID-PLAN §4 "While pending")
+                                // A hang-up or a lock between the call id told and this send: nothing of it goes.
+                                if (!stillWanted()) throw VaultStateException("$type: no longer wanted, not sent", type, CODE_NOT_SENT)
+                                sendOnceLocked(id, type, body, null).also { onCopy() }
+                            }
                         }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                        // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
                     }
-                }
-                lastDone = cfg.elapsedMs()
-            }
-            val floor = (minAnswerWait.toMillis() - (cfg.elapsedMs() - firstDone)).coerceAtLeast(0)
-            return answerWithin(maxOf(left(timeout), floor)) ?: throw noAnswer()
+                    if (sent != null) noteOpeningSent(id)
+                    sent != null
+                },
+                again = { bound ->
+                    withTimeoutOrNull(bound) {
+                        try {
+                            tagged(type) {
+                                lock.withLock {
+                                    if (!d.isCompleted && maySend(type) && stillWanted()) {
+                                        sendOnceLocked(id, type, body, null)
+                                        onCopy()
+                                    }
+                                }
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                            // Not re-sent this time (the relay, no session): the answer to the earlier copy may still come.
+                        }
+                    }
+                },
+                answerWithin = ::answerWithin,
+            ) ?: throw noAnswer()
         } finally {
             pending.remove(id)
         }
@@ -1994,9 +2016,13 @@ class VaultDevice private constructor(
         timeout: Duration,
         stillWanted: () -> Boolean = { true },
     ): JsonObject {
-        val r = requestOnceRetried(type, body, resendAfter, timeout, stillWanted)
+        val copies = java.util.concurrent.atomic.AtomicInteger()
+        val r = requestOnceRetried(type, body, resendAfter, timeout, stillWanted, onCopy = { copies.incrementAndGet() })
         if (r.inner.status != Inner.STATUS_OK) {
-            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
+            throw VaultOpException(
+                type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() },
+                resent = copies.get() > 1,
+            )
         }
         return r.body
     }
@@ -3899,6 +3925,12 @@ class VaultDevice private constructor(
 
         /** [requestOnceRetried]'s code for a wait ended because the request is no longer wanted. */
         const val CODE_NOT_WANTED = "not_wanted"
+
+        /**
+         * [requestOnceRetried]'s code for a request no longer wanted before its first send: nothing of it was sent, so
+         * there is nothing for the vault to end ([nothingSent]).
+         */
+        const val CODE_NOT_SENT = "not_sent"
 
         /** [settleCollect]'s batch: RELAY-PROTOCOL's default `max`. */
         const val SETTLE_COLLECT_MAX = 32

@@ -1047,6 +1047,30 @@ class CallMachineTest {
     }
 
     /**
+     * (0.97.0) A `call.start` the vault refused, or one of which nothing was sent, is no call: told so by the gateway, the
+     * call ends with no hang-up for its id. One that failed otherwise (the relay) still sends it.
+     */
+    @Test
+    fun aStartThatIsNoCallSendsNoHangUp() = runTest {
+        for (notPlaced in listOf(true, false)) {
+            val s = FakeSignalling().apply {
+                startGate = Channel(1)
+                tellIds = true
+                startFailure = CallRefusedException("busy")
+                failureNotPlaced = notPlaced
+            }
+            val m = machine(s)
+            m.call("conn-1")
+            runCurrent()
+            s.startGate!!.send(Unit)
+            runCurrent()
+            assertEquals(CallEnd.OWN_VAULT_BUSY, m.ended().reason)
+            val ends = s.sent.filter { it.startsWith("end") }
+            assertEquals("told no call: $notPlaced", if (notPlaced) emptyList() else listOf("end($CALL_ID, hangup)"), ends)
+        }
+    }
+
+    /**
      * (C2, VAULT-MESSAGING §10.10 "Glare", decision D21 a) This device's outgoing call lost a glare: the vault ends it
      * `busy` with `superseded_by` and rings the connection's own call, which this device answers without asking,
      * whichever of the two arrives first. Nothing is sent for the lost call, and "busy" is never shown.
