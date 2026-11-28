@@ -1212,7 +1212,8 @@ class VaultManager(
     private val vaultGone by lazy {
         VaultGoneWatch(
             scope,
-            watching = { phaseFlow.value == AppPhase.Unlocked && uiInFront },
+            // In front: an activity is started (false in a process a push or the service started, until one starts).
+            watching = { phaseFlow.value == AppPhase.Unlocked && heldBack.uiStartedNow },
             // Applied only while still open here and no unlock is under way (its result is newer than the API's word).
             probe = {
                 ownerCheck.probeVault(lockCauseKnown = false) {
@@ -1225,12 +1226,6 @@ class VaultManager(
         )
     }
 
-    /**
-     * An activity of the app is in front: false until one starts (a process a push or the service started shows nothing),
-     * false again when the last stops ([onForeground], [onUiStopped]).
-     */
-    @Volatile
-    private var uiInFront = false
 
     /** (Rule 3) A passed owner check's waiting-asks replay that came due while the release gate paused the work. */
     private val heldAskReplay = HeldAskReplay()
@@ -2171,13 +2166,9 @@ class VaultManager(
      */
     override fun onUiCreated() = heldBack.uiStarted()
 
-    override fun onUiStopped() {
-        uiInFront = false
-        heldBack.uiStopped()
-    }
+    override fun onUiStopped() = heldBack.uiStopped()
 
     override fun onForeground() {
-        uiInFront = true
         // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
         // activity's creation, [onUiCreated]).
         heldBack.uiStarted()
