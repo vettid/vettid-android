@@ -174,6 +174,7 @@ private val NEVER_PAUSED: StateFlow<Boolean> = MutableStateFlow(false)
 
 /** [VaultRepository.pendingDeletion] of a repository that does not follow it. */
 private val NO_DELETION: StateFlow<DeletionView?> = MutableStateFlow(null)
+private val NOT_SILENT: StateFlow<Boolean> = MutableStateFlow(false)
 private val NO_LOCK_NOTICE: StateFlow<LockNotice> = MutableStateFlow(LockNotice.None)
 
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
@@ -185,6 +186,19 @@ interface VaultRepository {
      * enclave. Cleared by any sealed unlock result or message from the vault.
      */
     val refusedByVault: StateFlow<Boolean>
+
+    /**
+     * (#19721 step 4, owner decision a, #19767) The vault is open on this phone, and two checks in a row, a minute apart at
+     * least, neither reached it nor found it locked: "Your vault isn't answering". Gone as soon as anything from the vault
+     * arrives. The shell does not show it during a call.
+     */
+    val vaultSilent: StateFlow<Boolean> get() = NOT_SILENT
+
+    /**
+     * "Unlock again" on that notice: the unlock screen, with nothing sent to the vault first. The member's unlock restarts a
+     * vault that is still running (VAULT-MESSAGING §11.4). Does nothing unless [vaultSilent].
+     */
+    fun unlockAgain() = Unit
 
     /**
      * What to tell the member about the lock they asked for ([LockNotice]): that the vault could not be told and

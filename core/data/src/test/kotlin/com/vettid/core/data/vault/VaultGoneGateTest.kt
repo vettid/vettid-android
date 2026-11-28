@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -45,5 +46,25 @@ class VaultGoneGateTest {
         phase = AppPhase.Unlocked
         screen = true
         assertEquals("the screen's own probe runs", false, gate.mayLock(gate.begin()))
+    }
+
+    /** (#19721 step 4) What a probe counts for: each fact on its own. */
+    @Test
+    fun whatAProbeCountsFor() {
+        // The vault answered, or a lock was found: as found, whatever the API did.
+        for (found in listOf(VaultProbe.OPEN, VaultProbe.LOCKED)) {
+            assertEquals(found, VaultGoneGate.counted(ProbeFacts(found, apiAnswered = false)))
+            assertEquals(found, VaultGoneGate.counted(ProbeFacts(found, apiAnswered = true)))
+        }
+        // No answer, the member API answered and its word was taken: counted.
+        assertEquals(VaultProbe.NO_ANSWER, VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true)))
+        // It asked nobody: the API's read failed, or the lock it found could not be applied.
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = false)))
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, refused = true)))
+        // Stale (a lock, a wipe or an unlock during it): nothing, even with the API's answer.
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered = true, stale = true)))
+        // Stale before found: a stale probe that found the vault open or locked counts for nothing either.
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.OPEN, apiAnswered = true, stale = true)))
+        assertNull(VaultGoneGate.counted(ProbeFacts(VaultProbe.LOCKED, apiAnswered = true, stale = true)))
     }
 }

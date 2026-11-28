@@ -120,6 +120,10 @@
     <string name="relay_refused_title">Your vault couldn\'t move to its new address</string>
     <string name="relay_refused_body">Your vault may not receive messages until its keys are replaced.</string>
     <string name="relay_refused_action">Replace your vault\'s keys</string>
+    <!-- NEW (#19721 step 4), approved by the owner 2026-11-28 (GC #19767, choice a; the same texts in the iPhone app): a vault the service still counts as running that does not answer. The action opens the unlock screen; the app never unlocks by itself. -->
+    <string name="vault_silent_title">Your vault isn\'t answering</string>
+    <string name="vault_silent_body">VettID can\'t reach your vault right now. If this goes on, unlock it again with your PIN. Anything still running in your vault, such as a call, will end.</string>
+    <string name="vault_silent_action">Unlock again</string>
     <!-- The one-time note of the notification modes (ANDROID-PLAN 0.1.23, §9 question 13). -->
     <string name="notify_note">VettID now notifies you in the background. Change this in Settings → Notifications.</string>
     <!-- ANDROID-PLAN "Transfer" (release R), verbatim: the old phone after it removed its keys -->
