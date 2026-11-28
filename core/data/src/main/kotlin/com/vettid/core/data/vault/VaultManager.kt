@@ -104,6 +104,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -925,6 +928,38 @@ class VaultManager(
     }
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
+    /**
+     * (#19721 step 4, owner decision a, #19767) "Your vault isn't answering": [VaultGoneWatch.silent] while the vault is open
+     * on this phone. The shell hides it during a call.
+     */
+    override val vaultSilent: StateFlow<Boolean> by lazy {
+        combine(vaultGone.silent, phase) { silent, p -> silent && p == AppPhase.Unlocked }
+            .stateIn(scope, SharingStarted.Eagerly, false)
+    }
+
+    /**
+     * (#19721 step 4) "Unlock again": the unlock screen, as after this phone's own lock, but with no lock sent; the member's
+     * unlock then restarts a vault that is still running (VAULT-MESSAGING §11.4 "Unlock of a running vault"). Only while the
+     * notice is up.
+     */
+    override fun unlockAgain() {
+        // The watch and the phase themselves, not [vaultSilent] (derived on the scope, it can lag a lock just published).
+        if (!vaultGone.silent.value || phaseFlow.value != AppPhase.Unlocked) return
+        // The next opening starts from no unanswered probe, without a moment of the notice.
+        vaultGone.reset()
+        // Not "Your vault is locked" or "locked itself" on the unlock screen: the member asked for it here.
+        markLockedHere()
+        ownerCheck.onLockedHere()
+        // Locked here until this phone's next unlock opens the vault: the member API still says unlocked ([evaluate]).
+        unlockAgainHold.ask { lockedByNotice() }
+    }
+
+    /** (#19721 step 4) After [unlockAgain]: locked whatever the member API says, until this phone's unlock opens the vault. */
+    private val unlockAgainHold = UnlockAgainHold()
+
+    /** Whether what the vault sends is taken into the app's lists: not while this phone is held locked (a lock, Unlock again). */
+    private fun takesEvents(): Boolean = UnlockAgainHold.takesEvents(lockGuard.takesEvents(), unlockAgainHold.holds)
+
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
     /** (#244 review B3) `vault.locking` received during an unlock, judged after it. */
     private val unlockNotices = UnlockNoticeHold()
@@ -1222,14 +1257,13 @@ class VaultManager(
             watching = gate::watching,
             probe = {
                 val mark = gate.begin()
-                ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark) } == VaultProbe.LOCKED
+                VaultGoneGate.counted(ownerCheck.probeVaultFacts(lockCauseKnown = false) { gate.mayLock(mark) })
             },
             elapsedMs = { android.os.SystemClock.elapsedRealtime() },
             // The owner check's own request: its screen probes for itself, knowing the cause.
             ignored = setOf(VaultApi.TYPE_OWNER_CHECK),
         )
     }
-
 
     /** (Rule 3) A passed owner check's waiting-asks replay that came due while the release gate paused the work. */
     private val heldAskReplay = HeldAskReplay()
@@ -1321,6 +1355,10 @@ class VaultManager(
             // An opening's steps ([PhaseSteps.onPhase]); [afterMissedClose]: a close conflated into it cleared its lists first.
             suspend fun opened(afterMissedClose: Boolean) {
                 lockedHere = false
+                // (#19721 step 4) Each opening counts unanswered probes from none, and ends an "Unlock again" (an opening by a
+                // path other than the unlock's sealed result, which ended it already).
+                vaultGone.reset()
+                unlockAgainHold.opened(stillOpen = phaseFlow.value == AppPhase.Unlocked)
                 lockedElsewhereFlow.value = false
                 // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                 social.reopen() // the pending.list read below may merge again
@@ -1351,6 +1389,8 @@ class VaultManager(
                 // unlock and a lock again, conflated) still comes as a new value and runs the lock's clears. One that ends
                 // Unlocked (a lock and an unlock, conflated) runs them too, then that opening's steps and its reads again.
                 val p = tick.phase
+                // (#19721 step 4) The vault left this phone (a wipe, a sign-out, a setup): Unlock again is over.
+                unlockAgainHold.onPhase(p)
                 // First, so that an opening published later is less likely to be taken for this phase's (the window between
                 // the value's delivery and this read is narrow, not closed: the late steps check the phase again).
                 openingAtPhase = feed.openingNumber
@@ -1810,6 +1850,7 @@ class VaultManager(
                 // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
                 device.sendGate = lockGuard.sendGate()
                 device.onNoAnswer = vaultGone::onNoAnswer
+                device.onHeard = vaultGone::heard
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }
@@ -1826,7 +1867,7 @@ class VaultManager(
             }.also {
                 session = it
                 // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
-                eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
+                eventsFlow.value = VaultEvents(it.device.events.filter { takesEvents() }, it.device.droppedForTime)
                 syncMove()
             }
         }
@@ -2042,7 +2083,7 @@ class VaultManager(
         onEvent(m)
         // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
         // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
-        if (!lockGuard.takesEvents()) return
+        if (!takesEvents()) return
         try {
             takeIntoFeatures(m, releaseUpdate.paused.value)
             // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
@@ -2334,7 +2375,7 @@ class VaultManager(
         // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
         if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
-        if (!VaultDeletion.statusUnlocked(st.state)) AppPhase.Locked else afterUnlocked(s)
+        if (UnlockAgainHold.opens(VaultDeletion.statusUnlocked(st.state), unlockAgainHold.holds)) afterUnlocked(s) else AppPhase.Locked
     }
 
     @Suppress("ReturnCount")
@@ -2910,6 +2951,10 @@ class VaultManager(
         if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
         // The vault is open as of the result's ts: a vault.locking from before it is stale (LockNotices).
         lockNotices.opened(r.at)
+        // (#19721 step 4) The vault answered this unlock: "Unlock again" is done, and unanswered probes count from none,
+        // before the phase is published (no moment of the notice).
+        unlockAgainHold.unlockOk()
+        vaultGone.reset()
         // (N4) `at` is the sealed result's inner `ts` (VaultDevice.openUnlockResult), so every vault release gives it. A
         // result without it would move nothing: the unlock's own notice, judged against the previous opening, would not be
         // stale and would overtake this unlock (fail secure: Locked, and the screen says the vault did not open).

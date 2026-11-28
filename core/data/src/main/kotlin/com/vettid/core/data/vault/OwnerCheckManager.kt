@@ -406,22 +406,32 @@ class OwnerCheckManager(
     /** Whether the owner check's screens run a probe of their own ([probeVault] without a guard), knowing the lock's cause. */
     val screenProbing: Boolean get() = screenProbes.get() > 0
 
-    override suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe {
+    override suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe =
+        probeVaultFacts(lockCauseKnown, mayLock).found
+
+    /**
+     * (#19721 step 4) [probeVault] with what it learnt: whether the member API answered, whether a lock it found could not
+     * be applied ([mayLock] said no), and whether a lock, a wipe or an unlock during it made it stale. The vault-gone watch
+     * decides from these alone ([VaultGoneGate.counted]).
+     */
+    suspend fun probeVaultFacts(lockCauseKnown: Boolean, mayLock: () -> Boolean): ProbeFacts {
         val started = epoch.get()
         // An answer to vault.status, whatever it says of the check, means the vault is open (the relay is the vault's own voice).
         val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { attempt { readStatus() }.isSuccess } == true
         // The member API's `unlocked` is not an answer (the host saw a lease, not the enclave); only `locked` is taken.
         val api = if (answered) null else attempt { memberState() }.getOrNull()
+        val apiAnswered = api != null
         return when {
             // The member locked the vault, or it was wiped or unlocked, during the read: the result is stale and dropped.
-            epoch.get() != started -> VaultProbe.NO_ANSWER
-            answered -> VaultProbe.OPEN
-            api != STATE_LOCKED -> VaultProbe.NO_ANSWER
-            !mayLock() -> VaultProbe.NO_ANSWER // e.g. an unlock under way: its result is newer than the API's word
+            epoch.get() != started -> ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered, stale = true)
+            answered -> ProbeFacts(VaultProbe.OPEN, apiAnswered)
+            api != STATE_LOCKED -> ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered)
+            // E.g. an unlock under way: its result is newer than the API's word.
+            !mayLock() -> ProbeFacts(VaultProbe.NO_ANSWER, apiAnswered, refused = true)
             else -> {
                 markLocked(lockCauseKnown && !lockedOther)
                 onFoundLocked()
-                VaultProbe.LOCKED
+                ProbeFacts(VaultProbe.LOCKED, apiAnswered)
             }
         }
     }

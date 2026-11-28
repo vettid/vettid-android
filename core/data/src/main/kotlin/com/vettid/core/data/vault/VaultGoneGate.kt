@@ -22,4 +22,29 @@ internal class VaultGoneGate(
 
     fun mayLock(mark: Long): Boolean =
         phase() == AppPhase.Unlocked && !unlockInFlight() && openings() == mark && !checkScreenProbing()
+
+    companion object {
+        /**
+         * (#19721 step 4) What a probe tells the watch: an answer from the vault or a lock found, as found; `NO_ANSWER` only
+         * when the member API answered and its word was taken; otherwise null (it asked nobody, or it is stale), which
+         * counts for nothing and resets nothing.
+         */
+        fun counted(f: ProbeFacts): VaultProbe? = when {
+            f.stale -> null
+            f.found != VaultProbe.NO_ANSWER -> f.found
+            f.refused || !f.apiAnswered -> null
+            else -> VaultProbe.NO_ANSWER
+        }
+    }
 }
+
+/** What one probe learnt ([OwnerCheckManager.probeVaultFacts]). */
+data class ProbeFacts(
+    val found: VaultProbe,
+    /** The member API's state read answered (whatever it said). */
+    val apiAnswered: Boolean,
+    /** The API said locked, and the lock could not be applied then. */
+    val refused: Boolean = false,
+    /** A lock, a wipe or an unlock during the probe: its result was dropped. */
+    val stale: Boolean = false,
+)

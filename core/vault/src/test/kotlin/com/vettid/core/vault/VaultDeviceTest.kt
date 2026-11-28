@@ -635,6 +635,31 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (#19721 step 4) A rekey tells [VaultDevice.onHeard] at its `hs.init` (once: a replay under a new msg_id is not fresh)
+     * and at its verified `hs.fin`.
+     */
+    @Test
+    fun aRekeysInitAndFinAreToldAndAReplayedInitIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            var heard = 0
+            d.onHeard = { heard++ }
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            assertEquals("the hs.init", 1, heard)
+            repeat(3) { d.handle(v.msg(init)) } // replayed under new msg_ids
+            assertEquals("a replayed hs.init", 1, heard)
+            val res = ini.handleResp(resp, d.relayAddr.pk(), Instant.now())
+            v.keyring.activate(res.epoch, Instant.now())
+            d.handle(v.msg(res.fin))
+            assertEquals("the hs.fin", 2, heard)
+            expectConfirm(res.epoch)
+        }
+    }
+
     @Test
     fun answersAVaultInitiatedRekey() = runBlocking<Unit> {
         withTimeout(30_000) {
@@ -5314,6 +5339,50 @@ class VaultDeviceTest {
             }.exceptionOrNull()
             assertTrue("$withId", withId is VaultStateException)
             assertEquals(listOf("vault.status", "device.list", "credential.version"), told.toList())
+        }
+    }
+
+    /**
+     * (#19721 step 4) Each fresh message from the vault is told ([VaultDevice.onHeard]): an answer and an event alike; one
+     * that does not open, a redelivered copy and a stale one are not.
+     */
+    @Test
+    fun eachMessageFromTheVaultIsToldAndOneThatDoesNotOpenIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            var heard = 0
+            d.onHeard = { heard++ }
+            runCatching { d.handle(v.msg("not a sealed message".toByteArray())) }
+            assertEquals("a message that does not open", 0, heard)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertEquals("an event", 1, heard)
+            val asking = async(Dispatchers.IO) { runCatching { d.requestOnce("vault.status", timeout = java.time.Duration.ofSeconds(5)) } }
+            val req = v.open(nextDeposit().second)
+            d.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
+            assertTrue(asking.await().isSuccess)
+            assertEquals("an answer", 2, heard)
+
+            // A redelivered copy (the same inner id under a new relay message) and a stale message say nothing of the vault now.
+            val id = Ulid.new()
+            d.handle(v.seal("device.pair.rejected", "{}", id = id))
+            assertEquals(3, heard)
+            d.handle(v.seal("device.pair.rejected", "{}", id = id))
+            assertEquals("a redelivered copy", 3, heard)
+            val expired = Inner(
+                id = Ulid.new(), type = "device.pair.rejected", ts = Instant.now().minusSeconds(120),
+                exp = Instant.now().minusSeconds(60), body = "{}".toByteArray(),
+            )
+            runCatching { d.handle(v.msg(v.keyring.current()!!.seal(expired))) }
+            assertEquals("an expired message", 3, heard)
+
+            // An event left on the relay by a hold is not told; its redelivery after the hold is, once.
+            d.holdEvents()
+            val held = v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"held","sent_at":"x"}""")
+            runCatching { d.handle(held) }
+            assertEquals("an event the hold leaves for later", 3, heard)
+            d.endHold(deliver = true)
+            d.handle(held)
+            assertEquals("its redelivery after the hold", 4, heard)
         }
     }
 
