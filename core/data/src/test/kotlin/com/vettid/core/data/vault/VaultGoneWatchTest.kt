@@ -177,6 +177,23 @@ class VaultGoneWatchTest {
         assertFalse(w.silent.value)
     }
 
+    /** The first probe, with nothing counted yet: a message during it still voids it (the quick path of [VaultGoneWatch.heard]). */
+    @Test
+    fun theFirstProbeDuringWhichTheVaultWasHeardFromCountsForNothing() = runTest {
+        val w = watch(backgroundScope)
+        gate = CompletableDeferred()
+        w.onNoAnswer("item.list")
+        runCurrent()
+        w.heard()
+        gate!!.complete(Unit)
+        runCurrent()
+        gate = null
+        now += VaultGoneWatch.PROBE_EVERY_MS
+        probeOnce(w)
+        assertEquals(2, probes)
+        assertFalse("one in a row only", w.silent.value)
+    }
+
     @Test
     fun aProbeDuringWhichTheVaultOpenedAgainCountsForNothing() = runTest {
         val w = watch(backgroundScope)
