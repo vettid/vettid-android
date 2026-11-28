@@ -19,7 +19,8 @@ class VaultGoneWatchTest {
     private var watching = true
     private var probes = 0
     private var gate: CompletableDeferred<Unit>? = null
-    private var found = VaultProbe.NO_ANSWER
+    private var found: VaultProbe? = VaultProbe.NO_ANSWER
+    private var afterProbe: () -> Unit = {}
 
     private fun watch(scope: kotlinx.coroutines.CoroutineScope) = VaultGoneWatch(
         scope,
@@ -27,6 +28,7 @@ class VaultGoneWatchTest {
         probe = {
             probes++
             gate?.await()
+            afterProbe()
             found
         },
         elapsedMs = { now },
@@ -203,6 +205,46 @@ class VaultGoneWatchTest {
         w.heard() // the probe is launched, not run yet
         runCurrent()
         assertEquals(2, probes)
+        assertFalse(w.silent.value)
+        // The voided probe and the one before it are gone: one more unanswered probe is the first in a row.
+        now += VaultGoneWatch.PROBE_EVERY_MS
+        probeOnce(w)
+        assertEquals(3, probes)
+        assertFalse(w.silent.value)
+    }
+
+    /** A probe that could ask nobody (null) counts for nothing and resets nothing. */
+    @Test
+    fun aProbeThatAskedNobodyNeitherCountsNorResets() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        found = null
+        probeOnce(w)
+        assertFalse(w.silent.value)
+        found = VaultProbe.NO_ANSWER
+        probeOnce(w) // the second unanswered one in a row: the null between them reset nothing
+        assertTrue(w.silent.value)
+        found = null
+        probeOnce(w)
+        assertTrue("still silent", w.silent.value)
+    }
+
+    /** An unanswered probe that ends with the app no longer in front (or the vault closed) is not counted. */
+    @Test
+    fun anUnansweredProbeEndingOutOfFrontIsNotCounted() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        afterProbe = { watching = false }
+        probeOnce(w)
+        assertFalse(w.silent.value)
+        afterProbe = {}
+        watching = true
+        probeOnce(w)
+        assertTrue(w.silent.value)
+        // An answer is taken whenever it ends: it says the vault is there.
+        afterProbe = { watching = false }
+        found = VaultProbe.OPEN
+        probeOnce(w)
         assertFalse(w.silent.value)
     }
 

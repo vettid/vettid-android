@@ -945,23 +945,20 @@ class VaultManager(
     override fun unlockAgain() {
         // The watch and the phase themselves, not [vaultSilent] (derived on the scope, it can lag a lock just published).
         if (!vaultGone.silent.value || phaseFlow.value != AppPhase.Unlocked) return
-        // Locked here until this phone's next unlock opens the vault: the member API still says unlocked ([evaluate]).
-        unlockAgainAsked = true
         // The next opening starts from no unanswered probe, without a moment of the notice.
         vaultGone.reset()
         // Not "Your vault is locked" or "locked itself" on the unlock screen: the member asked for it here.
         markLockedHere()
         ownerCheck.onLockedHere()
-        lockedByNotice()
+        // Locked here until this phone's next unlock opens the vault: the member API still says unlocked ([evaluate]).
+        unlockAgainHold.ask { lockedByNotice() }
     }
 
-    /**
-     * (#19721 step 4) Set by [unlockAgain], cleared by an unlock's sealed `ok` result: until then [evaluate] keeps this phone
-     * locked, since the member API counts the vault that did not answer as running (`unlocked`). Memory only: a new process
-     * goes by the status again (the notice comes back after two more probes if the vault still does not answer).
-     */
-    @Volatile
-    private var unlockAgainAsked = false
+    /** (#19721 step 4) After [unlockAgain]: locked whatever the member API says, until this phone's unlock opens the vault. */
+    private val unlockAgainHold = UnlockAgainHold()
+
+    /** Whether what the vault sends is taken into the app's lists: not while this phone is held locked (a lock, Unlock again). */
+    private fun takesEvents(): Boolean = lockGuard.takesEvents() && !unlockAgainHold.holds
 
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
     /** (#244 review B3) `vault.locking` received during an unlock, judged after it. */
@@ -1238,7 +1235,10 @@ class VaultManager(
             acceptsTimeScale = { t -> TimeScales.accepted(t, session?.alt?.let { a -> a::acceptsTimeScale }) },
             storedTimeScale = { local.timeScale },
             // (ANDROID-PLAN 0.1.95) "Probably locked, checking": the member API's word on the vault, and the lock it finds.
-            memberState = { lockSession()?.let { runCatching { guard { vaultStatus(it) } }.getOrNull()?.state } },
+            memberState = {
+                lockSession()?.let { runCatching { guard { vaultStatus(it) } }.getOrNull()?.state }
+                    ?.also { memberStateReads.incrementAndGet() }
+            },
             onFoundLocked = { lockedByNotice() },
         )
     }
@@ -1247,6 +1247,9 @@ class VaultManager(
      * (#19721 b′) A request unanswered although its deposit went out: the vault may have gone away without `vault.locking`.
      * The owner check's probe finds out, and shows the vault locked when the member API says so ([VaultGoneWatch]).
      */
+    /** (#19721 step 4) The member API's state reads that answered: a vault-gone probe whose read failed asked nobody. */
+    private val memberStateReads = java.util.concurrent.atomic.AtomicLong()
+
     private val vaultGone by lazy {
         val gate = VaultGoneGate(
             phase = { phaseFlow.value },
@@ -1260,7 +1263,11 @@ class VaultManager(
             watching = gate::watching,
             probe = {
                 val mark = gate.begin()
-                ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark) }
+                val reads = memberStateReads.get()
+                var refused = false
+                val found = ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark).also { if (!it) refused = true } }
+                // NO_ANSWER counts only when the member API answered and its word was taken: else it asked nobody.
+                found.takeUnless { it == VaultProbe.NO_ANSWER && (refused || memberStateReads.get() == reads) }
             },
             elapsedMs = { android.os.SystemClock.elapsedRealtime() },
             // The owner check's own request: its screen probes for itself, knowing the cause.
@@ -1361,7 +1368,7 @@ class VaultManager(
                 // (#19721 step 4) Each opening counts unanswered probes from none, and ends an "Unlock again" (an opening by a
                 // path other than the unlock's sealed result, which ended it already).
                 vaultGone.reset()
-                unlockAgainAsked = false
+                unlockAgainHold.opened(stillOpen = phaseFlow.value == AppPhase.Unlocked)
                 lockedElsewhereFlow.value = false
                 // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                 social.reopen() // the pending.list read below may merge again
@@ -1392,6 +1399,8 @@ class VaultManager(
                 // unlock and a lock again, conflated) still comes as a new value and runs the lock's clears. One that ends
                 // Unlocked (a lock and an unlock, conflated) runs them too, then that opening's steps and its reads again.
                 val p = tick.phase
+                // (#19721 step 4) The vault left this phone (a wipe, a sign-out, a deletion, a setup): Unlock again is over.
+                if (p == AppPhase.SignedOut || p is AppPhase.Setup || p is AppPhase.Deleting) unlockAgainHold.forgotten()
                 // First, so that an opening published later is less likely to be taken for this phase's (the window between
                 // the value's delivery and this read is narrow, not closed: the late steps check the phase again).
                 openingAtPhase = feed.openingNumber
@@ -1868,7 +1877,7 @@ class VaultManager(
             }.also {
                 session = it
                 // What the vault sends while a lock is pending is not handed on: on this phone it is locked.
-                eventsFlow.value = VaultEvents(it.device.events.filter { lockGuard.takesEvents() }, it.device.droppedForTime)
+                eventsFlow.value = VaultEvents(it.device.events.filter { takesEvents() }, it.device.droppedForTime)
                 syncMove()
             }
         }
@@ -2084,7 +2093,7 @@ class VaultManager(
         onEvent(m)
         // A lock is pending: the vault may be open and still sending, but on this phone it is locked.
         // Nothing of what it sends is taken into the app's lists (an unlock reads them again).
-        if (!lockGuard.takesEvents()) return
+        if (!takesEvents()) return
         try {
             takeIntoFeatures(m, releaseUpdate.paused.value)
             // Before the phase is known a feed item cannot notify: kept until the vault is known to be open.
@@ -2376,7 +2385,7 @@ class VaultManager(
         // never gets here: it fails as a malformed answer (MemberApiClient.vaultStatusAnswer).
         if (st == null) return@guard AppPhase.Unreachable(FailureKind.NO_VAULT)
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
-        if (!VaultDeletion.statusUnlocked(st.state) || unlockAgainAsked) AppPhase.Locked else afterUnlocked(s)
+        if (!VaultDeletion.statusUnlocked(st.state) || unlockAgainHold.holds) AppPhase.Locked else afterUnlocked(s)
     }
 
     @Suppress("ReturnCount")
@@ -2954,7 +2963,7 @@ class VaultManager(
         lockNotices.opened(r.at)
         // (#19721 step 4) The vault answered this unlock: "Unlock again" is done, and unanswered probes count from none,
         // before the phase is published (no moment of the notice).
-        unlockAgainAsked = false
+        unlockAgainHold.unlockOk()
         vaultGone.reset()
         // (N4) `at` is the sealed result's inner `ts` (VaultDevice.openUnlockResult), so every vault release gives it. A
         // result without it would move nothing: the unlock's own notice, judged against the previous opening, would not be

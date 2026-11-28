@@ -904,10 +904,11 @@ class VaultDevice private constructor(
     var onNoAnswer: ((type: String) -> Unit)? = null
 
     /**
-     * (#19721 step 4) Told each time a fresh message from the vault was taken in: an answer or an event that opened under
-     * its session and passed its time check and the dedupe, a rekey's `hs.init`, or a rekey's verified `hs.fin`: the vault
-     * is there. Not for a stale, late or redelivered message. Called under the device's lock, so it must be quick and must
-     * not call back into the device.
+     * (#19721 step 4) Told each time a message from the vault was taken in: an answer or an event that opened under its
+     * session, passed its time check (a durable one may be up to 16 days old: a backlog the relay delivers late counts) and
+     * the dedupe and was not left for later, a rekey's new `hs.init` (past its dedupe and time check), or a rekey's verified
+     * `hs.fin`. Not for an expired or redelivered message. Called under the device's lock, so it must be quick and must not
+     * call back into the device.
      */
     @Volatile
     var onHeard: (() -> Unit)? = null
@@ -2652,11 +2653,11 @@ class VaultDevice private constructor(
         }
         noteVaultTime(inner.ts)
         if (st.seenInner.containsKey(inner.id)) return
-        // Past its time check and the dedupe: a stale message or a redelivered one says nothing of the vault now.
-        heard()
         // During a hold, an event (not an answer, not the session's own messages) is left on the relay: nothing of it is
         // recorded, so it is handled in full when it comes again.
         if (inner.re == null && inner.type !in SESSION_TYPES && leaveForLater(inner.type)) throw LeftForLater()
+        // Past its time check, the dedupe and the hold: a redelivered message, or one left for later, is not told.
+        heard()
         // Kept from the later of this phone's time and the message's own (checked) ts: a clock behind when it was handled does
         // not let the mark go while the message would still pass its time check ([prune]).
         st.seenInner[inner.id] = maxOf(t, inner.ts).toEpochMilli()
@@ -2950,7 +2951,6 @@ class VaultDevice private constructor(
      * it would leave this device unable to read anything the vault sends from then on.
      */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant, initId: String, ts: Instant) {
-        heard() // the vault started a rekey
         // An hs.init answered before: the vault deposited it again (a new msg_id, §6.5; the relay's own
         // redelivery of the same msg_id is dropped by `seen`, saved with the responder). §6.5: acked and dropped, never a
         // second responder. Only while its hs.resp may not have reached the relay is that hs.resp deposited again, the same
@@ -2971,6 +2971,7 @@ class VaultDevice private constructor(
         if (keyring.current() !== ep && !isConfirmedLocked(ep)) return
         val pi = PendingInit.openRekey(raw, ep, t)
         noteKeyTime(pi.inner.ts) // its ts passed checkTime; the keys' clock only
+        heard() // a new rekey from the vault, past its dedupe and its time check
         val v = requireVault()
         val (resp, env) = pi.respond(
             ResponderConfig(

@@ -635,6 +635,31 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * (#19721 step 4) A rekey tells [VaultDevice.onHeard] at its `hs.init` (once: a replay under a new msg_id is not fresh)
+     * and at its verified `hs.fin`.
+     */
+    @Test
+    fun aRekeysInitAndFinAreToldAndAReplayedInitIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            var heard = 0
+            d.onHeard = { heard++ }
+            val ini = v.rekeyInit(d)
+            val init = ini.envelope()
+            d.handle(v.msg(init))
+            val resp = nextDeposit().second
+            assertEquals("the hs.init", 1, heard)
+            repeat(3) { d.handle(v.msg(init)) } // replayed under new msg_ids
+            assertEquals("a replayed hs.init", 1, heard)
+            val res = ini.handleResp(resp, d.relayAddr.pk(), Instant.now())
+            v.keyring.activate(res.epoch, Instant.now())
+            d.handle(v.msg(res.fin))
+            assertEquals("the hs.fin", 2, heard)
+            expectConfirm(res.epoch)
+        }
+    }
+
     @Test
     fun answersAVaultInitiatedRekey() = runBlocking<Unit> {
         withTimeout(30_000) {
