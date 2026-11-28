@@ -3,6 +3,7 @@ package com.vettid.core.data.vault
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.vault.VaultMessage
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +19,20 @@ class LockNoticesTest {
     private val notices = LockNotices()
 
     private fun msg(type: String, ts: Instant) = VaultMessage(Inner(id = Ulid.new(), type = type, ts = ts, body = "{}".toByteArray()))
+
+    /** (#19721 b′) Every unlock result taken moves [LockNotices.openings], one without a time too: the vault-gone probe's mark. */
+    @Test
+    fun everyUnlockResultMovesTheOpeningsOneWithoutATimeToo() {
+        val n = LockNotices()
+        val before = n.openings
+        n.opened(null)
+        assertEquals(before + 1, n.openings)
+        n.opened(Instant.parse("2026-10-07T12:00:00Z"))
+        assertEquals(before + 2, n.openings)
+        // An older result after a newer one moves the count too (its time does not).
+        n.opened(Instant.parse("2026-10-07T11:00:00Z"))
+        assertEquals(before + 3, n.openings)
+    }
 
     @Test
     fun everyNoticeCountsBeforeTheFirstUnlock() {

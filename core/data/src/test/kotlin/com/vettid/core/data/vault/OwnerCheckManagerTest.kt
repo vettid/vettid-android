@@ -128,6 +128,9 @@ class OwnerCheckManagerTest {
 
     /** When set, the member API's answer waits for it (a read that is still running when something else happens). */
     private var memberGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /** Completed when a probe reaches the member API's read (no sleep to wait for it). */
+    private val memberAsked = kotlinx.coroutines.CompletableDeferred<Unit>()
     private var foundLocked = 0
 
     /** Whether the build accepts a `time_scale` (a staging build: up to TimeScale.MAX). */
@@ -144,7 +147,11 @@ class OwnerCheckManagerTest {
         onPassed = { passedCalls++ },
         readNotices = { read += it },
         now = { nowHook?.also { nowHook = null }?.invoke(); now },
-        memberState = { memberGate?.await(); memberState },
+        memberState = {
+            memberAsked.complete(Unit)
+            memberGate?.await()
+            memberState
+        },
         onFoundLocked = { foundLocked++ },
         acceptsTimeScale = { accepts(it) },
         storedTimeScale = { storedScale },
@@ -1303,7 +1310,7 @@ class OwnerCheckManagerTest {
         memberState = "locked"
         memberGate = kotlinx.coroutines.CompletableDeferred()
         val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
-        Thread.sleep(200)
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
         m.onEvent(event("vault.locking", """{"reason":"update"}"""))
         memberGate!!.complete(Unit)
         assertEquals(VaultProbe.NO_ANSWER, late.await())
@@ -1326,7 +1333,7 @@ class OwnerCheckManagerTest {
         memberGate = kotlinx.coroutines.CompletableDeferred()
         val mark = gate.begin()
         val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) { gate.mayLock(mark) } }
-        Thread.sleep(200)
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
         val ticket = hold.begin()
         notices.opened(java.time.Instant.parse("2026-10-07T12:00:00Z"))
         ticket.end()
@@ -1334,6 +1341,51 @@ class OwnerCheckManagerTest {
         assertEquals(VaultProbe.NO_ANSWER, late.await())
         assertFalse(m.lockedByOwnerCheck.value)
         assertEquals(0, foundLocked)
+    }
+
+    /** (#19721 b′) [OwnerCheckManager.screenProbing] is true while a screen's own probe runs, and false once it ended. */
+    @Test
+    fun screenProbingIsTrueOnlyWhileAScreensProbeRuns() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        memberState = "unlocked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        assertFalse(m.screenProbing)
+        val probe = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
+        assertTrue(m.screenProbing)
+        memberGate!!.complete(Unit)
+        assertEquals(VaultProbe.NO_ANSWER, probe.await())
+        assertFalse(m.screenProbing)
+    }
+
+    /** A screen's probe cancelled mid-read (its screen gone) lets [OwnerCheckManager.screenProbing] go too. */
+    @Test
+    fun screenProbingEndsWithAProbeThatThrows() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        memberState = "unlocked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val probe = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
+        assertTrue(m.screenProbing)
+        probe.cancel() // the screen went away mid-read
+        probe.join()
+        assertFalse(m.screenProbing)
+    }
+
+    /** A guarded probe (the vault-gone watch's) is not a screen's: [OwnerCheckManager.screenProbing] stays false. */
+    @Test
+    fun aGuardedProbeIsNotAScreensProbe() = runTest {
+        val ops = opsAt(1).apply { failStatus = true }
+        val m = manager(ops)
+        memberState = "unlocked"
+        memberGate = kotlinx.coroutines.CompletableDeferred()
+        val probe = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) { true } }
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
+        assertFalse(m.screenProbing)
+        memberGate!!.complete(Unit)
+        probe.await()
     }
 
     /** A lock by the member during a read drops the read's result (the epoch moved). */
@@ -1344,7 +1396,7 @@ class OwnerCheckManagerTest {
         memberState = "locked"
         memberGate = kotlinx.coroutines.CompletableDeferred()
         val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = false) }
-        Thread.sleep(200)
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
         m.onLockedHere()
         memberGate!!.complete(Unit)
         assertEquals(VaultProbe.NO_ANSWER, late.await())
@@ -1371,7 +1423,8 @@ class OwnerCheckManagerTest {
         memberState = "locked"
         memberGate = kotlinx.coroutines.CompletableDeferred()
         val late = this.async(Dispatchers.Default) { m.probeVault(lockCauseKnown = true) }
-        Thread.sleep(200) // the relay read has failed and the API read waits
+        // The relay read has failed and the API read waits.
+        kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.withTimeout(10_000) { memberAsked.await() } }
         m.clear()
         memberGate!!.complete(Unit)
         assertEquals(VaultProbe.NO_ANSWER, late.await())
