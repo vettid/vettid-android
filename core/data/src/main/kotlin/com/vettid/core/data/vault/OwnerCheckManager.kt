@@ -393,6 +393,20 @@ class OwnerCheckManager(
     }
 
     override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+        screenProbes.incrementAndGet()
+        try {
+            return probeVault(lockCauseKnown) { true }
+        } finally {
+            screenProbes.decrementAndGet()
+        }
+    }
+
+    private val screenProbes = java.util.concurrent.atomic.AtomicInteger()
+
+    /** Whether the owner check's screens run a probe of their own ([probeVault] without a guard), knowing the lock's cause. */
+    val screenProbing: Boolean get() = screenProbes.get() > 0
+
+    override suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe {
         val started = epoch.get()
         // An answer to vault.status, whatever it says of the check, means the vault is open (the relay is the vault's own voice).
         val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { attempt { readStatus() }.isSuccess } == true
@@ -403,6 +417,7 @@ class OwnerCheckManager(
             epoch.get() != started -> VaultProbe.NO_ANSWER
             answered -> VaultProbe.OPEN
             api != STATE_LOCKED -> VaultProbe.NO_ANSWER
+            !mayLock() -> VaultProbe.NO_ANSWER // e.g. an unlock under way: its result is newer than the API's word
             else -> {
                 markLocked(lockCauseKnown && !lockedOther)
                 onFoundLocked()

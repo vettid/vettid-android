@@ -896,6 +896,19 @@ class VaultDevice private constructor(
     var sendGate: SendGate = SendGate { true }
 
     /**
+     * Told the type of each request that got no answer although its deposit went out (the relay took it, retries
+     * included): the vault may have gone away without `vault.locking` (a crash, a kill), which the app then probes for.
+     * Not told of a relay refusal, a send the gate held, a request no longer wanted, or `call.start`'s own give-up.
+     */
+    @Volatile
+    var onNoAnswer: ((type: String) -> Unit)? = null
+
+    private fun noAnswer(type: String): VaultStateException {
+        runCatching { onNoAnswer?.invoke(type) }
+        return VaultStateException("$type: no response", type)
+    }
+
+    /**
      * (ANDROID-PLAN §4 "While pending") Marks a call made for the lock itself (the owner's lock-time uses: the lock and the one
      * `vault.status` of "Lock it now"): what the device would send again for it is not held by [sendGate].
      */
@@ -1907,8 +1920,9 @@ class VaultDevice private constructor(
                 }
             }
             noteOpeningSent(id)
-            return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
-                ?: throw VaultStateException("$type: no response", type)
+            withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
+            ensureCollecting() // the collection may have ended: the answer would then wait in the mailbox unread
+            throw noAnswer(type)
         } finally {
             pending.remove(id)
         }
@@ -2324,7 +2338,7 @@ class VaultDevice private constructor(
                 ensureCollecting()
                 if (attempt < APP_RETRIES) resendRequest(id, type, body, null)
             }
-            throw VaultStateException("$type: no response", type)
+            throw noAnswer(type)
         } finally {
             pending.remove(id)
         }
@@ -3549,7 +3563,7 @@ class VaultDevice private constructor(
                 ensureCollecting()
                 if (attempt < APP_RETRIES) resendRequest(id, type, body, exp)
             }
-            throw VaultStateException("$type: no response", type)
+            throw noAnswer(type)
         } finally {
             pending.remove(id)
         }

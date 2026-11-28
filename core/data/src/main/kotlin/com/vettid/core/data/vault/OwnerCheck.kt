@@ -269,6 +269,13 @@ interface OwnerCheckRepository {
      */
     suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe = VaultProbe.NO_ANSWER
 
+    /**
+     * [probeVault], applying a lock found only while [mayLock] says so, asked at that moment (#19721 b′: not over an unlock
+     * under way, whose result is later than the member API's word; VAULT-MESSAGING §11.4 `ts`). A lock it may not apply is
+     * [VaultProbe.NO_ANSWER].
+     */
+    suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe = probeVault(lockCauseKnown)
+
     /** Unread `owner_check.*` feed items. */
     val notices: StateFlow<List<OwnerCheckNotice>>
 

@@ -203,6 +203,10 @@ class HeldBackEvents {
      */
     private var ui = false
 
+    /** Whether an activity of this app is started now ([uiStarted], until [uiStopped]): false in a process a push started. */
+    val uiStartedNow: Boolean
+        @Synchronized get() = ui
+
     /** What [releaseHeld] hands back: the events, and whether a push wake started this process ([wakeIfUnknown]). */
     class Released(val events: List<VaultMessage>, val wake: Boolean)
 
