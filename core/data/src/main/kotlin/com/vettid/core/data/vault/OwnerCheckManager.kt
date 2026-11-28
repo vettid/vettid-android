@@ -392,7 +392,9 @@ class OwnerCheckManager(
         reconnects.tryEmit(Unit)
     }
 
-    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe {
+    override suspend fun probeVault(lockCauseKnown: Boolean): VaultProbe = probeVault(lockCauseKnown) { true }
+
+    override suspend fun probeVault(lockCauseKnown: Boolean, mayLock: () -> Boolean): VaultProbe {
         val started = epoch.get()
         // An answer to vault.status, whatever it says of the check, means the vault is open (the relay is the vault's own voice).
         val answered = withTimeoutOrNull(STATUS_AFTER_FAILURE_MS) { attempt { readStatus() }.isSuccess } == true
@@ -403,6 +405,7 @@ class OwnerCheckManager(
             epoch.get() != started -> VaultProbe.NO_ANSWER
             answered -> VaultProbe.OPEN
             api != STATE_LOCKED -> VaultProbe.NO_ANSWER
+            !mayLock() -> VaultProbe.NO_ANSWER // e.g. an unlock under way: its result is newer than the API's word
             else -> {
                 markLocked(lockCauseKnown && !lockedOther)
                 onFoundLocked()

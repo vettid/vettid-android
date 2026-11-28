@@ -866,6 +866,26 @@ class OwnerCheckManagerTest {
         assertEquals(OwnerCheckState.HELD, m.ownerCheck.value?.state)
     }
 
+    /**
+     * (#19721 b′) A probe's lock is applied only while [OwnerCheckRepository.probeVault]'s `mayLock` says so, asked when the
+     * member API's `locked` is in: over an unlock under way it is no lock (its result is newer), and nothing is marked.
+     */
+    @Test
+    fun aProbesLockIsAppliedOnlyWhileItMayBe() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("ok", "2026-10-08T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        ops.failStatus = true
+        memberState = "locked"
+        var asked = 0
+        assertEquals(VaultProbe.NO_ANSWER, m.probeVault(lockCauseKnown = false) { asked++; false })
+        assertEquals(1, asked)
+        assertEquals(false, m.lockedByOwnerCheck.value)
+        assertEquals(0, foundLocked)
+        assertEquals(VaultProbe.LOCKED, m.probeVault(lockCauseKnown = false) { true })
+        assertEquals(1, foundLocked)
+    }
+
     /** A lock forgets the scale (a `vault.locking` or the member's own): a check sent before the next read is at real time. */
     @Test
     fun aLockForgetsTheScale() = runTest {

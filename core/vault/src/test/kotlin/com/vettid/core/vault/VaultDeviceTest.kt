@@ -5294,6 +5294,19 @@ class VaultDeviceTest {
             assertTrue("$held", held != null && held.heldByLockGate)
             assertEquals("a held send is not told", listOf("vault.status"), told.toList())
             d.sendGate = VaultDevice.SendGate { true }
+
+            // A deposit the relay refuses is a relay failure, not a vault that did not answer.
+            refuseStatus = 503
+            refuseDeposits = "unavailable"
+            val refused = runCatching { d.requestOnce("vault.status", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            refuseDeposits = null
+            assertTrue("$refused", refused != null && refused !is VaultStateException)
+            assertEquals("a refused deposit is not told", listOf("vault.status"), told.toList())
+
+            // A request with the app's retries: told once, after the last copy went unanswered.
+            val retried = runCatching { d.request("device.list", timeout = java.time.Duration.ofMillis(300)) }.exceptionOrNull()
+            assertTrue("$retried", retried is VaultStateException)
+            assertEquals(listOf("vault.status", "device.list"), told.toList())
         }
     }
 

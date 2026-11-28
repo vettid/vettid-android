@@ -1209,12 +1209,28 @@ class VaultManager(
      * (#19721 b′) A request unanswered although its deposit went out: the vault may have gone away without `vault.locking`.
      * The owner check's probe finds out, and shows the vault locked when the member API says so ([VaultGoneWatch]).
      */
-    private val vaultGone = VaultGoneWatch(
-        scope,
-        watching = { phaseFlow.value == AppPhase.Unlocked && ownerCheck.inFront.value },
-        probe = { ownerCheck.probeVault(lockCauseKnown = false) == VaultProbe.LOCKED },
-        elapsedMs = { android.os.SystemClock.elapsedRealtime() },
-    )
+    private val vaultGone by lazy {
+        VaultGoneWatch(
+            scope,
+            watching = { phaseFlow.value == AppPhase.Unlocked && uiInFront },
+            // Applied only while still open here and no unlock is under way (its result is newer than the API's word).
+            probe = {
+                ownerCheck.probeVault(lockCauseKnown = false) {
+                    phaseFlow.value == AppPhase.Unlocked && !unlockNotices.inFlight()
+                } == VaultProbe.LOCKED
+            },
+            elapsedMs = { android.os.SystemClock.elapsedRealtime() },
+            // The owner check's own request: its screen probes for itself, knowing the cause.
+            ignored = setOf(VaultApi.TYPE_OWNER_CHECK),
+        )
+    }
+
+    /**
+     * An activity of the app is in front: false until one starts (a process a push or the service started shows nothing),
+     * false again when the last stops ([onForeground], [onUiStopped]).
+     */
+    @Volatile
+    private var uiInFront = false
 
     /** (Rule 3) A passed owner check's waiting-asks replay that came due while the release gate paused the work. */
     private val heldAskReplay = HeldAskReplay()
@@ -2155,9 +2171,13 @@ class VaultManager(
      */
     override fun onUiCreated() = heldBack.uiStarted()
 
-    override fun onUiStopped() = heldBack.uiStopped()
+    override fun onUiStopped() {
+        uiInFront = false
+        heldBack.uiStopped()
+    }
 
     override fun onForeground() {
+        uiInFront = true
         // ANDROID-PLAN 0.1.134 "A push wake": a push from now on did not start this process (also told at the first
         // activity's creation, [onUiCreated]).
         heldBack.uiStarted()

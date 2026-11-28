@@ -1920,8 +1920,9 @@ class VaultDevice private constructor(
                 }
             }
             noteOpeningSent(id)
-            return withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { VaultMessage(it) }
-                ?: throw noAnswer(type)
+            withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
+            ensureCollecting() // the collection may have ended: the answer would then wait in the mailbox unread
+            throw noAnswer(type)
         } finally {
             pending.remove(id)
         }

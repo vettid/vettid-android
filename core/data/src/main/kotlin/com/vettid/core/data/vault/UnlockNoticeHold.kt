@@ -27,6 +27,9 @@ internal class UnlockNoticeHold {
         }
     }
 
+    /** Whether an unlock is under way (begun and not ended). */
+    fun inFlight(): Boolean = synchronized(this) { open > 0 }
+
     fun begin(): Ticket = synchronized(this) {
         open++
         Ticket()

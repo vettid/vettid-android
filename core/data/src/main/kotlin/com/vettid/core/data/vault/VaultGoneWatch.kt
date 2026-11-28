@@ -22,13 +22,15 @@ internal class VaultGoneWatch(
     private val probe: suspend () -> Boolean,
     /** Monotonic milliseconds. */
     private val elapsedMs: () -> Long,
+    /** Request types whose lack of an answer starts no probe. */
+    private val ignored: Set<String> = emptySet(),
 ) {
     private val probing = AtomicBoolean(false)
     private val lastProbeMs = AtomicLong(Long.MIN_VALUE)
 
     /** A request of [type] got no answer. */
-    fun onNoAnswer(@Suppress("UNUSED_PARAMETER") type: String) {
-        if (!watching()) return
+    fun onNoAnswer(type: String) {
+        if (type in ignored || !watching()) return
         val now = elapsedMs()
         val last = lastProbeMs.get()
         if (last != Long.MIN_VALUE && now - last < PROBE_EVERY_MS) return
