@@ -198,6 +198,9 @@ fun AppShell(
     val gateVm: OwnerCheckGateViewModel = hiltViewModel()
     val gate by gateVm.gate.collectAsStateWithLifecycle()
     val relayRefused by gateVm.relayRefused.collectAsStateWithLifecycle()
+    // (#19721 step 4) "Your vault isn't answering", never during a call.
+    val silentVm: VaultSilentViewModel = hiltViewModel()
+    val silentShown by silentVm.shown.collectAsStateWithLifecycle()
     val inputGuard = remember { InputGuard() }
     var asked by rememberSaveable { mutableStateOf<OwnerCheckMode?>(null) }
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
@@ -359,9 +362,13 @@ fun AppShell(
                         onReplaceKeys = { navController.navigate(CredentialRotateRoute) { launchSingleTop = true } },
                     )
                 }
+                if (silentShown) {
+                    VaultSilentNotice(first = !alarmShown && !deletionShown && !relayShown, onUnlockAgain = silentVm::unlockAgain)
+                }
+                val above = alarmShown || deletionShown || relayShown || silentShown
                 OwnerCheckBanners(
                     gate,
-                    first = !alarmShown && !deletionShown && !relayShown,
+                    first = !above,
                     onCheckNow = { asked = OwnerCheckMode.VOLUNTARY },
                     onHoldOn = gateVm::turnHoldOn,
                     onDismissNotices = gateVm::dismissNotices,
@@ -372,10 +379,10 @@ fun AppShell(
                         Modifier.testTag("notify_note"),
                         stringResource(R.string.owner_check_notice_ok),
                         shell::noteShown,
-                        statusBarPadding = !alarmShown && !deletionShown && !relayShown && !gate.bannerShown(),
+                        statusBarPadding = !above && !gate.bannerShown(),
                     )
                 }
-                val bannerShown = alarmShown || deletionShown || relayShown || gate.bannerShown() || notifyPrompt.note
+                val bannerShown = above || gate.bannerShown() || notifyPrompt.note
                 Box(
                     Modifier
                         .weight(1f)

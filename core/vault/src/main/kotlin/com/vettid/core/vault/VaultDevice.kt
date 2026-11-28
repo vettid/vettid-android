@@ -903,6 +903,13 @@ class VaultDevice private constructor(
     @Volatile
     var onNoAnswer: ((type: String) -> Unit)? = null
 
+    /**
+     * (#19721 step 4) Told each time a message from the vault opened under its session (an answer or an event): the vault
+     * is there. Called under the device's lock, so it must be quick and must not call back into the device.
+     */
+    @Volatile
+    var onHeard: (() -> Unit)? = null
+
     private fun noAnswer(type: String): VaultStateException {
         runCatching { onNoAnswer?.invoke(type) }
         return VaultStateException("$type: no response", type)
@@ -2617,6 +2624,7 @@ class VaultDevice private constructor(
         }
         val (inner, ep) = opened
         refusalCount.value = 0 // the vault spoke to this device under its session
+        runCatching { onHeard?.invoke() }
         // §6.3.1: any message but hs.fin tells which epoch the vault uses (a redelivered hs.fin of an active epoch opens here,
         // and confirms nothing: the initiator may abandon an epoch right after its hs.fin).
         if (inner.type != HsTypes.FIN) noteConfirmedLocked(ep, t, inner.ts)

@@ -5318,6 +5318,28 @@ class VaultDeviceTest {
     }
 
     /**
+     * (#19721 step 4) Each message that opens under the vault's session is told ([VaultDevice.onHeard]): an answer and an
+     * event alike; one that does not open (not sealed to this device's keys) is not.
+     */
+    @Test
+    fun eachMessageFromTheVaultIsToldAndOneThatDoesNotOpenIsNot() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            var heard = 0
+            d.onHeard = { heard++ }
+            runCatching { d.handle(v.msg("not a sealed message".toByteArray())) }
+            assertEquals("a message that does not open", 0, heard)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertEquals("an event", 1, heard)
+            val asking = async(Dispatchers.IO) { runCatching { d.requestOnce("vault.status", timeout = java.time.Duration.ofSeconds(5)) } }
+            val req = v.open(nextDeposit().second)
+            d.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
+            assertTrue(asking.await().isSuccess)
+            assertEquals("an answer", 2, heard)
+        }
+    }
+
+    /**
      * A lock must never land late (the member may have opened the vault again): it is deposited once, with an
      * `exp`, never from the outbox; and one that an earlier version of the app left in the outbox is dropped.
      */

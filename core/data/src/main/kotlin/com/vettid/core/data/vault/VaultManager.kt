@@ -104,6 +104,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -925,6 +928,28 @@ class VaultManager(
     }
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
+    /**
+     * (#19721 step 4, owner decision a, #19767) "Your vault isn't answering": [VaultGoneWatch.silent] while the vault is open
+     * on this phone. The shell hides it during a call.
+     */
+    override val vaultSilent: StateFlow<Boolean> by lazy {
+        combine(vaultGone.silent, phase) { silent, p -> silent && p == AppPhase.Unlocked }
+            .stateIn(scope, SharingStarted.Eagerly, false)
+    }
+
+    /**
+     * (#19721 step 4) "Unlock again": the unlock screen, as after this phone's own lock, but with no lock sent; the member's
+     * unlock then restarts a vault that is still running (VAULT-MESSAGING §11.4 "Unlock of a running vault"). Only while the
+     * notice is up.
+     */
+    override fun unlockAgain() {
+        if (!vaultSilent.value) return
+        // Not "Your vault is locked" or "locked itself" on the unlock screen: the member asked for it here.
+        markLockedHere()
+        ownerCheck.onLockedHere()
+        lockedByNotice()
+    }
+
     /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
     /** (#244 review B3) `vault.locking` received during an unlock, judged after it. */
     private val unlockNotices = UnlockNoticeHold()
@@ -1222,14 +1247,13 @@ class VaultManager(
             watching = gate::watching,
             probe = {
                 val mark = gate.begin()
-                ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark) } == VaultProbe.LOCKED
+                ownerCheck.probeVault(lockCauseKnown = false) { gate.mayLock(mark) }
             },
             elapsedMs = { android.os.SystemClock.elapsedRealtime() },
             // The owner check's own request: its screen probes for itself, knowing the cause.
             ignored = setOf(VaultApi.TYPE_OWNER_CHECK),
         )
     }
-
 
     /** (Rule 3) A passed owner check's waiting-asks replay that came due while the release gate paused the work. */
     private val heldAskReplay = HeldAskReplay()
@@ -1321,6 +1345,8 @@ class VaultManager(
             // An opening's steps ([PhaseSteps.onPhase]); [afterMissedClose]: a close conflated into it cleared its lists first.
             suspend fun opened(afterMissedClose: Boolean) {
                 lockedHere = false
+                // (#19721 step 4) Each opening counts unanswered probes from none.
+                vaultGone.reset()
                 lockedElsewhereFlow.value = false
                 // First: events delivered from here on update the state it reopens (a throw below cannot skip it).
                 social.reopen() // the pending.list read below may merge again
@@ -1810,6 +1836,7 @@ class VaultManager(
                 // pending: asked by the device before each deposit of an entry, for every flush (its collection start's too).
                 device.sendGate = lockGuard.sendGate()
                 device.onNoAnswer = vaultGone::onNoAnswer
+                device.onHeard = vaultGone::heard
                 val api = VaultApi(device) { local.phone.inUse }
                 // §11.14.9 step 2: no credential operation while a PIN or password change is undecided.
                 api.setCredentialGate { carriesPin -> changes.gate(carriesPin) }

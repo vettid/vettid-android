@@ -4,18 +4,22 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * (#19721 b′) An unanswered request starts one probe of whether the vault is still there; never while the vault is not open
  * here or the app is not in front, never two at a time (the probe's own unanswered read counts for nothing), and at least a
- * minute apart.
+ * minute apart. (Step 4, #19767) Two probes in a row that neither reached the vault nor found it locked make it silent;
+ * anything heard from it, a probe that reached it or found it locked, and an opening start the count again.
  */
 class VaultGoneWatchTest {
     private var now = 1_000_000L
     private var watching = true
     private var probes = 0
     private var gate: CompletableDeferred<Unit>? = null
+    private var found = VaultProbe.NO_ANSWER
 
     private fun watch(scope: kotlinx.coroutines.CoroutineScope) = VaultGoneWatch(
         scope,
@@ -23,7 +27,7 @@ class VaultGoneWatchTest {
         probe = {
             probes++
             gate?.await()
-            false
+            found
         },
         elapsedMs = { now },
         ignored = setOf("vault.owner-check"),
@@ -88,5 +92,113 @@ class VaultGoneWatchTest {
         w2.onNoAnswer("c")
         runCurrent()
         assertEquals(3, probes)
+    }
+
+    /** One probe a minute after the last, from a new unanswered request. */
+    private fun kotlinx.coroutines.test.TestScope.probeOnce(w: VaultGoneWatch) {
+        w.onNoAnswer("item.list")
+        runCurrent()
+        now += VaultGoneWatch.PROBE_EVERY_MS
+    }
+
+    @Test
+    fun twoUnansweredProbesInARowMakeItSilentAndOneDoesNot() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        assertFalse(w.silent.value)
+        probeOnce(w)
+        assertEquals(2, probes)
+        assertTrue(w.silent.value)
+    }
+
+    @Test
+    fun aProbeThatReachesTheVaultOrFindsItLockedStartsTheCountAgain() = runTest {
+        for (reached in listOf(VaultProbe.OPEN, VaultProbe.LOCKED)) {
+            val w = watch(backgroundScope)
+            found = VaultProbe.NO_ANSWER
+            probeOnce(w)
+            found = reached
+            probeOnce(w)
+            found = VaultProbe.NO_ANSWER
+            probeOnce(w)
+            assertFalse("after $reached", w.silent.value)
+            probeOnce(w)
+            assertTrue("after $reached", w.silent.value)
+            // And a silent vault that a probe then reaches is no longer silent.
+            found = reached
+            probeOnce(w)
+            assertFalse("reached: $reached", w.silent.value)
+        }
+    }
+
+    @Test
+    fun anythingHeardFromTheVaultEndsItAndStartsTheCountAgain() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        probeOnce(w)
+        assertTrue(w.silent.value)
+        w.heard()
+        assertFalse(w.silent.value)
+        probeOnce(w)
+        assertFalse(w.silent.value) // one in a row again
+        w.heard()
+        probeOnce(w)
+        assertFalse(w.silent.value)
+    }
+
+    @Test
+    fun anOpeningStartsTheCountAgain() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        probeOnce(w)
+        assertTrue(w.silent.value)
+        w.reset()
+        assertFalse(w.silent.value)
+        probeOnce(w)
+        assertFalse(w.silent.value)
+    }
+
+    @Test
+    fun aProbeDuringWhichTheVaultWasHeardFromCountsForNothing() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        gate = CompletableDeferred()
+        w.onNoAnswer("item.list")
+        runCurrent()
+        w.heard() // a message from the vault while the probe's read goes unanswered
+        gate!!.complete(Unit)
+        runCurrent()
+        assertEquals(2, probes)
+        assertFalse(w.silent.value)
+        // Nor does the one before it count: the next unanswered probe is the first in a row.
+        gate = null
+        now += VaultGoneWatch.PROBE_EVERY_MS
+        probeOnce(w)
+        assertFalse(w.silent.value)
+    }
+
+    @Test
+    fun aProbeDuringWhichTheVaultOpenedAgainCountsForNothing() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        gate = CompletableDeferred()
+        w.onNoAnswer("item.list")
+        runCurrent()
+        w.reset() // an unlock finished while it ran
+        gate!!.complete(Unit)
+        runCurrent()
+        assertFalse(w.silent.value)
+    }
+
+    @Test
+    fun aProbeNotRunCountsForNothing() = runTest {
+        val w = watch(backgroundScope)
+        probeOnce(w)
+        w.onNoAnswer("item.list")
+        watching = false // closed before it ran
+        runCurrent()
+        watching = true
+        assertEquals(1, probes)
+        assertFalse(w.silent.value)
     }
 }
